@@ -20,6 +20,7 @@ IRIS bridges the gap between AI code generation and visual verification, providi
 npm install -g iris
 # or
 npx iris watch localhost:3000
+```
 
 Follow development
 - GitHub: github.com/frankbria/iris
