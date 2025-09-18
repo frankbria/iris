@@ -1,0 +1,24 @@
+{
+  "name": "iris-suite",
+  "version": "0.0.1",
+  "description": "Interface Recognition & Interaction Suite - AI-powered UI understanding and testing",
+  "keywords": ["ai", "ui", "testing", "automation", "playwright", "vision", "developer-tools"],
+  "homepage": "https://github.com/frankbria/iris",
+  "bugs": "https://github.com/frankbria/iris/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/frankbria/iris.git"
+  },
+  "main": "index.js",
+  "bin": {
+    "iris": "./cli.js"
+  },
+  "scripts": {
+    "test": "echo \"No tests yet\""
+  },
+  "author": "FRANK BRIA <frank@frankbria.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
