@@ -16,10 +16,10 @@ This list breaks down the core tasks needed to complete **Phase 1 – Foundatio
 + [x] Write a smoke test to validate Playwright can launch a page and perform a simple click.
 
 ## 3. Natural Language → Playwright Translation
-- [ ] Define an AI client interface supporting OpenAI/Anthropic backends.
-- [ ] Implement fallback translation rules for basic commands (click, fill, navigate).
-- [ ] Wire the `run` command to send the user’s natural‑language instruction to the translator.
-- [ ] Add unit tests covering common translation mappings.
++ [x] Define an AI client interface supporting OpenAI/Anthropic backends.
++ [x] Implement fallback translation rules for basic commands (click, fill, navigate).
++ [x] Wire the `run` command to send the user’s natural‑language instruction to the translator.
++ [x] Add unit tests covering common translation mappings.
 
 ## 4. Protocol Layer (JSON‑RPC over WebSocket)
 - [ ] Implement a lightweight WebSocket server exposing JSON‑RPC 2.0 endpoints.

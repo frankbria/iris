@@ -10,8 +10,10 @@ program
 program
   .command('run <instruction>')
   .description('Run a natural language instruction')
-  .action((instruction: string) => {
-    console.log(`Running instruction: ${instruction}`);
+  .action(async (instruction: string) => {
+    const { translate } = await import('./translator');
+    const actions = translate(instruction);
+    console.log(JSON.stringify(actions));
   });
 
 program
@@ -28,10 +30,13 @@ program
     console.log('Starting JSON-RPC/WebSocket server...');
   });
 
-export function runCli(args: string[]): void {
-  program.parse(args, { from: 'node' });
+export async function runCli(args: string[]): Promise<void> {
+  await program.parseAsync(args, { from: 'node' });
 }
 
 if (require.main === module) {
-  runCli(process.argv);
+  runCli(process.argv).catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
 }
