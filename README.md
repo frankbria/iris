@@ -22,6 +22,10 @@ npm install -g iris
 npx iris watch localhost:3000
 ```
 
+## AI Agent Instructions
+
+For step-by-step development guidance, see [AGENT_INSTRUCTIONS.md](AGENT_INSTRUCTIONS.md).
+
 Follow development
 - GitHub: github.com/frankbria/iris
 - Twitter: @FrankBria18044
