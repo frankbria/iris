@@ -27,7 +27,16 @@ describe('CLI Commands', () => {
   });
 
   test('connect command prints server start message', async () => {
+    // Mock the startServer function to avoid actually starting a server
+    const mockStartServer = jest.fn();
+    jest.doMock('../src/protocol', () => ({
+      startServer: mockStartServer
+    }));
+
     await runCli(['node', 'iris', 'connect']);
-    expect(consoleOutput).toContain('Starting JSON-RPC/WebSocket server...');
+    expect(consoleOutput).toContain(
+      'JSON-RPC server listening on ws://localhost:4000'
+    );
+    expect(mockStartServer).toHaveBeenCalledWith(4000);
   });
 });
