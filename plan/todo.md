@@ -10,10 +10,10 @@ This list breaks down the core tasks needed to complete **Phase 1 – Foundatio
 + [x] Integrate a basic reporting/logging mechanism for command output.
 
 ## 2. Browser Automation Module
-- [ ] Add Playwright dependency and TypeScript types.
-- [ ] Create a `browser.ts` module to launch, close, and control browser contexts.
-- [ ] Expose core actions: `navigate`, `click`, `type`, `screenshot`, etc.
-- [ ] Write a smoke test to validate Playwright can launch a page and perform a simple click.
++ [x] Add Playwright dependency and TypeScript types.
++ [x] Create a `browser.ts` module to launch, close, and control browser contexts.
++ [x] Expose core actions: `navigate`, `click`, `type`, `screenshot`, etc.
++ [x] Write a smoke test to validate Playwright can launch a page and perform a simple click.
 
 ## 3. Natural Language → Playwright Translation
 - [ ] Define an AI client interface supporting OpenAI/Anthropic backends.
