@@ -23,7 +23,7 @@ npx iris watch localhost:3000
 
 Follow development
 - GitHub: github.com/frankbria/iris
-- Twitter: @frankbria
+- Twitter: @FrankBria18044
 
 Building in public. Star the repo to follow along!
 
