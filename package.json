@@ -32,6 +32,8 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.2.0",
     "commander": "^11.0.0",
     "playwright": "^1.35.0",
     "ws": "^8.13.0"

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import * as path from 'path';
+import * as os from 'os';
 
 const program = new Command();
 program
@@ -11,9 +13,39 @@ program
   .command('run <instruction>')
   .description('Run a natural language instruction')
   .action(async (instruction: string) => {
-    const { translate } = await import('./translator');
-    const actions = translate(instruction);
-    console.log(JSON.stringify(actions));
+    const startTime = new Date();
+    let status: 'success' | 'error' = 'success';
+
+    try {
+      const { translate } = await import('./translator');
+      const actions = translate(instruction);
+      console.log(JSON.stringify(actions));
+    } catch (error) {
+      status = 'error';
+      console.error('Error executing instruction:', error);
+    } finally {
+      const endTime = new Date();
+
+      // Persist to database
+      const { initializeDatabase, insertTestRun } = await import('./db');
+      const dbPath = process.env.IRIS_DB_PATH || path.join(os.homedir(), '.iris', 'iris.db');
+
+      // Ensure directory exists
+      const dbDir = path.dirname(dbPath);
+      const fs = await import('fs');
+      if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true });
+      }
+
+      const db = initializeDatabase(dbPath);
+      insertTestRun(db, {
+        instruction,
+        status,
+        startTime,
+        endTime
+      });
+      db.close();
+    }
   });
 
 program

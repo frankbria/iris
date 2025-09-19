@@ -28,16 +28,16 @@ This list breaks down the core tasks needed to complete **Phase 1 – Foundatio
 + [x] Add an integration test simulating an RPC client issuing a command and receiving a result.
 
 ## 5. Persistence (SQLite Storage)
-- [ ] Add SQLite dependency (e.g. better‑sqlite3) and initialize DB schema.
-- [ ] Create migrations or initialization logic for the `test_results` table.
-- [ ] Implement a `db.ts` module to insert and query test run records.
-- [ ] Hook into the `run` command to persist start/end timestamps and status.
-- [ ] Write tests for DB module CRUD operations.
++ [x] Add SQLite dependency (e.g. better‑sqlite3) and initialize DB schema.
++ [x] Create migrations or initialization logic for the `test_results` table.
++ [x] Implement a `db.ts` module to insert and query test run records.
++ [x] Hook into the `run` command to persist start/end timestamps and status.
++ [x] Write tests for DB module CRUD operations.
 
 ## 6. Documentation & Testing
-- [ ] Update `README.md` with Phase 1 usage examples for `run`, `watch`, and `connect`.
-- [ ] Create basic unit and integration tests under `test/` (e.g. Jest or Mocha).
-- [ ] Ensure new TypeScript code compiles with the project tsconfig and linter.
++ [x] Update `README.md` with Phase 1 usage examples for `run`, `watch`, and `connect`.
++ [x] Create basic unit and integration tests under `test/` (e.g. Jest or Mocha).
++ [x] Ensure new TypeScript code compiles with the project tsconfig and linter.
 
 ---
 
