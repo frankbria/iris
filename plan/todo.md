@@ -3,11 +3,11 @@
 This list breaks down the core tasks needed to complete **Phase 1 – Foundations (Core CLI & Browser Automation)** as defined in `AGENT_INSTRUCTIONS.md` and the docs folder.
 
 ## 1. CLI Commands
-- [ ] Scaffold a TypeScript/Node.js CLI project (commander.js or similar).
-- [ ] Implement the `run` command stub with help text and argument parsing.
-- [ ] Implement the `watch` command stub to watch files or URL and trigger runs.
-- [ ] Implement the `connect` command stub to start the JSON‑RPC/WebSocket server.
-- [ ] Integrate a basic reporting/logging mechanism for command output.
++ [x] Scaffold a TypeScript/Node.js CLI project (commander.js or similar).
++ [x] Implement the `run` command stub with help text and argument parsing.
++ [x] Implement the `watch` command stub to watch files or URL and trigger runs.
++ [x] Implement the `connect` command stub to start the JSON‑RPC/WebSocket server.
++ [x] Integrate a basic reporting/logging mechanism for command output.
 
 ## 2. Browser Automation Module
 - [ ] Add Playwright dependency and TypeScript types.
