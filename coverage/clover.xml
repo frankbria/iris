@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<coverage generated="1758322607701" clover="3.2.0">
-  <project timestamp="1758322607701" name="All files">
+<coverage generated="1758323754766" clover="3.2.0">
+  <project timestamp="1758323754766" name="All files">
     <metrics statements="101" coveredstatements="94" conditionals="27" coveredconditionals="20" methods="24" coveredmethods="23" elements="152" coveredelements="137" complexity="0" loc="101" ncloc="101" packages="1" files="5" classes="5"/>
     <file name="browser.ts" path="/home/frankbria/projects/iris/src/browser.ts">
       <metrics statements="15" coveredstatements="15" conditionals="0" coveredconditionals="0" methods="7" coveredmethods="7"/>
