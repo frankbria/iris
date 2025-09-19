@@ -22,10 +22,10 @@ This list breaks down the core tasks needed to complete **Phase 1 – Foundatio
 + [x] Add unit tests covering common translation mappings.
 
 ## 4. Protocol Layer (JSON‑RPC over WebSocket)
-- [ ] Implement a lightweight WebSocket server exposing JSON‑RPC 2.0 endpoints.
-- [ ] Define RPC methods for `executeCommand`, `getStatus`, and `streamLogs`.
-- [ ] Integrate server startup into the `connect` command.
-- [ ] Add an integration test simulating an RPC client issuing a command and receiving a result.
++ [x] Implement a lightweight WebSocket server exposing JSON‑RPC 2.0 endpoints.
++ [x] Define RPC methods for `executeCommand`, `getStatus`, and `streamLogs`.
++ [x] Integrate server startup into the `connect` command.
++ [x] Add an integration test simulating an RPC client issuing a command and receiving a result.
 
 ## 5. Persistence (SQLite Storage)
 - [ ] Add SQLite dependency (e.g. better‑sqlite3) and initialize DB schema.

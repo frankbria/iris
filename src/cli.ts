@@ -24,10 +24,13 @@ program
   });
 
 program
-  .command('connect')
-  .description('Start JSON-RPC/WebSocket server')
-  .action(() => {
-    console.log('Starting JSON-RPC/WebSocket server...');
+  .command('connect [port]')
+  .description('Start JSON-RPC/WebSocket server on the given port')
+  .action(async (port: string | undefined) => {
+    const { startServer } = await import('./protocol');
+    const p = port ? Number(port) : 4000;
+    startServer(p);
+    console.log(`JSON-RPC server listening on ws://localhost:${p}`);
   });
 
 export async function runCli(args: string[]): Promise<void> {
