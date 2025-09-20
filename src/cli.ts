@@ -18,8 +18,19 @@ program
 
     try {
       const { translate } = await import('./translator');
-      const actions = translate(instruction);
-      console.log(JSON.stringify(actions));
+      const result = await translate(instruction);
+
+      console.log(`✨ Translation result (${result.method}):`);
+      console.log(`   Actions: ${JSON.stringify(result.actions)}`);
+      console.log(`   Confidence: ${result.confidence}`);
+      if (result.reasoning) {
+        console.log(`   Reasoning: ${result.reasoning}`);
+      }
+
+      if (result.actions.length === 0) {
+        status = 'error';
+        console.log('⚠️  No actions generated from instruction');
+      }
     } catch (error) {
       status = 'error';
       console.error('Error executing instruction:', error);
@@ -50,9 +61,16 @@ program
 
 program
   .command('watch [target]')
-  .description('Watch files or URL and trigger runs')
-  .action((target: string | undefined) => {
-    console.log(`Watching: ${target ?? 'default'}`);
+  .description('Watch files or directories and trigger runs on changes')
+  .option('-i, --instruction <instruction>', 'Instruction to run when files change', 'click submit')
+  .action(async (target: string | undefined, options: { instruction: string }) => {
+    try {
+      const { watchFiles } = await import('./watcher');
+      await watchFiles(target, options.instruction);
+    } catch (error) {
+      console.error('Watch error:', error);
+      process.exit(1);
+    }
   });
 
 program
