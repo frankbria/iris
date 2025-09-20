@@ -2,11 +2,12 @@ import { createAIClient } from '../src/ai-client';
 import { IrisConfig } from '../src/config';
 
 // Mock OpenAI
+const mockCreate = jest.fn();
 jest.mock('openai', () => ({
   OpenAI: jest.fn().mockImplementation(() => ({
     chat: {
       completions: {
-        create: jest.fn(),
+        create: mockCreate,
       },
     },
   })),
@@ -53,8 +54,7 @@ describe('AI Client', () => {
     });
 
     it('should translate instruction successfully', async () => {
-      const { OpenAI } = await import('openai');
-      const mockCreate = jest.fn().mockResolvedValue({
+      mockCreate.mockResolvedValue({
         choices: [{
           message: {
             content: JSON.stringify({
@@ -65,10 +65,6 @@ describe('AI Client', () => {
           }
         }]
       });
-
-      (OpenAI as jest.MockedClass<typeof OpenAI>).mockImplementation(() => ({
-        chat: { completions: { create: mockCreate } }
-      }));
 
       const client = createAIClient(config);
       const result = await client.translateInstruction({
@@ -82,12 +78,7 @@ describe('AI Client', () => {
     });
 
     it('should handle API errors gracefully', async () => {
-      const { OpenAI } = await import('openai');
-      const mockCreate = jest.fn().mockRejectedValue(new Error('API Error'));
-
-      (OpenAI as jest.MockedClass<typeof OpenAI>).mockImplementation(() => ({
-        chat: { completions: { create: mockCreate } }
-      }));
+      mockCreate.mockRejectedValue(new Error('API Error'));
 
       const client = createAIClient(config);
       const result = await client.translateInstruction({

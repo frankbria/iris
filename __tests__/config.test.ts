@@ -20,6 +20,14 @@ describe('Config System', () => {
     delete process.env.OLLAMA_MODEL;
   });
 
+  afterEach(() => {
+    // Additional cleanup after each test
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OLLAMA_ENDPOINT;
+    delete process.env.OLLAMA_MODEL;
+  });
+
   describe('loadConfig', () => {
     it('should load default config when no config file exists', () => {
       mockOs.homedir.mockReturnValue('/home/test');
@@ -30,6 +38,33 @@ describe('Config System', () => {
       expect(config.ai.provider).toBe('openai');
       expect(config.ai.model).toBe('gpt-4o-mini');
       expect(config.watch.debounceMs).toBe(1000);
+    });
+
+    it('should merge config file with defaults', () => {
+      // This test should run before any environment variable tests
+      // to avoid pollution from previous tests
+
+      // Explicitly ensure clean environment before this test
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.OLLAMA_ENDPOINT;
+      delete process.env.OLLAMA_MODEL;
+
+      const configContent = JSON.stringify({
+        ai: { model: 'gpt-4' },
+        watch: { debounceMs: 2000 }
+      });
+
+      mockOs.homedir.mockReturnValue('/home/test');
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue(configContent);
+
+      const config = loadConfig();
+
+      expect(config.ai.provider).toBe('openai'); // from default
+      expect(config.ai.model).toBe('gpt-4'); // from file
+      expect(config.watch.debounceMs).toBe(2000); // from file
+      expect(config.browser.headless).toBe(true); // from default
     });
 
     it('should load config from environment variables', () => {
@@ -56,6 +91,10 @@ describe('Config System', () => {
     });
 
     it('should load Ollama config from environment', () => {
+      // Ensure clean environment first
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.ANTHROPIC_API_KEY;
+
       process.env.OLLAMA_ENDPOINT = 'http://localhost:11434';
       process.env.OLLAMA_MODEL = 'llama2';
       mockOs.homedir.mockReturnValue('/home/test');
@@ -66,24 +105,10 @@ describe('Config System', () => {
       expect(config.ai.provider).toBe('ollama');
       expect(config.ai.endpoint).toBe('http://localhost:11434');
       expect(config.ai.model).toBe('llama2');
-    });
 
-    it('should merge config file with defaults', () => {
-      const configContent = JSON.stringify({
-        ai: { model: 'gpt-4' },
-        watch: { debounceMs: 2000 }
-      });
-
-      mockOs.homedir.mockReturnValue('/home/test');
-      mockFs.existsSync.mockReturnValue(true);
-      mockFs.readFileSync.mockReturnValue(configContent);
-
-      const config = loadConfig();
-
-      expect(config.ai.provider).toBe('openai'); // from default
-      expect(config.ai.model).toBe('gpt-4'); // from file
-      expect(config.watch.debounceMs).toBe(2000); // from file
-      expect(config.browser.headless).toBe(true); // from default
+      // Clean up immediately after this test
+      delete process.env.OLLAMA_ENDPOINT;
+      delete process.env.OLLAMA_MODEL;
     });
   });
 

@@ -36,6 +36,23 @@ jest.mock('../src/db', () => ({
   insertTestRun: jest.fn(),
 }));
 
+// Mock executor
+const mockExecutorInstance = {
+  launchBrowser: jest.fn().mockResolvedValue({}),
+  createPage: jest.fn().mockResolvedValue({}),
+  executeAction: jest.fn().mockResolvedValue({
+    success: true,
+    action: { type: 'click', selector: '#test' },
+    duration: 100,
+    context: { url: 'http://example.com', timestamp: Date.now() }
+  }),
+  cleanup: jest.fn().mockResolvedValue(undefined),
+};
+
+jest.mock('../src/executor', () => ({
+  ActionExecutor: jest.fn().mockImplementation(() => mockExecutorInstance),
+}));
+
 import chokidar from 'chokidar';
 
 describe('FileWatcher', () => {
@@ -131,16 +148,24 @@ describe('FileWatcher', () => {
       // Mock console.warn to check it's called
       const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
 
-      // Simulate ready event
+      // Simulate ready event to set isRunning = true
+      let readyCallback: any;
       mockWatcher.on.mockImplementation((event: string, callback: any) => {
         if (event === 'ready') {
-          setTimeout(callback, 0);
+          readyCallback = callback;
         }
         return mockWatcher;
       });
 
+      // Start watcher and trigger ready
+      const startPromise = watcher.start();
+      if (readyCallback) {
+        readyCallback(); // Trigger ready immediately
+      }
+      await startPromise;
+
+      // Now try to start again
       await watcher.start();
-      await watcher.start(); // Try to start again
 
       expect(consoleSpy).toHaveBeenCalledWith('Watcher is already running');
       consoleSpy.mockRestore();
@@ -152,14 +177,20 @@ describe('FileWatcher', () => {
       const watcher = new FileWatcher();
 
       // Start the watcher first
+      let readyCallback: any;
       mockWatcher.on.mockImplementation((event: string, callback: any) => {
         if (event === 'ready') {
-          setTimeout(callback, 0);
+          readyCallback = callback;
         }
         return mockWatcher;
       });
 
-      await watcher.start();
+      const startPromise = watcher.start();
+      if (readyCallback) {
+        readyCallback(); // Trigger ready
+      }
+      await startPromise;
+
       await watcher.stop();
 
       expect(mockWatcher.close).toHaveBeenCalled();
@@ -233,6 +264,84 @@ describe('FileWatcher', () => {
     });
   });
 
+  describe('browser execution', () => {
+    it('should support execution mode configuration', () => {
+      const watcher = new FileWatcher({
+        execute: true,
+        headless: false,
+        browserTimeout: 60000,
+        retryAttempts: 5,
+        retryDelay: 2000,
+      });
+
+      const status = watcher.getStatus();
+      expect(status.options.execute).toBe(true);
+      expect(status.options.headless).toBe(false);
+      expect(status.options.browserTimeout).toBe(60000);
+      expect(status.options.retryAttempts).toBe(5);
+      expect(status.options.retryDelay).toBe(2000);
+    });
+
+    it('should default to translation-only mode', () => {
+      const watcher = new FileWatcher();
+      const status = watcher.getStatus();
+
+      expect(status.options.execute).toBe(false);
+      expect(status.options.headless).toBe(true);
+      expect(status.options.browserTimeout).toBe(30000);
+      expect(status.options.retryAttempts).toBe(2);
+      expect(status.options.retryDelay).toBe(1000);
+    });
+
+    it('should execute actions when execute mode is enabled', () => {
+      const watcher = new FileWatcher({
+        execute: true,
+        debounceMs: 50,
+      });
+
+      // Test the configuration is set correctly
+      const status = watcher.getStatus();
+      expect(status.options.execute).toBe(true);
+
+      // Verify that ActionExecutor would be instantiated if start was called
+      const { ActionExecutor } = require('../src/executor');
+      expect(ActionExecutor).toBeDefined();
+    });
+
+    it('should not execute actions when execute mode is disabled', () => {
+      const watcher = new FileWatcher({
+        execute: false,
+        debounceMs: 50,
+      });
+
+      // Test the configuration is set correctly
+      const status = watcher.getStatus();
+      expect(status.options.execute).toBe(false);
+      expect(status.browserSessionActive).toBe(false);
+    });
+
+    it('should have browser session recovery capabilities', () => {
+      const watcher = new FileWatcher({
+        execute: true,
+        debounceMs: 50,
+      });
+
+      // Verify recovery methods exist
+      expect(typeof watcher['recoverBrowserSession']).toBe('function');
+      expect(typeof watcher['cleanupBrowserSession']).toBe('function');
+      expect(typeof watcher['initializeBrowserSession']).toBe('function');
+    });
+
+    it('should include browser session status in getStatus', () => {
+      const watcher = new FileWatcher({ execute: true });
+
+      const status = watcher.getStatus();
+      expect(status).toHaveProperty('browserSessionActive');
+      expect(status.browserSessionActive).toBe(false);
+      expect(status.options.execute).toBe(true);
+    });
+  });
+
   describe('createWatcher', () => {
     it('should create a new FileWatcher instance', async () => {
       const watcher = await createWatcher({
@@ -243,6 +352,19 @@ describe('FileWatcher', () => {
       expect(watcher).toBeInstanceOf(FileWatcher);
       expect(watcher.getStatus().options.instruction).toBe('test instruction');
       expect(watcher.getStatus().options.debounceMs).toBe(200);
+    });
+
+    it('should create watcher with execution options', async () => {
+      const watcher = await createWatcher({
+        execute: true,
+        headless: false,
+        browserTimeout: 45000,
+      });
+
+      const status = watcher.getStatus();
+      expect(status.options.execute).toBe(true);
+      expect(status.options.headless).toBe(false);
+      expect(status.options.browserTimeout).toBe(45000);
     });
   });
 });

@@ -1,10 +1,20 @@
 import { Browser, chromium, Page } from 'playwright';
 
+export interface BrowserLaunchOptions {
+  headless?: boolean;
+  devtools?: boolean;
+  slowMo?: number;
+}
+
 /**
  * Launch a Chromium browser instance.
  */
-export async function launchBrowser(): Promise<Browser> {
-  return await chromium.launch();
+export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise<Browser> {
+  return await chromium.launch({
+    headless: options.headless ?? true,
+    devtools: options.devtools ?? false,
+    slowMo: options.slowMo ?? 0,
+  });
 }
 
 /**
