@@ -234,11 +234,11 @@ Cleaned up redundant, outdated, and superseded documentation files across root, 
 
 ### If you referenced removed files:
 
-**INTEGRATION_SUMMARY.md** → **DEVELOPMENT_INSTRUCTIONS.md**
+**INTEGRATION_SUMMARY.md** → **docs/DEVELOPMENT_INSTRUCTIONS.md**
 - Phase 1 integration details now in comprehensive development guide
 - Section: "Phase 1 Implementation (COMPLETE)"
 
-**WATCHER_BROWSER_INTEGRATION.md** → **DEVELOPMENT_INSTRUCTIONS.md**
+**WATCHER_BROWSER_INTEGRATION.md** → **docs/DEVELOPMENT_INSTRUCTIONS.md**
 - File watcher details now in development guide
 - Section: "Phase 1 Implementation (COMPLETE)"
 
@@ -254,23 +254,23 @@ Cleaned up redundant, outdated, and superseded documentation files across root, 
 - More detailed task breakdown
 - Section: Complete task list with checkboxes
 
-**plan/status_*.md** → **CODEBASE_ANALYSIS_SUMMARY.md**
+**plan/status_*.md** → **docs/CODEBASE_ANALYSIS_SUMMARY.md**
 - Current comprehensive analysis
 - Sections: Phase 1 & 2 status, quality metrics, roadmap
 
 ### Finding information after cleanup:
 
 **Question:** Where's the integration info?
-**Answer:** DEVELOPMENT_INSTRUCTIONS.md > Phase 1 Implementation
+**Answer:** docs/DEVELOPMENT_INSTRUCTIONS.md > Phase 1 Implementation
 
 **Question:** Where's Phase 2 architecture?
 **Answer:** docs/phase2_technical_architecture.md (PRIMARY REFERENCE)
 
 **Question:** Where's current status?
-**Answer:** CODEBASE_ANALYSIS_SUMMARY.md or READY_FOR_COMMIT.md
+**Answer:** docs/CODEBASE_ANALYSIS_SUMMARY.md or plan/READY_FOR_COMMIT.md
 
 **Question:** How do I navigate the docs?
-**Answer:** PROJECT_INDEX.md (NEW - Navigation hub)
+**Answer:** docs/PROJECT_INDEX.md (NEW - Navigation hub)
 
 ---
 
@@ -280,9 +280,9 @@ Cleaned up redundant, outdated, and superseded documentation files across root, 
 
 **Verified no broken links in:**
 - README.md ✅
-- DEVELOPMENT_INSTRUCTIONS.md ✅
-- CODEBASE_ANALYSIS_SUMMARY.md ✅
-- PROJECT_INDEX.md ✅ (NEW)
+- docs/DEVELOPMENT_INSTRUCTIONS.md ✅
+- docs/CODEBASE_ANALYSIS_SUMMARY.md ✅
+- docs/PROJECT_INDEX.md ✅ (NEW)
 - All docs/*.md files ✅
 - All plan/*.md files ✅
 
@@ -320,35 +320,35 @@ Cleaned up redundant, outdated, and superseded documentation files across root, 
 
 ### For Future Development
 
-1. **Use PROJECT_INDEX.md** as navigation hub
+1. **Use docs/PROJECT_INDEX.md** as navigation hub
 2. **Update README.md** for major milestone changes
-3. **Keep CODEBASE_ANALYSIS_SUMMARY.md** current with status
+3. **Keep docs/CODEBASE_ANALYSIS_SUMMARY.md** current with status
 4. **Archive old status reports** instead of accumulating
 
 ### For Contributors
 
-1. **Start with PROJECT_INDEX.md** to understand structure
-2. **Check DEVELOPMENT_INSTRUCTIONS.md** before coding
+1. **Start with docs/PROJECT_INDEX.md** to understand structure
+2. **Check docs/DEVELOPMENT_INSTRUCTIONS.md** before coding
 3. **Update plan/phase2_todo.md** as tasks complete
 4. **Don't create duplicate documentation** - update existing
 
 ### For AI Agents
 
 1. **Primary references:**
-   - DEVELOPMENT_INSTRUCTIONS.md
+   - docs/DEVELOPMENT_INSTRUCTIONS.md
    - docs/phase2_technical_architecture.md
    - plan/phase2_todo.md
 
 2. **Navigation:**
-   - Use PROJECT_INDEX.md for quick reference
+   - Use docs/PROJECT_INDEX.md for quick reference
    - Follow documentation hierarchy
 
 3. **Status checks:**
-   - CODEBASE_ANALYSIS_SUMMARY.md for comprehensive analysis
-   - READY_FOR_COMMIT.md for current commit status
+   - docs/CODEBASE_ANALYSIS_SUMMARY.md for comprehensive analysis
+   - plan/READY_FOR_COMMIT.md for current commit status
 
 ---
 
 **Cleanup Complete:** ✅ All redundant files removed, documentation optimized
 **Status:** Ready for git commit
-**Next Step:** Review READY_FOR_COMMIT.md and execute commit
+**Next Step:** Review plan/READY_FOR_COMMIT.md and execute commit

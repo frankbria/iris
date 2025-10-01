@@ -228,13 +228,14 @@ npm test -- --coverage
 ## Documentation
 
 **For Developers:**
-- [DEVELOPMENT_INSTRUCTIONS.md](DEVELOPMENT_INSTRUCTIONS.md) - Comprehensive development guide
-- [CODEBASE_ANALYSIS_SUMMARY.md](CODEBASE_ANALYSIS_SUMMARY.md) - Complete analysis
+- [docs/DEVELOPMENT_INSTRUCTIONS.md](docs/DEVELOPMENT_INSTRUCTIONS.md) - Comprehensive development guide
+- [docs/CODEBASE_ANALYSIS_SUMMARY.md](docs/CODEBASE_ANALYSIS_SUMMARY.md) - Complete analysis
 - [docs/phase2_technical_architecture.md](docs/phase2_technical_architecture.md) - Phase 2 design (2,556 lines)
+- [docs/PROJECT_INDEX.md](docs/PROJECT_INDEX.md) - Project navigation guide
 
 **For Contributors:**
-- [READY_FOR_COMMIT.md](READY_FOR_COMMIT.md) - Git workflow guide
-- [GIT_COMMIT_GUIDE.md](GIT_COMMIT_GUIDE.md) - Commit instructions
+- [plan/READY_FOR_COMMIT.md](plan/READY_FOR_COMMIT.md) - Git workflow guide
+- [docs/GIT_COMMIT_GUIDE.md](docs/GIT_COMMIT_GUIDE.md) - Commit instructions
 - [plan/phase2_todo.md](plan/phase2_todo.md) - Remaining tasks
 
 **For AI Agents:**
@@ -337,7 +338,7 @@ Building in public. Star the repo to follow along! ⭐
 - Configuration: See [Configuration](#configuration)
 
 **Development:**
-- Guide: [DEVELOPMENT_INSTRUCTIONS.md](DEVELOPMENT_INSTRUCTIONS.md)
+- Guide: [docs/DEVELOPMENT_INSTRUCTIONS.md](docs/DEVELOPMENT_INSTRUCTIONS.md)
 - Architecture: [docs/phase2_technical_architecture.md](docs/phase2_technical_architecture.md)
 - Tasks: [plan/phase2_todo.md](plan/phase2_todo.md)
 

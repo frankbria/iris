@@ -8,19 +8,19 @@
 ## 🚀 Start Here
 
 **New to IRIS?** Read in this order:
-1. [README.md](README.md) - Project overview and quick start
-2. [READY_FOR_COMMIT.md](READY_FOR_COMMIT.md) - Current status and commit guide
+1. [../README.md](../README.md) - Project overview and quick start
+2. [../plan/READY_FOR_COMMIT.md](../plan/READY_FOR_COMMIT.md) - Current status and commit guide
 3. [DEVELOPMENT_INSTRUCTIONS.md](DEVELOPMENT_INSTRUCTIONS.md) - Development guide
 
 **Want to contribute?**
 1. [DEVELOPMENT_INSTRUCTIONS.md](DEVELOPMENT_INSTRUCTIONS.md) - How to develop
-2. [plan/phase2_todo.md](plan/phase2_todo.md) - What needs to be done
+2. [../plan/phase2_todo.md](../plan/phase2_todo.md) - What needs to be done
 3. [GIT_COMMIT_GUIDE.md](GIT_COMMIT_GUIDE.md) - How to commit
 
 **AI Agent?**
-1. [AGENT_INSTRUCTIONS.md](AGENT_INSTRUCTIONS.md) - Step-by-step development
-2. [CLAUDE.md](CLAUDE.md) - Claude Code specific instructions
-3. [docs/phase2_technical_architecture.md](docs/phase2_technical_architecture.md) - Architecture
+1. [../AGENT_INSTRUCTIONS.md](../AGENT_INSTRUCTIONS.md) - Step-by-step development
+2. [../CLAUDE.md](../CLAUDE.md) - Claude Code specific instructions
+3. [phase2_technical_architecture.md](phase2_technical_architecture.md) - Architecture
 
 ---
 
@@ -28,30 +28,35 @@
 
 ### Root Directory
 
-**Core Documentation:**
-- `README.md` - Project overview, quick start, features
-- `DEVELOPMENT_INSTRUCTIONS.md` - Comprehensive development guide (primary reference)
-- `CODEBASE_ANALYSIS_SUMMARY.md` - Complete codebase analysis and status
-- `PROJECT_INDEX.md` - This file (navigation guide)
-
-**Git & Commit:**
-- `READY_FOR_COMMIT.md` - Commit preparation guide
-- `GIT_COMMIT_GUIDE.md` - Git workflow instructions
-- `COMMIT_MESSAGE.txt` - Prepared commit message
-- `PRE_COMMIT_CHECKLIST.sh` - Automated verification script
-
-**Phase 2 Documentation:**
-- `PHASE2_SETUP_SUMMARY.md` - Phase 2 setup overview
-
 **AI Agent Instructions:**
 - `AGENT_INSTRUCTIONS.md` - Development guidance for AI agents
 - `CLAUDE.md` - Claude Code specific instructions
+- `README.md` - Project overview, quick start, features
 
 **Configuration:**
 - `package.json` - Project dependencies and scripts
 - `tsconfig.json` - TypeScript configuration
 - `jest.config.ts` - Jest testing configuration
 - `.gitignore` - Git ignore rules
+
+### `/docs` - Documentation
+
+**Core Documentation:**
+- `DEVELOPMENT_INSTRUCTIONS.md` - Comprehensive development guide (primary reference)
+- `CODEBASE_ANALYSIS_SUMMARY.md` - Complete codebase analysis and status
+- `PROJECT_INDEX.md` - This file (navigation guide)
+- `GIT_COMMIT_GUIDE.md` - Git workflow instructions
+- `PHASE2_SETUP_SUMMARY.md` - Phase 2 setup overview
+- `CLEANUP_SUMMARY.md` - Documentation cleanup record
+
+### `/plan` - Planning & Tracking
+
+**Git & Commit:**
+- `READY_FOR_COMMIT.md` - Commit preparation guide
+- `COMMIT_MESSAGE.txt` - Prepared commit message
+
+**Scripts:**
+- `scripts/verify.sh` - Reusable verification script
 
 ### `/src` - Source Code
 
@@ -138,42 +143,42 @@
 ### I want to understand the project
 
 **Read first:**
-1. `README.md` - Overview and features
+1. `../README.md` - Overview and features
 2. `CODEBASE_ANALYSIS_SUMMARY.md` - Current status
 
 **Then explore:**
-- `docs/prd.md` - Product vision
-- `docs/dev_plan.md` - Development roadmap
-- `docs/phase2_technical_architecture.md` - Architecture details
+- `prd.md` - Product vision
+- `dev_plan.md` - Development roadmap
+- `phase2_technical_architecture.md` - Architecture details
 
 ### I want to start developing
 
 **Setup:**
 1. Read `DEVELOPMENT_INSTRUCTIONS.md` - Complete guide
-2. Check `plan/phase2_todo.md` - What needs work
-3. Review `docs/phase2_technical_architecture.md` - Architecture
+2. Check `../plan/phase2_todo.md` - What needs work
+3. Review `phase2_technical_architecture.md` - Architecture
 
 **Start coding:**
-1. Pick a task from `plan/phase2_todo.md`
+1. Pick a task from `../plan/phase2_todo.md`
 2. Follow TDD approach (write tests first)
-3. Reference architecture in `docs/phase2_technical_architecture.md`
+3. Reference architecture in `phase2_technical_architecture.md`
 
 ### I want to commit code
 
 **Before committing:**
-1. Read `READY_FOR_COMMIT.md` - Quick guide
-2. Run `./PRE_COMMIT_CHECKLIST.sh` - Automated checks
+1. Read `../plan/READY_FOR_COMMIT.md` - Quick guide
+2. Run `../scripts/verify.sh` - Automated checks
 3. Review `GIT_COMMIT_GUIDE.md` - Detailed instructions
 
 **Commit:**
 1. Stage files: `git add src/ __tests__/ docs/ *.md`
-2. Commit: `git commit -F COMMIT_MESSAGE.txt`
+2. Commit: `git commit -F plan/COMMIT_MESSAGE.txt`
 3. Push: `git push origin main`
 
 ### I want to understand Phase 2 architecture
 
 **Primary reference:**
-- `docs/phase2_technical_architecture.md` (2,556 lines)
+- `phase2_technical_architecture.md` (2,556 lines)
   - Sections 1-2: Type system and interfaces
   - Sections 3-4: Database schema
   - Sections 5-6: CLI and testing
@@ -181,18 +186,18 @@
 
 **Implementation status:**
 - `CODEBASE_ANALYSIS_SUMMARY.md` - What's complete
-- `plan/phase2_todo.md` - What's remaining
+- `../plan/phase2_todo.md` - What's remaining
 
 ### I'm an AI coding assistant
 
 **Start here:**
-1. `AGENT_INSTRUCTIONS.md` - Development workflow
-2. `CLAUDE.md` - Claude Code specific
+1. `../AGENT_INSTRUCTIONS.md` - Development workflow
+2. `../CLAUDE.md` - Claude Code specific
 3. `DEVELOPMENT_INSTRUCTIONS.md` - Reference guide
 
 **For implementation:**
-1. Check `plan/phase2_todo.md` - Tasks
-2. Read `docs/phase2_technical_architecture.md` - Architecture
+1. Check `../plan/phase2_todo.md` - Tasks
+2. Read `phase2_technical_architecture.md` - Architecture
 3. Follow TDD approach in tests first
 
 ---
@@ -255,35 +260,35 @@
 ### Architecture & Design
 
 **Question:** How does visual regression work?
-**Answer:** `docs/phase2_technical_architecture.md` sections 1-2 (type system), section 7 (implementation)
+**Answer:** `phase2_technical_architecture.md` sections 1-2 (type system), section 7 (implementation)
 
 **Question:** What's the database schema?
-**Answer:** `docs/phase2_technical_architecture.md` section 5 (migration), `src/utils/migration.ts`
+**Answer:** `phase2_technical_architecture.md` section 5 (migration), `../src/utils/migration.ts`
 
 **Question:** How do I add a new CLI command?
-**Answer:** `docs/phase2_technical_architecture.md` section 6, `src/cli.ts`
+**Answer:** `phase2_technical_architecture.md` section 6, `../src/cli.ts`
 
 ### Implementation Details
 
 **Question:** How to implement AI visual classification?
-**Answer:** `docs/phase2_technical_architecture.md:2086-2293`, `DEVELOPMENT_INSTRUCTIONS.md` (Next Steps)
+**Answer:** `phase2_technical_architecture.md:2086-2293`, `DEVELOPMENT_INSTRUCTIONS.md` (Next Steps)
 
 **Question:** What tests should I write?
-**Answer:** `docs/phase2_technical_architecture.md` section 4 (TDD strategy), existing tests in `__tests__/`
+**Answer:** `phase2_technical_architecture.md` section 4 (TDD strategy), existing tests in `../__tests__/`
 
 **Question:** How to add Phase 2 dependencies?
-**Answer:** `docs/phase2_technical_architecture.md` section 3, `package.json`
+**Answer:** `phase2_technical_architecture.md` section 3, `../package.json`
 
 ### Status & Planning
 
 **Question:** What's the current status?
-**Answer:** `CODEBASE_ANALYSIS_SUMMARY.md`, `READY_FOR_COMMIT.md`
+**Answer:** `CODEBASE_ANALYSIS_SUMMARY.md`, `../plan/READY_FOR_COMMIT.md`
 
 **Question:** What needs to be done?
-**Answer:** `plan/phase2_todo.md`, `DEVELOPMENT_INSTRUCTIONS.md` (Remaining Work)
+**Answer:** `../plan/phase2_todo.md`, `DEVELOPMENT_INSTRUCTIONS.md` (Remaining Work)
 
 **Question:** When is Phase 2 complete?
-**Answer:** Estimated 2-3 weeks based on remaining tasks in `plan/phase2_todo.md`
+**Answer:** Estimated 2-3 weeks based on remaining tasks in `../plan/phase2_todo.md`
 
 ---
 
@@ -314,7 +319,7 @@ npm start connect
 
 ### Pre-Commit Checks
 ```bash
-./PRE_COMMIT_CHECKLIST.sh
+./scripts/verify.sh
 ```
 
 ### View Coverage
@@ -328,8 +333,8 @@ open coverage/lcov-report/index.html
 ## 📚 Documentation Hierarchy
 
 **Level 1 - Overview (Start Here):**
-1. `README.md` - What is IRIS?
-2. `READY_FOR_COMMIT.md` - Current status
+1. `../README.md` - What is IRIS?
+2. `../plan/READY_FOR_COMMIT.md` - Current status
 3. `PROJECT_INDEX.md` - This file
 
 **Level 2 - Development:**
@@ -338,38 +343,38 @@ open coverage/lcov-report/index.html
 3. `CODEBASE_ANALYSIS_SUMMARY.md` - What exists
 
 **Level 3 - Architecture:**
-1. `docs/phase2_technical_architecture.md` - Complete design
-2. `docs/prd.md` - Product vision
-3. `docs/dev_plan.md` - Roadmap
+1. `phase2_technical_architecture.md` - Complete design
+2. `prd.md` - Product vision
+3. `dev_plan.md` - Roadmap
 
 **Level 4 - Planning:**
-1. `plan/phase2_todo.md` - Tasks
-2. `docs/user_stories.md` - Use cases
-3. `docs/tech_specs.md` - Technical details
+1. `../plan/phase2_todo.md` - Tasks
+2. `user_stories.md` - Use cases
+3. `tech_specs.md` - Technical details
 
 **Level 5 - AI Agents:**
-1. `AGENT_INSTRUCTIONS.md` - Development workflow
-2. `CLAUDE.md` - Claude Code specific
+1. `../AGENT_INSTRUCTIONS.md` - Development workflow
+2. `../CLAUDE.md` - Claude Code specific
 
 ---
 
 ## 🎓 Learning Path
 
 **Beginner (Understanding IRIS):**
-1. Read `README.md`
+1. Read `../README.md`
 2. Try running commands: `npm start run "click #button"`
-3. Read `docs/prd.md` for vision
+3. Read `prd.md` for vision
 
 **Intermediate (Contributing):**
 1. Read `DEVELOPMENT_INSTRUCTIONS.md`
-2. Explore `src/` directory
+2. Explore `../src/` directory
 3. Run tests: `npm test`
-4. Review `plan/phase2_todo.md`
+4. Review `../plan/phase2_todo.md`
 
 **Advanced (Architecture):**
-1. Study `docs/phase2_technical_architecture.md`
-2. Review implementation in `src/visual/`
-3. Understand test patterns in `__tests__/`
+1. Study `phase2_technical_architecture.md`
+2. Review implementation in `../src/visual/`
+3. Understand test patterns in `../__tests__/`
 4. Design new features
 
 **Expert (Leading Development):**

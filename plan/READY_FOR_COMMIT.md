@@ -14,13 +14,13 @@
 
 ```bash
 # 1. Run pre-commit verification
-./PRE_COMMIT_CHECKLIST.sh
+./scripts/verify.sh
 
 # 2. Stage files for commit
-git add src/ __tests__/ docs/ *.md package.json package-lock.json tsconfig.json jest.config.ts .gitignore
+git add src/ __tests__/ docs/ plan/ *.md package.json package-lock.json tsconfig.json jest.config.ts .gitignore scripts/
 
 # 3. Commit with prepared message
-git commit -F COMMIT_MESSAGE.txt
+git commit -F plan/COMMIT_MESSAGE.txt
 
 # 4. Push to remote
 git push origin main
@@ -47,27 +47,25 @@ git add src/visual/ src/a11y/ src/utils/
 git add __tests__/visual/ __tests__/a11y/ __tests__/utils/
 
 # 6. Stage documentation
-git add docs/phase2_technical_architecture.md
-git add DEVELOPMENT_INSTRUCTIONS.md
-git add CODEBASE_ANALYSIS_SUMMARY.md
-git add GIT_COMMIT_GUIDE.md
-git add PHASE2_SETUP_SUMMARY.md
-git add READY_FOR_COMMIT.md
-git add COMMIT_MESSAGE.txt
-git add PRE_COMMIT_CHECKLIST.sh
+git add docs/
+git add plan/READY_FOR_COMMIT.md
+git add plan/COMMIT_MESSAGE.txt
 
-# 7. Stage configuration
+# 7. Stage scripts
+git add scripts/verify.sh
+
+# 8. Stage configuration
 git add package.json package-lock.json
 git add tsconfig.json jest.config.ts
 git add .gitignore
 
-# 8. Commit
-git commit -F COMMIT_MESSAGE.txt
+# 9. Commit
+git commit -F plan/COMMIT_MESSAGE.txt
 
-# 9. Tag (optional)
+# 10. Tag (optional)
 git tag -a v0.2.0-phase2-core -m "Phase 2 Core Infrastructure Complete"
 
-# 10. Push
+# 11. Push
 git push origin main
 git push origin v0.2.0-phase2-core
 ```
@@ -112,18 +110,20 @@ git push origin v0.2.0-phase2-core
 ### ✅ Documentation (COMPREHENSIVE)
 
 **Development Guides:**
-- `DEVELOPMENT_INSTRUCTIONS.md` - Complete development handbook
-- `CODEBASE_ANALYSIS_SUMMARY.md` - Comprehensive analysis report
-- `GIT_COMMIT_GUIDE.md` - Git workflow instructions
-- `PHASE2_SETUP_SUMMARY.md` - Phase 2 setup overview
-- `READY_FOR_COMMIT.md` - This file
+- `docs/DEVELOPMENT_INSTRUCTIONS.md` - Complete development handbook
+- `docs/CODEBASE_ANALYSIS_SUMMARY.md` - Comprehensive analysis report
+- `docs/GIT_COMMIT_GUIDE.md` - Git workflow instructions
+- `docs/PHASE2_SETUP_SUMMARY.md` - Phase 2 setup overview
+- `docs/PROJECT_INDEX.md` - Project navigation guide
+- `docs/CLEANUP_SUMMARY.md` - Documentation cleanup record
+- `plan/READY_FOR_COMMIT.md` - This file
 
 **Architecture:**
 - `docs/phase2_technical_architecture.md` - Detailed Phase 2 design (2,556 lines)
 
 **Automation:**
-- `PRE_COMMIT_CHECKLIST.sh` - Automated verification script
-- `COMMIT_MESSAGE.txt` - Prepared commit message
+- `scripts/verify.sh` - Reusable verification script
+- `plan/COMMIT_MESSAGE.txt` - Prepared commit message
 
 ### ✅ Configuration (UPDATED)
 
@@ -340,7 +340,7 @@ cat docs/phase2_technical_architecture.md | grep -A 200 "AIVisualClassifier"
 - [ ] Update documentation
 
 **Reference Files:**
-- `DEVELOPMENT_INSTRUCTIONS.md` - Development guide
+- `docs/DEVELOPMENT_INSTRUCTIONS.md` - Development guide
 - `docs/phase2_technical_architecture.md:2086-2293` - AI classifier architecture
 - `src/ai-client.ts` - Extend this for vision analysis
 
@@ -431,8 +431,8 @@ This commit is successful if:
 - Phase 2: Core infrastructure complete, integration pending
 
 **Start Here:**
-1. Read `DEVELOPMENT_INSTRUCTIONS.md` (comprehensive guide)
-2. Review `CODEBASE_ANALYSIS_SUMMARY.md` (current status)
+1. Read `docs/DEVELOPMENT_INSTRUCTIONS.md` (comprehensive guide)
+2. Review `docs/CODEBASE_ANALYSIS_SUMMARY.md` (current status)
 3. Check `docs/phase2_technical_architecture.md` (architecture)
 4. Look at `plan/phase2_todo.md` (remaining tasks)
 
@@ -531,13 +531,13 @@ Before running `git commit`:
 
 ```bash
 # Run verification
-./PRE_COMMIT_CHECKLIST.sh
+./scripts/verify.sh
 
 # Stage all files
-git add src/ __tests__/ docs/ *.md package.json package-lock.json tsconfig.json jest.config.ts .gitignore
+git add src/ __tests__/ docs/ plan/ *.md package.json package-lock.json tsconfig.json jest.config.ts .gitignore scripts/
 
 # Commit with message
-git commit -F COMMIT_MESSAGE.txt
+git commit -F plan/COMMIT_MESSAGE.txt
 
 # Tag release
 git tag -a v0.2.0-phase2-core -m "Phase 2 Core Infrastructure Complete"
