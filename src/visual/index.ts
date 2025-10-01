@@ -50,11 +50,13 @@ export {
 export { VisualCaptureEngine } from './capture';
 export { VisualDiffEngine } from './diff';
 export { BaselineManager } from './baseline';
+export { StorageManager } from './storage';
 
 // Import implementations for the public API
 import { VisualCaptureEngine } from './capture';
 import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
+import { StorageManager } from './storage';
 
 /**
  * Main entry point for visual regression testing.

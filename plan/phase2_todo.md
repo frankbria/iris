@@ -99,21 +99,21 @@ This list breaks down the core tasks needed to complete **Phase 2 – Enhanced T
   - [x] Add configuration for default mask selectors
   - [x] Test masking with various element types
 
-### 4. Basic File System Storage
+### 4. Basic File System Storage ✅ COMPLETED
 
-+ [ ] **Baseline directory structure**
-  - [ ] Create `.iris/baselines/` directory management
-  - [ ] Implement branch-based directory organization
-  - [ ] Create metadata.json file handling
-  - [ ] Add file cleanup and maintenance utilities
-  - [ ] Implement file system permissions setup
++ [x] **Baseline directory structure**
+  - [x] Create `.iris/baselines/` directory management
+  - [x] Implement branch-based directory organization
+  - [x] Create metadata.json file handling
+  - [x] Add file cleanup and maintenance utilities
+  - [x] Implement file system permissions setup
 
-+ [ ] **Image file operations**
-  - [ ] Implement image file saving with compression
-  - [ ] Add image file loading and validation
-  - [ ] Create image hash generation for deduplication
-  - [ ] Implement file naming conventions
-  - [ ] Add image format validation and conversion
++ [x] **Image file operations**
+  - [x] Implement image file saving with compression
+  - [x] Add image file loading and validation
+  - [x] Create image hash generation for deduplication
+  - [x] Implement file naming conventions
+  - [x] Add image format validation and conversion
 
 ---
 
