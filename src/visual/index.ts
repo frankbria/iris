@@ -51,12 +51,23 @@ export { VisualCaptureEngine } from './capture';
 export { VisualDiffEngine } from './diff';
 export { BaselineManager } from './baseline';
 export { StorageManager } from './storage';
+export { AIVisualClassifier } from './ai-classifier';
+
+// AI Classifier types
+export type {
+  AIProvider,
+  AIProviderConfig,
+  PreparedImageForAI,
+  AIAnalysisRequest,
+  AIAnalysisResponse
+} from './ai-classifier';
 
 // Import implementations for the public API
 import { VisualCaptureEngine } from './capture';
 import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
 import { StorageManager } from './storage';
+import { AIVisualClassifier } from './ai-classifier';
 
 /**
  * Main entry point for visual regression testing.

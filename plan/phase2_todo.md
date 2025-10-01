@@ -9,20 +9,21 @@ This list breaks down the core tasks needed to complete **Phase 2 – Enhanced T
 
 **Completed (Week 1-4):**
 - ✅ Full visual testing infrastructure (capture, diff, baseline)
+- ✅ AI visual classifier with OpenAI/Claude/Ollama support
 - ✅ TypeScript types and schemas with Zod validation
 - ✅ Database schema and migration system
-- ✅ Comprehensive test suite (221 tests passing)
-- ✅ Dependencies: sharp, image-ssim, simple-git, pixelmatch
+- ✅ Comprehensive test suite (302 tests passing, 95%+ coverage)
+- ✅ Dependencies: sharp, image-ssim, simple-git, pixelmatch, openai, @anthropic-ai/sdk
 
 **Working Components:**
 - `VisualCaptureEngine` - Screenshot capture with stabilization & masking
 - `VisualDiffEngine` - SSIM & pixel comparison with region analysis
 - `BaselineManager` - Git-integrated baseline storage & management
+- `AIVisualClassifier` - OpenAI/Claude/Ollama integration for semantic analysis
 - Database persistence layer with SQLite
 - Complete type safety and validation
 
 **Remaining Work:**
-- AI visual classifier integration (OpenAI/Claude/Ollama)
 - CLI command integration (`iris visual-diff`)
 - HTML/JUnit report generation (JSON works)
 - Full end-to-end orchestration pipeline
@@ -150,35 +151,35 @@ This list breaks down the core tasks needed to complete **Phase 2 – Enhanced T
   - [x] Create annotated diff images with region highlights
   - [x] Implement artifact file management
 
-### 6. AI Visual Classifier Integration
+### 6. AI Visual Classifier Integration ✅ COMPLETED
 
-+ [ ] **AI provider integration** (`src/visual/ai-classifier.ts`)
-  - [ ] Implement `AIVisualClassifier` class structure
-  - [ ] Create OpenAI GPT-4V integration
-  - [ ] Add Claude 3.5 Sonnet vision integration
-  - [ ] Implement Ollama local model support
-  - [ ] Add provider fallback and error handling
++ [x] **AI provider integration** (`src/visual/ai-classifier.ts`)
+  - [x] Implement `AIVisualClassifier` class structure
+  - [x] Create OpenAI GPT-4V integration
+  - [x] Add Claude 3.5 Sonnet vision integration
+  - [x] Implement Ollama local model support
+  - [x] Add provider fallback and error handling
 
-+ [ ] **Image preprocessing for AI**
-  - [ ] Implement `prepareImagesForAI()` method
-  - [ ] Add image resizing for model input requirements
-  - [ ] Create image encoding for API transmission
-  - [ ] Implement image quality optimization
-  - [ ] Add batch processing capability
++ [x] **Image preprocessing for AI**
+  - [x] Implement `prepareImagesForAI()` method
+  - [x] Add image resizing for model input requirements
+  - [x] Create image encoding for API transmission
+  - [x] Implement image quality optimization
+  - [x] Add batch processing capability
 
-+ [ ] **AI analysis pipeline**
-  - [ ] Create `analyzeChange()` method for single comparisons
-  - [ ] Implement `batchAnalyze()` for multiple comparisons
-  - [ ] Add context injection for better AI understanding
-  - [ ] Create response parsing and validation
-  - [ ] Implement confidence scoring normalization
++ [x] **AI analysis pipeline**
+  - [x] Create `analyzeChange()` method for single comparisons
+  - [x] Implement `batchAnalyze()` for multiple comparisons
+  - [x] Add context injection for better AI understanding
+  - [x] Create response parsing and validation
+  - [x] Implement confidence scoring normalization
 
-+ [ ] **Change classification logic**
-  - [ ] Implement intentional vs. unintentional change detection
-  - [ ] Add change type classification (layout, color, content, typography)
-  - [ ] Create semantic similarity scoring
-  - [ ] Implement reasoning extraction from AI responses
-  - [ ] Add classification confidence metrics
++ [x] **Change classification logic**
+  - [x] Implement intentional vs. unintentional change detection
+  - [x] Add change type classification (layout, color, content, typography)
+  - [x] Create semantic similarity scoring
+  - [x] Implement reasoning extraction from AI responses
+  - [x] Add classification confidence metrics
 
 ### 7. Baseline Management System ✅ COMPLETED
 
