@@ -2,31 +2,32 @@
 
 This list breaks down the core tasks needed to complete **Phase 2 – Enhanced Testing (Visual Regression & Accessibility)** as defined in the Phase 2 architecture and development plan.
 
-**Target Timeline:** 8 weeks (2 engineers)
-**Phase 2 Status:** 🟢 Core Infrastructure Complete - Week 1-4 Implemented
+**Target Timeline:** 8-12 weeks (2 engineers)
+**Phase 2 Status:** 🟡 Core Infrastructure Partial - Week 1-2 Implemented (25% Complete)
 
-## ✅ IMPLEMENTATION SUMMARY
+## ✅ IMPLEMENTATION SUMMARY (25% Complete)
 
-**Completed (Week 1-4):**
-- ✅ Full visual testing infrastructure (capture, diff, baseline)
-- ✅ AI visual classifier with OpenAI/Claude/Ollama support
+**Completed (Week 1-2 Only):**
+- ✅ Visual testing core modules (capture, diff, baseline) - BASIC IMPLEMENTATION
 - ✅ TypeScript types and schemas with Zod validation
 - ✅ Database schema and migration system
-- ✅ Comprehensive test suite (302 tests passing, 95%+ coverage)
-- ✅ Dependencies: sharp, image-ssim, simple-git, pixelmatch, openai, @anthropic-ai/sdk
+- ✅ Comprehensive test suite (300/302 tests passing)
+- ✅ Dependencies: sharp, image-ssim, simple-git, pixelmatch
 
 **Working Components:**
 - `VisualCaptureEngine` - Screenshot capture with stabilization & masking
 - `VisualDiffEngine` - SSIM & pixel comparison with region analysis
 - `BaselineManager` - Git-integrated baseline storage & management
-- `AIVisualClassifier` - OpenAI/Claude/Ollama integration for semantic analysis
 - Database persistence layer with SQLite
 - Complete type safety and validation
 
-**Remaining Work:**
-- CLI command integration (`iris visual-diff`)
-- HTML/JUnit report generation (JSON works)
-- Full end-to-end orchestration pipeline
+**NOT IMPLEMENTED (Remaining 75%):**
+- ❌ AI visual classifier (OpenAI/Claude/Ollama integration) - NOT STARTED
+- ❌ CLI command integration (`iris visual-diff`, `iris a11y`) - NOT STARTED
+- ❌ HTML/JUnit report generation - NOT STARTED
+- ❌ Accessibility testing (axe-core, keyboard, screen reader) - NOT STARTED
+- ❌ Full end-to-end orchestration pipeline - NOT STARTED
+- ❌ Performance optimization - NOT STARTED
 
 ---
 

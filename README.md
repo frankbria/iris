@@ -2,7 +2,7 @@
 
 > 👁️ AI-powered UI understanding and testing toolkit
 
-**Phase 1: ✅ Complete** | **Phase 2: 🟡 40% Complete (Core Infrastructure)**
+**Phase 1: ✅ Complete** | **Phase 2: 🟡 25% Complete (Core Modules Only)**
 
 IRIS gives AI coding assistants "eyes and hands" to see and interact with user interfaces through natural language commands, visual regression testing, and accessibility validation.
 
@@ -22,25 +22,27 @@ IRIS gives AI coding assistants "eyes and hands" to see and interact with user i
 
 **Test Status:** 122/122 tests passing (100%)
 
-### 🟡 Phase 2 - Visual Regression & Accessibility (40% Complete)
+### 🟡 Phase 2 - Visual Regression & Accessibility (25% Complete)
 
-**Implemented:**
-- ✅ Visual capture engine with page stabilization
-- ✅ SSIM and pixel-based diff engine
-- ✅ Git-integrated baseline manager
+**Implemented (Core Modules Only):**
+- ✅ Visual capture engine with page stabilization (basic)
+- ✅ SSIM and pixel-based diff engine (basic)
+- ✅ Git-integrated baseline manager (basic)
 - ✅ Complete TypeScript/Zod type system
 - ✅ Database schema for visual testing
 - ✅ Accessibility type definitions
 
-**Test Status:** 99/101 tests passing (98% - 2 skipped pending implementation)
+**Test Status:** 178/180 tests passing (99% - 2 skipped pending implementation)
 
-**In Progress:**
-- ⏳ AI visual classification (semantic change analysis)
-- ⏳ CLI integration (`iris visual-diff`, `iris a11y`)
-- ⏳ HTML/JUnit report generation
-- ⏳ Accessibility testing (axe-core integration)
+**NOT IMPLEMENTED (Remaining 75%):**
+- ❌ AI visual classification (semantic change analysis) - NOT IMPLEMENTED
+- ❌ CLI integration (`iris visual-diff`, `iris a11y`) - NOT IMPLEMENTED
+- ❌ HTML/JUnit report generation - NOT IMPLEMENTED
+- ❌ Accessibility testing (axe-core integration) - NOT IMPLEMENTED
+- ❌ E2E orchestration pipeline - NOT IMPLEMENTED
+- ❌ Performance optimization - NOT IMPLEMENTED
 
-**Overall Test Status:** 221/223 tests passing (99.1%)
+**Overall Test Status:** 300/302 tests passing (99.3%)
 
 ---
 
@@ -144,19 +146,19 @@ Create `~/.iris/config.json`:
 - Branch-based baseline isolation
 - Automatic cleanup of old baselines
 
-**Coming Soon:**
-- AI-powered semantic analysis of visual changes
-- CLI commands: `iris visual-diff`
-- HTML/JUnit report generation
+**NOT IMPLEMENTED (Coming in Future Releases):**
+- ❌ AI-powered semantic analysis of visual changes - NOT IMPLEMENTED
+- ❌ CLI commands: `iris visual-diff` - NOT IMPLEMENTED
+- ❌ HTML/JUnit report generation - NOT IMPLEMENTED
 
-### Accessibility Testing (In Development)
+### Accessibility Testing (NOT IMPLEMENTED)
 
-**Planned Features:**
-- WCAG 2.1 AA compliance validation with axe-core
-- Keyboard navigation testing
-- Screen reader simulation
-- Color contrast validation
-- CLI command: `iris a11y`
+**Planned Features (NOT YET STARTED):**
+- ❌ WCAG 2.1 AA compliance validation with axe-core - NOT IMPLEMENTED
+- ❌ Keyboard navigation testing - NOT IMPLEMENTED
+- ❌ Screen reader simulation - NOT IMPLEMENTED
+- ❌ Color contrast validation - NOT IMPLEMENTED
+- ❌ CLI command: `iris a11y` - NOT IMPLEMENTED
 
 ---
 
@@ -254,11 +256,12 @@ npm test -- --coverage
 - JSON-RPC protocol server
 - SQLite persistence
 
-### Phase 2 🟡 (40% Complete - Q4 2025)
-- Visual regression testing with AI analysis
-- Accessibility validation (WCAG 2.1 AA)
-- HTML/JUnit report generation
-- CLI integration for visual and a11y commands
+### Phase 2 🟡 (25% Complete - Q1-Q2 2026)
+- Visual regression testing core modules (PARTIAL)
+- ❌ AI analysis integration (NOT IMPLEMENTED)
+- ❌ Accessibility validation (WCAG 2.1 AA) (NOT IMPLEMENTED)
+- ❌ HTML/JUnit report generation (NOT IMPLEMENTED)
+- ❌ CLI integration for visual and a11y commands (NOT IMPLEMENTED)
 
 ### Phase 3 📋 (Planned - Q1 2026)
 - Performance monitoring
@@ -272,8 +275,8 @@ npm test -- --coverage
 
 **Test Coverage:**
 - Phase 1: 122/122 tests (100%)
-- Phase 2: 99/101 tests (98%)
-- **Overall: 221/223 tests passing (99.1%)**
+- Phase 2: 178/180 tests (99%)
+- **Overall: 300/302 tests passing (99.3%)**
 
 **Test Suites:**
 - Unit tests for all core modules
@@ -344,5 +347,5 @@ Building in public. Star the repo to follow along! ⭐
 
 **Status:**
 - Phase 1: ✅ Complete
-- Phase 2: 🟡 40% Complete
-- Tests: 221/223 passing (99.1%)
+- Phase 2: 🟡 25% Complete (Core Only)
+- Tests: 300/302 passing (99.3%)
