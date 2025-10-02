@@ -52,6 +52,7 @@ export { VisualDiffEngine } from './diff';
 export { BaselineManager } from './baseline';
 export { StorageManager } from './storage';
 export { AIVisualClassifier } from './ai-classifier';
+export { VisualTestRunner } from './visual-runner';
 
 // AI Classifier types
 export type {
@@ -61,6 +62,12 @@ export type {
   AIAnalysisRequest,
   AIAnalysisResponse
 } from './ai-classifier';
+
+// Visual Test Runner types
+export type {
+  VisualTestRunnerConfig,
+  VisualTestResult
+} from './visual-runner';
 
 // Import implementations for the public API
 import { VisualCaptureEngine } from './capture';
