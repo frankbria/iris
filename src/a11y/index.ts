@@ -60,20 +60,28 @@ export {
   A11yReportSchema
 } from './types';
 
-// Core testing engines (to be implemented)
-// export { AxeRunner } from './axe-runner';
-// export { KeyboardTester } from './keyboard-tester';
-// export { ScreenReaderSim } from './screenreader-sim';
-// export { A11yReporter } from './a11y-reporter';
-// export { A11yRunner } from './a11y-runner';
+// Core testing engines
+export { AxeRunner } from './axe-integration';
+export { KeyboardTester } from './keyboard-tester';
+export { AccessibilityRunner } from './a11y-runner';
 
-// TODO: Implement core accessibility testing components
-// This is a Phase 2 module that will be implemented in stages:
-// 1. AxeRunner - axe-core integration with WCAG 2.1 AA rules
-// 2. KeyboardTester - Keyboard navigation and focus management
-// 3. ScreenReaderSim - Screen reader simulation and ARIA validation
-// 4. A11yReporter - Accessibility report generation
-// 5. A11yRunner - Accessibility test orchestration
+// Export additional types from runners
+export type {
+  AxeConfig,
+  AxeRunOptions
+} from './axe-integration';
+
+export type {
+  KeyboardTestConfig,
+  FocusableElement,
+  FocusTrap,
+  KeyboardInteraction
+} from './keyboard-tester';
+
+export type {
+  AccessibilityRunnerConfig,
+  AccessibilityTestResult
+} from './a11y-runner';
 
 /**
  * Run comprehensive accessibility test suite.
