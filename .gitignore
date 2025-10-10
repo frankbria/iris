@@ -1,5 +1,45 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+*.js.map
+*.d.ts
+*.d.ts.map
+jest.setup.js
+jest.setup.js.map
+jest.setup.d.ts
+jest.setup.d.ts.map
+
+# Test coverage
+coverage/
+
+# Environment
 .env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database (development)
+*.sqlite
+*.db
+
+# Temporary files
+*.tmp
+.iris/

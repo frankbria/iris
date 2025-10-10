@@ -185,6 +185,190 @@ program
     console.log(`JSON-RPC server listening on ws://localhost:${p}`);
   });
 
+program
+  .command('visual-diff')
+  .description('Run visual regression testing')
+  .option('--pages <patterns>', 'Page patterns to test (comma-separated)', '/')
+  .option('--baseline <reference>', 'Baseline branch or commit', 'main')
+  .option('--semantic', 'Enable AI-powered semantic analysis', false)
+  .option('--threshold <value>', 'Pixel difference threshold (0-1)', '0.1')
+  .option('--devices <list>', 'Device types (desktop,mobile,tablet)', 'desktop')
+  .option('--format <type>', 'Output format (html|json|junit)', 'html')
+  .option('--output <path>', 'Output file path')
+  .option('--fail-on <severity>', 'Fail on severity level (minor|moderate|breaking)', 'breaking')
+  .option('--update-baseline', 'Update baseline with current screenshots', false)
+  .option('--mask <selectors>', 'CSS selectors to mask (comma-separated)')
+  .option('--exclude <selectors>', 'CSS selectors to exclude (comma-separated)')
+  .option('--concurrency <number>', 'Max concurrent comparisons', '3')
+  .action(async (options) => {
+    const startTime = Date.now();
+
+    try {
+      console.log('🎯 Starting visual regression testing...');
+
+      const { VisualTestRunner } = await import('./visual/visual-runner');
+
+      const runner = new VisualTestRunner({
+        pages: options.pages.split(',').map((p: string) => p.trim()),
+        baseline: {
+          strategy: 'branch' as const,
+          reference: options.baseline
+        },
+        capture: {
+          viewport: { width: 1920, height: 1080 },
+          fullPage: true,
+          mask: options.mask ? options.mask.split(',').map((s: string) => s.trim()) : [],
+          format: 'png' as const,
+          quality: 90,
+          stabilization: {
+            waitForFonts: true,
+            disableAnimations: true,
+            delay: 500,
+            waitForNetworkIdle: true,
+            networkIdleTimeout: 2000
+          }
+        },
+        diff: {
+          threshold: parseFloat(options.threshold),
+          semanticAnalysis: options.semantic,
+          aiProvider: 'openai' as const,
+          antiAliasing: true,
+          regions: [],
+          maxConcurrency: parseInt(options.concurrency)
+        },
+        devices: options.devices.split(',').map((d: string) => d.trim()),
+        updateBaseline: options.updateBaseline,
+        failOn: options.failOn,
+        output: {
+          format: options.format,
+          path: options.output
+        }
+      });
+
+      const result = await runner.run();
+
+      const duration = Date.now() - startTime;
+      console.log(`\n📊 Visual testing completed in ${duration}ms`);
+      console.log(`   Total comparisons: ${result.summary.totalComparisons}`);
+      console.log(`   Passed: ${result.summary.passed}`);
+      console.log(`   Failed: ${result.summary.failed}`);
+
+      if (result.summary.overallStatus === 'failed') {
+        console.log(`\n❌ Visual regression detected!`);
+        console.log(`   Breaking: ${result.summary.severityCounts.breaking || 0}`);
+        console.log(`   Moderate: ${result.summary.severityCounts.moderate || 0}`);
+        console.log(`   Minor: ${result.summary.severityCounts.minor || 0}`);
+
+        if (options.format === 'html' && result.reportPath) {
+          console.log(`\n📋 Report generated: ${result.reportPath}`);
+        }
+
+        // Exit with failure code based on severity threshold
+        const failureSeverities = ['breaking', 'moderate', 'minor'];
+        const failIndex = failureSeverities.indexOf(options.failOn);
+        const hasFailures = failureSeverities.slice(0, failIndex + 1)
+          .some(severity => (result.summary.severityCounts[severity as keyof typeof result.summary.severityCounts] || 0) > 0);
+
+        if (hasFailures) {
+          process.exit(5); // Visual regression failure exit code
+        }
+      } else {
+        console.log(`\n✅ All visual tests passed!`);
+      }
+
+    } catch (error) {
+      console.error(`\n❌ Visual testing failed:`, error);
+      process.exit(3); // Environment/runtime error
+    }
+  });
+
+program
+  .command('a11y')
+  .description('Run accessibility testing')
+  .option('--pages <patterns>', 'Page patterns to test (comma-separated)', '/')
+  .option('--rules <rules>', 'Specific axe rules to run (comma-separated)')
+  .option('--tags <tags>', 'Axe rule tags (wcag2a,wcag2aa,wcag21aa)', 'wcag2a,wcag2aa')
+  .option('--fail-on <impacts>', 'Fail on impact levels (critical,serious,moderate,minor)', 'critical,serious')
+  .option('--format <type>', 'Output format (html|json|junit)', 'html')
+  .option('--output <path>', 'Output file path')
+  .option('--include-keyboard', 'Include keyboard navigation testing', true)
+  .option('--include-screenreader', 'Include screen reader simulation', false)
+  .action(async (options) => {
+    const startTime = Date.now();
+
+    try {
+      console.log('♿ Starting accessibility testing...');
+
+      const { AccessibilityRunner } = await import('./a11y/a11y-runner');
+
+      const runner = new AccessibilityRunner({
+        pages: options.pages.split(',').map((p: string) => p.trim()),
+        axe: {
+          rules: {},
+          tags: options.tags.split(',').map((t: string) => t.trim()),
+          include: [],
+          exclude: [],
+          disableRules: [],
+          timeout: 30000
+        },
+        keyboard: {
+          testFocusOrder: options.includeKeyboard,
+          testTrapDetection: options.includeKeyboard,
+          testArrowKeyNavigation: options.includeKeyboard,
+          testEscapeHandling: options.includeKeyboard,
+          customSequences: []
+        },
+        screenReader: {
+          testAriaLabels: options.includeScreenreader,
+          testLandmarkNavigation: options.includeScreenreader,
+          testImageAltText: options.includeScreenreader,
+          testHeadingStructure: options.includeScreenreader,
+          simulateScreenReader: options.includeScreenreader
+        },
+        failureThreshold: options.failOn.split(',').reduce((acc: any, impact: string) => {
+          acc[impact.trim()] = true;
+          return acc;
+        }, {}),
+        reporting: {
+          includePassedTests: false,
+          groupByImpact: true,
+          includeScreenshots: true
+        },
+        output: {
+          format: options.format,
+          path: options.output
+        }
+      });
+
+      const result = await runner.run();
+
+      const duration = Date.now() - startTime;
+      console.log(`\n📊 Accessibility testing completed in ${duration}ms`);
+      console.log(`   Total violations: ${result.summary.totalViolations}`);
+      console.log(`   Accessibility score: ${result.summary.score}/100`);
+
+      if (!result.summary.passed) {
+        console.log(`\n❌ Accessibility violations found!`);
+        console.log(`   Critical: ${result.summary.violationsBySeverity.critical || 0}`);
+        console.log(`   Serious: ${result.summary.violationsBySeverity.serious || 0}`);
+        console.log(`   Moderate: ${result.summary.violationsBySeverity.moderate || 0}`);
+        console.log(`   Minor: ${result.summary.violationsBySeverity.minor || 0}`);
+
+        if (options.format === 'html' && result.reportPath) {
+          console.log(`\n📋 Report generated: ${result.reportPath}`);
+        }
+
+        process.exit(4); // Accessibility failure exit code
+      } else {
+        console.log(`\n✅ All accessibility tests passed!`);
+      }
+
+    } catch (error) {
+      console.error(`\n❌ Accessibility testing failed:`, error);
+      process.exit(3); // Environment/runtime error
+    }
+  });
+
 export async function runCli(args: string[]): Promise<void> {
   await program.parseAsync(args, { from: 'node' });
 }
