@@ -53,6 +53,7 @@ export { BaselineManager } from './baseline';
 export { StorageManager } from './storage';
 export { AIVisualClassifier } from './ai-classifier';
 export { VisualTestRunner } from './visual-runner';
+export { VisualReporter } from './reporter';
 
 // AI Classifier types
 export type {
@@ -68,6 +69,12 @@ export type {
   VisualTestRunnerConfig,
   VisualTestResult
 } from './visual-runner';
+
+// Visual Reporter types
+export type {
+  ReportConfig,
+  ReportArtifacts
+} from './reporter';
 
 // Import implementations for the public API
 import { VisualCaptureEngine } from './capture';
