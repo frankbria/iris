@@ -112,6 +112,7 @@ export class StorageManager {
       quality?: number;
       format?: 'png' | 'jpeg' | 'webp';
       compression?: number;
+      autoOptimize?: boolean;
     } = {}
   ): Promise<{
     path: string;
@@ -120,8 +121,28 @@ export class StorageManager {
     format: string;
   }> {
     const testDir = await this.ensureTestDirectory(branch, testName);
-    const format = options.format || 'png';
-    const quality = options.quality || 90;
+
+    // Auto-optimize format based on image analysis if requested
+    let format = options.format;
+    let quality = options.quality || 90;
+
+    if (options.autoOptimize && !format) {
+      const metadata = await sharp(imageBuffer).metadata();
+      const originalSize = imageBuffer.length;
+
+      // Use JPEG for photos (larger images), WebP for graphics
+      if (originalSize > 1024 * 1024) { // > 1MB, likely a photo
+        format = 'jpeg';
+        quality = 85; // More aggressive compression for large images
+      } else if (originalSize > 500 * 1024) { // > 500KB
+        format = 'webp';
+        quality = 88;
+      } else {
+        format = 'png'; // Small images, keep quality
+      }
+    } else {
+      format = format || 'png';
+    }
 
     // Process image with sharp for compression
     let processedBuffer: Buffer;
@@ -131,16 +152,21 @@ export class StorageManager {
       sharpInstance = sharpInstance.png({
         compressionLevel: options.compression || 9,
         adaptiveFiltering: true,
+        palette: true, // Use palette optimization for smaller size
       });
     } else if (format === 'jpeg') {
       sharpInstance = sharpInstance.jpeg({
         quality,
         mozjpeg: true,
+        progressive: true, // Progressive JPEG for faster loading
+        optimizeScans: true,
       });
     } else if (format === 'webp') {
       sharpInstance = sharpInstance.webp({
         quality,
         lossless: false,
+        nearLossless: true, // Better compression with minimal quality loss
+        smartSubsample: true,
       });
     }
 

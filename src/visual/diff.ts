@@ -1,5 +1,6 @@
 import pixelmatch from 'pixelmatch';
 import sharp from 'sharp';
+import * as crypto from 'crypto';
 const imageSsim = require('image-ssim');
 import { DiffOptions, DiffResult, DiffAnalysis, PreparedImage, SSIMResult } from './types';
 
@@ -7,11 +8,46 @@ import { DiffOptions, DiffResult, DiffAnalysis, PreparedImage, SSIMResult } from
  * VisualDiffEngine handles pixel-level and semantic comparison of images
  */
 export class VisualDiffEngine {
+  private diffCache: Map<string, DiffResult> = new Map();
+  private cacheEnabled: boolean = true;
+  private maxCacheSize: number = 100;
+  private maxImageSize: number = 10 * 1024 * 1024; // 10MB max per image
+  private memoryThreshold: number = 100 * 1024 * 1024; // 100MB total memory threshold
   /**
    * Compare two images using pixel matching
    */
   async compare(baselineBuffer: Buffer, currentBuffer: Buffer, options: DiffOptions): Promise<DiffResult> {
     try {
+      // Memory management: check image sizes
+      if (baselineBuffer.length > this.maxImageSize || currentBuffer.length > this.maxImageSize) {
+        return {
+          success: false,
+          passed: false,
+          similarity: 0,
+          pixelDifference: 0,
+          threshold: options.threshold,
+          error: `Image size exceeds maximum allowed (${this.maxImageSize / (1024 * 1024)}MB)`,
+        };
+      }
+
+      // Check available memory and clear cache if needed
+      const memoryUsage = process.memoryUsage();
+      if (memoryUsage.heapUsed > this.memoryThreshold) {
+        this.clearCache();
+        if (global.gc) {
+          global.gc(); // Force garbage collection if available
+        }
+      }
+
+      // Check cache first
+      if (this.cacheEnabled) {
+        const cacheKey = this.generateCacheKey(baselineBuffer, currentBuffer, options);
+        const cached = this.diffCache.get(cacheKey);
+        if (cached) {
+          return cached;
+        }
+      }
+
       // Prepare images for comparison
       const baseline = await this.prepareImage(baselineBuffer);
       const current = await this.prepareImage(currentBuffer);
@@ -31,6 +67,45 @@ export class VisualDiffEngine {
       // Create diff buffer
       const diffBuffer = Buffer.alloc(baseline.width * baseline.height * 4);
 
+      // Early exit optimization: sample a subset of pixels first for large images
+      const totalPixels = baseline.width * baseline.height;
+      const isLargeImage = totalPixels > 1920 * 1080; // > Full HD
+
+      if (isLargeImage) {
+        // Sample 10% of pixels for quick check
+        const sampleSize = Math.floor(totalPixels * 0.1);
+        let sampleDiff = 0;
+
+        for (let i = 0; i < sampleSize; i++) {
+          const pixelIndex = Math.floor(Math.random() * totalPixels);
+          const bufferIndex = pixelIndex * 4;
+
+          // Simple RGB difference check
+          const rDiff = Math.abs(baseline.buffer[bufferIndex] - current.buffer[bufferIndex]);
+          const gDiff = Math.abs(baseline.buffer[bufferIndex + 1] - current.buffer[bufferIndex + 1]);
+          const bDiff = Math.abs(baseline.buffer[bufferIndex + 2] - current.buffer[bufferIndex + 2]);
+
+          if (rDiff > 10 || gDiff > 10 || bDiff > 10) {
+            sampleDiff++;
+          }
+        }
+
+        const sampleSimilarity = (sampleSize - sampleDiff) / sampleSize;
+
+        // If sample shows large difference, exit early
+        if (sampleSimilarity < 0.7) {
+          return {
+            success: true,
+            passed: false,
+            similarity: sampleSimilarity,
+            pixelDifference: Math.floor((1 - sampleSimilarity) * totalPixels),
+            threshold: options.threshold,
+            diffBuffer: Buffer.alloc(0), // Don't generate diff for obviously different images
+            earlyExit: true,
+          } as any;
+        }
+      }
+
       // Perform pixel comparison
       const pixelDifference = pixelmatch(
         baseline.buffer,
@@ -49,14 +124,13 @@ export class VisualDiffEngine {
       );
 
       // Calculate similarity
-      const totalPixels = baseline.width * baseline.height;
       const similarity = (totalPixels - pixelDifference) / totalPixels;
       const passed = similarity >= options.threshold;
 
       // Generate diff image
       const diffImageBuffer = await this.generateDiffImage(diffBuffer, baseline.width, baseline.height);
 
-      return {
+      const result = {
         success: true,
         passed,
         similarity,
@@ -64,6 +138,14 @@ export class VisualDiffEngine {
         threshold: options.threshold,
         diffBuffer: diffImageBuffer,
       };
+
+      // Store in cache
+      if (this.cacheEnabled) {
+        const cacheKey = this.generateCacheKey(baselineBuffer, currentBuffer, options);
+        this.addToCache(cacheKey, result);
+      }
+
+      return result;
     } catch (error) {
       return {
         success: false,
@@ -306,5 +388,96 @@ export class VisualDiffEngine {
     }
 
     return { minX, maxX, minY, maxY };
+  }
+
+  /**
+   * Generate cache key from image buffers and options
+   */
+  private generateCacheKey(baselineBuffer: Buffer, currentBuffer: Buffer, options: DiffOptions): string {
+    const baselineHash = crypto.createHash('sha256').update(baselineBuffer).digest('hex').substring(0, 16);
+    const currentHash = crypto.createHash('sha256').update(currentBuffer).digest('hex').substring(0, 16);
+    const optionsHash = crypto.createHash('sha256').update(JSON.stringify(options)).digest('hex').substring(0, 8);
+    return `${baselineHash}-${currentHash}-${optionsHash}`;
+  }
+
+  /**
+   * Add result to cache with size management
+   */
+  private addToCache(key: string, result: DiffResult): void {
+    // Implement LRU eviction if cache is full
+    if (this.diffCache.size >= this.maxCacheSize) {
+      // Remove oldest entry (first in Map)
+      const firstKey = this.diffCache.keys().next().value;
+      if (firstKey) {
+        this.diffCache.delete(firstKey);
+      }
+    }
+    this.diffCache.set(key, result);
+  }
+
+  /**
+   * Clear the diff cache
+   */
+  clearCache(): void {
+    this.diffCache.clear();
+  }
+
+  /**
+   * Enable or disable caching
+   */
+  setCacheEnabled(enabled: boolean): void {
+    this.cacheEnabled = enabled;
+    if (!enabled) {
+      this.clearCache();
+    }
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats(): { size: number; maxSize: number; enabled: boolean } {
+    return {
+      size: this.diffCache.size,
+      maxSize: this.maxCacheSize,
+      enabled: this.cacheEnabled,
+    };
+  }
+
+  /**
+   * Set memory limits for image processing
+   */
+  setMemoryLimits(maxImageSize: number, memoryThreshold: number): void {
+    this.maxImageSize = maxImageSize;
+    this.memoryThreshold = memoryThreshold;
+  }
+
+  /**
+   * Get current memory usage statistics
+   */
+  getMemoryStats(): {
+    heapUsed: number;
+    heapTotal: number;
+    external: number;
+    threshold: number;
+    maxImageSize: number;
+  } {
+    const memoryUsage = process.memoryUsage();
+    return {
+      heapUsed: memoryUsage.heapUsed,
+      heapTotal: memoryUsage.heapTotal,
+      external: memoryUsage.external,
+      threshold: this.memoryThreshold,
+      maxImageSize: this.maxImageSize,
+    };
+  }
+
+  /**
+   * Force cleanup of resources and garbage collection
+   */
+  forceCleanup(): void {
+    this.clearCache();
+    if (global.gc) {
+      global.gc();
+    }
   }
 }
