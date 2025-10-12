@@ -12,6 +12,7 @@ import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
 import { AIVisualClassifier } from './ai-classifier';
 import { StorageManager } from './storage';
+import { VisualReporter } from './reporter';
 import type { AIProvider } from './ai-classifier';
 
 export interface VisualTestRunnerConfig {
@@ -427,16 +428,27 @@ export class VisualTestRunner {
     summary: VisualTestResult['summary']
   ): Promise<string> {
     const format = this.config.output?.format || 'json';
-    const outputPath = this.config.output?.path || `./visual-report-${Date.now()}.${format}`;
+    const outputPath = this.config.output?.path;
 
-    if (format === 'json') {
-      const report = JSON.stringify({ summary, results }, null, 2);
-      const fs = await import('fs');
-      fs.writeFileSync(outputPath, report);
-      return outputPath;
-    }
+    // Create full test result structure for reporter
+    const fullResult: VisualTestResult = {
+      summary,
+      results,
+      duration: 0, // Will be set by caller
+      reportPath: outputPath
+    };
 
-    // HTML and JUnit formats to be implemented
-    throw new Error(`Report format '${format}' not yet implemented`);
+    // Use VisualReporter for all formats
+    const reporter = new VisualReporter({
+      format: format as 'html' | 'json' | 'junit',
+      outputPath,
+      title: 'IRIS Visual Regression Test Report',
+      includeScreenshots: true,
+      includePassedTests: true,
+      relativePaths: true
+    });
+
+    const artifacts = await reporter.generateReport(fullResult);
+    return artifacts.reportPath;
   }
 }
