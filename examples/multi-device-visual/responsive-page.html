@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRIS Responsive Testing Sample</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f0f2f5;
+        }
+
+        /* Header - Responsive */
+        header {
+            background: linear-gradient(135deg, #2193b0 0%, #6dd5ed 100%);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        header h1 {
+            font-size: clamp(1.8rem, 5vw, 3rem);
+            margin-bottom: 0.5rem;
+        }
+
+        header p {
+            font-size: clamp(1rem, 2.5vw, 1.3rem);
+            opacity: 0.95;
+        }
+
+        /* Navigation - Responsive */
+        nav {
+            background: white;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 2rem;
+        }
+
+        .nav-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #2193b0;
+        }
+
+        .nav-menu {
+            display: flex;
+            list-style: none;
+            gap: 2rem;
+        }
+
+        .nav-menu a {
+            text-decoration: none;
+            color: #333;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+
+        .nav-menu a:hover {
+            color: #2193b0;
+        }
+
+        .nav-toggle {
+            display: none;
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #333;
+        }
+
+        /* Main Content */
+        main {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Hero Section */
+        .hero {
+            background: white;
+            border-radius: 12px;
+            padding: 3rem;
+            margin-bottom: 2rem;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .hero h2 {
+            font-size: clamp(1.8rem, 4vw, 2.5rem);
+            color: #2193b0;
+            margin-bottom: 1rem;
+        }
+
+        .hero p {
+            font-size: clamp(1rem, 2vw, 1.2rem);
+            color: #666;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        /* Feature Grid - Responsive */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .feature-card {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .feature-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature-card h3 {
+            color: #2193b0;
+            margin-bottom: 0.5rem;
+            font-size: clamp(1.3rem, 2.5vw, 1.5rem);
+        }
+
+        .feature-card p {
+            color: #666;
+            font-size: clamp(0.9rem, 1.5vw, 1rem);
+        }
+
+        /* Device Info Badge */
+        .device-info {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 1rem 2rem;
+            border-radius: 12px;
+            text-align: center;
+            margin-bottom: 2rem;
+            font-weight: 600;
+        }
+
+        .device-info::before {
+            content: "📱 Current Viewport: ";
+        }
+
+        /* Responsive Stats */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-number {
+            font-size: clamp(2rem, 5vw, 3rem);
+            font-weight: 700;
+            color: #2193b0;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: clamp(0.8rem, 1.5vw, 1rem);
+            margin-top: 0.5rem;
+        }
+
+        /* Footer */
+        footer {
+            background: #2d3748;
+            color: white;
+            text-align: center;
+            padding: 2rem;
+            margin-top: 2rem;
+        }
+
+        footer p {
+            font-size: clamp(0.9rem, 1.5vw, 1rem);
+            opacity: 0.8;
+        }
+
+        /* Tablet Breakpoint (768px) */
+        @media (max-width: 768px) {
+            .nav-menu {
+                display: none;
+            }
+
+            .nav-toggle {
+                display: block;
+            }
+
+            .nav-menu.open {
+                display: flex;
+                flex-direction: column;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
+                background: white;
+                padding: 1rem;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+
+            .features {
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            }
+
+            .hero {
+                padding: 2rem 1.5rem;
+            }
+
+            .device-info::before {
+                content: "📱 Tablet View: ";
+            }
+        }
+
+        /* Mobile Breakpoint (480px) */
+        @media (max-width: 480px) {
+            header {
+                padding: 1.5rem 1rem;
+            }
+
+            main {
+                padding: 1rem;
+            }
+
+            .hero {
+                padding: 1.5rem 1rem;
+            }
+
+            .features {
+                grid-template-columns: 1fr;
+                gap: 1.5rem;
+            }
+
+            .feature-card {
+                padding: 1.5rem;
+            }
+
+            .stats {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .nav-container {
+                padding: 1rem;
+            }
+
+            .device-info::before {
+                content: "📱 Mobile View: ";
+            }
+        }
+
+        /* Desktop Large (1920px+) */
+        @media (min-width: 1920px) {
+            .device-info::before {
+                content: "🖥️ Desktop View (Large): ";
+            }
+        }
+
+        /* Desktop Standard (1366px-1919px) */
+        @media (min-width: 1366px) and (max-width: 1919px) {
+            .device-info::before {
+                content: "🖥️ Desktop View (Standard): ";
+            }
+        }
+
+        /* Display current viewport dimensions */
+        .viewport-dimensions {
+            background: #f7fafc;
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+            margin-bottom: 2rem;
+            font-family: monospace;
+            color: #4a5568;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>📱 IRIS Responsive Testing</h1>
+        <p>Multi-Device Visual Regression Detection</p>
+    </header>
+
+    <nav>
+        <div class="nav-container">
+            <div class="nav-brand">IRIS</div>
+            <button class="nav-toggle" aria-label="Toggle navigation">☰</button>
+            <ul class="nav-menu">
+                <li><a href="#features">Features</a></li>
+                <li><a href="#testing">Testing</a></li>
+                <li><a href="#docs">Docs</a></li>
+                <li><a href="#github">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main>
+        <div class="device-info" id="device-indicator"></div>
+
+        <div class="viewport-dimensions" id="viewport-info"></div>
+
+        <div class="hero">
+            <h2>Test Across All Devices</h2>
+            <p>IRIS automatically captures and compares screenshots across desktop, tablet, and mobile viewports to catch responsive design regressions before they reach production.</p>
+        </div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number">3</div>
+                <div class="stat-label">Device Types</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">100%</div>
+                <div class="stat-label">Coverage</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">&lt;5s</div>
+                <div class="stat-label">Test Time</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">Parallel</div>
+                <div class="stat-label">Execution</div>
+            </div>
+        </div>
+
+        <section class="features" id="features">
+            <div class="feature-card">
+                <div class="feature-icon">🖥️</div>
+                <h3>Desktop Testing</h3>
+                <p>Full HD 1920×1080 viewport testing for standard desktop monitors and large displays.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">📱</div>
+                <h3>Tablet Support</h3>
+                <p>768×1024 viewport testing for iPads and Android tablets in portrait orientation.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">📲</div>
+                <h3>Mobile Coverage</h3>
+                <p>375×667 viewport testing for iPhones and similar mobile devices.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">⚡</div>
+                <h3>Parallel Execution</h3>
+                <p>Test all devices simultaneously with configurable concurrency for fast feedback.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🎯</div>
+                <h3>Breakpoint Detection</h3>
+                <p>Automatically detect layout issues at CSS breakpoints across all device sizes.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">📊</div>
+                <h3>Device Reports</h3>
+                <p>Separate baselines and diffs for each device with detailed per-device analysis.</p>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>© 2025 IRIS - Interface Recognition & Interaction Suite</p>
+        <p>Multi-device visual testing for modern web applications</p>
+    </footer>
+
+    <script>
+        // Update viewport dimensions display
+        function updateViewportInfo() {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            const info = document.getElementById('viewport-info');
+            if (info) {
+                info.textContent = `Current Viewport: ${width}px × ${height}px`;
+            }
+        }
+
+        // Update device indicator
+        function updateDeviceIndicator() {
+            const width = window.innerWidth;
+            const indicator = document.getElementById('device-indicator');
+            if (indicator) {
+                if (width <= 480) {
+                    indicator.textContent = 'Testing Mobile Layout (≤480px)';
+                } else if (width <= 768) {
+                    indicator.textContent = 'Testing Tablet Layout (481-768px)';
+                } else if (width <= 1366) {
+                    indicator.textContent = 'Testing Laptop Layout (769-1366px)';
+                } else {
+                    indicator.textContent = 'Testing Desktop Layout (≥1367px)';
+                }
+            }
+        }
+
+        // Initialize
+        updateViewportInfo();
+        updateDeviceIndicator();
+
+        // Update on resize (but stabilize for screenshots)
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                updateViewportInfo();
+                updateDeviceIndicator();
+            }, 250);
+        });
+
+        // Mobile navigation toggle
+        document.querySelector('.nav-toggle')?.addEventListener('click', () => {
+            document.querySelector('.nav-menu')?.classList.toggle('open');
+        });
+    </script>
+</body>
+</html>
