@@ -148,12 +148,16 @@ function generateTestHTML(complexity: 'simple' | 'medium' | 'complex'): string {
  * Benchmark: Single page axe-core scan
  */
 async function benchmarkSinglePageAxe(browser: Browser, complexity: 'simple' | 'medium' | 'complex') {
-  const page = await browser.newPage();
+  const context = await browser.newContext();
+  const page = await context.newPage();
   const html = generateTestHTML(complexity);
   await page.setContent(html);
 
   const axeRunner = new AxeRunner({
+    rules: {},
     tags: ['wcag2a', 'wcag2aa'],
+    include: [],
+    exclude: [],
     disableRules: [],
     timeout: 30000
   });
@@ -167,18 +171,22 @@ async function benchmarkSinglePageAxe(browser: Browser, complexity: 'simple' | '
  * Benchmark: Multi-page axe-core scan (sequential)
  */
 async function benchmarkMultiPageAxeSequential(browser: Browser, pageCount: number) {
+  const context = await browser.newContext();
   const pages: Page[] = [];
   const runners: AxeRunner[] = [];
 
   // Prepare pages
   for (let i = 0; i < pageCount; i++) {
-    const page = await browser.newPage();
+    const page = await context.newPage();
     const html = generateTestHTML('medium');
     await page.setContent(html);
     pages.push(page);
 
     const runner = new AxeRunner({
+      rules: {},
       tags: ['wcag2a', 'wcag2aa'],
+      include: [],
+      exclude: [],
       disableRules: [],
       timeout: 30000
     });
@@ -196,17 +204,21 @@ async function benchmarkMultiPageAxeSequential(browser: Browser, pageCount: numb
  * Benchmark: Multi-page axe-core scan (parallel)
  */
 async function benchmarkMultiPageAxeParallel(browser: Browser, pageCount: number) {
+  const context = await browser.newContext();
   const pages: Page[] = [];
   const runners: AxeRunner[] = [];
 
   for (let i = 0; i < pageCount; i++) {
-    const page = await browser.newPage();
+    const page = await context.newPage();
     const html = generateTestHTML('medium');
     await page.setContent(html);
     pages.push(page);
 
     const runner = new AxeRunner({
+      rules: {},
       tags: ['wcag2a', 'wcag2aa'],
+      include: [],
+      exclude: [],
       disableRules: [],
       timeout: 30000
     });
@@ -301,7 +313,8 @@ function benchmarkDatabaseBatchWrites(recordCount: number) {
  * Benchmark: Rule-specific scans
  */
 async function benchmarkRuleSpecificScan(browser: Browser, ruleCount: number) {
-  const page = await browser.newPage();
+  const context = await browser.newContext();
+  const page = await context.newPage();
   const html = generateTestHTML('complex');
   await page.setContent(html);
 
@@ -309,7 +322,10 @@ async function benchmarkRuleSpecificScan(browser: Browser, ruleCount: number) {
   const tags = allTags.slice(0, Math.min(ruleCount, allTags.length));
 
   const axeRunner = new AxeRunner({
+    rules: {},
     tags,
+    include: [],
+    exclude: [],
     disableRules: [],
     timeout: 30000
   });

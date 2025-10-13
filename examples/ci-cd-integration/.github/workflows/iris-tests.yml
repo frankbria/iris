@@ -1,0 +1,228 @@
+name: IRIS Visual & Accessibility Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'components/**'
+      - '.github/workflows/iris-tests.yml'
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  visual-regression:
+    name: Visual Regression Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Full history for baseline comparison
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Install System Fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-liberation fonts-noto-color-emoji
+
+      - name: Build Application
+        run: npm run build
+
+      - name: Start Application Server
+        run: |
+          npm start &
+          npx wait-on http://localhost:3000 --timeout 60000
+
+      - name: Run Visual Regression Tests
+        id: visual-tests
+        run: |
+          npx iris visual-diff \
+            --pages "/" \
+            --devices "desktop,mobile" \
+            --threshold 0.1 \
+            --concurrency 2 \
+            --format html \
+            --output .iris/visual-report.html \
+            --fail-on moderate
+        continue-on-error: true
+
+      - name: Upload Visual Report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: visual-regression-report
+          path: |
+            .iris/visual-report.html
+            .iris/screenshots/**
+          retention-days: 30
+
+      - name: Upload Diff Images
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: visual-diffs
+          path: .iris/screenshots/diff/**
+          retention-days: 7
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            let status = '${{ steps.visual-tests.outcome }}';
+            let emoji = status === 'success' ? '✅' : '❌';
+
+            const comment = `## ${emoji} Visual Regression Tests ${status === 'success' ? 'Passed' : 'Failed'}
+
+            **Results:**
+            - Status: ${status}
+            - Device Coverage: Desktop, Mobile
+            - Threshold: 10%
+
+            [View Full Report](../actions/runs/${{ github.run_id }})`;
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
+
+      - name: Fail if Tests Failed
+        if: steps.visual-tests.outcome == 'failure'
+        run: exit 5
+
+  accessibility:
+    name: Accessibility Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Application
+        run: npm run build
+
+      - name: Start Application Server
+        run: |
+          npm start &
+          npx wait-on http://localhost:3000 --timeout 60000
+
+      - name: Run Accessibility Tests
+        id: a11y-tests
+        run: |
+          npx iris a11y \
+            --pages "/" \
+            --tags "wcag2a,wcag2aa" \
+            --fail-on "critical,serious" \
+            --include-keyboard \
+            --format html \
+            --output .iris/a11y-report.html
+        continue-on-error: true
+
+      - name: Upload Accessibility Report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: accessibility-report
+          path: .iris/a11y-report.html
+          retention-days: 30
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            let status = '${{ steps.a11y-tests.outcome }}';
+            let emoji = status === 'success' ? '♿' : '⚠️';
+
+            const comment = `## ${emoji} Accessibility Tests ${status === 'success' ? 'Passed' : 'Failed'}
+
+            **Standards:**
+            - WCAG 2.1 Level A
+            - WCAG 2.1 Level AA
+            - Keyboard Navigation
+
+            [View Full Report](../actions/runs/${{ github.run_id }})`;
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
+
+      - name: Fail if Tests Failed
+        if: steps.a11y-tests.outcome == 'failure'
+        run: exit 4
+
+  update-baselines:
+    name: Update Visual Baselines
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [visual-regression, accessibility]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build and Start Server
+        run: |
+          npm run build
+          npm start &
+          npx wait-on http://localhost:3000 --timeout 60000
+
+      - name: Update Baselines
+        run: |
+          npx iris visual-diff \
+            --pages "/" \
+            --devices "desktop,mobile" \
+            --update-baseline
+
+      - name: Commit Baselines
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add .iris/baselines/**
+          git diff --staged --quiet || git commit -m "chore: update visual baselines [skip ci]"
+          git push

@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Accessible Page Example - IRIS A11y Testing</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #1a202c;
+            background: #f7fafc;
+        }
+
+        /* Skip to main content link */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 0;
+            background: #2b6cb0;
+            color: white;
+            padding: 0.5rem 1rem;
+            text-decoration: none;
+            border-radius: 0 0 4px 0;
+        }
+
+        .skip-link:focus {
+            top: 0;
+        }
+
+        /* Header with proper ARIA roles */
+        header {
+            background: linear-gradient(135deg, #4299e1 0%, #667eea 100%);
+            color: white;
+            padding: 2rem;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        /* Navigation with proper ARIA */
+        nav {
+            background: white;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        nav ul {
+            display: flex;
+            list-style: none;
+            padding: 1rem 2rem;
+            gap: 2rem;
+        }
+
+        nav a {
+            color: #2d3748;
+            text-decoration: none;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        nav a:hover,
+        nav a:focus {
+            background: #edf2f7;
+            outline: 2px solid #4299e1;
+            outline-offset: 2px;
+        }
+
+        /* Main content area */
+        main {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Section styling */
+        section {
+            background: white;
+            border-radius: 8px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        section h2 {
+            color: #2b6cb0;
+            margin-bottom: 1rem;
+            font-size: 1.8rem;
+        }
+
+        section h3 {
+            color: #4299e1;
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+            font-size: 1.3rem;
+        }
+
+        /* Form with proper labels and contrast */
+        form {
+            max-width: 600px;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: #2d3748;
+        }
+
+        input,
+        textarea,
+        select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #cbd5e0;
+            border-radius: 4px;
+            font-size: 1rem;
+            font-family: inherit;
+            transition: border-color 0.2s;
+        }
+
+        input:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: #4299e1;
+            box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.1);
+        }
+
+        /* Proper button styling with good contrast */
+        button,
+        .button {
+            background: #2b6cb0;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 4px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover,
+        .button:hover {
+            background: #2c5282;
+        }
+
+        button:focus,
+        .button:focus {
+            outline: 2px solid #4299e1;
+            outline-offset: 2px;
+        }
+
+        /* Accessible card grid */
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .card {
+            background: #f7fafc;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+
+        .card h3 {
+            margin-top: 0;
+        }
+
+        /* Accessible alert */
+        .alert {
+            padding: 1rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+            border-left: 4px solid;
+        }
+
+        .alert-success {
+            background: #c6f6d5;
+            border-color: #38a169;
+            color: #22543d;
+        }
+
+        .alert-icon {
+            margin-right: 0.5rem;
+        }
+
+        /* Footer */
+        footer {
+            background: #2d3748;
+            color: white;
+            padding: 2rem;
+            text-align: center;
+            margin-top: 3rem;
+        }
+
+        footer a {
+            color: #90cdf4;
+            text-decoration: underline;
+        }
+
+        footer a:hover,
+        footer a:focus {
+            color: #bee3f8;
+        }
+
+        /* Focus visible indicator */
+        *:focus-visible {
+            outline: 2px solid #4299e1;
+            outline-offset: 2px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Skip to main content -->
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+
+    <!-- Header with proper role -->
+    <header role="banner">
+        <h1>♿ Accessible Page Example</h1>
+        <p>Demonstrating WCAG 2.1 AA Compliance with IRIS</p>
+    </header>
+
+    <!-- Navigation with proper ARIA -->
+    <nav role="navigation" aria-label="Main navigation">
+        <ul>
+            <li><a href="#features">Features</a></li>
+            <li><a href="#form">Contact Form</a></li>
+            <li><a href="#content">Content</a></li>
+            <li><a href="#footer">Footer</a></li>
+        </ul>
+    </nav>
+
+    <!-- Main content -->
+    <main id="main-content" role="main">
+        <!-- Success alert -->
+        <div class="alert alert-success" role="status" aria-live="polite">
+            <span class="alert-icon" aria-hidden="true">✓</span>
+            <strong>Success!</strong> This page follows accessibility best practices.
+        </div>
+
+        <!-- Features section -->
+        <section id="features" aria-labelledby="features-heading">
+            <h2 id="features-heading">Accessibility Features</h2>
+            <p>This page demonstrates proper implementation of accessibility features for WCAG 2.1 AA compliance.</p>
+
+            <div class="card-grid">
+                <article class="card">
+                    <h3>Semantic HTML</h3>
+                    <p>Uses proper HTML5 semantic elements like &lt;header&gt;, &lt;nav&gt;, &lt;main&gt;, and &lt;footer&gt;.</p>
+                </article>
+
+                <article class="card">
+                    <h3>ARIA Landmarks</h3>
+                    <p>Includes ARIA roles for screen reader navigation: banner, navigation, main, complementary.</p>
+                </article>
+
+                <article class="card">
+                    <h3>Keyboard Navigation</h3>
+                    <p>All interactive elements are keyboard accessible with visible focus indicators.</p>
+                </article>
+
+                <article class="card">
+                    <h3>Color Contrast</h3>
+                    <p>Text meets WCAG AA standards with 4.5:1 contrast ratio for normal text.</p>
+                </article>
+
+                <article class="card">
+                    <h3>Form Labels</h3>
+                    <p>All form inputs have explicit labels with proper for/id associations.</p>
+                </article>
+
+                <article class="card">
+                    <h3>Alt Text</h3>
+                    <p>Images include descriptive alt text or empty alt for decorative images.</p>
+                </article>
+            </div>
+        </section>
+
+        <!-- Contact form section -->
+        <section id="form" aria-labelledby="form-heading">
+            <h2 id="form-heading">Contact Form</h2>
+            <p>This form demonstrates proper accessibility implementation.</p>
+
+            <form action="/submit" method="post" novalidate>
+                <div class="form-group">
+                    <label for="name">Full Name <span aria-label="required">*</span></label>
+                    <input
+                        type="text"
+                        id="name"
+                        name="name"
+                        required
+                        aria-required="true"
+                        autocomplete="name"
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label for="email">Email Address <span aria-label="required">*</span></label>
+                    <input
+                        type="email"
+                        id="email"
+                        name="email"
+                        required
+                        aria-required="true"
+                        autocomplete="email"
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label for="subject">Subject</label>
+                    <select id="subject" name="subject">
+                        <option value="">Select a subject</option>
+                        <option value="general">General Inquiry</option>
+                        <option value="support">Technical Support</option>
+                        <option value="feedback">Feedback</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="message">Message <span aria-label="required">*</span></label>
+                    <textarea
+                        id="message"
+                        name="message"
+                        rows="5"
+                        required
+                        aria-required="true"
+                    ></textarea>
+                </div>
+
+                <button type="submit">Send Message</button>
+                <button type="reset">Reset Form</button>
+            </form>
+        </section>
+
+        <!-- Content section with proper heading hierarchy -->
+        <section id="content" aria-labelledby="content-heading">
+            <h2 id="content-heading">Content Guidelines</h2>
+
+            <h3>Heading Structure</h3>
+            <p>Headings follow a logical hierarchy without skipping levels (h1 → h2 → h3).</p>
+
+            <h3>Link Accessibility</h3>
+            <p>
+                Links have <a href="https://www.w3.org/WAI/WCAG21/quickref/">descriptive text</a>
+                that makes sense out of context. Avoid "click here" or "read more" without context.
+            </p>
+
+            <h3>Image Alt Text</h3>
+            <p>Images below demonstrate proper alt text usage:</p>
+            <figure>
+                <img
+                    src="data:image/svg+xml,%3Csvg width='200' height='100' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='200' height='100' fill='%234299e1'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='white' font-family='sans-serif' font-size='20'%3EChart%3C/text%3E%3C/svg%3E"
+                    alt="Bar chart showing 40% increase in accessibility compliance over 6 months"
+                    width="200"
+                    height="100"
+                >
+                <figcaption>Example of informative alt text for data visualization</figcaption>
+            </figure>
+
+            <h3>Decorative Images</h3>
+            <p>Decorative images use empty alt text and presentation role:</p>
+            <img
+                src="data:image/svg+xml,%3Csvg width='50' height='50' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='25' cy='25' r='20' fill='%23f0f0f0'/%3E%3C/svg%3E"
+                alt=""
+                role="presentation"
+            >
+        </section>
+    </main>
+
+    <!-- Complementary content -->
+    <aside role="complementary" aria-labelledby="aside-heading" style="max-width: 1200px; margin: 0 auto 2rem; padding: 0 2rem;">
+        <section style="background: white; border-radius: 8px; padding: 2rem; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);">
+            <h2 id="aside-heading">Quick Tips</h2>
+            <ul>
+                <li>Use semantic HTML elements</li>
+                <li>Provide text alternatives for images</li>
+                <li>Ensure keyboard accessibility</li>
+                <li>Maintain sufficient color contrast</li>
+                <li>Use ARIA when semantic HTML isn't enough</li>
+            </ul>
+        </section>
+    </aside>
+
+    <!-- Footer -->
+    <footer id="footer" role="contentinfo">
+        <p>© 2025 IRIS - Interface Recognition & Interaction Suite</p>
+        <p>
+            Learn more about
+            <a href="https://www.w3.org/WAI/WCAG21/quickref/">WCAG 2.1 Guidelines</a>
+        </p>
+    </footer>
+
+    <script>
+        // Prevent form submission for demo purposes
+        document.querySelector('form')?.addEventListener('submit', (e) => {
+            e.preventDefault();
+            alert('Form submission prevented for demo purposes');
+        });
+    </script>
+</body>
+</html>
