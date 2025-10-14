@@ -314,3 +314,119 @@ These standards ensure:
 - **Assessment**: Regular status checks ensure development claims match reality
 
 **Enforcement**: AI agents should automatically apply these standards to all feature development tasks without requiring explicit instruction for each task.
+
+## Issue Tracking with Beads
+
+IRIS uses **Beads** (`bd`) for dependency-aware issue tracking. This system is designed specifically for AI-supervised workflows, enabling agents to systematically work through tasks with clear dependency chains.
+
+### Why Beads?
+
+- **Dependency Awareness**: Issues explicitly declare what blocks them and what they block
+- **Ready Work Discovery**: `bd ready` shows all unblocked issues ready to claim
+- **AI-Friendly**: JSON output for programmatic access, automatic git sync
+- **Collaboration**: Multiple agents can work simultaneously without conflicts
+- **Context Preservation**: Each issue contains full context and success criteria
+
+### Quick Reference
+
+**Finding Work:**
+```bash
+# Show all issues ready to work on (no blockers)
+bd ready
+
+# Show issues by priority
+bd list --priority 0  # P0 - Critical
+bd list --priority 1  # P1 - High
+bd list --priority 2  # P2 - Medium
+bd list --priority 3  # P3 - Low
+
+# View issue details
+bd show iris-7
+
+# Check dependency tree
+bd dep tree iris-5
+```
+
+**Claiming Work:**
+```bash
+# Set yourself as assignee
+bd update iris-7 --assignee claude-agent
+
+# Mark as in progress
+bd update iris-7 --status in_progress
+```
+
+**During Work:**
+```bash
+# Create discovered work
+bd create "Found issue during iris-7" --deps "discovered-from:iris-7" -p 1 -t task
+
+# Add blocking dependency
+bd dep add iris-8 iris-7  # iris-7 blocks iris-8
+```
+
+**Completing Work:**
+```bash
+# Close issue
+bd close iris-7 --reason "Completed in commit abc123"
+
+# Find next work
+bd ready
+```
+
+### Current Issue Status
+
+**Phase 2 Remaining Work (19 issues):**
+
+- **Sub-Phase 2B** (iris-5): Visual Classification Integration (Week 5-7)
+  - iris-6 (P1): Week 5-6 AI Classifier Implementation
+  - iris-7 (P0): Week 7 Validation Harness & Golden Dataset ⚠️ **CRITICAL**
+
+- **Sub-Phase 2C** (iris-8): Parallel Execution & Performance (Week 8-10)
+  - iris-9 (P1): Week 8-9 Parallel Execution Architecture
+  - iris-10 (P1): Week 10 Optimization & Profiling
+
+- **Sub-Phase 2D** (iris-11): CLI Integration & Reporting (Week 11-14)
+  - iris-12 (P1): Week 11-12 CLI Command Implementation
+  - iris-13 (P1): Week 13-14 Report Generation
+
+- **Sub-Phase 2E** (iris-14): Accessibility Foundation (Week 15-18)
+  - iris-15 (P1): Week 15-16 Axe-core Integration
+  - iris-16 (P1): Week 17-18 Integration & Polish
+
+- **Infrastructure Issues** (P2):
+  - iris-17: Fix concurrency control bug in visual-runner.ts
+  - iris-18: AccessibilityRunner URL handling architecture
+  - iris-19: Baseline creation workflow improvement
+
+- **Optimization Tasks** (P3):
+  - iris-1: Performance test timing threshold adjustment
+  - iris-2: Branch coverage improvement to 80%+
+  - iris-3: Accessibility E2E infrastructure decision
+  - iris-4: Database test optimization
+
+**Critical Path:** iris-6 → iris-7 → iris-8 → iris-11 → iris-14 → iris-16
+
+**Ready Work:** 10 issues with no blockers (run `bd ready` to see list)
+
+### Integration with Development Workflow
+
+1. **Session Start**: Check `bd ready` to find available work
+2. **Before Coding**: Read issue with `bd show iris-X` for context and success criteria
+3. **During Implementation**: Create discovered issues with `discovered-from` dependency
+4. **Before Commit**: Verify all acceptance criteria from issue are met
+5. **After Commit**: Close issue with `bd close iris-X --reason "commit sha"`
+6. **Session End**: Push changes (beads auto-syncs to git)
+
+### Database Location
+
+- **Database**: `.beads/iris.db` (SQLite, gitignored)
+- **JSONL Sync**: `.beads/iris.jsonl` (git-tracked, auto-exported)
+- **Issue Prefix**: `iris-` (e.g., iris-1, iris-2, ...)
+
+### Documentation
+
+For complete beads workflow documentation, see:
+- **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** - Comprehensive agent guide
+- **Beads GitHub**: https://github.com/steveyegge/beads
+- **Quick Reference**: `bd quickstart` in terminal

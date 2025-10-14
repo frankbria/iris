@@ -499,6 +499,39 @@ Performance baselines:
 ### AI Agents
 - **[AGENT_INSTRUCTIONS.md](AGENT_INSTRUCTIONS.md)** - Development guidance
 - **[CLAUDE.md](CLAUDE.md)** - Claude Code instructions
+- **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** - Beads issue tracker guide
+
+### Issue Tracking with Beads
+
+IRIS uses **Beads** (`bd`) - a dependency-aware issue tracker designed for AI-supervised workflows. Issues are tracked with explicit dependency chains, making it easy for AI agents to find ready work and avoid duplicating effort.
+
+**Quick Start:**
+```bash
+# Show unblocked issues ready to work on
+bd ready
+
+# View issue details
+bd show iris-7
+
+# Claim work
+bd update iris-7 --status in_progress --assignee your-name
+
+# Close when complete
+bd close iris-7 --reason "commit abc123"
+```
+
+**Current Status:**
+- **19 issues** tracking Phase 2 Sub-Phases B-E (weeks 5-18)
+- **10 issues** ready with no blockers
+- **Critical path**: iris-6 → iris-7 (P0 validation) → iris-8 → ... → iris-16
+
+**Key Features:**
+- Dependency tracking (`blocks`, `parent-child`, `discovered-from`)
+- Auto-sync with git (JSONL export/import)
+- Priority-based work queues (P0-P3)
+- JSON output for programmatic access
+
+See **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** for complete workflow documentation.
 
 ---
 
