@@ -4,9 +4,10 @@ const config: Config.InitialOptions = {
   preset: 'ts-jest',
   testEnvironment: 'node',
   testMatch: [
-    '**/__tests__/**/*.ts',
-    '**/__tests__/*.ts',
-    '**/__tests__/**/*.test.ts'
+    '**/__tests__/**/*.test.ts',
+    '!**/__tests__/**/*.bench.ts',
+    '!**/__tests__/**/bench-utils.ts',
+    '!**/__tests__/**/report-generator.ts'
   ],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
   collectCoverageFrom: [
