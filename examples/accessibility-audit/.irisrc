@@ -1,0 +1,23 @@
+{
+  "accessibility": {
+    "tags": ["wcag2a", "wcag2aa", "wcag21aa"],
+    "failOn": ["critical", "serious"],
+    "keyboard": {
+      "testFocusOrder": true,
+      "testTrapDetection": true,
+      "testArrowKeyNavigation": false,
+      "testEscapeHandling": false
+    },
+    "screenReader": {
+      "testAriaLabels": true,
+      "testLandmarkNavigation": true,
+      "testImageAltText": true,
+      "testHeadingStructure": true
+    },
+    "reporting": {
+      "includePassedTests": false,
+      "groupByImpact": true,
+      "includeScreenshots": true
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "visual": {
+    "threshold": 0.1,
+    "baseline": {
+      "strategy": "branch",
+      "reference": "main"
+    },
+    "capture": {
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "fullPage": true,
+      "format": "png",
+      "quality": 90,
+      "stabilization": {
+        "waitForFonts": true,
+        "disableAnimations": true,
+        "delay": 500,
+        "waitForNetworkIdle": true,
+        "networkIdleTimeout": 2000
+      }
+    },
+    "diff": {
+      "antiAliasing": true,
+      "maxConcurrency": 3
+    }
+  }
+}

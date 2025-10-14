@@ -12,6 +12,7 @@ import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
 import { AIVisualClassifier } from './ai-classifier';
 import { StorageManager } from './storage';
+import { VisualReporter } from './reporter';
 import type { AIProvider } from './ai-classifier';
 
 export interface VisualTestRunnerConfig {
@@ -149,29 +150,38 @@ export class VisualTestRunner {
 
       const devices = this.config.devices || ['desktop'];
 
-      // Test each page on each device
+      // Build test tasks (page-device combinations)
+      const testTasks: Array<{ page: string; device: string }> = [];
       for (const pagePattern of this.config.pages) {
         for (const device of devices) {
-          const result = await this.testPage(pagePattern, device);
-          results.push(result);
-          summary.totalComparisons++;
+          testTasks.push({ page: pagePattern, device });
+        }
+      }
 
-          if (result.passed) {
-            summary.passed++;
-          } else {
-            summary.failed++;
+      // Run tests in parallel with concurrency control
+      const concurrency = this.config.diff.maxConcurrency || 3;
+      const testResults = await this.runTestsInParallel(testTasks, concurrency);
 
-            // Track severity counts
-            if (result.severity) {
-              summary.severityCounts[result.severity] =
-                (summary.severityCounts[result.severity] || 0) + 1;
-            }
+      // Process results and update summary
+      for (const result of testResults) {
+        results.push(result);
+        summary.totalComparisons++;
+
+        if (result.passed) {
+          summary.passed++;
+        } else {
+          summary.failed++;
+
+          // Track severity counts
+          if (result.severity) {
+            summary.severityCounts[result.severity] =
+              (summary.severityCounts[result.severity] || 0) + 1;
           }
+        }
 
-          // Check if this was a new baseline
-          if (!result.baselinePath) {
-            summary.newBaselines++;
-          }
+        // Check if this was a new baseline
+        if (!result.baselinePath) {
+          summary.newBaselines++;
         }
       }
 
@@ -199,6 +209,58 @@ export class VisualTestRunner {
         await this.browser.close();
       }
     }
+  }
+
+  /**
+   * Run tests in parallel with concurrency control
+   */
+  private async runTestsInParallel(
+    tasks: Array<{ page: string; device: string }>,
+    concurrency: number
+  ): Promise<VisualTestResult['results']> {
+    const results: VisualTestResult['results'] = [];
+    const executing: Promise<void>[] = [];
+
+    for (const task of tasks) {
+      const promise = this.testPage(task.page, task.device)
+        .then(result => {
+          results.push(result);
+        })
+        .catch(error => {
+          // Handle test errors gracefully
+          results.push({
+            page: task.page,
+            device: task.device,
+            passed: false,
+            similarity: 0,
+            pixelDifference: 1,
+            threshold: this.config.diff.threshold,
+            severity: 'breaking',
+            screenshotPath: '',
+            error: error.message
+          } as any);
+        });
+
+      executing.push(promise);
+
+      // Control concurrency - wait if we've reached the limit
+      if (executing.length >= concurrency) {
+        await Promise.race(executing).then(() => {
+          // Remove completed promises
+          const index = executing.findIndex(p =>
+            p === promise || (p as any).status === 'fulfilled' || (p as any).status === 'rejected'
+          );
+          if (index !== -1) {
+            executing.splice(index, 1);
+          }
+        });
+      }
+    }
+
+    // Wait for all remaining tests to complete
+    await Promise.all(executing);
+
+    return results;
   }
 
   /**
@@ -427,16 +489,27 @@ export class VisualTestRunner {
     summary: VisualTestResult['summary']
   ): Promise<string> {
     const format = this.config.output?.format || 'json';
-    const outputPath = this.config.output?.path || `./visual-report-${Date.now()}.${format}`;
+    const outputPath = this.config.output?.path;
 
-    if (format === 'json') {
-      const report = JSON.stringify({ summary, results }, null, 2);
-      const fs = await import('fs');
-      fs.writeFileSync(outputPath, report);
-      return outputPath;
-    }
+    // Create full test result structure for reporter
+    const fullResult: VisualTestResult = {
+      summary,
+      results,
+      duration: 0, // Will be set by caller
+      reportPath: outputPath
+    };
 
-    // HTML and JUnit formats to be implemented
-    throw new Error(`Report format '${format}' not yet implemented`);
+    // Use VisualReporter for all formats
+    const reporter = new VisualReporter({
+      format: format as 'html' | 'json' | 'junit',
+      outputPath,
+      title: 'IRIS Visual Regression Test Report',
+      includeScreenshots: true,
+      includePassedTests: true,
+      relativePaths: true
+    });
+
+    const artifacts = await reporter.generateReport(fullResult);
+    return artifacts.reportPath;
   }
 }

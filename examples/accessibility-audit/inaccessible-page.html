@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Inaccessible Page - Common A11y Issues</title>
+    <style>
+        body { font-family: sans-serif; background: #f0f0f0; color: #999; }
+        .header { background: #ccc; padding: 20px; }
+        .nav { background: white; padding: 10px; }
+        .nav span { margin: 0 10px; color: #aaa; cursor: pointer; }
+        .content { max-width: 800px; margin: 20px auto; background: white; padding: 20px; }
+        .button { background: #ddd; color: #aaa; padding: 10px 20px; cursor: pointer; display: inline-block; }
+        .input { border: 1px solid #ccc; padding: 5px; }
+    </style>
+</head>
+<body>
+    <!-- Missing lang attribute -->
+    <!-- Missing skip navigation -->
+
+    <div class="header">
+        <div style="font-size: 24px;">Inaccessible Page Example</div>
+        <div>This page has multiple accessibility issues</div>
+    </div>
+
+    <!-- Non-semantic navigation -->
+    <div class="nav">
+        <span onclick="navigate('features')">Features</span>
+        <span onclick="navigate('form')">Form</span>
+        <span onclick="navigate('content')">Content</span>
+    </div>
+
+    <div class="content">
+        <!-- Missing heading hierarchy -->
+        <div style="font-size: 20px; font-weight: bold;">Features</div>
+
+        <!-- Images without alt text -->
+        <img src="data:image/svg+xml,%3Csvg width='200' height='100' xmlns='http://www.w3.org/2000/svg'%3E%3Crect fill='%23ccc'/%3E%3C/svg%3E">
+
+        <!-- Empty button -->
+        <div class="button" onclick="doSomething()"></div>
+
+        <!-- Button with only icon -->
+        <div class="button" onclick="close()">×</div>
+
+        <!-- Form without labels -->
+        <div style="margin-top: 20px;">
+            <div>Contact Form</div>
+            <input type="text" placeholder="Name" class="input">
+            <input type="email" placeholder="Email" class="input">
+            <textarea placeholder="Message" class="input"></textarea>
+            <div class="button" onclick="submit()">Submit</div>
+        </div>
+
+        <!-- Link without descriptive text -->
+        <div style="margin-top: 20px;">
+            <span onclick="navigate('more')" style="color: #aaa; text-decoration: underline; cursor: pointer;">Click here</span> for more information.
+        </div>
+
+        <!-- Table without headers -->
+        <table style="margin-top: 20px; width: 100%;">
+            <tr><td>Item 1</td><td>$10</td></tr>
+            <tr><td>Item 2</td><td>$20</td></tr>
+        </table>
+    </div>
+
+    <div style="background: #333; color: #666; padding: 20px; text-align: center; margin-top: 40px;">
+        © 2025 Example Site
+    </div>
+
+    <script>
+        function navigate(page) { console.log('Navigate to:', page); }
+        function doSomething() { console.log('Action'); }
+        function close() { console.log('Close'); }
+        function submit() { console.log('Submit'); }
+    </script>
+</body>
+</html>
