@@ -5,12 +5,29 @@ describe('Browser Automation Module', () => {
   let page: Awaited<ReturnType<typeof newPage>>;
 
   beforeAll(async () => {
-    browser = await launchBrowser();
-    page = await newPage(browser);
+    console.log('=== Browser test beforeAll starting ===');
+    const startTime = Date.now();
+    try {
+      browser = await launchBrowser();
+      console.log(`Browser launched in ${Date.now() - startTime}ms`);
+      page = await newPage(browser);
+      console.log(`Page created in ${Date.now() - startTime}ms total`);
+    } catch (error) {
+      console.error('Browser launch failed:', error);
+      throw error;
+    }
   });
 
   afterAll(async () => {
-    await closeBrowser(browser);
+    console.log('=== Browser test afterAll starting ===');
+    const startTime = Date.now();
+    try {
+      await closeBrowser(browser);
+      console.log(`Browser closed in ${Date.now() - startTime}ms`);
+    } catch (error) {
+      console.error('Browser cleanup failed:', error);
+      throw error;
+    }
   });
 
   test('navigate to a data URL and check title', async () => {
