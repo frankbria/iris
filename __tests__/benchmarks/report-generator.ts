@@ -489,5 +489,3 @@ if (require.main === module) {
 
   console.log('\n✅ Report generation completed!');
 }
-
-export { generateReport };
