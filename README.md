@@ -2,7 +2,7 @@
 
 > 👁️ AI-powered UI understanding and testing toolkit
 
-**Phase 1: ✅ Complete** | **Phase 2: 🟡 25% Complete (Core Modules Only)**
+**Phase 1: ✅ Complete** | **Phase 2: 🟡 40% Complete (AI Vision Foundation Complete)**
 
 IRIS gives AI coding assistants "eyes and hands" to see and interact with user interfaces through natural language commands, visual regression testing, and accessibility validation.
 
@@ -22,27 +22,36 @@ IRIS gives AI coding assistants "eyes and hands" to see and interact with user i
 
 **Test Status:** 122/122 tests passing (100%)
 
-### 🟡 Phase 2 - Visual Regression & Accessibility (25% Complete)
+### 🟡 Phase 2 - Visual Regression & Accessibility (40% Complete)
 
-**Implemented (Core Modules Only):**
-- ✅ Visual capture engine with page stabilization (basic)
-- ✅ SSIM and pixel-based diff engine (basic)
-- ✅ Git-integrated baseline manager (basic)
+**✅ Sub-Phase 2A Complete: AI Vision Foundation (Week 1-4)**
+- ✅ Multimodal AI client architecture (text + vision)
+- ✅ Vision provider integrations (OpenAI GPT-4o, Anthropic Claude 3.5, Ollama)
+- ✅ Image preprocessing pipeline (resize, optimize, base64 encoding)
+- ✅ AI vision result caching (LRU memory + SQLite persistence)
+- ✅ Cost tracking with budget management and circuit breaker
+- ✅ Smart client with automatic fallback and cost optimization
+
+**✅ Phase 2 Core Infrastructure (Week 1-2)**
+- ✅ Visual capture engine with page stabilization
+- ✅ SSIM and pixel-based diff engine
+- ✅ Git-integrated baseline manager
 - ✅ Complete TypeScript/Zod type system
 - ✅ Database schema for visual testing
-- ✅ Accessibility type definitions
 
-**Test Status:** 178/180 tests passing (99% - 2 skipped pending implementation)
+**Test Status:** 360/362 tests passing (99.4% - 2 skipped pending implementation)
 
-**NOT IMPLEMENTED (Remaining 75%):**
-- ❌ AI visual classification (semantic change analysis) - NOT IMPLEMENTED
-- ❌ CLI integration (`iris visual-diff`, `iris a11y`) - NOT IMPLEMENTED
-- ❌ HTML/JUnit report generation - NOT IMPLEMENTED
-- ❌ Accessibility testing (axe-core integration) - NOT IMPLEMENTED
-- ❌ E2E orchestration pipeline - NOT IMPLEMENTED
-- ❌ Performance optimization - NOT IMPLEMENTED
+**🚧 In Progress: Sub-Phase 2B - Visual Classification Integration (Week 5-7)**
+- ⏳ AI visual classifier implementation
+- ⏳ Diff engine integration with AI classification
+- ⏳ Validation harness & golden dataset
 
-**Overall Test Status:** 300/302 tests passing (99.3%)
+**NOT IMPLEMENTED (Remaining 60%):**
+- ❌ CLI integration (`iris visual-diff`, `iris a11y`)
+- ❌ HTML/JUnit report generation
+- ❌ Accessibility testing (axe-core integration)
+- ❌ E2E orchestration pipeline
+- ❌ Performance optimization
 
 ---
 
@@ -256,14 +265,17 @@ npm test -- --coverage
 - JSON-RPC protocol server
 - SQLite persistence
 
-### Phase 2 🟡 (25% Complete - Q1-Q2 2026)
-- Visual regression testing core modules (PARTIAL)
-- ❌ AI analysis integration (NOT IMPLEMENTED)
-- ❌ Accessibility validation (WCAG 2.1 AA) (NOT IMPLEMENTED)
-- ❌ HTML/JUnit report generation (NOT IMPLEMENTED)
-- ❌ CLI integration for visual and a11y commands (NOT IMPLEMENTED)
+### Phase 2 🟡 (25% Complete - Q1-Q2 2026, 14-18 weeks)
+- Visual regression testing core modules (PARTIAL ✅)
+- ❌ AI vision integration with cost control (NOT IMPLEMENTED - Sub-Phase 2A)
+- ❌ Validation harness with golden dataset (NOT IMPLEMENTED - Sub-Phase 2B)
+- ❌ Parallel execution & performance optimization (NOT IMPLEMENTED - Sub-Phase 2C)
+- ❌ CLI integration & reporting (NOT IMPLEMENTED - Sub-Phase 2D)
+- ❌ Accessibility foundation (NOT IMPLEMENTED - Sub-Phase 2E)
 
-### Phase 3 📋 (Planned - Q1 2026)
+**📋 See [docs/PHASE2_README.md](docs/PHASE2_README.md) for complete Phase 2 documentation guide**
+
+### Phase 3 📋 (Planned - Q3 2026)
 - Performance monitoring
 - Advanced AI-powered visual analysis
 - Autonomous UI exploration

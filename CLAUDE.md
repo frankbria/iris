@@ -42,29 +42,97 @@ npm start connect
 
 ```
 src/
-├── cli.ts          # CLI interface and command routing
-└── browser.ts      # Browser automation wrapper
+├── cli.ts                  # CLI interface and command routing
+├── browser.ts              # Browser automation wrapper
+├── ai-client.ts            # Backward compatibility layer (re-exports)
+├── ai-client/              # AI client modules (Phase 2)
+│   ├── base.ts            # Abstract base classes for text + vision
+│   ├── text.ts            # Text-based AI clients (Phase 1)
+│   ├── vision.ts          # Vision AI clients (GPT-4o, Claude 3.5, Ollama)
+│   ├── preprocessor.ts    # Image preprocessing pipeline
+│   ├── cache.ts           # LRU + SQLite caching system
+│   ├── cost-tracker.ts    # Budget management and cost tracking
+│   ├── smart-client.ts    # Smart client with fallback logic
+│   ├── factory.ts         # Client factory with provider detection
+│   └── index.ts           # Module exports
+├── visual/                # Visual testing modules
+│   ├── capture.ts         # Screenshot capture with stabilization
+│   ├── diff.ts            # SSIM + pixel diff engine
+│   └── baseline.ts        # Git-integrated baseline management
+└── config.ts              # Configuration types and validation
 
 __tests__/
-├── cli.test.ts     # CLI command testing
-└── browser.test.ts # Browser automation testing
+├── cli.test.ts                    # CLI command testing
+├── browser.test.ts                # Browser automation testing
+├── ai-client.test.ts              # Text AI client tests
+├── ai-client-vision.test.ts       # Vision AI client tests (17 tests)
+├── ai-client-preprocessor.test.ts # Preprocessor tests (24 tests)
+├── ai-client-batch4.test.ts       # Cache + cost tracker tests (19 tests)
+└── visual/                        # Visual testing tests
+    ├── capture.test.ts
+    ├── diff.test.ts
+    └── baseline.test.ts
 
-docs/               # Detailed project documentation
-├── prd.md         # Product Requirements Document
-├── tech_specs.md  # Technical specifications
-├── dev_plan.md    # Development roadmap
-└── user_stories.md # User stories and acceptance criteria
+migrations/
+├── 001_initial_schema.sql         # Phase 1 database schema
+└── 002_ai_cache_cost.sql          # AI cache + cost tracking tables
+
+docs/                               # Detailed project documentation
+├── prd.md                         # Product Requirements Document
+├── tech_specs.md                  # Technical specifications
+├── dev_plan.md                    # Development roadmap
+├── user_stories.md                # User stories and acceptance criteria
+├── PHASE2_README.md               # Phase 2 documentation guide
+├── phase2_revised_plan.md         # Phase 2 strategy
+├── phase2_technical_architecture.md # Phase 2 technical details
+└── phase2_architecture_gaps.md    # Phase 2 gap analysis
+
+plan/
+└── phase2_todo.md                 # Active Phase 2 task tracker
 ```
 
 ## Development Guidelines
 
-### Phase 1 Focus
-The project is currently in Phase 1 (Foundations). Implementation should focus on:
-1. CLI command scaffolding with commander.js
-2. Browser automation with Playwright integration
-3. Natural language translation to browser actions
-4. JSON-RPC/WebSocket protocol layer
-5. Local SQLite persistence for test results
+### Current Phase: Phase 2 - Visual Regression & Accessibility (40% Complete)
+
+**Completed: Sub-Phase 2A - AI Vision Foundation (Week 1-4)**
+1. ✅ Multimodal AI client architecture (text + vision capabilities)
+2. ✅ Vision provider integrations (OpenAI GPT-4o, Anthropic Claude 3.5, Ollama llava)
+3. ✅ Image preprocessing pipeline (resize, optimize, hash for caching)
+4. ✅ AI vision result caching (LRU memory + SQLite persistence, 30-day TTL)
+5. ✅ Cost tracking with budget management (daily/monthly limits, circuit breaker)
+6. ✅ Smart client with automatic fallback (Ollama → OpenAI → Anthropic)
+
+**In Progress: Sub-Phase 2B - Visual Classification Integration (Week 5-7)**
+- AI visual classifier core implementation
+- Integration with existing diff engine
+- Validation harness & golden dataset creation
+
+### AI Client Architecture (Phase 2A)
+
+**Multimodal Design:**
+- `BaseAIClient`: Abstract class for text-based instruction translation
+- `BaseAIVisionClient`: Abstract class extending BaseAIClient with vision capabilities
+- Provider implementations: OpenAI (text + vision), Anthropic (text + vision), Ollama (text + vision)
+- Factory pattern with automatic provider detection and capability checking
+
+**Key Components:**
+- **ImagePreprocessor**: Resizes images to API limits (2048x2048), optimizes quality (85% JPEG), calculates SHA-256 hashes
+- **AIVisionCache**: Two-tier caching (LRU memory + SQLite), tracks hit rates, automatic TTL expiration
+- **CostTracker**: Real-time cost calculation, budget enforcement with circuit breaker, alert thresholds (80%/95%/100%)
+- **SmartAIVisionClient**: Intelligent provider selection, cache-first strategy, automatic fallback on failure
+
+**Pricing (default, configurable):**
+- GPT-4o: $0.002/image
+- Claude 3.5 Sonnet: $0.0015/image
+- Ollama (local): $0.00/image
+
+### Phase 1 - Foundations (Complete)
+1. ✅ CLI command scaffolding with commander.js
+2. ✅ Browser automation with Playwright integration
+3. ✅ Natural language translation to browser actions
+4. ✅ JSON-RPC/WebSocket protocol layer
+5. ✅ Local SQLite persistence for test results
 
 ### Testing Strategy
 - Jest with ts-jest preset for TypeScript support

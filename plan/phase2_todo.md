@@ -1,476 +1,616 @@
-# Phase 2 To-Do List - Visual Regression Testing
+# Phase 2 To-Do List - REVISED
 
-This list breaks down the core tasks needed to complete **Phase 2 – Enhanced Testing (Visual Regression & Accessibility)** as defined in the Phase 2 architecture and development plan.
-
-**Target Timeline:** 8-12 weeks (2 engineers)
-**Phase 2 Status:** 🟡 Core Infrastructure Partial - Week 1-2 Implemented (25% Complete)
-
-## ✅ IMPLEMENTATION SUMMARY (25% Complete)
-
-**Completed (Week 1-2 Only):**
-- ✅ Visual testing core modules (capture, diff, baseline) - BASIC IMPLEMENTATION
-- ✅ TypeScript types and schemas with Zod validation
-- ✅ Database schema and migration system
-- ✅ Comprehensive test suite (300/302 tests passing)
-- ✅ Dependencies: sharp, image-ssim, simple-git, pixelmatch
-
-**Working Components:**
-- `VisualCaptureEngine` - Screenshot capture with stabilization & masking
-- `VisualDiffEngine` - SSIM & pixel comparison with region analysis
-- `BaselineManager` - Git-integrated baseline storage & management
-- Database persistence layer with SQLite
-- Complete type safety and validation
-
-**NOT IMPLEMENTED (Remaining 75%):**
-- ❌ AI visual classifier (OpenAI/Claude/Ollama integration) - NOT STARTED
-- ❌ CLI command integration (`iris visual-diff`, `iris a11y`) - NOT STARTED
-- ❌ HTML/JUnit report generation - NOT STARTED
-- ❌ Accessibility testing (axe-core, keyboard, screen reader) - NOT STARTED
-- ❌ Full end-to-end orchestration pipeline - NOT STARTED
-- ❌ Performance optimization - NOT STARTED
+**Version:** 2.0 (Revised Plan)
+**Date:** 2025-10-13
+**Status:** Ready for Implementation
+**Reference:** See `docs/phase2_revised_plan.md` for comprehensive details
 
 ---
 
-## Week 1-2: Foundation & Core Infrastructure
+## 📊 Overview
 
-### 1. Project Structure & Dependencies
+**Target Timeline:** 14-18 weeks (was: 8-12 weeks)
+**Team Size:** 2 engineers
+**Current Progress:** 40% Complete (Core Infrastructure + AI Vision Foundation)
 
-+ [x] **Setup Phase 2 module structure**
-  - [x] Create `/src/visual/` directory structure
-  - [x] Create `/src/visual/__tests__/` directory (in `__tests__/visual/`)
-  - [x] Setup TypeScript exports in `src/visual/index.ts`
-  - [x] Update main `src/index.ts` to export visual module
-
-+ [x] **Add required dependencies**
-  - [x] Add image processing library (`sharp` ✅)
-  - [x] Add SSIM comparison library (`image-ssim` ✅)
-  - [x] Add Git integration library (`simple-git` ✅)
-  - [x] Update package.json with new dependencies
-  - [x] Install and verify all dependencies compile
-
-+ [x] **Database schema extensions**
-  - [x] Create migration script for new visual tables
-  - [x] Implement `baselines` table schema
-  - [x] Implement `visual_reports` table schema
-  - [x] Implement `region_diffs` table schema
-  - [x] Extend existing `visual_diffs` table with new columns
-  - [x] Create database indexes for performance
-  - [x] Test migration script with existing Phase 1 data
-
-### 2. TypeScript Interfaces & Types
-
-+ [x] **Core visual types definition** (`src/visual/types.ts`)
-  - [x] Define `CaptureConfig` interface
-  - [x] Define `CaptureResult` interface
-  - [x] Define `BaselineMetadata` interface
-  - [x] Define `DiffOptions` interface
-  - [x] Define `DiffResult` interface
-  - [x] Define `VisualAnalysisRequest` interface
-  - [x] Define `VisualAnalysisResponse` interface
-  - [x] Define `VisualReport` interfaces
-  - [x] Export all types from visual module
-
-+ [x] **Configuration schema extensions**
-  - [x] Extend `IrisConfig` with `visual` section
-  - [x] Define `VisualConfig` interface with all options
-  - [x] Update config validation to include visual settings
-  - [x] Add default visual configuration values
-  - [x] Test configuration loading with visual settings
-
-### 3. Visual Capture Engine Foundation
-
-+ [x] **Basic screenshot capture** (`src/visual/capture.ts`)
-  - [x] Implement `VisualCaptureEngine` class structure
-  - [x] Create `capture()` method for single screenshots
-  - [x] Create `captureMultiple()` method for batch captures
-  - [x] Implement viewport and full-page capture modes
-  - [x] Add element-specific screenshot capability
-  - [x] Generate screenshot metadata (timestamp, hash, viewport)
-
-+ [x] **Page stabilization utilities**
-  - [x] Implement `stabilizePage()` method
-  - [x] Add font loading detection and waiting
-  - [x] Add animation disabling capability
-  - [x] Implement configurable stabilization delay
-  - [x] Add network idle detection for AJAX completion
-
-+ [x] **Element masking functionality**
-  - [x] Implement `maskElements()` method
-  - [x] Add CSS selector-based masking
-  - [x] Create masking overlay generation
-  - [x] Add configuration for default mask selectors
-  - [x] Test masking with various element types
-
-### 4. Basic File System Storage ✅ COMPLETED
-
-+ [x] **Baseline directory structure**
-  - [x] Create `.iris/baselines/` directory management
-  - [x] Implement branch-based directory organization
-  - [x] Create metadata.json file handling
-  - [x] Add file cleanup and maintenance utilities
-  - [x] Implement file system permissions setup
-
-+ [x] **Image file operations**
-  - [x] Implement image file saving with compression
-  - [x] Add image file loading and validation
-  - [x] Create image hash generation for deduplication
-  - [x] Implement file naming conventions
-  - [x] Add image format validation and conversion
+**Key Changes from Original Plan:**
+- ✅ Added Sub-Phase 2A: AI Vision Foundation (4 weeks)
+- ✅ Added Week 7: Validation Harness & Golden Dataset
+- ✅ Added Sub-Phase 2C: Parallel Execution (3 weeks)
+- ✅ Descoped: Screen reader simulation → Phase 3
+- ✅ Revised performance targets to realistic levels
 
 ---
 
-## Week 3-4: Core Diff Engine & AI Integration ✅ COMPLETED
+## ✅ Completed (40%)
 
-### 5. Visual Diff Engine Implementation
+**Phase 1:** 100% Complete (122/122 tests passing)
 
-+ [x] **Pixel-level comparison** (`src/visual/diff.ts`)
-  - [x] Implement `VisualDiffEngine` class structure
-  - [x] Create `compare()` method for image comparison
-  - [x] Integrate SSIM structural similarity comparison
-  - [x] Implement pixel difference calculation
-  - [x] Add anti-aliasing tolerance handling
-  - [x] Generate diff heatmap visualization
+**Phase 2 Core Infrastructure (Week 1-2):**
+- ✅ Visual capture engine with stabilization
+- ✅ Visual diff engine (SSIM + pixel)
+- ✅ Git-integrated baseline manager
+- ✅ Complete TypeScript/Zod type system
+- ✅ Database schema and migrations
+- ✅ 178/180 Phase 2 tests passing
 
-+ [x] **Region-based analysis**
-  - [x] Implement `analyzeRegions()` method
-  - [x] Add UI region detection (header, nav, content, footer)
-  - [x] Create bounding box calculation for regions
-  - [x] Implement region-specific difference scoring
-  - [x] Add configurable region weight system
-
-+ [x] **Severity classification system**
-  - [x] Implement severity calculation algorithm
-  - [x] Add change type classification (layout, color, content)
-  - [x] Create severity thresholds configuration
-  - [x] Implement region importance weighting
-  - [x] Add break/pass decision logic
-
-+ [x] **Diff artifact generation**
-  - [x] Create difference overlay image generation
-  - [x] Implement side-by-side comparison images
-  - [x] Add heatmap visualization for differences
-  - [x] Create annotated diff images with region highlights
-  - [x] Implement artifact file management
-
-### 6. AI Visual Classifier Integration ✅ COMPLETED
-
-+ [x] **AI provider integration** (`src/visual/ai-classifier.ts`)
-  - [x] Implement `AIVisualClassifier` class structure
-  - [x] Create OpenAI GPT-4V integration
-  - [x] Add Claude 3.5 Sonnet vision integration
-  - [x] Implement Ollama local model support
-  - [x] Add provider fallback and error handling
-
-+ [x] **Image preprocessing for AI**
-  - [x] Implement `prepareImagesForAI()` method
-  - [x] Add image resizing for model input requirements
-  - [x] Create image encoding for API transmission
-  - [x] Implement image quality optimization
-  - [x] Add batch processing capability
-
-+ [x] **AI analysis pipeline**
-  - [x] Create `analyzeChange()` method for single comparisons
-  - [x] Implement `batchAnalyze()` for multiple comparisons
-  - [x] Add context injection for better AI understanding
-  - [x] Create response parsing and validation
-  - [x] Implement confidence scoring normalization
-
-+ [x] **Change classification logic**
-  - [x] Implement intentional vs. unintentional change detection
-  - [x] Add change type classification (layout, color, content, typography)
-  - [x] Create semantic similarity scoring
-  - [x] Implement reasoning extraction from AI responses
-  - [x] Add classification confidence metrics
-
-### 7. Baseline Management System ✅ COMPLETED
-
-+ [x] **Git integration** (`src/visual/baseline.ts`)
-  - [x] Implement `BaselineManager` class structure
-  - [x] Add Git branch detection using `simple-git`
-  - [x] Create commit hash extraction for baseline versioning
-  - [x] Implement branch-based baseline lookup
-  - [x] Add Git repository validation
-
-+ [x] **Baseline CRUD operations**
-  - [x] Implement `getBaseline()` method with strategy support
-  - [x] Create `setBaseline()` method for new baseline creation
-  - [x] Add `updateBaseline()` method for baseline updates
-  - [x] Implement `listBaselines()` with filtering
-  - [x] Create `cleanupOldBaselines()` maintenance method
-
-+ [x] **Baseline strategy implementation**
-  - [x] Add branch-based baseline strategy
-  - [x] Implement commit-based baseline strategy
-  - [x] Create manual baseline strategy
-  - [x] Add automatic baseline creation options
-  - [x] Implement baseline validation and integrity checks
+**Sub-Phase 2A: AI Vision Foundation (Week 1-4):**
+- ✅ Multimodal AI client architecture (text + vision)
+- ✅ Vision provider integrations (OpenAI GPT-4o, Anthropic Claude 3.5, Ollama)
+- ✅ Image preprocessing pipeline (resize, optimize, base64 encoding, hashing)
+- ✅ AI vision result caching (LRU memory + SQLite persistence)
+- ✅ Cost tracking with budget management and circuit breaker
+- ✅ Smart client with automatic fallback and cost optimization
+- ✅ 360/362 tests passing (added 19 new tests for Week 3-4 components)
 
 ---
 
-## Week 5-6: CLI Integration & Configuration
+## 🚧 In Progress / Not Started (60%)
 
-### 8. CLI Command Implementation
+### ✅ Sub-Phase 2A: AI Vision Foundation (Week 1-4) - COMPLETED
 
-+ [ ] **New `iris visual-diff` command** (update `src/cli.ts`)
-  - [ ] Register new visual-diff command with commander.js
-  - [ ] Implement command option parsing (--pages, --baseline, --semantic)
-  - [ ] Add device and viewport option handling
-  - [ ] Create threshold and sensitivity configuration
-  - [ ] Implement output format selection
+#### ✅ Week 1-2: AI Client Vision Extension - COMPLETED
 
-+ [ ] **Visual diff execution pipeline**
-  - [ ] Create main visual diff workflow orchestration
-  - [ ] Implement page pattern matching and URL resolution
-  - [ ] Add progress reporting for multi-page tests
-  - [ ] Create result aggregation across multiple pages
-  - [ ] Implement exit code handling based on severity
++ [x] **Refactor ai-client.ts for multimodal support**
+  - [x] Create `src/ai-client/base.ts` - Base client abstraction (180 lines)
+  - [x] Refactor existing to `src/ai-client/text/` - Text client implementations
+  - [x] Create `src/ai-client/vision/` - Vision client implementations (320 lines)
+  - [x] Create `src/ai-client/factory.ts` - Client factory (145 lines)
+  - [x] Update Phase 1 imports with backward compatibility layer
+  - [x] Verify all 122 Phase 1 tests still pass ✅
 
-+ [ ] **Enhanced existing commands**
-  - [ ] Extend `iris run` with visual assertion support
-  - [ ] Add `--visual` flag to run command
-  - [ ] Enhance `iris watch` with visual diff triggering
-  - [ ] Add visual change notifications to watch mode
-  - [ ] Integrate visual results with existing test run storage
++ [x] **Implement vision API integrations**
+  - [x] OpenAI GPT-4o provider implementation (GPT-4V deprecated)
+  - [x] Anthropic Claude 3.5 Sonnet vision provider
+  - [x] Ollama local model support (llava, bakllava)
+  - [x] Unified VisionClassification response format
+  - [x] Provider-specific error handling and availability checks
 
-+ [ ] **CLI user experience improvements**
-  - [ ] Add colored output for visual diff results
-  - [ ] Implement progress spinners for long operations
-  - [ ] Create summary statistics display
-  - [ ] Add interactive baseline update prompts
-  - [ ] Implement helpful error messages and suggestions
++ [x] **Image preprocessing pipeline**
+  - [x] Create `src/ai-client/preprocessor.ts` (260 lines)
+  - [x] Implement image resizing (2048x2048 max) for API limits
+  - [x] Base64 encoding for transmission
+  - [x] Quality optimization (85% JPEG quality target)
+  - [x] SHA-256 hash calculation for caching
+  - [x] Batch processing capability
 
-### 9. Configuration System Integration
+**Deliverables:**
+- [x] 9 new source files (~1,100 lines total)
+- [x] 24 tests with mocked providers (preprocessor batch)
+- [x] Documentation: CLAUDE.md updated with architecture details
 
-+ [ ] **Visual configuration loading**
-  - [ ] Integrate visual config with existing config system
-  - [ ] Add environment variable support for visual settings
-  - [ ] Implement configuration validation for visual options
-  - [ ] Create default configuration generation
-  - [ ] Add configuration file examples and documentation
-
-+ [ ] **Dynamic configuration handling**
-  - [ ] Implement runtime configuration overrides
-  - [ ] Add CLI flag to configuration mapping
-  - [ ] Create configuration inheritance (global → project → command)
-  - [ ] Implement sensitive setting handling (API keys)
-  - [ ] Add configuration validation error reporting
-
-### 10. Database Integration
-
-+ [ ] **Visual test result storage**
-  - [ ] Implement visual test run persistence
-  - [ ] Add baseline metadata storage and indexing
-  - [ ] Create visual diff result storage
-  - [ ] Implement region diff detail storage
-  - [ ] Add report metadata tracking
-
-+ [ ] **Database query optimization**
-  - [ ] Create indexed queries for baseline lookup
-  - [ ] Implement efficient visual test history queries
-  - [ ] Add baseline cleanup query optimization
-  - [ ] Create performance monitoring for database operations
-  - [ ] Implement query result caching where appropriate
+**Success Criteria:**
+- ✅ All Phase 1 tests pass (122/122)
+- ✅ Vision client handles mocked image analysis
+- ✅ Image preprocessing reduces size by >40%
+- ✅ All 3 providers have working implementations
 
 ---
 
-## Week 7-8: Reporting, Optimization & Testing
+#### ✅ Week 3-4: Cost Control & Caching Layer - COMPLETED
 
-### 11. Report Generation System
++ [x] **Result caching system**
+  - [x] Create `src/ai-client/cache.ts` (348 lines)
+  - [x] Implement LRU memory cache with eviction
+  - [x] SQLite-backed persistent cache with TTL
+  - [x] Cache key generation (provider:model:baseline_hash:current_hash)
+  - [x] TTL-based invalidation (default 30 days)
+  - [x] Database schema: `ai_vision_cache` table
+  - [x] Cache hit/miss tracking and statistics
 
-+ [ ] **HTML report generator** (`src/visual/reporter.ts`)
-  - [ ] Implement `VisualReporter` class structure
-  - [ ] Create `generateReport()` method for multi-format support
-  - [ ] Implement HTML template rendering
-  - [ ] Add interactive diff viewer in HTML reports
-  - [ ] Create responsive design for report viewing
++ [x] **Cost tracking and budgets**
+  - [x] Create `src/ai-client/cost-tracker.ts` (308 lines)
+  - [x] Real-time cost calculation per provider/model
+  - [x] Daily and monthly budget limits
+  - [x] Warning alerts at 80% budget
+  - [x] Critical alerts at 95% budget
+  - [x] Circuit breaker at 100% budget with exception
+  - [x] Database schema: `cost_tracking` table
+  - [x] Default pricing (GPT-4o: $0.002, Claude 3.5: $0.0015, Ollama: free)
+
++ [x] **Smart fallback strategies**
+  - [x] Create `src/ai-client/smart-client.ts` (233 lines)
+  - [x] Fallback chain: cache → Ollama → OpenAI → Anthropic
+  - [x] Budget enforcement with circuit breaker
+  - [x] Cost optimization tracking
+  - [x] Provider availability checking
+  - [x] Integration with preprocessor, cache, and cost tracker
+
++ [x] **Database migration**
+  - [x] Create `migrations/002_ai_cache_cost.sql`
+  - [x] Test migration with in-memory database
+  - [x] Rollback instructions in comments
+
+**Deliverables:**
+- [x] 3 new source files (889 lines total)
+- [x] 19 tests for caching, cost tracking, and smart client
+- [x] Documentation: README.md, CLAUDE.md, PHASE2_README.md updated
+
+**Success Criteria:**
+- ✅ Cache hit rate tracking implemented
+- ✅ Budget alerts trigger at thresholds (80%, 95%, 100%)
+- ✅ Cost tracking with per-operation granularity
+- ✅ Smart fallback with automatic provider selection
+
+---
+
+### Sub-Phase 2B: Visual Classification Integration (Week 5-7) ⏳ NOT STARTED
+
+#### Week 5-6: AI Visual Classifier Implementation
+
++ [ ] **Classifier core**
+  - [ ] Create `src/visual/ai-classifier.ts` (~300 lines)
+  - [ ] Implement `analyze()` method for single comparison
+  - [ ] Implement `batchAnalyze()` for multiple comparisons
+  - [ ] Build analysis prompt with context
+  - [ ] Parse and normalize AI responses
+  - [ ] Extract reasoning and confidence scores
+
++ [ ] **Integration with diff engine**
+  - [ ] Update `src/visual/diff.ts` (~50 lines added)
+  - [ ] Add optional AI classifier parameter
+  - [ ] Implement combined severity calculation
+  - [ ] Add `--skip-ai` flag support
+  - [ ] Ensure backward compatibility
+
++ [ ] **Feedback loop to selector system**
+  - [ ] Create `src/visual/selector-validator.ts` (enhanced)
+  - [ ] Visual confirmation of selector targets
+  - [ ] Suggestion generation for better selectors
+  - [ ] Integration with Phase 1 selector scoring
+
+**Deliverables:**
+- [ ] 3 source files (~350 lines new code)
+- [ ] 30+ tests with mocked AI responses
+- [ ] Documentation: AI classification guide, prompt engineering
+
+**Success Criteria:**
+- ✅ Classifier works with mocked responses
+- ✅ No Phase 2 regressions (178/180 still pass)
+- ✅ Combined severity calculation correct
+- ✅ Can disable AI via flag
+
+---
+
+#### Week 7: Validation Harness & Golden Dataset 🔴 CRITICAL
+
++ [ ] **Demo application suite**
+  - [ ] Create `examples/demo-apps/react-ecommerce/` (~500 lines)
+    - [ ] 5 intentional change scenarios
+    - [ ] 5 bug scenarios
+    - [ ] Scenario documentation
+  - [ ] Create `examples/demo-apps/vue-dashboard/` (~500 lines)
+    - [ ] 5 intentional + 5 bug scenarios
+  - [ ] Create `examples/demo-apps/html-marketing/` (~300 lines)
+    - [ ] 5 intentional + 5 bug scenarios
+  - [ ] Test runner scripts for all apps
+
++ [ ] **Golden dataset creation**
+  - [ ] Create `examples/golden-dataset/` directory
+  - [ ] Capture 50 labeled screenshot pairs
+    - [ ] 25 intentional changes (10 minor, 10 moderate, 5 breaking)
+    - [ ] 25 bugs (5 minor, 10 moderate, 10 breaking)
+  - [ ] Create `index.json` manifest with labels
+  - [ ] Document expected classifications
+  - [ ] Create `README.md` with dataset documentation
+
++ [ ] **Accuracy measurement system**
+  - [ ] Create `src/validation/accuracy-validator.ts` (~200 lines)
+  - [ ] Implement accuracy calculation
+  - [ ] False positive/negative tracking
+  - [ ] Confidence breakdown analysis
+  - [ ] Category-specific accuracy
+  - [ ] Generate accuracy reports
+
++ [ ] **E2E validation suite**
+  - [ ] Create `__tests__/e2e/react-ecommerce.test.ts` (10 tests)
+  - [ ] Create `__tests__/e2e/vue-dashboard.test.ts` (10 tests)
+  - [ ] Create `__tests__/e2e/html-marketing.test.ts` (10 tests)
+  - [ ] Create `__tests__/validation/accuracy.test.ts` (5 tests)
+  - [ ] Test against real browsers (not mocked)
+
++ [ ] **CLI validation command**
+  - [ ] Add `iris validate --dataset golden`
+  - [ ] Progress reporting
+  - [ ] Accuracy report generation
+
+**Deliverables:**
+- [ ] 3 demo applications (~1300 lines)
+- [ ] 50-item golden dataset with labels
+- [ ] Accuracy validation system (~200 lines)
+- [ ] 35+ E2E tests against real apps
+- [ ] Documentation: Validation methodology
+
+**Success Criteria:** 🔴 CRITICAL FOR PHASE 2 SUCCESS
+- ✅ All 3 demo apps run successfully
+- ✅ Golden dataset has 50 labeled examples
+- ✅ **AI classification accuracy >90%** on golden dataset
+- ✅ **False positive rate <5%**
+- ✅ All 30 E2E tests pass with real browsers
+- ✅ E2E suite completes in <10 minutes
+
+---
+
+### Sub-Phase 2C: Parallel Execution & Performance (Week 8-10) ⏳ NOT STARTED
+
+#### Week 8-9: Parallel Execution Architecture
+
++ [ ] **Concurrent page testing**
+  - [ ] Create `src/visual/parallel-executor.ts` (~350 lines)
+  - [ ] Browser pool management (4 concurrent browsers)
+  - [ ] Task queue with `p-limit` concurrency control
+  - [ ] Resource monitoring (memory, CPU)
+  - [ ] Circuit breaking on resource limits
+  - [ ] Graceful degradation on failures
+
++ [ ] **Smart caching and incremental testing**
+  - [ ] Create `src/visual/incremental-selector.ts` (~200 lines)
+  - [ ] Git diff analysis for changed files
+  - [ ] File-to-page mapping heuristics
+  - [ ] Dependency resolution (layout → all pages)
+  - [ ] Sample unchanged pages (10% for regression)
+  - [ ] Create `src/visual/result-cache.ts` (~150 lines)
+  - [ ] Result caching by file hash
+  - [ ] Cache invalidation strategy
+  - [ ] Cache hit/miss tracking
+
++ [ ] **Result aggregation and progress**
+  - [ ] Create `src/visual/progress-reporter.ts` (~200 lines)
+  - [ ] Real-time progress bar
+  - [ ] Result streaming as tests complete
+  - [ ] Summary generation
+  - [ ] Cache hit rate reporting
+  - [ ] Performance metrics
+
++ [ ] **CLI integration**
+  - [ ] Add `--concurrency N` flag to commands
+  - [ ] Add `--incremental` flag for smart selection
+  - [ ] Add `--cache-only` flag to skip cache
+
+**Deliverables:**
+- [ ] 4 new source files (~900 lines)
+- [ ] 33+ tests for parallel execution
+- [ ] Performance benchmarks
+- [ ] Documentation: Parallel execution guide
+
+**Success Criteria:**
+- ✅ 50 pages in <3 minutes (4x parallelism)
+- ✅ Resource usage <2GB total memory
+- ✅ No browser crashes or hangs
+- ✅ Incremental testing reduces time >80% for typical commits
+- ✅ Cache hit rate >40% after first week
+
+---
+
+#### Week 10: Optimization & Profiling
+
++ [ ] **Profiling and bottleneck identification**
+  - [ ] Create `src/visual/profiler.ts` (~150 lines)
+  - [ ] Profile each pipeline stage
+  - [ ] Identify top 3 bottlenecks
+  - [ ] Measure time distribution
+  - [ ] Memory profiling
+  - [ ] Generate profiling reports
+
++ [ ] **Optimization implementation**
+  - [ ] Optimize stabilization (reduce 50% overhead)
+    - [ ] Smart font loading detection
+    - [ ] Conditional network idle wait
+    - [ ] Variable delay based on complexity
+  - [ ] Batch AI calls (parallel processing)
+  - [ ] Browser context reuse (eliminate launch overhead)
+  - [ ] Image processing optimization
+
++ [ ] **Performance testing**
+  - [ ] Create performance regression tests
+  - [ ] Benchmark 10 pages in <30s
+  - [ ] Benchmark 50 pages in <3 min
+  - [ ] Memory leak detection
+  - [ ] CPU usage monitoring
+
+**Deliverables:**
+- [ ] Profiling system (~150 lines)
+- [ ] Optimizations in existing modules
+- [ ] Performance test suite
+- [ ] Documentation: Performance tuning guide
+
+**Success Criteria:**
+- ✅ 10 pages in <30s (4x parallelism)
+- ✅ 50 pages in <3 minutes (4x parallelism)
+- ✅ Memory usage <2GB for 50-page test
+- ✅ No memory leaks
+- ✅ CPU usage <80% average
+
+---
+
+### Sub-Phase 2D: CLI Integration & Reporting (Week 11-14) ⏳ NOT STARTED
+
+#### Week 11-12: CLI Command Implementation
+
++ [ ] **`iris visual-diff` command**
+  - [ ] Update `src/cli.ts` with new command
+  - [ ] Implement option parsing:
+    - [ ] `--pages` - Page patterns to test
+    - [ ] `--baseline` - Branch for baseline
+    - [ ] `--semantic` - Enable AI classification
+    - [ ] `--concurrency` - Parallel browsers
+    - [ ] `--browser` - Browser selection
+  - [ ] Integrate with visual pipeline
+  - [ ] Progress reporting
+  - [ ] Exit code handling (0=pass, 5=regression)
+
++ [ ] **Configuration system integration**
+  - [ ] Create `src/visual/config.ts`
+  - [ ] Extend `IrisConfig` with visual settings
+  - [ ] Config file support
+  - [ ] Environment variable overrides
+  - [ ] Validation and helpful errors
+
++ [ ] **Browser selection support**
+  - [ ] Support chromium, firefox, webkit
+  - [ ] Browser-specific baseline storage
+  - [ ] Document cross-browser limitations
+  - [ ] Rendering difference handling
+
++ [ ] **CLI UX improvements**
+  - [ ] Colored output
+  - [ ] Progress spinners
+  - [ ] Summary statistics
+  - [ ] Interactive baseline updates
+  - [ ] Helpful error messages
+
+**Deliverables:**
+- [ ] Updated `src/cli.ts` (~100 lines added)
+- [ ] `src/visual/config.ts` (~150 lines)
+- [ ] CLI help documentation
+- [ ] 15+ CLI integration tests
+
+**Success Criteria:**
+- ✅ `iris visual-diff` command works end-to-end
+- ✅ All flags parsed correctly
+- ✅ Configuration system integrated
+- ✅ Browser selection functional
+
+---
+
+#### Week 13-14: Report Generation
+
++ [ ] **HTML report generator**
+  - [ ] Create `src/visual/reporter.ts` (~400 lines)
+  - [ ] HTML template with embedded CSS
+  - [ ] Base64 image embedding (self-contained)
+  - [ ] Side-by-side comparison view
+  - [ ] Diff overlay visualization
+  - [ ] Severity filtering and grouping
+  - [ ] Navigation and search
 
 + [ ] **Multi-format export**
-  - [ ] Implement JSON report export
-  - [ ] Add Markdown report generation
-  - [ ] Create JUnit XML export for CI/CD
-  - [ ] Implement CSV export for data analysis
-  - [ ] Add custom template support
+  - [ ] JSON format (machine-readable)
+  - [ ] JUnit XML format (CI/CD)
+  - [ ] Markdown format (human-readable)
+  - [ ] Custom template support
 
-+ [ ] **Report artifacts management**
-  - [ ] Implement artifact copying and organization
-  - [ ] Create relative path handling in reports
-  - [ ] Add artifact compression for large reports
-  - [ ] Implement artifact cleanup policies
-  - [ ] Create report sharing and distribution utilities
++ [ ] **Asset management**
+  - [ ] Report directory structure
+  - [ ] Artifact organization
+  - [ ] Relative path handling
+  - [ ] Self-contained HTML option
+  - [ ] External artifacts option
 
-+ [ ] **Report visualization features**
-  - [ ] Add side-by-side image comparison viewer
-  - [ ] Implement diff overlay visualization
-  - [ ] Create severity filtering and grouping
-  - [ ] Add trend analysis for historical data
-  - [ ] Implement report navigation and search
++ [ ] **Report CLI integration**
+  - [ ] Add `--report-format` flag
+  - [ ] Add `--report-output` flag
+  - [ ] Automatic report generation
+  - [ ] Report path display in summary
 
-### 12. Performance Optimization
+**Deliverables:**
+- [ ] `src/visual/reporter.ts` (~400 lines)
+- [ ] HTML template
+- [ ] 10+ report generation tests
+- [ ] Documentation: Report formats guide
 
-+ [ ] **Capture performance optimization**
-  - [ ] Implement parallel screenshot processing
-  - [ ] Add screenshot caching for unchanged pages
-  - [ ] Create incremental capture for partial updates
-  - [ ] Implement smart retry mechanisms
-  - [ ] Add memory management for large image processing
-
-+ [ ] **Comparison performance optimization**
-  - [ ] Implement early exit for large differences
-  - [ ] Add diff result caching based on image hashes
-  - [ ] Create batch processing for multiple comparisons
-  - [ ] Implement region prioritization for faster feedback
-  - [ ] Add configurable performance tuning options
-
-+ [ ] **Storage optimization**
-  - [ ] Implement image compression without quality loss
-  - [ ] Add baseline deduplication across branches
-  - [ ] Create automatic cleanup of old artifacts
-  - [ ] Implement lazy loading for large image sets
-  - [ ] Add storage usage monitoring and reporting
-
-### 13. Error Handling & Edge Cases
-
-+ [ ] **Comprehensive error handling**
-  - [ ] Implement capture error recovery (page load failures, timeouts)
-  - [ ] Add baseline error handling (missing, corrupted files)
-  - [ ] Create AI service error fallback mechanisms
-  - [ ] Implement report generation error recovery
-  - [ ] Add graceful degradation for all failure modes
-
-+ [ ] **Edge case handling**
-  - [ ] Handle dynamic content and timing issues
-  - [ ] Implement browser compatibility edge cases
-  - [ ] Add network failure and retry logic
-  - [ ] Handle file system permission issues
-  - [ ] Create disk space and resource constraint handling
-
-+ [ ] **User-friendly error messages**
-  - [ ] Create actionable error messages with solutions
-  - [ ] Add troubleshooting guides for common issues
-  - [ ] Implement error categorization and severity
-  - [ ] Add context-aware error suggestions
-  - [ ] Create error reporting and diagnostics
-
-### 14. Comprehensive Testing Suite ✅ COMPLETED
-
-+ [x] **Unit tests for all modules**
-  - [x] Test visual capture engine with mocked Playwright
-  - [x] Test baseline manager with mocked Git and filesystem
-  - [x] Test diff engine with golden image datasets
-  - [x] Test AI classifier with mocked provider responses (partial)
-  - [x] Test report generator with template validation (partial)
-  - [x] Test CLI commands with mocked dependencies
-
-+ [ ] **Integration tests**
-  - [ ] End-to-end visual regression workflow tests
-  - [ ] Multi-device responsive testing scenarios
-  - [ ] Git workflow integration tests (branch switching)
-  - [ ] Database migration and schema tests
-  - [ ] Configuration loading and validation tests
-  - [ ] Error handling and recovery tests
-
-+ [ ] **Performance tests**
-  - [ ] Concurrent visual test execution benchmarks
-  - [ ] Large image processing memory tests
-  - [ ] Baseline storage growth and cleanup tests
-  - [ ] AI service latency and timeout tests
-  - [ ] Report generation performance tests
-  - [ ] Database query performance tests
-
-+ [ ] **Quality assurance**
-  - [ ] Code coverage analysis (target >90% for visual module)
-  - [ ] Static analysis and linting
-  - [ ] TypeScript strict mode compliance
-  - [ ] Security audit for file operations and AI integration
-  - [ ] Accessibility testing for generated reports
-  - [ ] Cross-platform compatibility testing (Windows, macOS, Linux)
+**Success Criteria:**
+- ✅ HTML reports are self-contained
+- ✅ All formats export correctly
+- ✅ Reports are portable
+- ✅ Interactive features work
 
 ---
 
-## Post-Implementation: Documentation & Release Prep
+### Sub-Phase 2E: Accessibility Foundation (Week 15-18) ⏳ NOT STARTED
 
-### 15. Documentation & Examples
+**NOTE: DESCOPED - Axe-core integration only**
+- ❌ Keyboard navigation testing → Phase 3
+- ❌ Screen reader simulation → Phase 3 or separate project
+- ❌ Focus trap detection → Phase 3
 
-+ [ ] **Technical documentation**
-  - [ ] Update API documentation with visual testing methods
-  - [ ] Create visual testing configuration guide
-  - [ ] Write troubleshooting guide for common issues
-  - [ ] Document AI provider setup and requirements
-  - [ ] Create performance tuning guide
+#### Week 15-16: Axe-core Integration
 
-+ [ ] **User guides and examples**
-  - [ ] Create getting started guide for visual testing
-  - [ ] Write best practices guide for baseline management
-  - [ ] Create example projects demonstrating visual testing
-  - [ ] Write CI/CD integration examples
-  - [ ] Create video tutorials for key workflows
++ [ ] **Axe-core Playwright integration**
+  - [ ] Create `src/a11y/axe-runner.ts` (~150 lines)
+  - [ ] Use `@axe-core/playwright` package
+  - [ ] Run on pages during visual testing
+  - [ ] Store results in database
+  - [ ] Result parsing and normalization
 
-+ [ ] **Migration documentation**
-  - [ ] Write Phase 1 to Phase 2 migration guide
-  - [ ] Document breaking changes (if any)
-  - [ ] Create configuration migration utilities
-  - [ ] Write database migration troubleshooting guide
-  - [ ] Document rollback procedures
++ [ ] **Rule configuration**
+  - [ ] Create `src/a11y/config.ts`
+  - [ ] WCAG 2.1 AA default rules
+  - [ ] Custom rule configuration
+  - [ ] Severity-based filtering
+  - [ ] False positive suppression
 
-### 16. Release Preparation
++ [ ] **Database schema**
+  - [ ] Extend database with a11y tables
+  - [ ] `accessibility_issues` table
+  - [ ] Issue tracking and history
+  - [ ] Migration script
 
-+ [ ] **Version management**
-  - [ ] Update package.json version to 2.0.0
-  - [ ] Create release notes for Phase 2
-  - [ ] Update CHANGELOG.md with new features
-  - [ ] Tag release in Git repository
-  - [ ] Update README.md with Phase 2 features
++ [ ] **CLI integration**
+  - [ ] Add `iris a11y` command
+  - [ ] Add `--fail-on` severity flag
+  - [ ] Integrate with visual-diff workflow
+  - [ ] Accessibility reporting
 
-+ [ ] **Quality gates**
-  - [ ] Run full test suite and ensure 100% pass rate
-  - [ ] Verify code coverage meets targets (>90%)
-  - [ ] Complete security audit checklist
-  - [ ] Validate performance benchmarks
-  - [ ] Test installation and setup process
+**Deliverables:**
+- [ ] 2 source files (~200 lines)
+- [ ] Database schema extension
+- [ ] 10+ tests
+- [ ] Documentation: Accessibility testing guide
 
-+ [ ] **Release validation**
-  - [ ] Test installation from NPM package
-  - [ ] Validate all CLI commands work correctly
-  - [ ] Test configuration and setup workflows
-  - [ ] Verify examples and documentation accuracy
-  - [ ] Conduct user acceptance testing with Phase 2 features
+**Success Criteria:**
+- ✅ Axe-core runs successfully
+- ✅ Results stored in database
+- ✅ CLI command works
+- ✅ Reports include a11y issues
 
 ---
 
-## Success Criteria
+#### Week 17-18: Integration & Polish
 
-**Phase 2 will be considered complete when:**
++ [ ] **Unified workflow**
+  - [ ] Combine visual + accessibility in single command
+  - [ ] Shared configuration
+  - [ ] Integrated reporting (visual + a11y)
+  - [ ] Single exit code for both
+
++ [ ] **Documentation completion**
+  - [ ] Getting started guide
+  - [ ] API documentation
+  - [ ] Troubleshooting guide
+  - [ ] Cost estimation calculator
+  - [ ] Configuration reference
+  - [ ] Best practices guide
+
++ [ ] **Example projects**
+  - [ ] React app with visual regression
+  - [ ] Vue app with accessibility
+  - [ ] GitHub Actions integration example
+  - [ ] GitLab CI integration example
+
++ [ ] **Final testing**
+  - [ ] Full regression test suite
+  - [ ] Performance validation
+  - [ ] Cost validation
+  - [ ] Accuracy validation
+  - [ ] Documentation accuracy
+
++ [ ] **Migration preparation**
+  - [ ] Migration guide from Phase 1
+  - [ ] Breaking changes documentation
+  - [ ] Upgrade checklist
+  - [ ] Rollback procedures
+
+**Deliverables:**
+- [ ] Complete documentation suite
+- [ ] 3+ example projects
+- [ ] Migration guide
+- [ ] Video walkthrough (optional)
+
+**Success Criteria:**
+- ✅ All Phase 2 tests pass (target: >95%)
+- ✅ Documentation is complete and accurate
+- ✅ Example projects work end-to-end
+- ✅ Ready for production use
+
+---
+
+## 📈 Progress Tracking
+
+### Week 1-4: AI Vision Foundation
+- [ ] Week 1-2: AI Client Extension (0% complete)
+- [ ] Week 3-4: Cost Control & Caching (0% complete)
+
+### Week 5-7: Visual Classification
+- [ ] Week 5-6: Classifier Implementation (0% complete)
+- [ ] Week 7: Validation Harness (0% complete) 🔴 CRITICAL
+
+### Week 8-10: Parallel Execution
+- [ ] Week 8-9: Parallel Architecture (0% complete)
+- [ ] Week 10: Optimization (0% complete)
+
+### Week 11-14: CLI & Reporting
+- [ ] Week 11-12: CLI Commands (0% complete)
+- [ ] Week 13-14: Report Generation (0% complete)
+
+### Week 15-18: Accessibility & Polish
+- [ ] Week 15-16: Axe-core Integration (0% complete)
+- [ ] Week 17-18: Integration & Polish (0% complete)
+
+**Overall Phase 2 Progress: 25% Complete (Core Infrastructure Only)**
+
+---
+
+## 🎯 Success Metrics (Revised)
 
 ### Technical Criteria
-- [ ] All CLI commands execute successfully with proper error handling
-- [ ] Visual diff accuracy >95% for intentional vs. unintentional changes
-- [ ] Performance target <10s for full-page visual diff with AI analysis
-- [ ] False positive rate <1% for regression detection
-- [ ] Test coverage >90% for all visual testing modules
+- [ ] All CLI commands work successfully
+- [ ] **AI classification accuracy >90%** on golden dataset
+- [ ] **False positive rate <5%**
+- [ ] **50 pages in <3 minutes** (4x parallelism)
+- [ ] Test coverage >85% for visual modules
+- [ ] Zero Phase 1 regressions (122/122 pass)
 
 ### User Experience Criteria
-- [ ] Setup time <5 minutes from installation to first visual test
-- [ ] Actionable remediation guidance >90% for flagged issues
-- [ ] CI pipeline overhead <30 seconds
-- [ ] Baseline storage <100MB for typical projects
+- [ ] Setup time <10 minutes
+- [ ] Cost estimation accurate within 10%
+- [ ] Cache hit rate >50%
+- [ ] CI pipeline overhead <3 minutes
+- [ ] Actionable guidance >80%
 
 ### Integration Criteria
-- [ ] Zero breaking changes to Phase 1 functionality
-- [ ] Seamless database migration from Phase 1
-- [ ] Backward compatible configuration
-- [ ] All Phase 1 tests continue to pass
+- [ ] Backward compatible with Phase 1
+- [ ] Database migration works
+- [ ] Phase 1 tests still pass
+- [ ] Example projects demonstrate value
 
 ### Documentation Criteria
-- [ ] Complete API documentation for all new interfaces
-- [ ] User guides for all major workflows
-- [ ] Troubleshooting guides for common issues
-- [ ] Example projects demonstrating features
-- [ ] Migration guide from Phase 1
+- [ ] Complete API documentation
+- [ ] User guides for workflows
+- [ ] Troubleshooting guides
+- [ ] Example projects
+- [ ] Migration guide
 
 ---
 
-**Total Estimated Tasks:** 150+ atomic tasks
-**Timeline:** 8 weeks (2 engineers working in parallel)
-**Current Phase 1 Completion:** ✅ 100% - Ready for Phase 2
+## ⚠️ Risk Management
 
-This comprehensive task list ensures systematic implementation of Phase 2 visual regression testing while maintaining the high quality standards established in Phase 1.
+### High-Risk Items
+
+**1. AI Classification Accuracy (Week 5-7)** 🔴
+- **Risk**: Accuracy <90%
+- **Mitigation**: Large golden dataset, prompt engineering, multiple providers
+
+**2. Performance Targets (Week 8-10)** 🟡
+- **Risk**: Can't achieve <3min for 50 pages
+- **Mitigation**: Parallel execution, incremental testing, smart caching
+
+**3. Cost Control (Week 3-4)** 🟡
+- **Risk**: Cache misses cause high costs
+- **Mitigation**: Aggressive caching, fallbacks, budgets, local models
+
+---
+
+## 📋 Next Steps
+
+**Immediate (This Week):**
+1. [ ] Review and approve this revised plan
+2. [ ] Update stakeholder expectations (14-18 weeks)
+3. [ ] Begin Sub-Phase 2A: AI Client Refactoring
+
+**Week 1 Tasks:**
+1. [ ] Create `src/ai-client/base.ts`
+2. [ ] Refactor existing ai-client to text-only
+3. [ ] Create `src/ai-client/vision.ts`
+4. [ ] Set up vision API testing environment
+
+**Critical Path:**
+- Week 1-4: AI Vision Foundation (blocks everything)
+- Week 7: Validation (proves it works)
+- Week 8-10: Parallel Execution (makes it fast enough)
+
+---
+
+**Document Status**: ✅ Ready for Implementation
+**Dependencies**: None - can start Week 1 immediately
+**Estimated Completion**: 14-18 weeks from start date
