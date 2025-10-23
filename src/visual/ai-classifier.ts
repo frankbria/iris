@@ -1,13 +1,30 @@
-import sharp from 'sharp';
-import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
+/**
+ * AI Visual Classifier - Refactored to use Phase 2A infrastructure
+ *
+ * This module provides backward-compatible interface while leveraging:
+ * - SmartAIVisionClient for intelligent provider selection and fallback
+ * - ImagePreprocessor for optimized image processing
+ * - AIVisionCache for result caching
+ * - CostTracker for budget management
+ *
+ * ADAPTER PATTERN: Maps between existing AIAnalysisRequest/Response types
+ * and Phase 2A AIVisionRequest/Response types to maintain backward compatibility.
+ */
+
+import { IrisConfig } from '../config';
+import { SmartAIVisionClient, SmartClientConfig } from '../ai-client/smart-client';
+import { ImagePreprocessor } from '../ai-client/preprocessor';
+import { AIVisionRequest, AIVisionResponse } from '../ai-client/base';
 import { AIVisualAnalysis } from './types';
 
 /**
- * AI Provider Types
+ * AI Provider Types (backward compatibility)
  */
 export type AIProvider = 'openai' | 'claude' | 'ollama';
 
+/**
+ * AI Provider Configuration (backward compatibility)
+ */
 export interface AIProviderConfig {
   provider: AIProvider;
   apiKey?: string;
@@ -17,6 +34,9 @@ export interface AIProviderConfig {
   temperature?: number;
 }
 
+/**
+ * Prepared image metadata (backward compatibility)
+ */
 export interface PreparedImageForAI {
   base64: string;
   mimeType: string;
@@ -24,6 +44,9 @@ export interface PreparedImageForAI {
   height: number;
 }
 
+/**
+ * AI analysis request (PUBLIC INTERFACE - DO NOT CHANGE)
+ */
 export interface AIAnalysisRequest {
   baselineImage: Buffer;
   currentImage: Buffer;
@@ -36,6 +59,9 @@ export interface AIAnalysisRequest {
   };
 }
 
+/**
+ * AI analysis response (PUBLIC INTERFACE - DO NOT CHANGE)
+ */
 export interface AIAnalysisResponse {
   classification: string;
   confidence: number;
@@ -58,14 +84,20 @@ export interface AIAnalysisResponse {
 /**
  * AI Visual Classifier for semantic visual change analysis
  *
- * Integrates with OpenAI GPT-4V, Claude 3.5 Sonnet, and Ollama for
- * intelligent classification of visual changes as intentional or unintentional.
+ * Refactored to use Phase 2A infrastructure while maintaining backward compatibility.
+ * Uses SmartAIVisionClient for intelligent provider selection, caching, and cost tracking.
  */
 export class AIVisualClassifier {
-  private openaiClient?: OpenAI;
-  private anthropicClient?: Anthropic;
+  private smartClient: SmartAIVisionClient;
+  private preprocessor: ImagePreprocessor;
   private config: AIProviderConfig;
+  private irisConfig: IrisConfig;
 
+  /**
+   * Create AI visual classifier with backward-compatible interface
+   *
+   * @param config - AI provider configuration (legacy format)
+   */
   constructor(config: AIProviderConfig) {
     this.config = {
       maxTokens: 2048,
@@ -73,78 +105,122 @@ export class AIVisualClassifier {
       ...config,
     };
 
-    // Initialize provider clients based on config
-    this.initializeProviders();
+    // Validate configuration early to maintain backward compatibility with error handling
+    this.validateProviderConfig(config);
+
+    // Convert legacy AIProviderConfig to IrisConfig format (adapter pattern)
+    this.irisConfig = this.convertToIrisConfig(config);
+
+    // Initialize Phase 2A components
+    this.preprocessor = new ImagePreprocessor({
+      maxWidth: 2048,
+      maxHeight: 2048,
+      quality: 85,
+      maintainAspectRatio: true,
+      format: 'jpeg',
+    });
+
+    // Initialize smart client with default configuration
+    const smartConfig: SmartClientConfig = {
+      enableCache: true,
+      enableCostTracking: true,
+      enableFallback: true,
+      fallbackChain: ['ollama', 'openai', 'anthropic'],
+    };
+
+    this.smartClient = new SmartAIVisionClient(this.irisConfig, smartConfig);
   }
 
   /**
-   * Initialize AI provider clients based on configuration
+   * Validate provider configuration (backward compatibility)
+   * Throws errors matching the legacy implementation's expectations
    */
-  private initializeProviders(): void {
-    switch (this.config.provider) {
-      case 'openai':
-        if (!this.config.apiKey) {
-          throw new Error('OpenAI API key is required for provider "openai"');
-        }
-        this.openaiClient = new OpenAI({
-          apiKey: this.config.apiKey,
-        });
-        // Default to GPT-4V if no model specified
-        this.config.model = this.config.model || 'gpt-4-vision-preview';
-        break;
-
-      case 'claude':
-        if (!this.config.apiKey) {
-          throw new Error('Anthropic API key is required for provider "claude"');
-        }
-        this.anthropicClient = new Anthropic({
-          apiKey: this.config.apiKey,
-        });
-        // Default to Claude 3.5 Sonnet if no model specified
-        this.config.model = this.config.model || 'claude-3-5-sonnet-20241022';
-        break;
-
-      case 'ollama':
-        // Ollama runs locally, use baseURL or default to localhost
-        this.config.baseURL = this.config.baseURL || 'http://localhost:11434';
-        this.config.model = this.config.model || 'llava:latest';
-        break;
-
-      default:
-        throw new Error(`Unsupported AI provider: ${this.config.provider}`);
+  private validateProviderConfig(config: AIProviderConfig): void {
+    // Validate provider type
+    const validProviders = ['openai', 'claude', 'ollama'];
+    if (!validProviders.includes(config.provider)) {
+      throw new Error(`Unsupported AI provider: ${config.provider}`);
     }
+
+    // Validate OpenAI configuration
+    if (config.provider === 'openai' && !config.apiKey) {
+      throw new Error('OpenAI API key is required for provider "openai"');
+    }
+
+    // Validate Claude/Anthropic configuration
+    if (config.provider === 'claude' && !config.apiKey) {
+      throw new Error('Anthropic API key is required for provider "claude"');
+    }
+
+    // Ollama doesn't require API key validation
   }
 
   /**
-   * Prepare image for AI analysis by converting to base64 and optimizing size
+   * Convert legacy AIProviderConfig to IrisConfig format
+   * This adapter method bridges the old and new configuration systems
+   */
+  private convertToIrisConfig(config: AIProviderConfig): IrisConfig {
+    // Map provider names (backward compatibility)
+    let provider: 'openai' | 'anthropic' | 'ollama';
+    if (config.provider === 'claude') {
+      provider = 'anthropic';
+    } else {
+      provider = config.provider as 'openai' | 'anthropic' | 'ollama';
+    }
+
+    // Determine default model based on provider
+    let model = config.model;
+    if (!model) {
+      switch (provider) {
+        case 'openai':
+          model = 'gpt-4o';
+          break;
+        case 'anthropic':
+          model = 'claude-3-5-sonnet-20241022';
+          break;
+        case 'ollama':
+          model = 'llava';
+          break;
+      }
+    }
+
+    return {
+      ai: {
+        provider,
+        apiKey: config.apiKey,
+        model,
+        endpoint: config.baseURL,
+      },
+      watch: {
+        patterns: ['**/*.{ts,tsx,js,jsx,html,css}'],
+        debounceMs: 1000,
+        ignore: ['node_modules/**', 'dist/**', '.git/**', 'coverage/**'],
+      },
+      browser: {
+        headless: true,
+        timeout: 30000,
+      },
+    };
+  }
+
+  /**
+   * Prepare image for AI analysis (backward compatibility method)
+   *
+   * This method maintains the legacy interface but delegates to ImagePreprocessor
+   *
+   * @param imageBuffer - Image buffer to prepare
+   * @param maxWidth - Maximum width (default: 1024)
+   * @returns Prepared image metadata
    */
   async prepareImageForAI(imageBuffer: Buffer, maxWidth: number = 1024): Promise<PreparedImageForAI> {
     try {
-      const image = sharp(imageBuffer);
-      const metadata = await image.metadata();
-
-      // Resize if larger than max width while maintaining aspect ratio
-      let processedImage = image;
-      if (metadata.width && metadata.width > maxWidth) {
-        processedImage = image.resize(maxWidth, undefined, {
-          fit: 'inside',
-          withoutEnlargement: true,
-        });
-      }
-
-      // Convert to JPEG for better compression (AI models handle JPEG well)
-      const optimizedBuffer = await processedImage
-        .jpeg({ quality: 85 })
-        .toBuffer();
-
-      const base64 = optimizedBuffer.toString('base64');
-      const finalMetadata = await sharp(optimizedBuffer).metadata();
+      const processed = await this.preprocessor.preprocess(imageBuffer);
 
       return {
-        base64,
+        base64: processed.base64,
         mimeType: 'image/jpeg',
-        width: finalMetadata.width || 0,
-        height: finalMetadata.height || 0,
+        width: processed.dimensions.width,
+        height: processed.dimensions.height,
       };
     } catch (error) {
       throw new Error(`Failed to prepare image for AI: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -152,352 +228,267 @@ export class AIVisualClassifier {
   }
 
   /**
-   * Prepare multiple images for batch AI analysis
+   * Analyze visual changes using Phase 2A infrastructure
+   *
+   * This method maintains the legacy interface while using SmartAIVisionClient internally
+   *
+   * @param request - AI analysis request
+   * @returns AI analysis response
+   */
+  async analyzeChange(request: AIAnalysisRequest): Promise<AIAnalysisResponse> {
+    try {
+      // Build Phase 2A vision request with context
+      const visionRequest: AIVisionRequest = {
+        baseline: request.baselineImage,
+        current: request.currentImage,
+        context: {
+          url: request.context?.url,
+          selector: undefined, // Not used in legacy interface
+          previousClassifications: undefined, // Not used in legacy interface
+        },
+      };
+
+      // Use SmartAIVisionClient for intelligent analysis with caching and fallback
+      const visionResponse = await this.smartClient.analyzeVisualDiff(visionRequest);
+
+      // Map Phase 2A response to legacy response format (adapter pattern)
+      return this.mapVisionResponseToAnalysisResponse(visionResponse, request.context);
+    } catch (error) {
+      // Return fallback response on error
+      return this.createFallbackResponse(error);
+    }
+  }
+
+  /**
+   * Batch analyze multiple visual changes with concurrency control
+   *
+   * Leverages shared cache across batch for efficiency
+   *
+   * @param requests - Array of analysis requests
+   * @returns Array of analysis responses
+   */
+  async batchAnalyze(requests: AIAnalysisRequest[]): Promise<AIAnalysisResponse[]> {
+    // Process in parallel with concurrency limit to avoid rate limits
+    const concurrency = 3; // Conservative limit for API rate limits
+
+    // Dynamic import to avoid Jest ES module issues
+    const pLimit = (await import('p-limit')).default;
+    const limit = pLimit(concurrency);
+
+    const tasks = requests.map(req =>
+      limit(() => this.analyzeChange(req))
+    );
+
+    return Promise.all(tasks);
+  }
+
+  /**
+   * Map Phase 2A AIVisionResponse to legacy AIAnalysisResponse
+   *
+   * This adapter method bridges the response formats:
+   * - Severity mapping: none→low, minor→low, moderate→medium, breaking→critical
+   * - Categories → changeType mapping
+   * - Intentional logic: none/minor → true, moderate/breaking → false
+   */
+  private mapVisionResponseToAnalysisResponse(
+    visionResponse: AIVisionResponse,
+    context?: AIAnalysisRequest['context']
+  ): AIAnalysisResponse {
+    // Map severity levels
+    const severity = this.mapSeverity(visionResponse.severity);
+
+    // Determine if change is intentional based on severity
+    const isIntentional = this.determineIntentionality(visionResponse.severity);
+
+    // Map categories to primary change type
+    const changeType = this.mapCategoriesToChangeType(visionResponse.categories);
+
+    // Build classification string
+    const classification = this.buildClassification(visionResponse.severity, isIntentional);
+
+    // Build description with context
+    const description = this.buildDescription(visionResponse, context);
+
+    return {
+      classification,
+      confidence: visionResponse.confidence,
+      description,
+      severity,
+      suggestions: visionResponse.suggestions || [],
+      isIntentional,
+      changeType,
+      reasoning: visionResponse.reasoning,
+      regions: undefined, // Phase 2A doesn't provide regions yet
+    };
+  }
+
+  /**
+   * Map Phase 2A severity to legacy severity levels
+   */
+  private mapSeverity(severity: 'none' | 'minor' | 'moderate' | 'breaking'): 'low' | 'medium' | 'high' | 'critical' {
+    switch (severity) {
+      case 'none':
+        return 'low';
+      case 'minor':
+        return 'low';
+      case 'moderate':
+        return 'medium';
+      case 'breaking':
+        return 'critical';
+      default:
+        return 'medium';
+    }
+  }
+
+  /**
+   * Determine if change is intentional based on severity
+   *
+   * Logic: none/minor changes are likely intentional updates,
+   * moderate/breaking changes are likely unintentional regressions
+   */
+  private determineIntentionality(severity: 'none' | 'minor' | 'moderate' | 'breaking'): boolean {
+    return severity === 'none' || severity === 'minor';
+  }
+
+  /**
+   * Map Phase 2A categories to primary change type
+   */
+  private mapCategoriesToChangeType(
+    categories: Array<'layout' | 'text' | 'color' | 'spacing' | 'content'>
+  ): 'layout' | 'color' | 'content' | 'typography' | 'animation' | 'unknown' {
+    if (categories.length === 0) {
+      return 'unknown';
+    }
+
+    // Priority order for determining primary change type
+    if (categories.includes('layout') || categories.includes('spacing')) {
+      return 'layout';
+    }
+    if (categories.includes('text')) {
+      return 'typography';
+    }
+    if (categories.includes('color')) {
+      return 'color';
+    }
+    if (categories.includes('content')) {
+      return 'content';
+    }
+
+    // Default to first category or unknown
+    const firstCategory = categories[0];
+    if (firstCategory === 'text') return 'typography';
+    if (firstCategory === 'spacing') return 'layout';
+    return firstCategory as any || 'unknown';
+  }
+
+  /**
+   * Build classification string from severity and intentionality
+   */
+  private buildClassification(
+    severity: 'none' | 'minor' | 'moderate' | 'breaking',
+    isIntentional: boolean
+  ): string {
+    if (severity === 'none') {
+      return 'no-change';
+    }
+    if (isIntentional) {
+      return 'intentional';
+    }
+    return 'regression';
+  }
+
+  /**
+   * Build description with context information
+   */
+  private buildDescription(
+    visionResponse: AIVisionResponse,
+    context?: AIAnalysisRequest['context']
+  ): string {
+    let description = visionResponse.reasoning;
+
+    // Add context if available
+    if (context) {
+      const contextParts: string[] = [];
+      if (context.testName) {
+        contextParts.push(`Test: ${context.testName}`);
+      }
+      if (context.url) {
+        contextParts.push(`URL: ${context.url}`);
+      }
+      if (context.viewport) {
+        contextParts.push(`Viewport: ${context.viewport.width}x${context.viewport.height}`);
+      }
+
+      if (contextParts.length > 0) {
+        description = `${description}\n\nContext: ${contextParts.join(', ')}`;
+      }
+    }
+
+    return description;
+  }
+
+  /**
+   * Create fallback response on error
+   */
+  private createFallbackResponse(error: unknown): AIAnalysisResponse {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+
+    return {
+      classification: 'unknown',
+      confidence: 0.5,
+      description: `Failed to analyze visual changes: ${message}`,
+      severity: 'medium',
+      suggestions: [
+        'Review the visual changes manually',
+        'Check AI provider configuration',
+        'Verify API keys and network connectivity',
+      ],
+      isIntentional: false,
+      changeType: 'unknown',
+      reasoning: `Analysis failed: ${message}`,
+    };
+  }
+
+  /**
+   * Get cache statistics from smart client
+   */
+  getCacheStats() {
+    return this.smartClient.getCacheStats();
+  }
+
+  /**
+   * Get cost statistics from smart client
+   */
+  getCostStats() {
+    return this.smartClient.getCostStats();
+  }
+
+  /**
+   * Get budget status from smart client
+   */
+  getBudgetStatus() {
+    return this.smartClient.getBudgetStatus();
+  }
+
+  /**
+   * Prepare multiple images for batch AI analysis (backward compatibility)
+   *
+   * @param images - Array of image buffers
+   * @param maxWidth - Maximum width (default: 1024)
+   * @returns Array of prepared images
    */
   async prepareImagesForAI(images: Buffer[], maxWidth: number = 1024): Promise<PreparedImageForAI[]> {
     return Promise.all(images.map(img => this.prepareImageForAI(img, maxWidth)));
   }
 
   /**
-   * Analyze visual changes using the configured AI provider
-   */
-  async analyzeChange(request: AIAnalysisRequest): Promise<AIAnalysisResponse> {
-    // Prepare images for AI consumption
-    const [baseline, current, diff] = await this.prepareImagesForAI(
-      [request.baselineImage, request.currentImage, ...(request.diffImage ? [request.diffImage] : [])]
-    );
-
-    // Route to appropriate provider
-    switch (this.config.provider) {
-      case 'openai':
-        return this.analyzeWithOpenAI(baseline, current, diff, request.context);
-      case 'claude':
-        return this.analyzeWithClaude(baseline, current, diff, request.context);
-      case 'ollama':
-        return this.analyzeWithOllama(baseline, current, diff, request.context);
-      default:
-        throw new Error(`Unsupported provider: ${this.config.provider}`);
-    }
-  }
-
-  /**
-   * Batch analyze multiple visual changes
-   */
-  async batchAnalyze(requests: AIAnalysisRequest[]): Promise<AIAnalysisResponse[]> {
-    // Process in parallel with concurrency limit to avoid rate limits
-    const results: AIAnalysisResponse[] = [];
-    const concurrency = 3; // Conservative limit for API rate limits
-
-    for (let i = 0; i < requests.length; i += concurrency) {
-      const batch = requests.slice(i, i + concurrency);
-      const batchResults = await Promise.all(
-        batch.map(req => this.analyzeChange(req))
-      );
-      results.push(...batchResults);
-    }
-
-    return results;
-  }
-
-  /**
-   * Analyze using OpenAI GPT-4V
-   */
-  private async analyzeWithOpenAI(
-    baseline: PreparedImageForAI,
-    current: PreparedImageForAI,
-    diff: PreparedImageForAI | undefined,
-    context?: AIAnalysisRequest['context']
-  ): Promise<AIAnalysisResponse> {
-    if (!this.openaiClient) {
-      throw new Error('OpenAI client not initialized');
-    }
-
-    const prompt = this.buildAnalysisPrompt(context);
-
-    try {
-      const messageContent: any[] = [
-        { type: 'text', text: prompt },
-        {
-          type: 'image_url',
-          image_url: {
-            url: `data:${baseline.mimeType};base64,${baseline.base64}`,
-            detail: 'high',
-          },
-        },
-        {
-          type: 'image_url',
-          image_url: {
-            url: `data:${current.mimeType};base64,${current.base64}`,
-            detail: 'high',
-          },
-        },
-      ];
-
-      if (diff) {
-        messageContent.push({
-          type: 'image_url',
-          image_url: {
-            url: `data:${diff.mimeType};base64,${diff.base64}`,
-            detail: 'high',
-          },
-        });
-      }
-
-      const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-        {
-          role: 'user',
-          content: messageContent,
-        },
-      ];
-
-      const response = await this.openaiClient.chat.completions.create({
-        model: this.config.model!,
-        messages,
-        max_tokens: this.config.maxTokens,
-        temperature: this.config.temperature,
-      });
-
-      const content = response.choices[0]?.message?.content;
-      if (!content) {
-        throw new Error('No response from OpenAI');
-      }
-
-      return this.parseAIResponse(content);
-    } catch (error) {
-      throw new Error(`OpenAI analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  /**
-   * Analyze using Anthropic Claude
-   */
-  private async analyzeWithClaude(
-    baseline: PreparedImageForAI,
-    current: PreparedImageForAI,
-    diff: PreparedImageForAI | undefined,
-    context?: AIAnalysisRequest['context']
-  ): Promise<AIAnalysisResponse> {
-    if (!this.anthropicClient) {
-      throw new Error('Anthropic client not initialized');
-    }
-
-    const prompt = this.buildAnalysisPrompt(context);
-
-    try {
-      const imageContent: any[] = [
-        { type: 'text', text: 'Baseline Image:' },
-        {
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: baseline.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-            data: baseline.base64,
-          },
-        },
-        { type: 'text', text: 'Current Image:' },
-        {
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: current.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-            data: current.base64,
-          },
-        },
-      ];
-
-      if (diff) {
-        imageContent.push(
-          { type: 'text', text: 'Diff Visualization:' },
-          {
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: diff.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-              data: diff.base64,
-            },
-          }
-        );
-      }
-
-      imageContent.push({ type: 'text', text: prompt });
-
-      const response = await this.anthropicClient.messages.create({
-        model: this.config.model!,
-        max_tokens: this.config.maxTokens!,
-        temperature: this.config.temperature!,
-        messages: [
-          {
-            role: 'user',
-            content: imageContent,
-          },
-        ],
-      });
-
-      const textBlock = response.content.find(block => block.type === 'text');
-      if (!textBlock || textBlock.type !== 'text') {
-        throw new Error('No text response from Claude');
-      }
-
-      return this.parseAIResponse(textBlock.text);
-    } catch (error) {
-      throw new Error(`Claude analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  /**
-   * Analyze using Ollama (local model)
-   */
-  private async analyzeWithOllama(
-    baseline: PreparedImageForAI,
-    current: PreparedImageForAI,
-    diff: PreparedImageForAI | undefined,
-    context?: AIAnalysisRequest['context']
-  ): Promise<AIAnalysisResponse> {
-    const prompt = this.buildAnalysisPrompt(context);
-
-    try {
-      // Ollama uses a simple REST API
-      const response = await fetch(`${this.config.baseURL}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.config.model,
-          prompt,
-          images: [baseline.base64, current.base64, ...(diff ? [diff.base64] : [])],
-          stream: false,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Ollama request failed: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      return this.parseAIResponse(data.response);
-    } catch (error) {
-      throw new Error(`Ollama analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  /**
-   * Build analysis prompt with context injection
-   */
-  private buildAnalysisPrompt(context?: AIAnalysisRequest['context']): string {
-    const contextInfo = context ? `
-Test Context:
-- Test Name: ${context.testName || 'Unknown'}
-- URL: ${context.url || 'Unknown'}
-- Viewport: ${context.viewport ? `${context.viewport.width}x${context.viewport.height}` : 'Unknown'}
-- Git Branch: ${context.gitBranch || 'Unknown'}
-` : '';
-
-    return `You are an expert visual regression testing analyst. Compare the baseline and current screenshots to determine if the visual changes are intentional or represent regressions.
-
-${contextInfo}
-
-Analyze the images and provide a structured response in JSON format with the following fields:
-
-{
-  "classification": "intentional" | "regression" | "unknown",
-  "confidence": 0.0-1.0 (confidence score),
-  "description": "Detailed description of changes observed",
-  "severity": "low" | "medium" | "high" | "critical",
-  "suggestions": ["array", "of", "specific", "recommendations"],
-  "isIntentional": true | false,
-  "changeType": "layout" | "color" | "content" | "typography" | "animation" | "unknown",
-  "reasoning": "Explanation of why this is classified as intentional/regression",
-  "regions": [
-    {
-      "x": number,
-      "y": number,
-      "width": number,
-      "height": number,
-      "type": "header" | "nav" | "content" | "footer" | "sidebar" | "other",
-      "description": "Description of change in this region"
-    }
-  ]
-}
-
-Focus on:
-1. Layout shifts and positioning changes
-2. Color and styling differences
-3. Content additions/removals/modifications
-4. Typography changes (fonts, sizes, weights)
-5. Animation or interactive element changes
-6. Accessibility implications
-
-Provide specific, actionable insights. If changes appear to be bugs (misalignment, broken layouts, missing content), classify as "regression" with high severity. If changes appear deliberate (new features, intentional redesign), classify as "intentional" with appropriate severity based on impact.
-
-Return ONLY the JSON object, no additional text.`;
-  }
-
-  /**
-   * Parse and validate AI response into structured format
-   */
-  private parseAIResponse(response: string): AIAnalysisResponse {
-    try {
-      // Extract JSON from response (handles cases where AI adds extra text)
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('No JSON found in AI response');
-      }
-
-      const parsed = JSON.parse(jsonMatch[0]);
-
-      // Validate and normalize the response
-      return {
-        classification: parsed.classification || 'unknown',
-        confidence: this.normalizeConfidence(parsed.confidence),
-        description: parsed.description || 'No description provided',
-        severity: this.validateSeverity(parsed.severity),
-        suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions : [],
-        isIntentional: parsed.isIntentional ?? (parsed.classification === 'intentional'),
-        changeType: this.validateChangeType(parsed.changeType),
-        reasoning: parsed.reasoning || 'No reasoning provided',
-        regions: Array.isArray(parsed.regions) ? parsed.regions : undefined,
-      };
-    } catch (error) {
-      // Fallback response if parsing fails
-      return {
-        classification: 'unknown',
-        confidence: 0.5,
-        description: `Failed to parse AI response: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        severity: 'medium',
-        suggestions: ['Review the visual changes manually', 'Check AI provider configuration'],
-        isIntentional: false,
-        changeType: 'unknown',
-        reasoning: 'AI response could not be parsed',
-      };
-    }
-  }
-
-  /**
-   * Normalize confidence score to 0-1 range
-   */
-  private normalizeConfidence(value: any): number {
-    const num = Number(value);
-    if (isNaN(num)) return 0.5;
-    return Math.max(0, Math.min(1, num));
-  }
-
-  /**
-   * Validate severity level
-   */
-  private validateSeverity(value: any): 'low' | 'medium' | 'high' | 'critical' {
-    const validSeverities = ['low', 'medium', 'high', 'critical'];
-    return validSeverities.includes(value) ? value : 'medium';
-  }
-
-  /**
-   * Validate change type
-   */
-  private validateChangeType(value: any): 'layout' | 'color' | 'content' | 'typography' | 'animation' | 'unknown' {
-    const validTypes = ['layout', 'color', 'content', 'typography', 'animation', 'unknown'];
-    return validTypes.includes(value) ? value : 'unknown';
-  }
-
-  /**
-   * Convert analysis response to AIVisualAnalysis format for compatibility
+   * Convert AIAnalysisResponse to AIVisualAnalysis format (backward compatibility)
+   *
+   * This method maintains compatibility with code expecting the simplified
+   * AIVisualAnalysis format (subset of AIAnalysisResponse).
+   *
+   * @param response - Full AI analysis response
+   * @returns Simplified visual analysis format
    */
   toVisualAnalysis(response: AIAnalysisResponse): AIVisualAnalysis {
     return {
@@ -508,5 +499,12 @@ Return ONLY the JSON object, no additional text.`;
       suggestions: response.suggestions,
       regions: response.regions,
     };
+  }
+
+  /**
+   * Close and cleanup resources
+   */
+  close(): void {
+    this.smartClient.close();
   }
 }
