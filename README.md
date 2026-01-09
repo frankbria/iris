@@ -1,5 +1,7 @@
 # IRIS - Interface Recognition & Interaction Suite
 
+[![Follow on X](https://img.shields.io/twitter/follow/FrankBria18044?style=social)](https://x.com/FrankBria18044)
+
 > 👁️ AI-powered UI understanding and testing toolkit
 
 **Phase 1: ✅ Complete** | **Phase 2: 🟡 75% Complete (CLI, Accessibility, AI Vision Foundation)**
