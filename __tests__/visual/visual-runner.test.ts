@@ -561,6 +561,49 @@ describe('VisualTestRunner', () => {
       expect(mockCaptureEngine.capture).toHaveBeenCalledTimes(4);
     });
 
+    it('should never exceed maxConcurrency in flight and drop no results', async () => {
+      // Regression: the old hand-rolled limiter silently violated the cap and
+      // could drop results (see plan 002). Instrument capture to record the
+      // peak number of simultaneously in-flight tasks.
+      const maxConcurrency = 2;
+      const pages = ['/', '/a', '/b', '/c', '/d', '/e']; // 6 > maxConcurrency
+      let inFlight = 0;
+      let peak = 0;
+
+      mockCaptureEngine.capture.mockImplementation(async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        // Yield so other queued tasks get a chance to start before we resolve.
+        await new Promise(resolve => setImmediate(resolve));
+        inFlight--;
+        return {
+          success: true,
+          buffer: Buffer.from('test-screenshot'),
+          metadata: {
+            url: 'http://localhost:3000/',
+            title: 'Test Page',
+            fullPage: true,
+            viewport: { width: 1920, height: 1080 },
+            hash: 'test-hash',
+            timestamp: Date.now()
+          }
+        };
+      });
+
+      const runner = new VisualTestRunner({
+        ...defaultConfig,
+        pages,
+        diff: { ...defaultConfig.diff, maxConcurrency }
+      });
+      const result = await runner.run();
+
+      // Cap enforced...
+      expect(peak).toBeLessThanOrEqual(maxConcurrency);
+      // ...and no results dropped.
+      expect(result.results).toHaveLength(pages.length);
+      expect(result.summary.totalComparisons).toBe(pages.length);
+    });
+
     it('should handle test failures gracefully in parallel execution', async () => {
       mockCaptureEngine.capture
         .mockResolvedValueOnce({
