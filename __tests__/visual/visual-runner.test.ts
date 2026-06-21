@@ -563,18 +563,29 @@ describe('VisualTestRunner', () => {
 
     it('should never exceed maxConcurrency in flight and drop no results', async () => {
       // Regression: the old hand-rolled limiter silently violated the cap and
-      // could drop results (see plan 002). Instrument capture to record the
-      // peak number of simultaneously in-flight tasks.
+      // could drop results (see plan 002). Use a barrier so the assertion is
+      // deterministic under parallel test load: each capture call holds open
+      // until exactly maxConcurrency calls are simultaneously in flight, then
+      // the gate releases. A correct pool reaches the gate (peak === cap); a
+      // pool that over-parallelizes trips the cap guard; a pool that serializes
+      // never reaches the gate and the test times out.
       const maxConcurrency = 2;
       const pages = ['/', '/a', '/b', '/c', '/d', '/e']; // 6 > maxConcurrency
       let inFlight = 0;
       let peak = 0;
+      let openGate!: () => void;
+      const gateReached = new Promise<void>(resolve => { openGate = resolve; });
 
       mockCaptureEngine.capture.mockImplementation(async () => {
         inFlight++;
         peak = Math.max(peak, inFlight);
-        // Yield so other queued tasks get a chance to start before we resolve.
-        await new Promise(resolve => setImmediate(resolve));
+        if (inFlight > maxConcurrency) {
+          throw new Error(`concurrency cap exceeded: ${inFlight} > ${maxConcurrency}`);
+        }
+        if (inFlight === maxConcurrency) {
+          openGate(); // the pool saturated the cap — let this wave proceed
+        }
+        await gateReached;
         inFlight--;
         return {
           success: true,
