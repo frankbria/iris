@@ -597,8 +597,9 @@ describe('VisualTestRunner', () => {
       });
       const result = await runner.run();
 
-      // Cap enforced...
-      expect(peak).toBeLessThanOrEqual(maxConcurrency);
+      // Cap enforced exactly: the pool saturates at the limit (so a future
+      // serialization regression is caught) but never exceeds it.
+      expect(peak).toBe(maxConcurrency);
       // ...and no results dropped.
       expect(result.results).toHaveLength(pages.length);
       expect(result.summary.totalComparisons).toBe(pages.length);
