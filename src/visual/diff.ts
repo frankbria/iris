@@ -168,8 +168,11 @@ export class VisualDiffEngine {
       const toImage = async (buffer: Buffer) => {
         const image = sharp(buffer).raw().ensureAlpha();
         const metadata = await image.metadata();
+        if (!metadata.width || !metadata.height) {
+          throw new Error('Invalid image: missing dimensions in metadata');
+        }
         const data = await image.toBuffer();
-        return { data, width: metadata.width!, height: metadata.height!, channels: 4 };
+        return { data, width: metadata.width, height: metadata.height, channels: 4 };
       };
 
       const baseline = await toImage(baselineBuffer);
