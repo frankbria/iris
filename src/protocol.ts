@@ -1,4 +1,5 @@
 import WebSocket, { WebSocketServer } from 'ws';
+import { z } from 'zod';
 import { translateSync, translate, Action } from './translator';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
 import { Page } from 'playwright';
@@ -9,6 +10,16 @@ export interface JsonRpcRequest {
   method: string;
   params?: any;
 }
+
+// RPC param schemas — validated at the dispatch boundary so handlers never
+// receive unvalidated input from the wire.
+const ExecuteCommandParams = z.object({ instruction: z.string().min(1) });
+const ExecuteBrowserActionParams = z.object({
+  instruction: z.string().optional(),
+  actions: z.array(z.any()).optional(),
+  // only http(s) is navigable — file:/data: schemes are rejected here
+  url: z.string().url().refine((u) => /^https?:$/.test(new URL(u).protocol)).optional(),
+});
 
 export interface JsonRpcResponse {
   jsonrpc: '2.0';
@@ -37,8 +48,12 @@ export interface BrowserStatus {
 /**
  * Start a JSON-RPC 2.0 over WebSocket server on the given port.
  */
-export function startServer(port: number, options?: { sessionTimeout?: number }): WebSocketServer {
-  const wss = new WebSocketServer({ port });
+export function startServer(
+  port: number,
+  options?: { sessionTimeout?: number; host?: string; allowedOrigins?: string[] }
+): WebSocketServer {
+  const host = options?.host ?? '127.0.0.1';
+  const wss = new WebSocketServer({ port, host });
   const sessions = new Map<WebSocket, BrowserSession>();
   const sessionTimeout = options?.sessionTimeout || 30 * 60 * 1000; // 30 minutes default
 
@@ -52,7 +67,16 @@ export function startServer(port: number, options?: { sessionTimeout?: number })
     }
   }, 5 * 60 * 1000); // Check every 5 minutes
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, request) => {
+    // Reject cross-site WebSocket hijacking: a browser page connecting to
+    // localhost sends an Origin header; trusted local tooling sends none.
+    const origin = request.headers.origin;
+    const allowedOrigins = options?.allowedOrigins ?? [];
+    if (origin && !allowedOrigins.includes(origin)) {
+      ws.close(1008, 'Origin not allowed');
+      return;
+    }
+
     ws.on('message', async (data) => {
       let req: JsonRpcRequest;
       try {
@@ -66,8 +90,12 @@ export function startServer(port: number, options?: { sessionTimeout?: number })
       try {
         switch (req.method) {
           case 'executeCommand': {
-            const { instruction } = req.params;
-            res.result = translateSync(instruction);
+            const parsed = ExecuteCommandParams.safeParse(req.params);
+            if (!parsed.success) {
+              res.error = { code: -32602, message: 'Invalid params' };
+              break;
+            }
+            res.result = translateSync(parsed.data.instruction);
             break;
           }
 
@@ -100,7 +128,12 @@ export function startServer(port: number, options?: { sessionTimeout?: number })
           }
 
           case 'executeBrowserAction': {
-            const { instruction, actions, url } = req.params;
+            const parsed = ExecuteBrowserActionParams.safeParse(req.params);
+            if (!parsed.success) {
+              res.error = { code: -32602, message: 'Invalid params' };
+              break;
+            }
+            const { instruction, actions, url } = parsed.data;
             const session = sessions.get(ws);
 
             if (!session) {
