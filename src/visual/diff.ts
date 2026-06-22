@@ -163,7 +163,19 @@ export class VisualDiffEngine {
    */
   async ssimCompare(baselineBuffer: Buffer, currentBuffer: Buffer): Promise<SSIMResult> {
     try {
-      const result = await imageSsim(baselineBuffer, currentBuffer);
+      // image-ssim.compare() is synchronous and needs decoded RGBA pixel data,
+      // not raw PNG buffers — decode both images to {data,width,height,channels} first.
+      const toImage = async (buffer: Buffer) => {
+        const image = sharp(buffer).raw().ensureAlpha();
+        const metadata = await image.metadata();
+        const data = await image.toBuffer();
+        return { data, width: metadata.width!, height: metadata.height!, channels: 4 };
+      };
+
+      const baseline = await toImage(baselineBuffer);
+      const current = await toImage(currentBuffer);
+      const result = imageSsim.compare(baseline, current);
+
       return {
         success: true,
         ssim: result.ssim,

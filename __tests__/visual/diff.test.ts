@@ -33,10 +33,10 @@ describe('VisualDiffEngine', () => {
     // Mock the sharp function to return our instance
     (sharp as jest.MockedFunction<any>).mockReturnValue(mockSharpInstance);
 
-    // Setup image-ssim mock
+    // image-ssim exports { Channels, compare }; compare() is auto-mocked and
+    // synchronous. Default it to a successful comparison; individual tests override.
     const mockImageSsim = require('image-ssim');
-    mockImageSsim.mockResolvedValue = jest.fn();
-    mockImageSsim.mockRejectedValue = jest.fn();
+    mockImageSsim.compare.mockReturnValue({ ssim: 0.95, mcs: 0.97 });
   });
 
   describe('compare()', () => {
@@ -142,12 +142,36 @@ describe('VisualDiffEngine', () => {
   });
 
   describe('ssimCompare()', () => {
-    it.skip('should perform SSIM comparison', async () => {
-      // TODO: Fix SSIM mock setup
+    it('should perform SSIM comparison', async () => {
+      // Arrange
+      const mockImageSsim = require('image-ssim');
+      mockImageSsim.compare.mockReturnValue({ ssim: 0.95, mcs: 0.97 });
+
+      // Act
+      const result = await diffEngine.ssimCompare(mockBaselineBuffer, mockCurrentBuffer);
+
+      // Assert
+      expect(result.success).toBe(true);
+      expect(result.ssim).toBeGreaterThanOrEqual(0);
+      expect(result.ssim).toBeLessThanOrEqual(1);
+      expect(result.mcs).toBeGreaterThanOrEqual(0);
+      expect(result.mcs).toBeLessThanOrEqual(1);
+      expect(mockImageSsim.compare).toHaveBeenCalled();
     });
 
-    it.skip('should handle SSIM errors gracefully', async () => {
-      // TODO: Fix SSIM mock setup
+    it('should handle SSIM errors gracefully', async () => {
+      // Arrange
+      const mockImageSsim = require('image-ssim');
+      mockImageSsim.compare.mockImplementation(() => {
+        throw new Error('SSIM failed');
+      });
+
+      // Act
+      const result = await diffEngine.ssimCompare(mockBaselineBuffer, mockCurrentBuffer);
+
+      // Assert
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('SSIM failed');
     });
   });
 
