@@ -289,6 +289,24 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       expect(closeCode).toBe(1008);
     });
 
+    test('accepts a connection whose Origin is in the allowlist', async () => {
+      const allowPort = 5001;
+      const allowWss = startServer(allowPort, { allowedOrigins: ['http://trusted.example'] });
+      try {
+        await new Promise<void>((resolve) => allowWss.once('listening', resolve));
+        const res = await new Promise<JsonRpcResponse>((resolve, reject) => {
+          const ws = new WebSocket(`ws://127.0.0.1:${allowPort}`, { origin: 'http://trusted.example' });
+          ws.on('open', () => ws.send(JSON.stringify({ jsonrpc: '2.0', id: 70, method: 'getStatus' })));
+          ws.on('message', (d) => { resolve(JSON.parse(d.toString())); ws.close(); });
+          ws.on('error', reject);
+        });
+        expect(res.result).toEqual({ status: 'ready' });
+        expect(res.error).toBeUndefined();
+      } finally {
+        await new Promise<void>((resolve) => allowWss.close(() => resolve()));
+      }
+    });
+
     test('executeCommand with missing instruction returns invalid params (-32602)', async () => {
       const req = { jsonrpc: '2.0', id: 60, method: 'executeCommand', params: {} };
       const res = await sendRequest(req);
@@ -298,25 +316,34 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       expect(res.error!.code).toBe(-32602);
     });
 
+    // Param validation runs before the session check, so no browser launch is
+    // needed to prove a file: URL is rejected.
     test('executeBrowserAction with file: URL scheme is rejected (-32602)', async () => {
-      const ws = await createPersistentConnection();
-      try {
-        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 61, method: 'launchBrowser' });
-        const res = await sendRequestViaConnection(ws, {
-          jsonrpc: '2.0',
-          id: 62,
-          method: 'executeBrowserAction',
-          params: { url: 'file:///etc/passwd', instruction: 'read it' },
-        });
-        expect(res.id).toBe(62);
-        expect(res.result).toBeUndefined();
-        expect(res.error).toBeDefined();
-        expect(res.error!.code).toBe(-32602);
-        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 63, method: 'closeBrowser' });
-      } finally {
-        ws.close();
-      }
-    }, 30000);
+      const res = await sendRequest({
+        jsonrpc: '2.0',
+        id: 62,
+        method: 'executeBrowserAction',
+        params: { url: 'file:///etc/passwd', instruction: 'read it' },
+      });
+      expect(res.id).toBe(62);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(-32602);
+    });
+
+    // A valid http(s) URL passes the schema — it reaches the session check
+    // (-32000 "no session") rather than being rejected as -32602.
+    test('executeBrowserAction with a valid https URL passes param validation', async () => {
+      const res = await sendRequest({
+        jsonrpc: '2.0',
+        id: 64,
+        method: 'executeBrowserAction',
+        params: { url: 'https://example.com', instruction: 'click #a' },
+      });
+      expect(res.id).toBe(64);
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(-32000); // got past validation, failed only on missing session
+    });
   });
 
   describe('Error Handling', () => {
