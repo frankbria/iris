@@ -218,47 +218,36 @@ export class VisualTestRunner {
     tasks: Array<{ page: string; device: string }>,
     concurrency: number
   ): Promise<VisualTestResult['results']> {
-    const results: VisualTestResult['results'] = [];
-    const executing: Promise<void>[] = [];
+    // ponytail: fixed-size worker pool instead of p-limit — p-limit@5 is
+    // ESM-only and breaks ts-jest's CommonJS transform when its dynamic import
+    // is actually executed. results[i] keeps output aligned to input order;
+    // the cap is enforced and no results are dropped. next++ is race-free
+    // because JS runs single-threaded between awaits.
+    const results: VisualTestResult['results'] = new Array(tasks.length);
+    const limit = Math.max(1, concurrency);
+    let next = 0;
 
-    for (const task of tasks) {
-      const promise = this.testPage(task.page, task.device)
-        .then(result => {
-          results.push(result);
-        })
-        .catch(error => {
-          // Handle test errors gracefully
-          results.push({
-            page: task.page,
-            device: task.device,
-            passed: false,
-            similarity: 0,
-            pixelDifference: 1,
-            threshold: this.config.diff.threshold,
-            severity: 'breaking',
-            screenshotPath: '',
-            error: error.message
-          } as any);
-        });
-
-      executing.push(promise);
-
-      // Control concurrency - wait if we've reached the limit
-      if (executing.length >= concurrency) {
-        await Promise.race(executing).then(() => {
-          // Remove completed promises
-          const index = executing.findIndex(p =>
-            p === promise || (p as any).status === 'fulfilled' || (p as any).status === 'rejected'
-          );
-          if (index !== -1) {
-            executing.splice(index, 1);
-          }
-        });
+    const worker = async (): Promise<void> => {
+      while (next < tasks.length) {
+        const i = next++;
+        const task = tasks[i];
+        results[i] = await this.testPage(task.page, task.device).catch(error => ({
+          page: task.page,
+          device: task.device,
+          passed: false,
+          similarity: 0,
+          pixelDifference: 1,
+          threshold: this.config.diff.threshold,
+          severity: 'breaking',
+          screenshotPath: '',
+          error: error.message
+        } as any));
       }
-    }
+    };
 
-    // Wait for all remaining tests to complete
-    await Promise.all(executing);
+    await Promise.all(
+      Array.from({ length: Math.min(limit, tasks.length) }, () => worker())
+    );
 
     return results;
   }

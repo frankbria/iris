@@ -170,12 +170,10 @@ describe('Visual Diff CLI E2E Tests', () => {
       const runner = new VisualTestRunner(config);
       const result = await runner.run();
 
-      // ADJUSTED: Concurrency bug in visual-runner.ts limits execution to max 2
-      // See docs/e2e-visual-test-assessment.md Pattern 1: Concurrency Control Bug
-      // With 2 pages and maxConcurrency: 2, only 1 actually executes due to bug
-      expect(result.summary.totalComparisons).toBe(1);
-      expect(result.summary.newBaselines).toBe(1);
-      expect(result.results).toHaveLength(1);
+      // 2 pages × 1 default device, both new baselines.
+      expect(result.summary.totalComparisons).toBe(2);
+      expect(result.summary.newBaselines).toBe(2);
+      expect(result.results).toHaveLength(2);
     });
   });
 
@@ -493,14 +491,12 @@ describe('Visual Diff CLI E2E Tests', () => {
       const runner = new VisualTestRunner(config);
       const result = await runner.run();
 
-      // ADJUSTED: Concurrency bug limits to 2 actual executions
-      // See docs/e2e-visual-test-assessment.md Pattern 1: Concurrency Control Bug
-      // Expected 3 devices (1 page × 3 devices) but bug limits to 2
-      expect(result.summary.totalComparisons).toBe(2);
-      expect(result.results).toHaveLength(2);
+      // 1 page × 3 devices.
+      expect(result.summary.totalComparisons).toBe(3);
+      expect(result.results).toHaveLength(3);
       expect(result.results[0].device).toBe('desktop');
       expect(result.results[1].device).toBe('tablet');
-      // Mobile device won't be tested due to concurrency bug
+      expect(result.results[2].device).toBe('mobile');
     });
 
     it('should detect device-specific visual regressions', async () => {
@@ -548,11 +544,8 @@ describe('Visual Diff CLI E2E Tests', () => {
       });
       const result = await testRunner.run();
 
-      // ADJUSTED: Concurrency bug limits execution
-      // See docs/e2e-visual-test-assessment.md Pattern 1: Concurrency Control Bug
-      // Expected 2 devices, actual behavior varies but limited by concurrency bug
-      expect(result.summary.totalComparisons).toBeGreaterThanOrEqual(1);
-      expect(result.summary.totalComparisons).toBeLessThanOrEqual(2);
+      // 1 page × 2 devices.
+      expect(result.summary.totalComparisons).toBe(2);
       expect(result.results.filter(r => !r.passed).length).toBeGreaterThanOrEqual(0);
     });
   });
@@ -697,12 +690,10 @@ describe('Visual Diff CLI E2E Tests', () => {
       const result = await runner.run();
       const duration = Date.now() - startTime;
 
-      // ADJUSTED: Concurrency bug limits to 2 actual executions
-      // See docs/e2e-visual-test-assessment.md Pattern 1: Concurrency Control Bug
-      // Expected 5 pages but bug limits to 2
-      expect(result.summary.totalComparisons).toBe(2);
+      // 5 pages × 1 default device.
+      expect(result.summary.totalComparisons).toBe(5);
       expect(duration).toBeLessThan(30000); // Should complete within 30 seconds
-      expect(result.results).toHaveLength(2);
+      expect(result.results).toHaveLength(5);
     });
   });
 
