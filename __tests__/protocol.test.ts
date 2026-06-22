@@ -277,6 +277,48 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
     }, 30000);
   });
 
+  describe('Security Hardening', () => {
+    test('rejects cross-origin connection with code 1008', async () => {
+      const closeCode = await new Promise<number>((resolve, reject) => {
+        const ws = new WebSocket(`ws://localhost:${port}`, {
+          origin: 'http://evil.example',
+        });
+        ws.on('close', (code) => resolve(code));
+        ws.on('error', reject);
+      });
+      expect(closeCode).toBe(1008);
+    });
+
+    test('executeCommand with missing instruction returns invalid params (-32602)', async () => {
+      const req = { jsonrpc: '2.0', id: 60, method: 'executeCommand', params: {} };
+      const res = await sendRequest(req);
+      expect(res.id).toBe(60);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(-32602);
+    });
+
+    test('executeBrowserAction with file: URL scheme is rejected (-32602)', async () => {
+      const ws = await createPersistentConnection();
+      try {
+        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 61, method: 'launchBrowser' });
+        const res = await sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 62,
+          method: 'executeBrowserAction',
+          params: { url: 'file:///etc/passwd', instruction: 'read it' },
+        });
+        expect(res.id).toBe(62);
+        expect(res.result).toBeUndefined();
+        expect(res.error).toBeDefined();
+        expect(res.error!.code).toBe(-32602);
+        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 63, method: 'closeBrowser' });
+      } finally {
+        ws.close();
+      }
+    }, 30000);
+  });
+
   describe('Error Handling', () => {
     test('unknown method returns method not found error', async () => {
       const req = { jsonrpc: '2.0', id: 50, method: 'unknownMethod' };
