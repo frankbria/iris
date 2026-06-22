@@ -15,6 +15,9 @@ import { AccessibilityRunner, AccessibilityRunnerConfig } from '../../src/a11y/a
 // Mock axe-core
 jest.mock('@axe-core/playwright', () => {
   return {
+    // __esModule lets the esModuleInterop default-import helper resolve the
+    // mock as the constructor instead of double-wrapping it.
+    __esModule: true,
     default: jest.fn().mockImplementation(() => ({
       withTags: jest.fn().mockReturnThis(),
       disableRules: jest.fn().mockReturnThis(),
@@ -92,21 +95,7 @@ describe('Accessibility CLI E2E Tests', () => {
   });
 
   describe('Axe-Core Integration', () => {
-    it.skip('should detect accessibility violations using axe-core', async () => {
-      // SKIP REASON: Infrastructure mismatch
-      // Test uses page.setContent() then passes page.url() ('about:blank') to AccessibilityRunner,
-      // which concatenates it as 'http://localhost:3000about:blank' - an invalid URL.
-      //
-      // AccessibilityRunner.testPage() expects either:
-      // 1. Full HTTP URLs (e.g., 'http://example.com/page')
-      // 2. Path strings (e.g., '/test-page') that get prepended with 'http://localhost:3000'
-      //
-      // TO RE-ENABLE:
-      // 1. Create HTML fixture files in test/fixtures/ directory
-      // 2. Start a test web server (e.g., express) on localhost:3000 in beforeAll
-      // 3. Serve fixture files from the test server
-      // 4. Update test to use 'http://localhost:3000/fixture-name.html' as page URL
-      // OR: Modify AccessibilityRunner.testPage() to accept page objects with setContent()
+    it('should detect accessibility violations using axe-core', async () => {
       const html = `
         <!DOCTYPE html>
         <html lang="en">
@@ -168,9 +157,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.results[0].axeResult.violations[0].impact).toBe('serious');
     });
 
-    it.skip('should pass when no violations are found', async () => {
-      // SKIP REASON: Same infrastructure mismatch as test above
-      // Uses data: URL which gets incorrectly concatenated by AccessibilityRunner
+    it('should pass when no violations are found', async () => {
       const html = `
         <!DOCTYPE html>
         <html lang="en">
@@ -227,8 +214,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.results[0].axeResult).toBeDefined();
     });
 
-    it.skip('should categorize violations by severity', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should categorize violations by severity', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -283,8 +269,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.summary.violationsBySeverity).toHaveProperty('minor');
     });
 
-    it.skip('should respect WCAG tag filtering', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should respect WCAG tag filtering', async () => {
       const html = '<html><head><title>Test</title></head><body><h1>Content</h1></body></html>';
 
       const config: AccessibilityRunnerConfig = {
@@ -333,8 +318,7 @@ describe('Accessibility CLI E2E Tests', () => {
   });
 
   describe('Keyboard Navigation Testing', () => {
-    it.skip('should test focus order on page', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should test focus order on page', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -391,8 +375,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.results[0].keyboardResult?.focusOrder.length).toBeGreaterThan(0);
     });
 
-    it.skip('should detect focus traps in modal dialogs', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should detect focus traps in modal dialogs', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -450,8 +433,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.results[0].keyboardResult?.trapTests.length).toBeGreaterThan(0);
     });
 
-    it.skip('should test arrow key navigation in menus', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should test arrow key navigation in menus', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -508,8 +490,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.results[0].keyboardResult?.interactions).toBeDefined();
     });
 
-    it.skip('should test escape key handling for dismissible components', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should test escape key handling for dismissible components', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -565,8 +546,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.results[0].keyboardResult?.interactions).toBeDefined();
     });
 
-    it.skip('should execute custom keyboard sequences', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should execute custom keyboard sequences', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -628,8 +608,7 @@ describe('Accessibility CLI E2E Tests', () => {
   });
 
   describe('Screen Reader Simulation', () => {
-    it.skip('should test ARIA labels', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should test ARIA labels', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -686,8 +665,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.results[0].screenReaderResult?.announcements.length).toBeGreaterThan(0);
     });
 
-    it.skip('should test landmark navigation structure', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should test landmark navigation structure', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -752,8 +730,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.results[0].screenReaderResult?.landmarkStructure.length).toBeGreaterThan(0);
     });
 
-    it.skip('should validate heading hierarchy', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should validate heading hierarchy', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -811,8 +788,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.results[0].screenReaderResult?.passed).toBe(true); // Valid hierarchy
     });
 
-    it.skip('should detect invalid heading hierarchy', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should detect invalid heading hierarchy', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -868,8 +844,7 @@ describe('Accessibility CLI E2E Tests', () => {
   });
 
   describe('Report Generation', () => {
-    it.skip('should generate JSON report with summary and results', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should generate JSON report with summary and results', async () => {
       const html = '<html><head><title>Report Test</title></head><body><h1>Content</h1></body></html>';
       const reportPath = path.join(tempDir, 'a11y-report.json');
 
@@ -923,8 +898,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(reportContent).toHaveProperty('results');
     });
 
-    it.skip('should calculate accessibility score correctly', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should calculate accessibility score correctly', async () => {
       const html = '<html><head><title>Score Test</title></head><body><h1>Content</h1></body></html>';
 
       const config: AccessibilityRunnerConfig = {
@@ -972,8 +946,7 @@ describe('Accessibility CLI E2E Tests', () => {
   });
 
   describe('Multiple Pages Testing', () => {
-    it.skip('should test multiple pages and aggregate results', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should test multiple pages and aggregate results', async () => {
       const page1 = '<html><head><title>Page 1</title></head><body><h1>Page 1</h1></body></html>';
       const page2 = '<html><head><title>Page 2</title></head><body><h1>Page 2</h1></body></html>';
 
@@ -1024,8 +997,7 @@ describe('Accessibility CLI E2E Tests', () => {
   });
 
   describe('Failure Threshold', () => {
-    it.skip('should respect failure threshold for critical violations', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should respect failure threshold for critical violations', async () => {
       const html = '<html><head><title>Threshold Test</title></head><body><div>Content</div></body></html>';
 
       const config: AccessibilityRunnerConfig = {
@@ -1072,8 +1044,7 @@ describe('Accessibility CLI E2E Tests', () => {
       expect(result.summary.passed).toBeDefined();
     });
 
-    it.skip('should fail when serious violations exceed threshold', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should fail when serious violations exceed threshold', async () => {
       const html = '<html><head><title>Serious Test</title></head><body><div>Content</div></body></html>';
 
       const config: AccessibilityRunnerConfig = {
@@ -1121,8 +1092,7 @@ describe('Accessibility CLI E2E Tests', () => {
   });
 
   describe('Comprehensive Testing', () => {
-    it.skip('should run all test types together', async () => {
-      // SKIP REASON: Same infrastructure mismatch - data: URL not supported
+    it('should run all test types together', async () => {
       const html = `
         <!DOCTYPE html>
         <html lang="en">

@@ -180,8 +180,10 @@ export class AccessibilityRunner {
     const page = await context.newPage();
 
     try {
-      // Navigate to page
-      const url = pagePattern.startsWith('http') ? pagePattern : `http://localhost:3000${pagePattern}`;
+      // Navigate to page. Treat any scheme-prefixed value (http:, https:, about:,
+      // data:, file:) as a complete URL; only bare paths get the dev-server base.
+      const isFullUrl = /^[a-z]+:/i.test(pagePattern);
+      const url = isFullUrl ? pagePattern : `http://localhost:3000${pagePattern}`;
       await page.goto(url, { waitUntil: 'networkidle' });
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
@@ -298,9 +300,14 @@ export class AccessibilityRunner {
       // Validate heading hierarchy
       const headingHierarchyValid = this.validateHeadingHierarchy(headingStructure);
 
+      // Only factor landmarks into the verdict when landmark testing was
+      // requested — otherwise a heading-only run can never pass.
+      const landmarkValid =
+        !this.config.screenReader.testLandmarkNavigation || landmarkStructure.length > 0;
+
       return {
         testName,
-        passed: headingHierarchyValid && landmarkStructure.length > 0,
+        passed: headingHierarchyValid && landmarkValid,
         announcements,
         landmarkStructure,
         headingStructure
