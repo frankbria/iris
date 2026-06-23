@@ -779,7 +779,7 @@ npm install
 - `docs/phase2_technical_architecture.md` - Phase 2 design (2,556 lines)
 
 **Planning:**
-- `plan/phase1_todo.md` - Phase 1 tasks (COMPLETE)
+- `docs/archive/phase1_todo.md` - Phase 1 tasks (COMPLETE, archived)
 - `plan/phase2_todo.md` - Phase 2 tasks (IN PROGRESS)
 - `plan/status_202509192120.md` - Latest status report
 
