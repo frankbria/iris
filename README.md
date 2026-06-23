@@ -96,7 +96,9 @@ Run the project's quality gates (typecheck, lint, and tests) in one step:
 npm run verify
 ```
 
-Copy `.env.example` to `.env` and fill in the credentials for your AI provider.
+IRIS reads its credentials from environment variables (see `.env.example` for the
+full list). Export them in your shell, or use a loader such as `direnv`/`dotenv` —
+the CLI does not read a `.env` file on its own.
 
 ### Try the Demo (Fastest Way)
 
