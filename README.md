@@ -22,9 +22,9 @@ IRIS gives AI coding assistants "eyes and hands" to see and interact with user i
 - ✅ SQLite persistence for test runs and results
 - ✅ Multi-provider AI support (OpenAI/Anthropic/Ollama)
 
-### ✅ Phase 2 - Visual Regression & Accessibility (COMPLETE)
+### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Production-ready with 95.9% test pass rate and comprehensive feature coverage
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 561/562 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -56,17 +56,12 @@ IRIS gives AI coding assistants "eyes and hands" to see and interact with user i
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 541/564 tests passing (95.9% pass rate)
-- 1 non-critical performance test timing failure (easily fixable)
-- 22 accessibility E2E tests skipped due to infrastructure mismatch
+**Test Results:** 561/562 tests passing (99.8% pass rate), 1 skipped, 0 failing
 
-**Coverage:** 75.49% overall (below 85% target)
-- Visual module: 88.3%
-- Accessibility module: 76.6%
-- Database: 95.74%
-- Branch coverage: 58.28% (primary improvement area)
+**Coverage:** 75.26% statements overall (below the 85% target)
+- Branch coverage: 56.9% (primary improvement area)
 
-**Production Readiness:** ✅ Ready for use with noted optimization opportunities
+**Status:** Usable for visual regression today; accessibility integration and the `src/a11y/index.ts` wrappers are still in progress (see open issues).
 
 ---
 
@@ -405,9 +400,9 @@ Includes configurations for:
 
 ```bash
 npm test
-# Result: 541/564 passing (95.9% pass rate)
-# 1 failing (performance timing - non-critical)
-# 22 skipped (accessibility E2E - infrastructure mismatch)
+# Result: 561/562 passing (99.8% pass rate)
+# 0 failing
+# 1 skipped
 ```
 
 ### Build
@@ -420,9 +415,8 @@ npm run build
 
 ```bash
 npm test -- --coverage
-# Overall: 75.49% (below 85% target)
-# Visual: 88.3% | A11y: 76.6% | Database: 95.74%
-# Branch coverage: 58.28% (primary improvement area)
+# Overall: 75.26% statements (below 85% target)
+# Branch coverage: 56.9% (primary improvement area)
 ```
 
 ### Run Benchmarks
@@ -462,7 +456,7 @@ Performance baselines:
 - SQLite persistence with migration system
 - Test result tracking with visual and a11y results
 
-### Phase 2 Visual & Accessibility (100% Complete)
+### Phase 2 Visual & Accessibility (In Progress)
 
 **Visual Module** (`src/visual/`)
 - `visual-runner.ts` - Test orchestration (15,365 bytes)
@@ -506,9 +500,9 @@ Performance baselines:
 - **[docs/PROJECT_INDEX.md](docs/PROJECT_INDEX.md)** - Project navigation
 
 ### Contributing
-- **[plan/READY_FOR_COMMIT.md](plan/READY_FOR_COMMIT.md)** - Git workflow guide
 - **[docs/GIT_COMMIT_GUIDE.md](docs/GIT_COMMIT_GUIDE.md)** - Commit instructions
-- **[plan/phase2_completion_report.md](plan/phase2_completion_report.md)** - Phase 2 completion report
+
+> Historical phase reports and assessments live in [docs/archive/](docs/archive/).
 
 ### AI Agents
 - **[AGENT_INSTRUCTIONS.md](AGENT_INSTRUCTIONS.md)** - Development guidance
@@ -559,7 +553,7 @@ See **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** for compl
 - JSON-RPC protocol server
 - SQLite persistence
 
-### Phase 2 ✅ (COMPLETE - October 2025)
+### Phase 2 🚧 (In Progress)
 - ✅ Visual regression testing with pixel and SSIM comparison
 - ✅ AI semantic analysis (OpenAI, Claude, Ollama)
 - ✅ AI vision foundation with cost control and caching
@@ -573,8 +567,9 @@ See **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** for compl
 - ✅ Performance benchmarks
 - ✅ Comprehensive documentation and examples
 - ✅ CI/CD ready
-- ✅ Test suite stabilized (95.9% pass rate)
-- ⚠️ Coverage at 75.49% (below 85% target - branch coverage improvement needed)
+- ✅ Test suite stabilized (99.8% pass rate, 0 failing)
+- ⚠️ Coverage at 75.26% (below 85% target - branch coverage improvement needed)
+- ⚠️ Some `src/a11y/index.ts` convenience wrappers still stubbed
 
 ### Phase 3 📋 (Planned - Q1 2026)
 - Performance monitoring and Core Web Vitals
@@ -589,17 +584,14 @@ See **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** for compl
 ## Testing
 
 **Test Coverage:**
-- Total: 564 tests (541 passing, 95.9% pass rate)
-- Failing: 1 (non-critical performance timing test)
-- Skipped: 22 (accessibility E2E infrastructure mismatch)
-- Overall coverage: 75.49% (target: 85%)
-  - Visual module: 88.3%
-  - Accessibility module: 76.6%
-  - Database: 95.74%
-  - Branch coverage: 58.28% (primary improvement opportunity)
+- Total: 562 tests (561 passing, 99.8% pass rate)
+- Failing: 0
+- Skipped: 1
+- Overall coverage: 75.26% statements (target: 85%)
+  - Branch coverage: 56.9% (primary improvement opportunity)
 
 **Test Suites:**
-- Unit tests for all core modules (541 passing)
+- Unit tests for all core modules
 - Integration tests for CLI commands
 - E2E tests: Visual (93.3% passing), Accessibility (0% - skipped)
 - Browser automation tests with real Playwright
@@ -742,7 +734,6 @@ iris a11y --help
 
 **Status:**
 - Phase 1: ✅ Complete
-- Phase 2: ✅ Complete (production-ready)
-- Tests: 541/564 passing (95.9%)
-- Coverage: 75.49% (below 85% target)
-- Production Ready: ✅ Yes (with noted optimization opportunities)
+- Phase 2: 🚧 In Progress (visual regression complete; a11y integration ongoing)
+- Tests: 561/562 passing (99.8%), 1 skipped, 0 failing
+- Coverage: 75.26% statements (below 85% target)

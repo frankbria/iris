@@ -215,8 +215,8 @@ This assessment provides an objective view of project status and helps identify 
 
 ### Testing Requirements
 
-- **Minimum Coverage**: 85% code coverage ratio required for all new code
-- **Test Pass Rate**: 100% - all tests must pass, no exceptions
+- **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~75% statements / ~57% branch — new code should not lower it)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 561/562 passing, 1 skipped, 0 failing)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation
