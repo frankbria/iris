@@ -497,7 +497,7 @@ Performance baselines:
 ### Development
 - **[docs/DEVELOPMENT_INSTRUCTIONS.md](docs/DEVELOPMENT_INSTRUCTIONS.md)** - Development guide
 - **[docs/phase2_technical_architecture.md](docs/phase2_technical_architecture.md)** - Phase 2 architecture (2,556 lines)
-- **[docs/PROJECT_INDEX.md](docs/PROJECT_INDEX.md)** - Project navigation
+- **[plans/README.md](plans/README.md)** - Active plan tracker and roadmap
 
 ### Contributing
 - **[docs/GIT_COMMIT_GUIDE.md](docs/GIT_COMMIT_GUIDE.md)** - Commit instructions
@@ -593,7 +593,7 @@ See **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** for compl
 **Test Suites:**
 - Unit tests for all core modules
 - Integration tests for CLI commands
-- E2E tests: Visual (93.3% passing), Accessibility (0% - skipped)
+- E2E tests: visual and accessibility suites passing (1 visual case skipped)
 - Browser automation tests with real Playwright
 - Performance benchmarks
 
