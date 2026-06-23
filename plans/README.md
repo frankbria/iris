@@ -17,7 +17,7 @@ Issue-title priority codes use `[PX.Y]`: **X** = priority tier (0 highest),
 | 003  | `[P1.2]` | Harden the `iris connect` WebSocket server | P1 | M | 001 (rec.) | [#3](https://github.com/frankbria/iris/issues/3) | DONE ([#12](https://github.com/frankbria/iris/pull/12)) |
 | 004  | `[P1.3]` | Fix AccessibilityRunner URL handling; un-skip 21 tests | P1 | M | — | [#4](https://github.com/frankbria/iris/issues/4) | DONE ([#13](https://github.com/frankbria/iris/pull/13)) |
 | 005  | `[P2.1]` | Add DX quality gates: typecheck/lint/format, .env.example, CI | P2 | M | — | [#5](https://github.com/frankbria/iris/issues/5) | DONE ([#14](https://github.com/frankbria/iris/pull/14)) |
-| 006  | `[P2.2]` | Reconcile docs with reality; remove dead doc/test artifacts | P2 | S–M | 002, 004 (rec.) | [#6](https://github.com/frankbria/iris/issues/6) | IN PROGRESS |
+| 006  | `[P2.2]` | Reconcile docs with reality; remove dead doc/test artifacts | P2 | S–M | 002, 004 (rec.) | [#6](https://github.com/frankbria/iris/issues/6) | DONE ([#17](https://github.com/frankbria/iris/pull/17)) |
 | 007  | `[P2.3]` | Restrict config-file perms; close leaked DB/classifier handles | P2 | S | — | [#7](https://github.com/frankbria/iris/issues/7) | TODO |
 | 008  | `[P3.1]` | Spike: surface cost/cache infra in the `visual-diff` CLI | P3 | M | 002, 007 (rec.) | [#8](https://github.com/frankbria/iris/issues/8) | TODO |
 
