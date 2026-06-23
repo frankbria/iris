@@ -61,10 +61,17 @@ export function saveConfig(config: IrisConfig): void {
   const configDir = path.dirname(configPath);
 
   if (!fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
+    fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
   }
 
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  // Config may hold ai.apiKey — keep it owner-only. `mode` on writeFileSync is
+  // ignored for an existing file, so lock down any pre-existing (possibly
+  // world-readable) file BEFORE writing secrets — otherwise the new contents
+  // would briefly sit under the old loose perms until a post-write chmod.
+  if (fs.existsSync(configPath)) {
+    fs.chmodSync(configPath, 0o600);
+  }
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
 function loadFromEnvironment(): IrisConfig {
