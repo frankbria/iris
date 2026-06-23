@@ -233,20 +233,24 @@ export class FileWatcher {
         const dbPath = process.env.IRIS_DB_PATH || path.join(os.homedir(), '.iris', 'iris.db');
         const db = initializeDatabase(dbPath);
 
-        // Include execution details in the instruction field
-        let instructionDetail = `${this.options.instruction} (triggered by ${event.type}: ${event.path})`;
-        if (this.options.execute && executionResults.length > 0) {
-          const successCount = executionResults.filter(r => r.success).length;
-          instructionDetail += ` - Executed: ${successCount}/${executionResults.length} actions`;
-        }
+        try {
+          // Include execution details in the instruction field
+          let instructionDetail = `${this.options.instruction} (triggered by ${event.type}: ${event.path})`;
+          if (this.options.execute && executionResults.length > 0) {
+            const successCount = executionResults.filter(r => r.success).length;
+            instructionDetail += ` - Executed: ${successCount}/${executionResults.length} actions`;
+          }
 
-        insertTestRun(db, {
-          instruction: instructionDetail,
-          status,
-          startTime,
-          endTime,
-        });
-        db.close();
+          insertTestRun(db, {
+            instruction: instructionDetail,
+            status,
+            startTime,
+            endTime,
+          });
+        } finally {
+          // Always close, even if insertTestRun throws, so the handle never leaks.
+          db.close();
+        }
       } catch (dbError) {
         console.error('⚠️  Failed to persist watch execution to database:', dbError);
       }

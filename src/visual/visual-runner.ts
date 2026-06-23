@@ -208,6 +208,9 @@ export class VisualTestRunner {
       if (this.browser) {
         await this.browser.close();
       }
+      // Release the classifier's SQLite handles (cache + cost-tracker). No-op
+      // when semantic analysis is disabled and the classifier was never created.
+      this.aiClassifier?.close();
     }
   }
 
