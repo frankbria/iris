@@ -262,6 +262,42 @@ describe('FileWatcher', () => {
         })
       );
     });
+
+    it('closes the database even when insertTestRun throws', async () => {
+      const { initializeDatabase, insertTestRun } = await import('../src/db');
+      const closeSpy = jest.fn();
+      (initializeDatabase as jest.Mock).mockReturnValue({ close: closeSpy });
+      (insertTestRun as jest.Mock).mockImplementation(() => {
+        throw new Error('disk full');
+      });
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      const watcher = new FileWatcher({ instruction: 'click submit', debounceMs: 50 });
+
+      let changeCallback: any;
+      mockWatcher.on.mockImplementation((event: string, callback: any) => {
+        if (event === 'change') {
+          changeCallback = callback;
+        } else if (event === 'ready') {
+          setTimeout(() => callback(), 0);
+        }
+        return mockWatcher;
+      });
+
+      await watcher.start();
+      changeCallback('src/test.ts');
+      await jest.advanceTimersByTimeAsync(100);
+
+      // The throw must not skip the close — that's the leak this fix prevents
+      expect(insertTestRun).toHaveBeenCalled();
+      expect(closeSpy).toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to persist'),
+        expect.any(Error)
+      );
+
+      errorSpy.mockRestore();
+    });
   });
 
   describe('browser execution', () => {
