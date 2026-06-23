@@ -200,6 +200,7 @@ program
   .option('--mask <selectors>', 'CSS selectors to mask (comma-separated)')
   .option('--exclude <selectors>', 'CSS selectors to exclude (comma-separated)')
   .option('--concurrency <number>', 'Max concurrent comparisons', '3')
+  .option('--show-cost', 'Print a read-only AI cost/cache summary after the run', false)
   .action(async (options) => {
     const startTime = Date.now();
 
@@ -252,6 +253,15 @@ program
       console.log(`   Total comparisons: ${result.summary.totalComparisons}`);
       console.log(`   Passed: ${result.summary.passed}`);
       console.log(`   Failed: ${result.summary.failed}`);
+
+      // Read-only AI cost summary (spike 008). Only printed when opted in and a
+      // classifier ran; cost is $0 on all-cache-hit or local/stub-provider runs.
+      if (options.showCost && result.costSummary) {
+        const c = result.costSummary;
+        console.log(
+          `   AI vision: ${c.operationCount} analyses, est. $${c.totalCost.toFixed(4)} (cache hit rate ${(c.cacheHitRate * 100).toFixed(1)}%)`
+        );
+      }
 
       if (result.summary.overallStatus === 'failed') {
         console.log(`\n❌ Visual regression detected!`);

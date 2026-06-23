@@ -26,6 +26,16 @@ jest.mock('../../src/visual/ai-classifier', () => {
         changeType: 'layout',
         reasoning: 'Layout shift detected in navigation area'
       }),
+      getCostStats: jest.fn().mockReturnValue({
+        totalCost: 0,
+        dailyCost: 0,
+        monthlyCost: 0,
+        operationCount: 0,
+        cacheHitCount: 0,
+        cacheHitRate: 0,
+        costByProvider: {},
+        costByModel: {}
+      }),
       close: jest.fn()
     }))
   };
