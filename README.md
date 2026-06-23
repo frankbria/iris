@@ -88,6 +88,16 @@ npm link
 iris --version
 ```
 
+### Verify Your Setup
+
+Run the project's quality gates (typecheck, lint, and tests) in one step:
+
+```bash
+npm run verify
+```
+
+Copy `.env.example` to `.env` and fill in the credentials for your AI provider.
+
 ### Try the Demo (Fastest Way)
 
 ```bash

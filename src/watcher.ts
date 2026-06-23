@@ -143,7 +143,7 @@ export class FileWatcher {
   private async executeInstruction(event: WatchEvent): Promise<void> {
     const startTime = new Date();
     let status: 'success' | 'error' = 'success';
-    let executionResults: ExecutionResult[] = [];
+    const executionResults: ExecutionResult[] = [];
 
     try {
       console.log(`🔄 File ${event.type}: ${event.path}`);

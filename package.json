@@ -24,7 +24,12 @@
   "scripts": {
     "build": "tsc",
     "test": "jest",
-    "start": "ts-node src/cli.ts"
+    "start": "ts-node src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\" \"__tests__/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"__tests__/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"__tests__/**/*.ts\"",
+    "verify": "npm run typecheck && npm run lint && npm test"
   },
   "author": "FRANK BRIA <frank@frankbria.com>",
   "license": "MIT",
@@ -54,9 +59,12 @@
     "@types/node": "^18.16.18",
     "@types/pixelmatch": "^5.2.6",
     "@types/ws": "^8.18.1",
+    "eslint": "^9.39.4",
     "jest": "^29.5.0",
+    "prettier": "^3.8.4",
     "ts-jest": "^29.1.0",
     "ts-node": "^10.9.1",
-    "typescript": "^5.1.6"
+    "typescript": "^5.1.6",
+    "typescript-eslint": "^8.62.0"
   }
 }
