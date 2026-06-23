@@ -15,6 +15,12 @@ npm run build
 # Run tests
 npm run test
 
+# Quality gates (also enforced in CI)
+npm run typecheck      # tsc --noEmit
+npm run lint           # eslint (flat config, eslint.config.js)
+npm run format:check   # prettier --check (non-blocking)
+npm run verify         # typecheck + lint + test in one step
+
 # Start development server (ts-node)
 npm start
 
