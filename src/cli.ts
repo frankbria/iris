@@ -18,7 +18,7 @@ program
   .action(async (instruction: string, options: { dryRun?: boolean; headless?: boolean; timeout?: string }) => {
     const startTime = new Date();
     let status: 'success' | 'error' = 'success';
-    let executionResults: any[] = [];
+    const executionResults: any[] = [];
 
     try {
       const { translate } = await import('./translator');

@@ -145,7 +145,6 @@ export class StorageManager {
     }
 
     // Process image with sharp for compression
-    let processedBuffer: Buffer;
     let sharpInstance = sharp(imageBuffer);
 
     if (format === 'png') {
@@ -170,7 +169,7 @@ export class StorageManager {
       });
     }
 
-    processedBuffer = await sharpInstance.toBuffer();
+    const processedBuffer = await sharpInstance.toBuffer();
 
     // Generate hash for deduplication
     const hash = this.generateImageHash(processedBuffer);

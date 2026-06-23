@@ -149,8 +149,13 @@ describe('Performance Optimizations', () => {
 
       expect(result.passed).toBe(false);
       expect(result.similarity).toBeLessThan(0.7);
-      // Early exit should be fast (< 100ms for large image)
-      expect(duration).toBeLessThan(200);
+      // Early exit must skip the full pixel diff. A full diff on a 2000x1200
+      // image takes multiple seconds; 1s is a CI-safe ceiling that still catches
+      // a regression where the early-exit path is not taken, without flaking on
+      // slow/loaded shared runners.
+      // ponytail: absolute wall-clock bound; switch to a relative early-vs-full
+      // comparison if this ever flakes again.
+      expect(duration).toBeLessThan(1000);
     });
 
     it('should not early exit for similar large images', async () => {
