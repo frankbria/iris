@@ -18,7 +18,7 @@ Issue-title priority codes use `[PX.Y]`: **X** = priority tier (0 highest),
 | 004  | `[P1.3]` | Fix AccessibilityRunner URL handling; un-skip 21 tests | P1 | M | — | [#4](https://github.com/frankbria/iris/issues/4) | DONE ([#13](https://github.com/frankbria/iris/pull/13)) |
 | 005  | `[P2.1]` | Add DX quality gates: typecheck/lint/format, .env.example, CI | P2 | M | — | [#5](https://github.com/frankbria/iris/issues/5) | DONE ([#14](https://github.com/frankbria/iris/pull/14)) |
 | 006  | `[P2.2]` | Reconcile docs with reality; remove dead doc/test artifacts | P2 | S–M | 002, 004 (rec.) | [#6](https://github.com/frankbria/iris/issues/6) | DONE ([#17](https://github.com/frankbria/iris/pull/17)) |
-| 007  | `[P2.3]` | Restrict config-file perms; close leaked DB/classifier handles | P2 | S | — | [#7](https://github.com/frankbria/iris/issues/7) | TODO |
+| 007  | `[P2.3]` | Restrict config-file perms; close leaked DB/classifier handles | P2 | S | — | [#7](https://github.com/frankbria/iris/issues/7) | DONE ([#18](https://github.com/frankbria/iris/pull/18)) |
 | 008  | `[P3.1]` | Spike: surface cost/cache infra in the `visual-diff` CLI | P3 | M | 002, 007 (rec.) | [#8](https://github.com/frankbria/iris/issues/8) | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale).

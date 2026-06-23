@@ -25,7 +25,8 @@ jest.mock('../../src/visual/ai-classifier', () => {
         isIntentional: false,
         changeType: 'layout',
         reasoning: 'Layout shift detected in navigation area'
-      })
+      }),
+      close: jest.fn()
     }))
   };
 });

@@ -182,14 +182,74 @@ describe('Config System', () => {
       mockFs.existsSync.mockReturnValue(false);
       mockFs.mkdirSync.mockImplementation(() => undefined);
       mockFs.writeFileSync.mockImplementation(() => undefined);
+      mockFs.chmodSync.mockImplementation(() => undefined);
 
       saveConfig(config);
 
-      expect(mockFs.mkdirSync).toHaveBeenCalledWith('/home/test/.iris', { recursive: true });
+      expect(mockFs.mkdirSync).toHaveBeenCalledWith('/home/test/.iris', {
+        recursive: true,
+        mode: 0o700,
+      });
       expect(mockFs.writeFileSync).toHaveBeenCalledWith(
         '/home/test/.iris/config.json',
-        JSON.stringify(config, null, 2)
+        JSON.stringify(config, null, 2),
+        { mode: 0o600 }
       );
+      // File did not pre-exist, so no chmod is needed (writeFileSync's mode applies)
+      expect(mockFs.chmodSync).not.toHaveBeenCalled();
+    });
+
+    it('tightens an existing config file before writing secrets', () => {
+      const config = {
+        ai: { provider: 'openai' as const, apiKey: 'sk-test', model: 'gpt-4o-mini' },
+        watch: { patterns: ['**/*.ts'], debounceMs: 1000, ignore: ['node_modules/**'] },
+        browser: { headless: true, timeout: 30000 },
+      };
+
+      mockOs.homedir.mockReturnValue('/home/test');
+      // Dir exists + config file already exists (e.g. world-readable from an old version)
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.chmodSync.mockImplementation(() => undefined);
+      mockFs.writeFileSync.mockImplementation(() => undefined);
+
+      saveConfig(config);
+
+      // chmod must run BEFORE the write so secrets never sit under loose perms
+      const chmodOrder = mockFs.chmodSync.mock.invocationCallOrder[0];
+      const writeOrder = mockFs.writeFileSync.mock.invocationCallOrder[0];
+      expect(mockFs.chmodSync).toHaveBeenCalledWith('/home/test/.iris/config.json', 0o600);
+      expect(chmodOrder).toBeLessThan(writeOrder);
+    });
+
+    // POSIX-only: verify the real on-disk file mode is 0o600 (owner-only).
+    // Windows reports different mode bits, so skip there.
+    const itPosix = process.platform === 'win32' ? it.skip : it;
+    itPosix('writes config.json with 0o600 permissions on disk', () => {
+      const realFs = jest.requireActual('fs') as typeof fs;
+      const realOs = jest.requireActual('os') as typeof os;
+
+      const tmpHome = realFs.mkdtempSync(path.join(realOs.tmpdir(), 'iris-cfg-'));
+      try {
+        // Point getConfigPath() at the temp home and route fs through the real module
+        mockOs.homedir.mockReturnValue(tmpHome);
+        mockFs.existsSync.mockImplementation(realFs.existsSync);
+        mockFs.mkdirSync.mockImplementation(realFs.mkdirSync as typeof fs.mkdirSync);
+        mockFs.writeFileSync.mockImplementation(realFs.writeFileSync as typeof fs.writeFileSync);
+        mockFs.chmodSync.mockImplementation(realFs.chmodSync);
+
+        const config = {
+          ai: { provider: 'openai' as const, apiKey: 'sk-secret', model: 'gpt-4o-mini' },
+          watch: { patterns: ['**/*.ts'], debounceMs: 1000, ignore: ['node_modules/**'] },
+          browser: { headless: true, timeout: 30000 },
+        };
+
+        saveConfig(config);
+
+        const configFile = path.join(tmpHome, '.iris', 'config.json');
+        expect(realFs.statSync(configFile).mode & 0o777).toBe(0o600);
+      } finally {
+        realFs.rmSync(tmpHome, { recursive: true, force: true });
+      }
     });
   });
 });

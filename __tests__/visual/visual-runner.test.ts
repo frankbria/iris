@@ -395,7 +395,8 @@ describe('VisualTestRunner', () => {
           isIntentional: false,
           changeType: 'layout' as const,
           reasoning: 'Detected significant layout shift in header area'
-        })
+        }),
+        close: jest.fn()
       } as any;
 
       (AIVisualClassifier as jest.MockedClass<typeof AIVisualClassifier>).mockImplementation(() => mockAIClassifier);
