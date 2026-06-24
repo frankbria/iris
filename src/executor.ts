@@ -1,6 +1,14 @@
 import { Browser, Page } from 'playwright';
 import { Action } from './translator';
-import { launchBrowser, newPage, closeBrowser, navigate, click, typeText, BrowserLaunchOptions } from './browser';
+import {
+  launchBrowser,
+  newPage,
+  closeBrowser,
+  navigate,
+  click,
+  typeText,
+  BrowserLaunchOptions,
+} from './browser';
 
 export interface ExecutionResult {
   success: boolean;
@@ -33,7 +41,9 @@ export interface PageContext {
  * error handling, and browser lifecycle management.
  */
 export class ActionExecutor {
-  private readonly options: Required<Omit<ActionExecutorOptions, 'browserOptions'>> & { browserOptions: BrowserLaunchOptions };
+  private readonly options: Required<Omit<ActionExecutorOptions, 'browserOptions'>> & {
+    browserOptions: BrowserLaunchOptions;
+  };
   private browser: Browser | null = null;
 
   constructor(options: ActionExecutorOptions = {}) {
@@ -54,7 +64,9 @@ export class ActionExecutor {
       this.browser = await launchBrowser(this.options.browserOptions);
       return this.browser;
     } catch (error) {
-      throw new Error(`Browser launch failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Browser launch failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
     }
   }
 
@@ -76,7 +88,9 @@ export class ActionExecutor {
 
       return page;
     } catch (error) {
-      throw new Error(`Page creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Page creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
     }
   }
 
@@ -231,13 +245,13 @@ export class ActionExecutor {
       'net::err_network_timeout',
     ];
 
-    return nonRetryablePatterns.some(pattern => message.includes(pattern));
+    return nonRetryablePatterns.some((pattern) => message.includes(pattern));
   }
 
   /**
    * Wait for the specified delay.
    */
   private async delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

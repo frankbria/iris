@@ -21,7 +21,7 @@ describe('AxeRunner', () => {
     include: [],
     exclude: [],
     disableRules: [],
-    timeout: 10000
+    timeout: 10000,
   };
 
   beforeEach(() => {
@@ -56,10 +56,10 @@ describe('AxeRunner', () => {
                 target: ['.low-contrast'],
                 html: '<span class="low-contrast">Text</span>',
                 failureSummary: 'Fix color contrast',
-                element: 'span'
-              }
-            ]
-          }
+                element: 'span',
+              },
+            ],
+          },
         ],
         passes: [
           {
@@ -68,22 +68,22 @@ describe('AxeRunner', () => {
             nodes: [
               {
                 target: ['h1'],
-                html: '<h1>Title</h1>'
-              }
-            ]
-          }
+                html: '<h1>Title</h1>',
+              },
+            ],
+          },
         ],
         incomplete: [],
         inapplicable: [
           {
             id: 'frame-title',
-            description: 'Frames must have title attribute'
-          }
+            description: 'Frames must have title attribute',
+          },
         ],
         testEngine: {
           name: 'axe-core',
-          version: '4.8.0'
-        }
+          version: '4.8.0',
+        },
       };
 
       // Mock AxeBuilder
@@ -91,7 +91,7 @@ describe('AxeRunner', () => {
       const mockAxeBuilder = {
         withTags: jest.fn().mockReturnThis(),
         disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults)
+        analyze: jest.fn().mockResolvedValue(mockAxeResults),
       };
       AxeBuilder.mockImplementation(() => mockAxeBuilder);
 
@@ -116,14 +116,14 @@ describe('AxeRunner', () => {
         passes: [],
         incomplete: [],
         inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' }
+        testEngine: { name: 'axe-core', version: '4.8.0' },
       };
 
       const { default: AxeBuilder } = require('@axe-core/playwright');
       const mockAxeBuilder = {
         withTags: jest.fn().mockReturnThis(),
         disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults)
+        analyze: jest.fn().mockResolvedValue(mockAxeResults),
       };
       AxeBuilder.mockImplementation(() => mockAxeBuilder);
 
@@ -135,7 +135,7 @@ describe('AxeRunner', () => {
     it('should disable specified rules', async () => {
       const configWithDisabledRules = {
         ...defaultConfig,
-        disableRules: ['color-contrast', 'link-name']
+        disableRules: ['color-contrast', 'link-name'],
       };
       axeRunner = new AxeRunner(configWithDisabledRules);
 
@@ -144,14 +144,14 @@ describe('AxeRunner', () => {
         passes: [],
         incomplete: [],
         inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' }
+        testEngine: { name: 'axe-core', version: '4.8.0' },
       };
 
       const { default: AxeBuilder } = require('@axe-core/playwright');
       const mockAxeBuilder = {
         withTags: jest.fn().mockReturnThis(),
         disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults)
+        analyze: jest.fn().mockResolvedValue(mockAxeResults),
       };
       AxeBuilder.mockImplementation(() => mockAxeBuilder);
 
@@ -170,7 +170,7 @@ describe('AxeRunner', () => {
             description: 'Critical accessibility issue',
             help: 'Fix critical issue',
             helpUrl: 'https://example.com/critical',
-            nodes: [{ target: ['.critical'], html: '<div class="critical"></div>' }]
+            nodes: [{ target: ['.critical'], html: '<div class="critical"></div>' }],
           },
           {
             id: 'moderate-issue',
@@ -179,20 +179,20 @@ describe('AxeRunner', () => {
             description: 'Moderate accessibility issue',
             help: 'Fix moderate issue',
             helpUrl: 'https://example.com/moderate',
-            nodes: [{ target: ['.moderate'], html: '<div class="moderate"></div>' }]
-          }
+            nodes: [{ target: ['.moderate'], html: '<div class="moderate"></div>' }],
+          },
         ],
         passes: [],
         incomplete: [],
         inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' }
+        testEngine: { name: 'axe-core', version: '4.8.0' },
       };
 
       const { default: AxeBuilder } = require('@axe-core/playwright');
       const mockAxeBuilder = {
         withTags: jest.fn().mockReturnThis(),
         disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults)
+        analyze: jest.fn().mockResolvedValue(mockAxeResults),
       };
       AxeBuilder.mockImplementation(() => mockAxeBuilder);
 
@@ -211,19 +211,19 @@ describe('AxeRunner', () => {
           {
             id: 'all-pass',
             description: 'All tests pass',
-            nodes: [{ target: ['body'], html: '<body></body>' }]
-          }
+            nodes: [{ target: ['body'], html: '<body></body>' }],
+          },
         ],
         incomplete: [],
         inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' }
+        testEngine: { name: 'axe-core', version: '4.8.0' },
       };
 
       const { default: AxeBuilder } = require('@axe-core/playwright');
       const mockAxeBuilder = {
         withTags: jest.fn().mockReturnThis(),
         disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults)
+        analyze: jest.fn().mockResolvedValue(mockAxeResults),
       };
       AxeBuilder.mockImplementation(() => mockAxeBuilder);
 
@@ -239,12 +239,13 @@ describe('AxeRunner', () => {
       const mockAxeBuilder = {
         withTags: jest.fn().mockReturnThis(),
         disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockRejectedValue(new Error('Axe analysis failed'))
+        analyze: jest.fn().mockRejectedValue(new Error('Axe analysis failed')),
       };
       AxeBuilder.mockImplementation(() => mockAxeBuilder);
 
-      await expect(axeRunner.run(mockPage, 'test', 'https://example.com'))
-        .rejects.toThrow('Axe-core execution failed: Axe analysis failed');
+      await expect(axeRunner.run(mockPage, 'test', 'https://example.com')).rejects.toThrow(
+        'Axe-core execution failed: Axe analysis failed',
+      );
     });
 
     it('should include timestamp in results', async () => {
@@ -253,14 +254,14 @@ describe('AxeRunner', () => {
         passes: [],
         incomplete: [],
         inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' }
+        testEngine: { name: 'axe-core', version: '4.8.0' },
       };
 
       const { default: AxeBuilder } = require('@axe-core/playwright');
       const mockAxeBuilder = {
         withTags: jest.fn().mockReturnThis(),
         disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults)
+        analyze: jest.fn().mockResolvedValue(mockAxeResults),
       };
       AxeBuilder.mockImplementation(() => mockAxeBuilder);
 
@@ -285,21 +286,26 @@ describe('AxeRunner', () => {
             description: 'Buttons must have discernible text',
             help: 'Add text to button',
             helpUrl: 'https://example.com/button-name',
-            nodes: [{ target: ['#submit-btn'], html: '<button id="submit-btn"></button>' }]
-          }
+            nodes: [{ target: ['#submit-btn'], html: '<button id="submit-btn"></button>' }],
+          },
         ],
-        testEngine: { name: 'axe-core', version: '4.8.0' }
+        testEngine: { name: 'axe-core', version: '4.8.0' },
       };
 
       const { default: AxeBuilder } = require('@axe-core/playwright');
       const mockAxeBuilder = {
         include: jest.fn().mockReturnThis(),
         withTags: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults)
+        analyze: jest.fn().mockResolvedValue(mockAxeResults),
       };
       AxeBuilder.mockImplementation(() => mockAxeBuilder);
 
-      const result = await axeRunner.runOnElement(mockPage, '#submit-btn', 'button-test', 'https://example.com');
+      const result = await axeRunner.runOnElement(
+        mockPage,
+        '#submit-btn',
+        'button-test',
+        'https://example.com',
+      );
 
       expect(mockAxeBuilder.include).toHaveBeenCalledWith('#submit-btn');
       expect(result.testName).toBe('button-test_#submit-btn');
@@ -312,12 +318,13 @@ describe('AxeRunner', () => {
       const mockAxeBuilder = {
         include: jest.fn().mockReturnThis(),
         withTags: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockRejectedValue(new Error('Element not found'))
+        analyze: jest.fn().mockRejectedValue(new Error('Element not found')),
       };
       AxeBuilder.mockImplementation(() => mockAxeBuilder);
 
-      await expect(axeRunner.runOnElement(mockPage, '#missing', 'test', 'https://example.com'))
-        .rejects.toThrow('Axe-core element scan failed: Element not found');
+      await expect(
+        axeRunner.runOnElement(mockPage, '#missing', 'test', 'https://example.com'),
+      ).rejects.toThrow('Axe-core element scan failed: Element not found');
     });
   });
 
@@ -336,7 +343,7 @@ describe('AxeRunner', () => {
             description: '',
             help: '',
             helpUrl: '',
-            nodes: []
+            nodes: [],
           },
           {
             id: 'critical-2',
@@ -345,7 +352,7 @@ describe('AxeRunner', () => {
             description: '',
             help: '',
             helpUrl: '',
-            nodes: []
+            nodes: [],
           },
           {
             id: 'serious-1',
@@ -354,7 +361,7 @@ describe('AxeRunner', () => {
             description: '',
             help: '',
             helpUrl: '',
-            nodes: []
+            nodes: [],
           },
           {
             id: 'moderate-1',
@@ -363,7 +370,7 @@ describe('AxeRunner', () => {
             description: '',
             help: '',
             helpUrl: '',
-            nodes: []
+            nodes: [],
           },
           {
             id: 'moderate-2',
@@ -372,7 +379,7 @@ describe('AxeRunner', () => {
             description: '',
             help: '',
             helpUrl: '',
-            nodes: []
+            nodes: [],
           },
           {
             id: 'moderate-3',
@@ -381,7 +388,7 @@ describe('AxeRunner', () => {
             description: '',
             help: '',
             helpUrl: '',
-            nodes: []
+            nodes: [],
           },
           {
             id: 'minor-1',
@@ -390,8 +397,8 @@ describe('AxeRunner', () => {
             description: '',
             help: '',
             helpUrl: '',
-            nodes: []
-          }
+            nodes: [],
+          },
         ],
         passes: [],
         incomplete: [],
@@ -401,12 +408,12 @@ describe('AxeRunner', () => {
           violations: 7,
           passes: 0,
           incomplete: 0,
-          inapplicable: 0
+          inapplicable: 0,
         },
         testRunner: {
           name: 'axe-core',
-          version: '4.8.0'
-        }
+          version: '4.8.0',
+        },
       };
 
       const counts = axeRunner.getSeverityCounts(result);
@@ -432,12 +439,12 @@ describe('AxeRunner', () => {
           violations: 0,
           passes: 0,
           incomplete: 0,
-          inapplicable: 0
+          inapplicable: 0,
         },
         testRunner: {
           name: 'axe-core',
-          version: '4.8.0'
-        }
+          version: '4.8.0',
+        },
       };
 
       const counts = axeRunner.getSeverityCounts(result);
@@ -450,19 +457,21 @@ describe('AxeRunner', () => {
   });
 
   describe('checkThreshold', () => {
-    const createResultWithViolations = (impacts: Array<'critical' | 'serious' | 'moderate' | 'minor'>): A11yResult => ({
+    const createResultWithViolations = (
+      impacts: Array<'critical' | 'serious' | 'moderate' | 'minor'>,
+    ): A11yResult => ({
       testName: 'test',
       url: 'https://example.com',
       timestamp: new Date(),
       passed: false,
-      violations: impacts.map(impact => ({
+      violations: impacts.map((impact) => ({
         id: `${impact}-violation`,
         impact,
         tags: [],
         description: '',
         help: '',
         helpUrl: '',
-        nodes: []
+        nodes: [],
       })),
       passes: [],
       incomplete: [],
@@ -472,12 +481,12 @@ describe('AxeRunner', () => {
         violations: impacts.length,
         passes: 0,
         incomplete: 0,
-        inapplicable: 0
+        inapplicable: 0,
       },
       testRunner: {
         name: 'axe-core',
-        version: '4.8.0'
-      }
+        version: '4.8.0',
+      },
     });
 
     it('should fail when critical violations exceed threshold', () => {

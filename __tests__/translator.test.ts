@@ -81,7 +81,9 @@ describe('Translator', () => {
 
       for (const test of tests) {
         const result = await translate(test.input);
-        expect(result.actions).toEqual([{ type: 'fill', selector: test.selector, text: test.text }]);
+        expect(result.actions).toEqual([
+          { type: 'fill', selector: test.selector, text: test.text },
+        ]);
         expect(result.method).toBe('pattern');
       }
     });

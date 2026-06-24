@@ -96,9 +96,7 @@ export abstract class BaseAIClient implements AIClient {
    * Translate natural language instruction to browser actions
    * Must be implemented by concrete clients
    */
-  abstract translateInstruction(
-    request: AITranslationRequest
-  ): Promise<AITranslationResponse>;
+  abstract translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse>;
 
   /**
    * Check if the client is available
@@ -134,10 +132,7 @@ export abstract class BaseAIClient implements AIClient {
 /**
  * Abstract base class for AI clients with vision support
  */
-export abstract class BaseAIVisionClient
-  extends BaseAIClient
-  implements AIVisionClient
-{
+export abstract class BaseAIVisionClient extends BaseAIClient implements AIVisionClient {
   /**
    * Analyze visual differences between two images
    * Must be implemented by concrete vision clients

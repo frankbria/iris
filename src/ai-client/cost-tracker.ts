@@ -195,19 +195,12 @@ export class CostTracker {
    * @returns Cost of operation
    * @throws Error if circuit breaker is triggered
    */
-  trackOperation(
-    provider: string,
-    model: string,
-    cached: boolean = false
-  ): number {
+  trackOperation(provider: string, model: string, cached: boolean = false): number {
     // Check circuit breaker
     const status = this.getBudgetStatus();
-    if (
-      this.budget.enableCircuitBreaker &&
-      status.circuitBreakerTriggered
-    ) {
+    if (this.budget.enableCircuitBreaker && status.circuitBreakerTriggered) {
       throw new Error(
-        'Budget limit exceeded - circuit breaker activated. No further API calls allowed.'
+        'Budget limit exceeded - circuit breaker activated. No further API calls allowed.',
       );
     }
 
@@ -233,7 +226,7 @@ export class CostTracker {
    */
   getCostForPeriod(startTime: number, endTime: number): number {
     const stmt = this.db.prepare(
-      'SELECT SUM(cost) as total FROM cost_tracking WHERE timestamp >= ? AND timestamp < ?'
+      'SELECT SUM(cost) as total FROM cost_tracking WHERE timestamp >= ? AND timestamp < ?',
     );
     const result = stmt.get(startTime, endTime) as { total: number | null };
     return result.total || 0;
@@ -266,17 +259,17 @@ export class CostTracker {
    */
   getStats(): CostStats {
     const totalStmt = this.db.prepare(
-      'SELECT SUM(cost) as total, COUNT(*) as count FROM cost_tracking'
+      'SELECT SUM(cost) as total, COUNT(*) as count FROM cost_tracking',
     );
     const totalResult = totalStmt.get() as { total: number | null; count: number };
 
     const cacheStmt = this.db.prepare(
-      'SELECT COUNT(*) as count FROM cost_tracking WHERE cached = 1'
+      'SELECT COUNT(*) as count FROM cost_tracking WHERE cached = 1',
     );
     const cacheResult = cacheStmt.get() as { count: number };
 
     const providerStmt = this.db.prepare(
-      'SELECT provider, SUM(cost) as total FROM cost_tracking GROUP BY provider'
+      'SELECT provider, SUM(cost) as total FROM cost_tracking GROUP BY provider',
     );
     const providerResults = providerStmt.all() as Array<{
       provider: string;
@@ -284,7 +277,7 @@ export class CostTracker {
     }>;
 
     const modelStmt = this.db.prepare(
-      'SELECT model, SUM(cost) as total FROM cost_tracking GROUP BY model'
+      'SELECT model, SUM(cost) as total FROM cost_tracking GROUP BY model',
     );
     const modelResults = modelStmt.all() as Array<{
       model: string;
@@ -303,8 +296,7 @@ export class CostTracker {
 
     const operationCount = totalResult.count;
     const cacheHitCount = cacheResult.count;
-    const cacheHitRate =
-      operationCount > 0 ? cacheHitCount / operationCount : 0;
+    const cacheHitRate = operationCount > 0 ? cacheHitCount / operationCount : 0;
 
     return {
       totalCost: totalResult.total || 0,
@@ -339,8 +331,7 @@ export class CostTracker {
       monthlyPercent >= this.budget.criticalThreshold;
 
     const circuitBreakerTriggered =
-      this.budget.enableCircuitBreaker &&
-      (dailyPercent >= 1.0 || monthlyPercent >= 1.0);
+      this.budget.enableCircuitBreaker && (dailyPercent >= 1.0 || monthlyPercent >= 1.0);
 
     return {
       dailyUsed: dailyCost,
@@ -403,9 +394,6 @@ export class CostTracker {
 /**
  * Create a cost tracker instance
  */
-export function createCostTracker(
-  dbPath?: string,
-  budget?: BudgetConfig
-): CostTracker {
+export function createCostTracker(dbPath?: string, budget?: BudgetConfig): CostTracker {
   return new CostTracker(dbPath, budget);
 }

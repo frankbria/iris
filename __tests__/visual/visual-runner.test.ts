@@ -37,7 +37,7 @@ describe('VisualTestRunner', () => {
     pages: ['/', '/about'],
     baseline: {
       strategy: 'branch' as const,
-      reference: 'main'
+      reference: 'main',
     },
     capture: {
       viewport: { width: 1920, height: 1080 },
@@ -50,8 +50,8 @@ describe('VisualTestRunner', () => {
         disableAnimations: true,
         delay: 100,
         waitForNetworkIdle: true,
-        networkIdleTimeout: 3000
-      }
+        networkIdleTimeout: 3000,
+      },
     },
     diff: {
       threshold: 0.95,
@@ -59,8 +59,8 @@ describe('VisualTestRunner', () => {
       aiProvider: 'openai' as const,
       antiAliasing: true,
       regions: [],
-      maxConcurrency: 3
-    }
+      maxConcurrency: 3,
+    },
   };
 
   beforeEach(() => {
@@ -71,19 +71,19 @@ describe('VisualTestRunner', () => {
       addStyleTag: jest.fn().mockResolvedValue(undefined),
       waitForTimeout: jest.fn().mockResolvedValue(undefined),
       waitForLoadState: jest.fn().mockResolvedValue(undefined),
-      close: jest.fn().mockResolvedValue(undefined)
+      close: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     // Mock Playwright BrowserContext
     mockContext = {
       newPage: jest.fn().mockResolvedValue(mockPage),
-      close: jest.fn().mockResolvedValue(undefined)
+      close: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     // Mock Playwright Browser
     mockBrowser = {
       newContext: jest.fn().mockResolvedValue(mockContext),
-      close: jest.fn().mockResolvedValue(undefined)
+      close: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     // Mock chromium.launch
@@ -101,12 +101,14 @@ describe('VisualTestRunner', () => {
           fullPage: true,
           viewport: { width: 1920, height: 1080 },
           hash: 'test-hash',
-          timestamp: Date.now()
-        }
-      })
+          timestamp: Date.now(),
+        },
+      }),
     } as any;
 
-    (VisualCaptureEngine as jest.MockedClass<typeof VisualCaptureEngine>).mockImplementation(() => mockCaptureEngine);
+    (VisualCaptureEngine as jest.MockedClass<typeof VisualCaptureEngine>).mockImplementation(
+      () => mockCaptureEngine,
+    );
 
     // Mock VisualDiffEngine
     mockDiffEngine = {
@@ -116,30 +118,36 @@ describe('VisualTestRunner', () => {
         similarity: 1.0,
         pixelDifference: 0,
         threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff')
-      })
+        diffBuffer: Buffer.from('test-diff'),
+      }),
     } as any;
 
-    (VisualDiffEngine as jest.MockedClass<typeof VisualDiffEngine>).mockImplementation(() => mockDiffEngine);
+    (VisualDiffEngine as jest.MockedClass<typeof VisualDiffEngine>).mockImplementation(
+      () => mockDiffEngine,
+    );
 
     // Mock BaselineManager
     mockBaselineManager = {
       loadBaseline: jest.fn().mockResolvedValue({
         success: true,
         buffer: Buffer.from('test-baseline'),
-        metadata: {}
+        metadata: {},
       }),
-      saveBaseline: jest.fn().mockResolvedValue(undefined)
+      saveBaseline: jest.fn().mockResolvedValue(undefined),
     } as any;
 
-    (BaselineManager as jest.MockedClass<typeof BaselineManager>).mockImplementation(() => mockBaselineManager);
+    (BaselineManager as jest.MockedClass<typeof BaselineManager>).mockImplementation(
+      () => mockBaselineManager,
+    );
 
     // Mock StorageManager
     mockStorageManager = {
-      ensureTestDirectory: jest.fn().mockResolvedValue('/test/dir')
+      ensureTestDirectory: jest.fn().mockResolvedValue('/test/dir'),
     } as any;
 
-    (StorageManager as jest.MockedClass<typeof StorageManager>).mockImplementation(() => mockStorageManager);
+    (StorageManager as jest.MockedClass<typeof StorageManager>).mockImplementation(
+      () => mockStorageManager,
+    );
 
     // Mock fs.writeFileSync
     const fs = require('fs');
@@ -183,27 +191,35 @@ describe('VisualTestRunner', () => {
     it('should navigate to correct URLs for pages', async () => {
       await visualRunner.run();
 
-      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000/', { waitUntil: 'networkidle' });
-      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000/about', { waitUntil: 'networkidle' });
+      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000/', {
+        waitUntil: 'networkidle',
+      });
+      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000/about', {
+        waitUntil: 'networkidle',
+      });
     });
 
     it('should handle absolute URLs', async () => {
       const customConfig = {
         ...defaultConfig,
-        pages: ['https://example.com/page1', 'https://example.com/page2']
+        pages: ['https://example.com/page1', 'https://example.com/page2'],
       };
       visualRunner = new VisualTestRunner(customConfig);
 
       await visualRunner.run();
 
-      expect(mockPage.goto).toHaveBeenCalledWith('https://example.com/page1', { waitUntil: 'networkidle' });
-      expect(mockPage.goto).toHaveBeenCalledWith('https://example.com/page2', { waitUntil: 'networkidle' });
+      expect(mockPage.goto).toHaveBeenCalledWith('https://example.com/page1', {
+        waitUntil: 'networkidle',
+      });
+      expect(mockPage.goto).toHaveBeenCalledWith('https://example.com/page2', {
+        waitUntil: 'networkidle',
+      });
     });
 
     it('should create new baseline when updateBaseline is true', async () => {
       const configWithUpdate = {
         ...defaultConfig,
-        updateBaseline: true
+        updateBaseline: true,
       };
       visualRunner = new VisualTestRunner(configWithUpdate);
 
@@ -217,7 +233,7 @@ describe('VisualTestRunner', () => {
     it('should create new baseline when baseline does not exist', async () => {
       mockBaselineManager.loadBaseline.mockResolvedValue({
         success: false,
-        error: 'Baseline not found'
+        error: 'Baseline not found',
       });
 
       const result = await visualRunner.run();
@@ -238,10 +254,10 @@ describe('VisualTestRunner', () => {
       mockDiffEngine.compare.mockResolvedValue({
         success: true,
         passed: false,
-        similarity: 0.80,
-        pixelDifference: 0.20,
+        similarity: 0.8,
+        pixelDifference: 0.2,
         threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff')
+        diffBuffer: Buffer.from('test-diff'),
       });
 
       const result = await visualRunner.run();
@@ -257,15 +273,15 @@ describe('VisualTestRunner', () => {
           passed: true,
           similarity: 0.96,
           pixelDifference: 0.04,
-          threshold: 0.95
+          threshold: 0.95,
         })
         .mockResolvedValueOnce({
           success: true,
           passed: false,
-          similarity: 0.80,
-          pixelDifference: 0.20,
+          similarity: 0.8,
+          pixelDifference: 0.2,
           threshold: 0.95,
-          diffBuffer: Buffer.from('test-diff')
+          diffBuffer: Buffer.from('test-diff'),
         });
 
       const result = await visualRunner.run();
@@ -294,7 +310,7 @@ describe('VisualTestRunner', () => {
       await visualRunner.run();
 
       expect(mockPage.addStyleTag).toHaveBeenCalledWith({
-        content: expect.stringContaining('animation-duration: 0s')
+        content: expect.stringContaining('animation-duration: 0s'),
       });
     });
 
@@ -308,7 +324,7 @@ describe('VisualTestRunner', () => {
       await visualRunner.run();
 
       expect(mockPage.waitForLoadState).toHaveBeenCalledWith('networkidle', {
-        timeout: 3000
+        timeout: 3000,
       });
     });
 
@@ -322,9 +338,9 @@ describe('VisualTestRunner', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 0
-          }
-        }
+            networkIdleTimeout: 0,
+          },
+        },
       };
       visualRunner = new VisualTestRunner(configNoStabilization);
 
@@ -344,7 +360,7 @@ describe('VisualTestRunner', () => {
       const configWithDevices = {
         ...defaultConfig,
         pages: ['/', '/about'],
-        devices: ['desktop', 'mobile', 'tablet']
+        devices: ['desktop', 'mobile', 'tablet'],
       };
 
       // Clear just the call history, not the implementations
@@ -362,14 +378,14 @@ describe('VisualTestRunner', () => {
     it('should use device-specific viewports', async () => {
       const configWithMobile = {
         ...defaultConfig,
-        devices: ['mobile']
+        devices: ['mobile'],
       };
       visualRunner = new VisualTestRunner(configWithMobile);
 
       await visualRunner.run();
 
       expect(mockBrowser.newContext).toHaveBeenCalledWith({
-        viewport: { width: 375, height: 667 }
+        viewport: { width: 375, height: 667 },
       });
     });
 
@@ -377,7 +393,7 @@ describe('VisualTestRunner', () => {
       await visualRunner.run();
 
       expect(mockBrowser.newContext).toHaveBeenCalledWith({
-        viewport: { width: 1920, height: 1080 }
+        viewport: { width: 1920, height: 1080 },
       });
     });
   });
@@ -394,7 +410,7 @@ describe('VisualTestRunner', () => {
           suggestions: ['Review layout changes', 'Check responsive behavior'],
           isIntentional: false,
           changeType: 'layout' as const,
-          reasoning: 'Detected significant layout shift in header area'
+          reasoning: 'Detected significant layout shift in header area',
         }),
         getCostStats: jest.fn().mockReturnValue({
           totalCost: 0.0042,
@@ -404,12 +420,14 @@ describe('VisualTestRunner', () => {
           cacheHitCount: 1,
           cacheHitRate: 0.5,
           costByProvider: { openai: 0.0042 },
-          costByModel: {}
+          costByModel: {},
         }),
-        close: jest.fn()
+        close: jest.fn(),
       } as any;
 
-      (AIVisualClassifier as jest.MockedClass<typeof AIVisualClassifier>).mockImplementation(() => mockAIClassifier);
+      (AIVisualClassifier as jest.MockedClass<typeof AIVisualClassifier>).mockImplementation(
+        () => mockAIClassifier,
+      );
     });
 
     it('should run AI analysis when enabled and test fails', async () => {
@@ -417,18 +435,18 @@ describe('VisualTestRunner', () => {
         ...defaultConfig,
         diff: {
           ...defaultConfig.diff,
-          semanticAnalysis: true
-        }
+          semanticAnalysis: true,
+        },
       };
       visualRunner = new VisualTestRunner(configWithAI);
 
       mockDiffEngine.compare.mockResolvedValue({
         success: true,
         passed: false,
-        similarity: 0.80,
-        pixelDifference: 0.20,
+        similarity: 0.8,
+        pixelDifference: 0.2,
         threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff')
+        diffBuffer: Buffer.from('test-diff'),
       });
 
       const result = await visualRunner.run();
@@ -444,8 +462,8 @@ describe('VisualTestRunner', () => {
         ...defaultConfig,
         diff: {
           ...defaultConfig.diff,
-          semanticAnalysis: true
-        }
+          semanticAnalysis: true,
+        },
       };
       visualRunner = new VisualTestRunner(configWithAI);
 
@@ -454,7 +472,7 @@ describe('VisualTestRunner', () => {
         passed: true,
         similarity: 0.96,
         pixelDifference: 0.04,
-        threshold: 0.95
+        threshold: 0.95,
       });
 
       const result = await visualRunner.run();
@@ -468,18 +486,18 @@ describe('VisualTestRunner', () => {
         ...defaultConfig,
         diff: {
           ...defaultConfig.diff,
-          semanticAnalysis: true
-        }
+          semanticAnalysis: true,
+        },
       };
       visualRunner = new VisualTestRunner(configWithAI);
 
       mockDiffEngine.compare.mockResolvedValue({
         success: true,
         passed: false,
-        similarity: 0.80,
-        pixelDifference: 0.20,
+        similarity: 0.8,
+        pixelDifference: 0.2,
         threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff')
+        diffBuffer: Buffer.from('test-diff'),
       });
 
       mockAIClassifier.analyzeChange.mockResolvedValue({
@@ -490,7 +508,7 @@ describe('VisualTestRunner', () => {
         suggestions: ['Immediate review required', 'Rollback changes'],
         isIntentional: false,
         changeType: 'layout' as const,
-        reasoning: 'Critical structural changes detected'
+        reasoning: 'Critical structural changes detected',
       });
 
       const result = await visualRunner.run();
@@ -503,7 +521,7 @@ describe('VisualTestRunner', () => {
     it('should populate costSummary from the classifier when semantic analysis is on', async () => {
       const configWithAI = {
         ...defaultConfig,
-        diff: { ...defaultConfig.diff, semanticAnalysis: true }
+        diff: { ...defaultConfig.diff, semanticAnalysis: true },
       };
       visualRunner = new VisualTestRunner(configWithAI);
 
@@ -529,10 +547,10 @@ describe('VisualTestRunner', () => {
       mockDiffEngine.compare.mockResolvedValue({
         success: true,
         passed: false,
-        similarity: 0.80,
-        pixelDifference: 0.20,
+        similarity: 0.8,
+        pixelDifference: 0.2,
         threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff')
+        diffBuffer: Buffer.from('test-diff'),
       });
 
       const result = await visualRunner.run();
@@ -544,10 +562,10 @@ describe('VisualTestRunner', () => {
       mockDiffEngine.compare.mockResolvedValue({
         success: true,
         passed: false,
-        similarity: 0.90,
-        pixelDifference: 0.10,
+        similarity: 0.9,
+        pixelDifference: 0.1,
         threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff')
+        diffBuffer: Buffer.from('test-diff'),
       });
 
       const result = await visualRunner.run();
@@ -562,7 +580,7 @@ describe('VisualTestRunner', () => {
         similarity: 0.96,
         pixelDifference: 0.04,
         threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff')
+        diffBuffer: Buffer.from('test-diff'),
       });
 
       const result = await visualRunner.run();
@@ -580,8 +598,8 @@ describe('VisualTestRunner', () => {
         pages: ['/', '/about', '/contact', '/services'],
         diff: {
           ...defaultConfig.diff,
-          maxConcurrency: 2
-        }
+          maxConcurrency: 2,
+        },
       };
 
       // Clear just the call history, not the implementations
@@ -609,7 +627,9 @@ describe('VisualTestRunner', () => {
       let inFlight = 0;
       let peak = 0;
       let openGate!: () => void;
-      const gateReached = new Promise<void>(resolve => { openGate = resolve; });
+      const gateReached = new Promise<void>((resolve) => {
+        openGate = resolve;
+      });
 
       mockCaptureEngine.capture.mockImplementation(async () => {
         inFlight++;
@@ -631,15 +651,15 @@ describe('VisualTestRunner', () => {
             fullPage: true,
             viewport: { width: 1920, height: 1080 },
             hash: 'test-hash',
-            timestamp: Date.now()
-          }
+            timestamp: Date.now(),
+          },
         };
       });
 
       const runner = new VisualTestRunner({
         ...defaultConfig,
         pages,
-        diff: { ...defaultConfig.diff, maxConcurrency }
+        diff: { ...defaultConfig.diff, maxConcurrency },
       });
       const result = await runner.run();
 
@@ -662,8 +682,8 @@ describe('VisualTestRunner', () => {
             fullPage: true,
             viewport: { width: 1920, height: 1080 },
             hash: 'test-hash',
-            timestamp: Date.now()
-          }
+            timestamp: Date.now(),
+          },
         })
         .mockRejectedValueOnce(new Error('Capture failed'));
 
@@ -682,10 +702,10 @@ describe('VisualTestRunner', () => {
       mockDiffEngine.compare.mockResolvedValue({
         success: true,
         passed: false,
-        similarity: 0.80,
-        pixelDifference: 0.20,
+        similarity: 0.8,
+        pixelDifference: 0.2,
         threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff')
+        diffBuffer: Buffer.from('test-diff'),
       });
 
       const result = await visualRunner.run();
@@ -705,7 +725,7 @@ describe('VisualTestRunner', () => {
         passed: true,
         similarity: 0.96,
         pixelDifference: 0.04,
-        threshold: 0.95
+        threshold: 0.95,
       });
 
       const result = await visualRunner.run();
@@ -729,7 +749,7 @@ describe('VisualTestRunner', () => {
     it('should handle baseline loading errors', async () => {
       mockBaselineManager.loadBaseline.mockResolvedValue({
         success: false,
-        error: 'Baseline load failed'
+        error: 'Baseline load failed',
       });
 
       const result = await visualRunner.run();
@@ -746,7 +766,7 @@ describe('VisualTestRunner', () => {
         similarity: 0,
         pixelDifference: 0,
         threshold: 0.95,
-        error: 'Comparison failed'
+        error: 'Comparison failed',
       });
 
       const result = await visualRunner.run();

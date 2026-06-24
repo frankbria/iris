@@ -64,7 +64,12 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
 
   describe('Legacy Translation Methods', () => {
     test('executeCommand returns translated actions', async () => {
-      const req = { jsonrpc: '2.0', id: 1, method: 'executeCommand', params: { instruction: 'click #a' } };
+      const req = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'executeCommand',
+        params: { instruction: 'click #a' },
+      };
       const res = await sendRequest(req);
       expect(res.id).toBe(1);
       expect(res.result).toEqual([{ type: 'click', selector: '#a' }]);
@@ -94,7 +99,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       expect(res.result).toEqual({
         isActive: false,
         hasPage: false,
-        lastActivity: 0
+        lastActivity: 0,
       });
       expect(res.error).toBeUndefined();
     });
@@ -104,7 +109,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         jsonrpc: '2.0',
         id: 11,
         method: 'executeBrowserAction',
-        params: { instruction: 'click #button' }
+        params: { instruction: 'click #button' },
       };
       const res = await sendRequest(req);
       expect(res.id).toBe(11);
@@ -135,7 +140,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         expect(launchRes.result).toEqual({
           success: true,
           message: 'Browser launched successfully',
-          sessionId: expect.any(String)
+          sessionId: expect.any(String),
         });
 
         // 2. Check browser status
@@ -145,7 +150,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         expect(statusRes.result).toEqual({
           isActive: true,
           hasPage: false,
-          lastActivity: expect.any(Number)
+          lastActivity: expect.any(Number),
         });
 
         // 3. Execute browser action (this will create a page)
@@ -153,14 +158,16 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           jsonrpc: '2.0',
           id: 22,
           method: 'executeBrowserAction',
-          params: { instruction: 'navigate to data:text/html,<html><body><h1>Test Page</h1></body></html>' }
+          params: {
+            instruction: 'navigate to data:text/html,<html><body><h1>Test Page</h1></body></html>',
+          },
         };
         const actionRes = await sendRequestViaConnection(ws, actionReq);
         expect(actionRes.id).toBe(22);
         expect(actionRes.result).toEqual({
           success: expect.any(Boolean),
           results: expect.any(Array),
-          translationResult: expect.any(Object)
+          translationResult: expect.any(Object),
         });
 
         // 4. Check browser status after action
@@ -171,7 +178,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           isActive: true,
           hasPage: true,
           lastActivity: expect.any(Number),
-          context: expect.any(Object)
+          context: expect.any(Object),
         });
 
         // 5. Close browser
@@ -180,7 +187,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         expect(closeRes.id).toBe(24);
         expect(closeRes.result).toEqual({
           success: true,
-          message: 'Browser closed successfully'
+          message: 'Browser closed successfully',
         });
 
         // 6. Verify browser status after close
@@ -190,9 +197,8 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         expect(statusRes3.result).toEqual({
           isActive: false,
           hasPage: false,
-          lastActivity: 0
+          lastActivity: 0,
         });
-
       } finally {
         ws.close();
       }
@@ -213,10 +219,13 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           method: 'executeBrowserAction',
           params: {
             actions: [
-              { type: 'navigate', url: 'data:text/html,<html><body><button id="button">Click me</button></body></html>' },
-              { type: 'click', selector: '#button' }
-            ]
-          }
+              {
+                type: 'navigate',
+                url: 'data:text/html,<html><body><button id="button">Click me</button></body></html>',
+              },
+              { type: 'click', selector: '#button' },
+            ],
+          },
         };
         const actionRes = await sendRequestViaConnection(ws, actionReq);
         expect(actionRes.id).toBe(31);
@@ -225,20 +234,19 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           results: expect.arrayContaining([
             expect.objectContaining({
               action: { type: 'navigate', url: expect.stringContaining('data:text/html') },
-              success: expect.any(Boolean)
+              success: expect.any(Boolean),
             }),
             expect.objectContaining({
               action: { type: 'click', selector: '#button' },
-              success: expect.any(Boolean)
-            })
+              success: expect.any(Boolean),
+            }),
           ]),
-          translationResult: null
+          translationResult: null,
         });
 
         // Close browser
         const closeReq = { jsonrpc: '2.0', id: 32, method: 'closeBrowser' };
         await sendRequestViaConnection(ws, closeReq);
-
       } finally {
         ws.close();
       }
@@ -257,20 +265,19 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           jsonrpc: '2.0',
           id: 41,
           method: 'executeBrowserAction',
-          params: {}
+          params: {},
         };
         const actionRes = await sendRequestViaConnection(ws, actionReq);
         expect(actionRes.id).toBe(41);
         expect(actionRes.result).toEqual({
           success: false,
           results: [],
-          error: 'Either instruction or actions must be provided'
+          error: 'Either instruction or actions must be provided',
         });
 
         // Close browser
         const closeReq = { jsonrpc: '2.0', id: 42, method: 'closeBrowser' };
         await sendRequestViaConnection(ws, closeReq);
-
       } finally {
         ws.close();
       }
@@ -295,9 +302,16 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       try {
         await new Promise<void>((resolve) => allowWss.once('listening', resolve));
         const res = await new Promise<JsonRpcResponse>((resolve, reject) => {
-          const ws = new WebSocket(`ws://127.0.0.1:${allowPort}`, { origin: 'http://trusted.example' });
-          ws.on('open', () => ws.send(JSON.stringify({ jsonrpc: '2.0', id: 70, method: 'getStatus' })));
-          ws.on('message', (d) => { resolve(JSON.parse(d.toString())); ws.close(); });
+          const ws = new WebSocket(`ws://127.0.0.1:${allowPort}`, {
+            origin: 'http://trusted.example',
+          });
+          ws.on('open', () =>
+            ws.send(JSON.stringify({ jsonrpc: '2.0', id: 70, method: 'getStatus' })),
+          );
+          ws.on('message', (d) => {
+            resolve(JSON.parse(d.toString()));
+            ws.close();
+          });
           ws.on('error', reject);
         });
         expect(res.result).toEqual({ status: 'ready' });
@@ -365,7 +379,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         ws.send('invalid json');
 
         // Wait a bit to ensure no response
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
         // Send valid request to verify connection still works
         const validReq = { jsonrpc: '2.0', id: 51, method: 'getStatus' };

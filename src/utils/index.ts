@@ -27,16 +27,11 @@ export type {
   CacheOptions,
   RateLimitConfig,
   HealthCheck,
-  HealthStatus
+  HealthStatus,
 } from './types';
 
 // Error classes
-export {
-  UtilityError,
-  ValidationError,
-  RetryableError,
-  TimeoutError
-} from './types';
+export { UtilityError, ValidationError, RetryableError, TimeoutError } from './types';
 
 // Zod schemas
 export {
@@ -51,32 +46,18 @@ export {
   ImageMetadataSchema,
   ImageComparisonSchema,
   ErrorContextSchema,
-  RetryConfigSchema
+  RetryConfigSchema,
 } from './types';
 
 // Utility functions
-export {
-  generateCorrelationId,
-  isRetryableError,
-  createLogger
-} from './types';
+export { generateCorrelationId, isRetryableError, createLogger } from './types';
 
 // Import types for function signatures
-import type {
-  GitInfo,
-  ImageComparison,
-  PerformanceMetric,
-  RetryConfig
-} from './types';
+import type { GitInfo, ImageComparison, PerformanceMetric, RetryConfig } from './types';
 import { isRetryableError } from './types';
 
 // Migration utilities
-export {
-  Migration,
-  MigrationRunner,
-  applyPhase2Migration,
-  Phase2Migration
-} from './migration';
+export { Migration, MigrationRunner, applyPhase2Migration, Phase2Migration } from './migration';
 
 // TODO: Implement additional utility modules
 // This is a Phase 2 module that will be implemented in stages:
@@ -98,7 +79,7 @@ export async function processImage(
     resize?: { width: number; height: number };
     format?: 'png' | 'jpeg' | 'webp';
     quality?: number;
-  }
+  },
 ): Promise<Buffer> {
   // TODO: Implement image processing with Sharp
   throw new Error('Image processing not yet implemented - Phase 2 in progress');
@@ -127,7 +108,7 @@ export async function compareImages(
   options?: {
     threshold?: number;
     includeRegions?: boolean;
-  }
+  },
 ): Promise<ImageComparison> {
   // TODO: Implement image comparison
   throw new Error('Image comparison not yet implemented - Phase 2 in progress');
@@ -141,7 +122,7 @@ export async function compareImages(
  */
 export async function withPerformanceMonitoring<T>(
   fn: () => Promise<T>,
-  name: string
+  name: string,
 ): Promise<{ result: T; metrics: PerformanceMetric[] }> {
   // TODO: Implement performance monitoring
   throw new Error('Performance monitoring not yet implemented - Phase 2 in progress');
@@ -153,10 +134,7 @@ export async function withPerformanceMonitoring<T>(
  * @param fn Function to retry
  * @param config Retry configuration
  */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  config: RetryConfig
-): Promise<T> {
+export async function withRetry<T>(fn: () => Promise<T>, config: RetryConfig): Promise<T> {
   let lastError: Error;
   let delay = config.delayMs;
 
@@ -178,7 +156,7 @@ export async function withRetry<T>(
 
       // Wait before retry
       if (delay > 0) {
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise((resolve) => setTimeout(resolve, delay));
         delay = Math.min(delay * config.backoffMultiplier, config.maxDelayMs);
       }
     }

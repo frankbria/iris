@@ -18,7 +18,11 @@ const ExecuteBrowserActionParams = z.object({
   instruction: z.string().optional(),
   actions: z.array(z.any()).optional(),
   // only http(s) is navigable — file:/data: schemes are rejected here
-  url: z.string().url().refine((u) => /^https?:$/.test(new URL(u).protocol)).optional(),
+  url: z
+    .string()
+    .url()
+    .refine((u) => /^https?:$/.test(new URL(u).protocol))
+    .optional(),
 });
 
 export interface JsonRpcResponse {
@@ -50,7 +54,7 @@ export interface BrowserStatus {
  */
 export function startServer(
   port: number,
-  options?: { sessionTimeout?: number; host?: string; allowedOrigins?: string[] }
+  options?: { sessionTimeout?: number; host?: string; allowedOrigins?: string[] },
 ): WebSocketServer {
   const host = options?.host ?? '127.0.0.1';
   const wss = new WebSocketServer({ port, host });
@@ -58,14 +62,17 @@ export function startServer(
   const sessionTimeout = options?.sessionTimeout || 30 * 60 * 1000; // 30 minutes default
 
   // Cleanup inactive sessions periodically
-  const cleanupInterval = setInterval(() => {
-    const now = Date.now();
-    for (const [ws, session] of sessions.entries()) {
-      if (now - session.lastActivity > sessionTimeout) {
-        cleanupSession(ws, sessions);
+  const cleanupInterval = setInterval(
+    () => {
+      const now = Date.now();
+      for (const [ws, session] of sessions.entries()) {
+        if (now - session.lastActivity > sessionTimeout) {
+          cleanupSession(ws, sessions);
+        }
       }
-    }
-  }, 5 * 60 * 1000); // Check every 5 minutes
+    },
+    5 * 60 * 1000,
+  ); // Check every 5 minutes
 
   wss.on('connection', (ws, request) => {
     // Reject cross-site WebSocket hijacking: a browser page connecting to
@@ -106,7 +113,7 @@ export function startServer(
             res.result = {
               success: true,
               message: 'Browser launched successfully',
-              sessionId: getSessionId(ws)
+              sessionId: getSessionId(ws),
             };
             break;
           }
@@ -137,7 +144,10 @@ export function startServer(
             const session = sessions.get(ws);
 
             if (!session) {
-              throw { code: -32000, message: 'No active browser session. Call launchBrowser first.' };
+              throw {
+                code: -32000,
+                message: 'No active browser session. Call launchBrowser first.',
+              };
             }
 
             const result = await executeBrowserActions(session, instruction, actions, url);
@@ -162,7 +172,7 @@ export function startServer(
         res.error = {
           code: err.code || -32000,
           message: err.message || 'Server error',
-          data: err.data
+          data: err.data,
         };
       }
 
@@ -192,7 +202,9 @@ export function startServer(
 /**
  * Create a new browser session with ActionExecutor
  */
-async function createBrowserSession(browserOptions?: ActionExecutorOptions): Promise<BrowserSession> {
+async function createBrowserSession(
+  browserOptions?: ActionExecutorOptions,
+): Promise<BrowserSession> {
   const executor = new ActionExecutor(browserOptions);
 
   const session: BrowserSession = {
@@ -212,7 +224,7 @@ async function executeBrowserActions(
   session: BrowserSession,
   instruction?: string,
   actions?: Action[],
-  url?: string
+  url?: string,
 ): Promise<{
   success: boolean;
   results: ExecutionResult[];
@@ -247,27 +259,26 @@ async function executeBrowserActions(
         success: false,
         results: [],
         translationResult,
-        error: 'No actions to execute'
+        error: 'No actions to execute',
       };
     }
 
     // Execute the actions
     const results = await session.executor.executeActions(actionsToExecute, session.page);
 
-    const success = results.every(result => result.success);
+    const success = results.every((result) => result.success);
 
     return {
       success,
       results,
       translationResult,
-      error: success ? undefined : 'Some actions failed'
+      error: success ? undefined : 'Some actions failed',
     };
-
   } catch (error) {
     return {
       success: false,
       results: [],
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
 }
@@ -280,14 +291,14 @@ async function getBrowserSessionStatus(session?: BrowserSession): Promise<Browse
     return {
       isActive: false,
       hasPage: false,
-      lastActivity: 0
+      lastActivity: 0,
     };
   }
 
   const status: BrowserStatus = {
     isActive: session.isActive,
     hasPage: session.page !== null,
-    lastActivity: session.lastActivity
+    lastActivity: session.lastActivity,
   };
 
   // Get page context if available
@@ -296,7 +307,7 @@ async function getBrowserSessionStatus(session?: BrowserSession): Promise<Browse
       const context = await session.executor.getPageContext(session.page);
       status.context = {
         url: context.url,
-        title: context.title
+        title: context.title,
       };
     } catch (error) {
       // Context retrieval failed, but status is still valid
@@ -309,7 +320,10 @@ async function getBrowserSessionStatus(session?: BrowserSession): Promise<Browse
 /**
  * Clean up a browser session
  */
-async function cleanupSession(ws: WebSocket, sessions: Map<WebSocket, BrowserSession>): Promise<void> {
+async function cleanupSession(
+  ws: WebSocket,
+  sessions: Map<WebSocket, BrowserSession>,
+): Promise<void> {
   const session = sessions.get(ws);
   if (session) {
     try {

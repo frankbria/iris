@@ -74,8 +74,8 @@ export class AxeRunner {
           target: node.target || [],
           html: node.html || '',
           failureSummary: node.failureSummary,
-          element: node.target?.[0]
-        }))
+          element: node.target?.[0],
+        })),
       }));
 
       // Transform passes
@@ -84,8 +84,8 @@ export class AxeRunner {
         description: pass.description || '',
         nodes: pass.nodes.map((node: any) => ({
           target: node.target || [],
-          html: node.html || ''
-        }))
+          html: node.html || '',
+        })),
       }));
 
       // Transform incomplete
@@ -94,14 +94,14 @@ export class AxeRunner {
         description: inc.description || '',
         nodes: inc.nodes.map((node: any) => ({
           target: node.target || [],
-          html: node.html || ''
-        }))
+          html: node.html || '',
+        })),
       }));
 
       // Transform inapplicable
       const inapplicable = axeResults.inapplicable.map((inap: any) => ({
         id: inap.id,
-        description: inap.description || ''
+        description: inap.description || '',
       }));
 
       // Create summary
@@ -110,13 +110,13 @@ export class AxeRunner {
         violations: violations.length,
         passes: passes.length,
         incomplete: incomplete.length,
-        inapplicable: inapplicable.length
+        inapplicable: inapplicable.length,
       };
 
       // Get test runner info
       const testRunner = {
         name: axeResults.testEngine?.name || 'axe-core',
-        version: axeResults.testEngine?.version || '4.8.0'
+        version: axeResults.testEngine?.version || '4.8.0',
       };
 
       return {
@@ -129,21 +129,26 @@ export class AxeRunner {
         incomplete,
         inapplicable,
         summary,
-        testRunner
+        testRunner,
       };
-
     } catch (error) {
-      throw new Error(`Axe-core execution failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Axe-core execution failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
   /**
    * Run axe-core on specific element
    */
-  async runOnElement(page: Page, selector: string, testName: string, url: string): Promise<A11yResult> {
+  async runOnElement(
+    page: Page,
+    selector: string,
+    testName: string,
+    url: string,
+  ): Promise<A11yResult> {
     try {
-      let axeBuilder = new AxeBuilder({ page })
-        .include(selector);
+      let axeBuilder = new AxeBuilder({ page }).include(selector);
 
       if (this.config.tags.length > 0) {
         axeBuilder = axeBuilder.withTags(this.config.tags);
@@ -163,8 +168,8 @@ export class AxeRunner {
           target: node.target || [],
           html: node.html || '',
           failureSummary: node.failureSummary,
-          element: node.target?.[0]
-        }))
+          element: node.target?.[0],
+        })),
       }));
 
       return {
@@ -181,16 +186,17 @@ export class AxeRunner {
           violations: violations.length,
           passes: 0,
           incomplete: 0,
-          inapplicable: 0
+          inapplicable: 0,
         },
         testRunner: {
           name: 'axe-core',
-          version: '4.8.0'
-        }
+          version: '4.8.0',
+        },
       };
-
     } catch (error) {
-      throw new Error(`Axe-core element scan failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Axe-core element scan failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -202,10 +208,10 @@ export class AxeRunner {
       critical: 0,
       serious: 0,
       moderate: 0,
-      minor: 0
+      minor: 0,
     };
 
-    result.violations.forEach(violation => {
+    result.violations.forEach((violation) => {
       const impact = violation.impact || 'moderate';
       counts[impact] = (counts[impact] || 0) + 1;
     });

@@ -39,14 +39,14 @@ describe('visual-diff CLI command', () => {
               severityCounts: {
                 breaking: 0,
                 moderate: 0,
-                minor: 0
-              }
+                minor: 0,
+              },
             },
             results: [],
             reportPath: undefined,
-            duration: 1000
-          })
-        }))
+            duration: 1000,
+          }),
+        })),
       }));
 
       jest.resetModules();
@@ -56,7 +56,7 @@ describe('visual-diff CLI command', () => {
       await freshRunCli(['node', 'iris', 'visual-diff', '--pages', '/']);
 
       // Verify command executed (output captured)
-      const output = consoleLogSpy.mock.calls.map(call => call.join(' ')).join('\n');
+      const output = consoleLogSpy.mock.calls.map((call) => call.join(' ')).join('\n');
       expect(output).toContain('Starting visual regression testing');
     });
 
@@ -68,10 +68,10 @@ describe('visual-diff CLI command', () => {
           failed: 0,
           newBaselines: 0,
           overallStatus: 'passed',
-          severityCounts: {}
+          severityCounts: {},
         },
         results: [],
-        duration: 1000
+        duration: 1000,
       });
 
       jest.doMock('../src/visual/visual-runner', () => ({
@@ -84,7 +84,7 @@ describe('visual-diff CLI command', () => {
           expect(config.devices).toBeDefined();
           expect(config.output).toBeDefined();
           return { run: mockRun };
-        })
+        }),
       }));
 
       jest.resetModules();
@@ -105,10 +105,10 @@ describe('visual-diff CLI command', () => {
           failed: 0,
           newBaselines: 0,
           overallStatus: 'passed',
-          severityCounts: {}
+          severityCounts: {},
         },
         results: [],
-        duration: 1000
+        duration: 1000,
       });
 
       // Mock implementation
@@ -117,7 +117,7 @@ describe('visual-diff CLI command', () => {
           // Verify pages are parsed correctly
           expect(config.pages).toEqual(['/', '/about', '/contact']);
           return { run: mockRun };
-        })
+        }),
       }));
 
       // Need to clear module cache and re-import
@@ -137,17 +137,17 @@ describe('visual-diff CLI command', () => {
           failed: 0,
           newBaselines: 0,
           overallStatus: 'passed',
-          severityCounts: {}
+          severityCounts: {},
         },
         results: [],
-        duration: 1000
+        duration: 1000,
       });
 
       jest.doMock('../src/visual/visual-runner', () => ({
         VisualTestRunner: jest.fn().mockImplementation((config) => {
           expect(config.baseline.reference).toBe('develop');
           return { run: mockRun };
-        })
+        }),
       }));
 
       jest.resetModules();
@@ -166,17 +166,17 @@ describe('visual-diff CLI command', () => {
           failed: 0,
           newBaselines: 0,
           overallStatus: 'passed',
-          severityCounts: {}
+          severityCounts: {},
         },
         results: [],
-        duration: 1000
+        duration: 1000,
       });
 
       jest.doMock('../src/visual/visual-runner', () => ({
         VisualTestRunner: jest.fn().mockImplementation((config) => {
           expect(config.diff.semanticAnalysis).toBe(true);
           return { run: mockRun };
-        })
+        }),
       }));
 
       jest.resetModules();
@@ -195,17 +195,17 @@ describe('visual-diff CLI command', () => {
           failed: 0,
           newBaselines: 0,
           overallStatus: 'passed',
-          severityCounts: {}
+          severityCounts: {},
         },
         results: [],
-        duration: 1000
+        duration: 1000,
       });
 
       jest.doMock('../src/visual/visual-runner', () => ({
         VisualTestRunner: jest.fn().mockImplementation((config) => {
           expect(config.diff.threshold).toBe(0.15);
           return { run: mockRun };
-        })
+        }),
       }));
 
       jest.resetModules();
@@ -228,12 +228,12 @@ describe('visual-diff CLI command', () => {
               failed: 0,
               newBaselines: 0,
               overallStatus: 'passed',
-              severityCounts: {}
+              severityCounts: {},
             },
             results: [],
-            duration: 1000
-          })
-        }))
+            duration: 1000,
+          }),
+        })),
       }));
 
       jest.resetModules();
@@ -258,13 +258,13 @@ describe('visual-diff CLI command', () => {
               severityCounts: {
                 breaking: 1,
                 moderate: 0,
-                minor: 0
-              }
+                minor: 0,
+              },
             },
             results: [],
-            duration: 1000
-          })
-        }))
+            duration: 1000,
+          }),
+        })),
       }));
 
       jest.resetModules();
@@ -282,8 +282,8 @@ describe('visual-diff CLI command', () => {
     it('should exit with 3 when command execution fails', async () => {
       jest.doMock('../src/visual/visual-runner', () => ({
         VisualTestRunner: jest.fn().mockImplementation(() => ({
-          run: jest.fn().mockRejectedValue(new Error('Browser launch failed'))
-        }))
+          run: jest.fn().mockRejectedValue(new Error('Browser launch failed')),
+        })),
       }));
 
       jest.resetModules();
@@ -313,14 +313,14 @@ describe('visual-diff CLI command', () => {
               severityCounts: {
                 breaking: 1,
                 moderate: 1,
-                minor: 0
-              }
+                minor: 0,
+              },
             },
             results: [],
             reportPath: '/path/to/report.html',
-            duration: 2500
-          })
-        }))
+            duration: 2500,
+          }),
+        })),
       }));
 
       jest.resetModules();
@@ -332,7 +332,7 @@ describe('visual-diff CLI command', () => {
         // May throw due to exit
       }
 
-      const output = consoleLogSpy.mock.calls.map(call => call.join(' ')).join('\n');
+      const output = consoleLogSpy.mock.calls.map((call) => call.join(' ')).join('\n');
       expect(output).toContain('Total comparisons: 5');
       expect(output).toContain('Passed: 3');
       expect(output).toContain('Failed: 2');
@@ -352,13 +352,13 @@ describe('visual-diff CLI command', () => {
               failed: 1,
               newBaselines: 0,
               overallStatus: 'failed',
-              severityCounts: { breaking: 1 }
+              severityCounts: { breaking: 1 },
             },
             results: [],
             reportPath,
-            duration: 1000
-          })
-        }))
+            duration: 1000,
+          }),
+        })),
       }));
 
       jest.resetModules();
@@ -370,7 +370,7 @@ describe('visual-diff CLI command', () => {
         // May throw
       }
 
-      const output = consoleLogSpy.mock.calls.map(call => call.join(' ')).join('\n');
+      const output = consoleLogSpy.mock.calls.map((call) => call.join(' ')).join('\n');
       expect(output).toContain(`Report generated: ${reportPath}`);
     });
   });
@@ -384,17 +384,17 @@ describe('visual-diff CLI command', () => {
           failed: 0,
           newBaselines: 0,
           overallStatus: 'passed',
-          severityCounts: {}
+          severityCounts: {},
         },
         results: [],
-        duration: 1000
+        duration: 1000,
       });
 
       jest.doMock('../src/visual/visual-runner', () => ({
         VisualTestRunner: jest.fn().mockImplementation((config) => {
           expect(config.capture.mask).toEqual(['.ad', '.popup', '.timestamp']);
           return { run: mockRun };
-        })
+        }),
       }));
 
       jest.resetModules();
@@ -413,17 +413,17 @@ describe('visual-diff CLI command', () => {
           failed: 0,
           newBaselines: 0,
           overallStatus: 'passed',
-          severityCounts: {}
+          severityCounts: {},
         },
         results: [],
-        duration: 3000
+        duration: 3000,
       });
 
       jest.doMock('../src/visual/visual-runner', () => ({
         VisualTestRunner: jest.fn().mockImplementation((config) => {
           expect(config.devices).toEqual(['desktop', 'mobile', 'tablet']);
           return { run: mockRun };
-        })
+        }),
       }));
 
       jest.resetModules();
@@ -442,17 +442,17 @@ describe('visual-diff CLI command', () => {
           failed: 0,
           newBaselines: 1,
           overallStatus: 'passed',
-          severityCounts: {}
+          severityCounts: {},
         },
         results: [],
-        duration: 1000
+        duration: 1000,
       });
 
       jest.doMock('../src/visual/visual-runner', () => ({
         VisualTestRunner: jest.fn().mockImplementation((config) => {
           expect(config.updateBaseline).toBe(true);
           return { run: mockRun };
-        })
+        }),
       }));
 
       jest.resetModules();

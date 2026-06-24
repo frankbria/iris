@@ -7,7 +7,7 @@ import {
   BaselineSaveResult,
   BaselineLoadResult,
   BaselineDeleteResult,
-  BaselineCleanupResult
+  BaselineCleanupResult,
 } from './types';
 
 /**
@@ -26,12 +26,12 @@ export class BaselineManager {
   async saveBaseline(
     testName: string,
     imageBuffer: Buffer,
-    metadata: BaselineMetadata
+    metadata: BaselineMetadata,
   ): Promise<BaselineSaveResult> {
     try {
       // Get current git information
-      const branch = metadata.gitBranch || await this.getCurrentBranch();
-      const commit = metadata.gitCommit || await this.getCurrentCommit();
+      const branch = metadata.gitBranch || (await this.getCurrentBranch());
+      const commit = metadata.gitCommit || (await this.getCurrentCommit());
 
       // Generate paths
       const imagePath = this.generateBaselinePath(testName, branch);
@@ -72,7 +72,7 @@ export class BaselineManager {
    */
   async loadBaseline(testName: string, branch?: string): Promise<BaselineLoadResult> {
     try {
-      const targetBranch = branch || await this.getCurrentBranch();
+      const targetBranch = branch || (await this.getCurrentBranch());
 
       // Try current branch first, then fallback to main
       const branches = targetBranch === 'main' ? ['main'] : [targetBranch, 'main'];
@@ -111,7 +111,7 @@ export class BaselineManager {
    */
   async getBaselineInfo(testName: string, branch?: string): Promise<BaselineInfo> {
     try {
-      const targetBranch = branch || await this.getCurrentBranch();
+      const targetBranch = branch || (await this.getCurrentBranch());
       const imagePath = this.generateBaselinePath(testName, targetBranch);
       const metadataPath = this.generateMetadataPath(testName, targetBranch);
 
@@ -148,7 +148,7 @@ export class BaselineManager {
    */
   async deleteBaseline(testName: string, branch?: string): Promise<BaselineDeleteResult> {
     try {
-      const targetBranch = branch || await this.getCurrentBranch();
+      const targetBranch = branch || (await this.getCurrentBranch());
       const imagePath = this.generateBaselinePath(testName, targetBranch);
       const metadataPath = this.generateMetadataPath(testName, targetBranch);
 
@@ -183,7 +183,7 @@ export class BaselineManager {
    */
   async listBaselines(branch?: string): Promise<string[]> {
     try {
-      const targetBranch = branch || await this.getCurrentBranch();
+      const targetBranch = branch || (await this.getCurrentBranch());
       const branchDir = path.join(this.baselineDir, targetBranch);
 
       if (!fs.existsSync(branchDir)) {
@@ -191,10 +191,10 @@ export class BaselineManager {
       }
 
       const files = fs.readdirSync(branchDir);
-      const imageFiles = files.filter(file => path.extname(file) === '.png');
+      const imageFiles = files.filter((file) => path.extname(file) === '.png');
 
       // Remove extension to get test names
-      return imageFiles.map(file => path.basename(file, '.png'));
+      return imageFiles.map((file) => path.basename(file, '.png'));
     } catch {
       return [];
     }
@@ -205,7 +205,7 @@ export class BaselineManager {
    */
   async cleanupOldBaselines(maxAgeDays: number, branch?: string): Promise<BaselineCleanupResult> {
     try {
-      const targetBranch = branch || await this.getCurrentBranch();
+      const targetBranch = branch || (await this.getCurrentBranch());
       const branchDir = path.join(this.baselineDir, targetBranch);
 
       if (!fs.existsSync(branchDir)) {

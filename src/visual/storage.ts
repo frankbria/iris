@@ -38,10 +38,7 @@ export class StorageManager {
    * Get the test directory path within a branch
    */
   getTestDirectory(branch: string, testName: string): string {
-    return path.join(
-      this.getBaselineDirectory(branch),
-      this.sanitizeTestName(testName)
-    );
+    return path.join(this.getBaselineDirectory(branch), this.sanitizeTestName(testName));
   }
 
   /**
@@ -63,7 +60,7 @@ export class StorageManager {
   async saveMetadata(
     branch: string,
     testName: string,
-    metadata: Record<string, any>
+    metadata: Record<string, any>,
   ): Promise<string> {
     const testDir = await this.ensureTestDirectory(branch, testName);
     const metadataPath = path.join(testDir, this.metadataFileName);
@@ -74,11 +71,10 @@ export class StorageManager {
       updatedAt: Date.now(),
     };
 
-    fs.writeFileSync(
-      metadataPath,
-      JSON.stringify(metadataWithTimestamp, null, 2),
-      { encoding: 'utf-8', mode: 0o644 }
-    );
+    fs.writeFileSync(metadataPath, JSON.stringify(metadataWithTimestamp, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o644,
+    });
 
     return metadataPath;
   }
@@ -86,10 +82,7 @@ export class StorageManager {
   /**
    * Load metadata.json file for a test baseline
    */
-  async loadMetadata(
-    branch: string,
-    testName: string
-  ): Promise<Record<string, any> | null> {
+  async loadMetadata(branch: string, testName: string): Promise<Record<string, any> | null> {
     const testDir = this.getTestDirectory(branch, testName);
     const metadataPath = path.join(testDir, this.metadataFileName);
 
@@ -113,7 +106,7 @@ export class StorageManager {
       format?: 'png' | 'jpeg' | 'webp';
       compression?: number;
       autoOptimize?: boolean;
-    } = {}
+    } = {},
   ): Promise<{
     path: string;
     hash: string;
@@ -131,10 +124,12 @@ export class StorageManager {
       const originalSize = imageBuffer.length;
 
       // Use JPEG for photos (larger images), WebP for graphics
-      if (originalSize > 1024 * 1024) { // > 1MB, likely a photo
+      if (originalSize > 1024 * 1024) {
+        // > 1MB, likely a photo
         format = 'jpeg';
         quality = 85; // More aggressive compression for large images
-      } else if (originalSize > 500 * 1024) { // > 500KB
+      } else if (originalSize > 500 * 1024) {
+        // > 500KB
         format = 'webp';
         quality = 88;
       } else {
@@ -235,10 +230,7 @@ export class StorageManager {
    * Generate SHA-256 hash of image content for deduplication
    */
   generateImageHash(imageBuffer: Buffer): string {
-    return crypto
-      .createHash('sha256')
-      .update(imageBuffer)
-      .digest('hex');
+    return crypto.createHash('sha256').update(imageBuffer).digest('hex');
   }
 
   /**
@@ -259,9 +251,10 @@ export class StorageManager {
       return [];
     }
 
-    return fs.readdirSync(branchDir, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
-      .map(dirent => dirent.name);
+    return fs
+      .readdirSync(branchDir, { withFileTypes: true })
+      .filter((dirent) => dirent.isDirectory())
+      .map((dirent) => dirent.name);
   }
 
   /**
@@ -293,22 +286,24 @@ export class StorageManager {
     errors: string[];
   }> {
     const result = { deleted: 0, errors: [] as string[] };
-    const cutoffTime = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
+    const cutoffTime = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
 
     if (!fs.existsSync(this.baseDir)) {
       return result;
     }
 
     // Iterate through all branches
-    const branches = fs.readdirSync(this.baseDir, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
-      .map(dirent => dirent.name);
+    const branches = fs
+      .readdirSync(this.baseDir, { withFileTypes: true })
+      .filter((dirent) => dirent.isDirectory())
+      .map((dirent) => dirent.name);
 
     for (const branch of branches) {
       const branchDir = this.getBaselineDirectory(branch);
-      const tests = fs.readdirSync(branchDir, { withFileTypes: true })
-        .filter(dirent => dirent.isDirectory())
-        .map(dirent => dirent.name);
+      const tests = fs
+        .readdirSync(branchDir, { withFileTypes: true })
+        .filter((dirent) => dirent.isDirectory())
+        .map((dirent) => dirent.name);
 
       for (const testName of tests) {
         try {
@@ -320,7 +315,7 @@ export class StorageManager {
           }
         } catch (error) {
           result.errors.push(
-            `Error cleaning ${branch}/${testName}: ${error instanceof Error ? error.message : 'Unknown error'}`
+            `Error cleaning ${branch}/${testName}: ${error instanceof Error ? error.message : 'Unknown error'}`,
           );
         }
       }
@@ -347,15 +342,17 @@ export class StorageManager {
       return stats;
     }
 
-    const branches = fs.readdirSync(this.baseDir, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
-      .map(dirent => dirent.name);
+    const branches = fs
+      .readdirSync(this.baseDir, { withFileTypes: true })
+      .filter((dirent) => dirent.isDirectory())
+      .map((dirent) => dirent.name);
 
     for (const branch of branches) {
       const branchDir = this.getBaselineDirectory(branch);
-      const tests = fs.readdirSync(branchDir, { withFileTypes: true })
-        .filter(dirent => dirent.isDirectory())
-        .map(dirent => dirent.name);
+      const tests = fs
+        .readdirSync(branchDir, { withFileTypes: true })
+        .filter((dirent) => dirent.isDirectory())
+        .map((dirent) => dirent.name);
 
       let branchSize = 0;
 
@@ -394,7 +391,7 @@ export class StorageManager {
   async convertImageFormat(
     imageBuffer: Buffer,
     targetFormat: 'png' | 'jpeg' | 'webp',
-    quality: number = 90
+    quality: number = 90,
   ): Promise<Buffer> {
     let sharpInstance = sharp(imageBuffer);
 
@@ -446,11 +443,13 @@ export class StorageManager {
     const normalized = path.normalize(resolved);
 
     // Must be within base directory or test directory
-    return normalized.startsWith(this.baseDir) &&
-           (normalized.endsWith('.png') ||
-            normalized.endsWith('.jpeg') ||
-            normalized.endsWith('.jpg') ||
-            normalized.endsWith('.webp'));
+    return (
+      normalized.startsWith(this.baseDir) &&
+      (normalized.endsWith('.png') ||
+        normalized.endsWith('.jpeg') ||
+        normalized.endsWith('.jpg') ||
+        normalized.endsWith('.webp'))
+    );
   }
 
   /**

@@ -1,15 +1,7 @@
 import { IrisConfig } from '../config';
 import { AIClient, AIVisionClient } from './base';
-import {
-  OpenAITextClient,
-  AnthropicTextClient,
-  OllamaTextClient,
-} from './text';
-import {
-  OpenAIVisionClient,
-  AnthropicVisionClient,
-  OllamaVisionClient,
-} from './vision';
+import { OpenAITextClient, AnthropicTextClient, OllamaTextClient } from './text';
+import { OpenAIVisionClient, AnthropicVisionClient, OllamaVisionClient } from './vision';
 
 /**
  * Client type - text for instruction translation, vision for visual analysis
@@ -59,9 +51,7 @@ export class AIClientFactory {
       case 'ollama':
         return new OllamaVisionClient(config.ai);
       default:
-        throw new Error(
-          `Unsupported AI provider for vision: ${config.ai.provider}`
-        );
+        throw new Error(`Unsupported AI provider for vision: ${config.ai.provider}`);
     }
   }
 

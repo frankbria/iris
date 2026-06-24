@@ -122,7 +122,7 @@ describe('StorageManager', () => {
       const first = await storage.loadMetadata('main', 'test');
 
       // Wait a bit to ensure different timestamp
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       await storage.saveMetadata('main', 'test', { ...metadata, updated: true });
       const second = await storage.loadMetadata('main', 'test');
@@ -139,8 +139,8 @@ describe('StorageManager', () => {
           width,
           height,
           channels: 3,
-          background: { r: 255, g: 0, b: 0 }
-        }
+          background: { r: 255, g: 0, b: 0 },
+        },
       })
         .png()
         .toBuffer();
@@ -163,7 +163,7 @@ describe('StorageManager', () => {
 
       const result = await storage.saveImage('main', 'test', imageBuffer, {
         format: 'png',
-        compression: 9
+        compression: 9,
       });
 
       expect(result.format).toBe('png');
@@ -175,7 +175,7 @@ describe('StorageManager', () => {
 
       const result = await storage.saveImage('main', 'test', imageBuffer, {
         format: 'jpeg',
-        quality: 80
+        quality: 80,
       });
 
       expect(result.format).toBe('jpeg');
@@ -187,7 +187,7 @@ describe('StorageManager', () => {
 
       const result = await storage.saveImage('main', 'test', imageBuffer, {
         format: 'webp',
-        quality: 85
+        quality: 85,
       });
 
       expect(result.format).toBe('webp');
@@ -343,14 +343,14 @@ describe('StorageManager', () => {
   describe('Baseline Cleanup', () => {
     it('should cleanup old baselines based on age', async () => {
       // Create old baseline with explicitly set old updatedAt
-      const oldTimestamp = Date.now() - (31 * 24 * 60 * 60 * 1000); // 31 days ago
+      const oldTimestamp = Date.now() - 31 * 24 * 60 * 60 * 1000; // 31 days ago
       const testDir = await storage.ensureTestDirectory('main', 'old-test');
       const metadataPath = path.join(testDir, 'metadata.json');
 
       const oldMetadata = {
         name: 'old-test',
         createdAt: oldTimestamp,
-        updatedAt: oldTimestamp
+        updatedAt: oldTimestamp,
       };
 
       fs.writeFileSync(metadataPath, JSON.stringify(oldMetadata, null, 2));
@@ -393,8 +393,10 @@ describe('StorageManager', () => {
   describe('Storage Statistics', () => {
     it('should get storage statistics', async () => {
       const image = await sharp({
-        create: { width: 100, height: 100, channels: 3, background: { r: 255, g: 0, b: 0 } }
-      }).png().toBuffer();
+        create: { width: 100, height: 100, channels: 3, background: { r: 255, g: 0, b: 0 } },
+      })
+        .png()
+        .toBuffer();
 
       await storage.saveImage('main', 'test1', image);
       await storage.saveImage('main', 'test2', image);
@@ -448,7 +450,7 @@ describe('StorageManager', () => {
       const promises = [
         storage.ensureTestDirectory('main', 'test'),
         storage.ensureTestDirectory('main', 'test'),
-        storage.ensureTestDirectory('main', 'test')
+        storage.ensureTestDirectory('main', 'test'),
       ];
 
       await expect(Promise.all(promises)).resolves.not.toThrow();

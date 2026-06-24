@@ -28,17 +28,19 @@ jest.mock('@axe-core/playwright', () => {
             id: 'color-contrast',
             impact: 'serious',
             tags: ['wcag2aa', 'wcag143'],
-            description: 'Ensures the contrast between foreground and background colors meets WCAG 2 AA contrast ratio thresholds',
+            description:
+              'Ensures the contrast between foreground and background colors meets WCAG 2 AA contrast ratio thresholds',
             help: 'Elements must have sufficient color contrast',
             helpUrl: 'https://dequeuniversity.com/rules/axe/4.8/color-contrast',
             nodes: [
               {
                 target: ['.low-contrast-text'],
                 html: '<p class="low-contrast-text">Low contrast text</p>',
-                failureSummary: 'Fix any of the following:\n  Element has insufficient color contrast'
-              }
-            ]
-          }
+                failureSummary:
+                  'Fix any of the following:\n  Element has insufficient color contrast',
+              },
+            ],
+          },
         ],
         passes: [
           {
@@ -47,24 +49,24 @@ jest.mock('@axe-core/playwright', () => {
             nodes: [
               {
                 target: ['html'],
-                html: '<title>Test Page</title>'
-              }
-            ]
-          }
+                html: '<title>Test Page</title>',
+              },
+            ],
+          },
         ],
         incomplete: [],
         inapplicable: [
           {
             id: 'audio-caption',
-            description: 'Ensures <audio> elements have captions'
-          }
+            description: 'Ensures <audio> elements have captions',
+          },
         ],
         testEngine: {
           name: 'axe-core',
-          version: '4.8.0'
-        }
-      })
-    }))
+          version: '4.8.0',
+        },
+      }),
+    })),
   };
 });
 
@@ -118,31 +120,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -178,31 +180,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: true,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -233,31 +235,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -280,40 +282,42 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
       const result = await runner.run();
 
       expect(result.results[0].axeResult.testRunner.name).toBe('axe-core');
-      expect(result.results[0].axeResult.violations.every(v =>
-        v.tags.some(tag => tag.includes('wcag2'))
-      )).toBeTruthy();
+      expect(
+        result.results[0].axeResult.violations.every((v) =>
+          v.tags.some((tag) => tag.includes('wcag2')),
+        ),
+      ).toBeTruthy();
     });
   });
 
@@ -340,31 +344,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: true,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -398,31 +402,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: true,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -456,31 +460,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: true,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -512,31 +516,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: true,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -565,7 +569,7 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
@@ -577,26 +581,26 @@ describe('Accessibility CLI E2E Tests', () => {
               name: 'Search shortcut',
               keys: ['Control', 'k'],
               expectedBehavior: 'Focus search input',
-              validator: '() => document.activeElement?.id === "search"'
-            }
-          ]
+              validator: '() => document.activeElement?.id === "search"',
+            },
+          ],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -630,31 +634,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: true,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -695,31 +699,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: true,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -752,31 +756,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: true,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -808,31 +812,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: true,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -845,7 +849,8 @@ describe('Accessibility CLI E2E Tests', () => {
 
   describe('Report Generation', () => {
     it('should generate JSON report with summary and results', async () => {
-      const html = '<html><head><title>Report Test</title></head><body><h1>Content</h1></body></html>';
+      const html =
+        '<html><head><title>Report Test</title></head><body><h1>Content</h1></body></html>';
       const reportPath = path.join(tempDir, 'a11y-report.json');
 
       const config: AccessibilityRunnerConfig = {
@@ -856,35 +861,35 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: true,
           groupByImpact: true,
-          includeScreenshots: false
+          includeScreenshots: false,
         },
         output: {
           format: 'json',
-          path: reportPath
-        }
+          path: reportPath,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -899,7 +904,8 @@ describe('Accessibility CLI E2E Tests', () => {
     });
 
     it('should calculate accessibility score correctly', async () => {
-      const html = '<html><head><title>Score Test</title></head><body><h1>Content</h1></body></html>';
+      const html =
+        '<html><head><title>Score Test</title></head><body><h1>Content</h1></body></html>';
 
       const config: AccessibilityRunnerConfig = {
         pages: ['data:text/html,' + encodeURIComponent(html)],
@@ -909,31 +915,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: true,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -953,7 +959,7 @@ describe('Accessibility CLI E2E Tests', () => {
       const config: AccessibilityRunnerConfig = {
         pages: [
           'data:text/html,' + encodeURIComponent(page1),
-          'data:text/html,' + encodeURIComponent(page2)
+          'data:text/html,' + encodeURIComponent(page2),
         ],
         axe: {
           rules: {},
@@ -961,31 +967,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -998,7 +1004,8 @@ describe('Accessibility CLI E2E Tests', () => {
 
   describe('Failure Threshold', () => {
     it('should respect failure threshold for critical violations', async () => {
-      const html = '<html><head><title>Threshold Test</title></head><body><div>Content</div></body></html>';
+      const html =
+        '<html><head><title>Threshold Test</title></head><body><div>Content</div></body></html>';
 
       const config: AccessibilityRunnerConfig = {
         pages: ['data:text/html,' + encodeURIComponent(html)],
@@ -1008,33 +1015,33 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true, // Fail on critical only
           serious: false,
           moderate: false,
-          minor: false
+          minor: false,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -1045,7 +1052,8 @@ describe('Accessibility CLI E2E Tests', () => {
     });
 
     it('should fail when serious violations exceed threshold', async () => {
-      const html = '<html><head><title>Serious Test</title></head><body><div>Content</div></body></html>';
+      const html =
+        '<html><head><title>Serious Test</title></head><body><div>Content</div></body></html>';
 
       const config: AccessibilityRunnerConfig = {
         pages: ['data:text/html,' + encodeURIComponent(html)],
@@ -1055,31 +1063,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: false,
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: false,
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
+          simulateScreenReader: false,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: false,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -1125,31 +1133,31 @@ describe('Accessibility CLI E2E Tests', () => {
           include: [],
           exclude: [],
           disableRules: [],
-          timeout: 30000
+          timeout: 30000,
         },
         keyboard: {
           testFocusOrder: true,
           testTrapDetection: true,
           testArrowKeyNavigation: true,
           testEscapeHandling: true,
-          customSequences: []
+          customSequences: [],
         },
         screenReader: {
           testAriaLabels: true,
           testLandmarkNavigation: true,
           testImageAltText: false,
           testHeadingStructure: true,
-          simulateScreenReader: true
+          simulateScreenReader: true,
         },
         failureThreshold: {
           critical: true,
-          serious: true
+          serious: true,
         },
         reporting: {
           includePassedTests: true,
           groupByImpact: true,
-          includeScreenshots: false
-        }
+          includeScreenshots: false,
+        },
       };
 
       const runner = new AccessibilityRunner(config);

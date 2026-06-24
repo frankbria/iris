@@ -27,7 +27,7 @@ export type {
   WcagPrinciple,
   ImpactLevel,
   WcagGuideline,
-  ComplianceStatus
+  ComplianceStatus,
 } from './types';
 
 // Import types for function signatures
@@ -39,16 +39,11 @@ import type {
   KeyboardNavigationTest,
   ScreenReaderTest,
   WcagLevel,
-  ComplianceStatus
+  ComplianceStatus,
 } from './types';
 
 // Error classes
-export {
-  A11yTestError,
-  AxeRunnerError,
-  KeyboardNavigationError,
-  ScreenReaderError
-} from './types';
+export { A11yTestError, AxeRunnerError, KeyboardNavigationError, ScreenReaderError } from './types';
 
 // Zod schemas for validation
 export {
@@ -57,7 +52,7 @@ export {
   A11yResultSchema,
   KeyboardTestResultSchema,
   ScreenReaderTestResultSchema,
-  A11yReportSchema
+  A11yReportSchema,
 } from './types';
 
 // Core testing engines
@@ -66,22 +61,16 @@ export { KeyboardTester } from './keyboard-tester';
 export { AccessibilityRunner } from './a11y-runner';
 
 // Export additional types from runners
-export type {
-  AxeConfig,
-  AxeRunOptions
-} from './axe-integration';
+export type { AxeConfig, AxeRunOptions } from './axe-integration';
 
 export type {
   KeyboardTestConfig,
   FocusableElement,
   FocusTrap,
-  KeyboardInteraction
+  KeyboardInteraction,
 } from './keyboard-tester';
 
-export type {
-  AccessibilityRunnerConfig,
-  AccessibilityTestResult
-} from './a11y-runner';
+export type { AccessibilityRunnerConfig, AccessibilityTestResult } from './a11y-runner';
 
 /**
  * Run comprehensive accessibility test suite.
@@ -117,7 +106,7 @@ export async function runA11yTest(config: A11yTestConfig): Promise<A11yResult> {
  */
 export async function runKeyboardTests(
   config: A11yTestConfig,
-  tests: KeyboardNavigationTest[]
+  tests: KeyboardNavigationTest[],
 ): Promise<KeyboardTestResult> {
   // TODO: Implement keyboard navigation testing
   throw new Error('Keyboard navigation testing not yet implemented - Phase 2 in progress');
@@ -131,7 +120,7 @@ export async function runKeyboardTests(
  */
 export async function runScreenReaderTests(
   config: A11yTestConfig,
-  tests: ScreenReaderTest[]
+  tests: ScreenReaderTest[],
 ): Promise<ScreenReaderTestResult> {
   // TODO: Implement screen reader simulation testing
   throw new Error('Screen reader simulation testing not yet implemented - Phase 2 in progress');
@@ -151,7 +140,7 @@ export async function generateA11yReport(
     screenReaderResults: ScreenReaderTestResult[];
   },
   format: 'html' | 'json' | 'junit' = 'html',
-  outputPath?: string
+  outputPath?: string,
 ): Promise<string> {
   // TODO: Implement accessibility report generation
   throw new Error('Accessibility report generation not yet implemented - Phase 2 in progress');
@@ -165,7 +154,7 @@ export async function generateA11yReport(
  */
 export async function checkWcagCompliance(
   url: string,
-  level: WcagLevel = 'AA'
+  level: WcagLevel = 'AA',
 ): Promise<ComplianceStatus> {
   // TODO: Implement WCAG compliance checking
   throw new Error('WCAG compliance checking not yet implemented - Phase 2 in progress');

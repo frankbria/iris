@@ -27,17 +27,25 @@ export class MigrationRunner {
     // Ensure Phase 1 baseline is recorded
     const currentVersion = this.getCurrentVersion();
     if (!currentVersion || currentVersion === '000') {
-      this.db.prepare(`
+      this.db
+        .prepare(
+          `
         INSERT OR REPLACE INTO schema_version (version, description, applied_at)
         VALUES (?, ?, ?)
-      `).run('001', 'Phase 1 Foundation - CLI, Browser, AI Integration', Date.now());
+      `,
+        )
+        .run('001', 'Phase 1 Foundation - CLI, Browser, AI Integration', Date.now());
     }
   }
 
   getCurrentVersion(): string {
-    const result = this.db.prepare(`
+    const result = this.db
+      .prepare(
+        `
       SELECT version FROM schema_version ORDER BY version DESC LIMIT 1
-    `).get() as { version: string } | undefined;
+    `,
+      )
+      .get() as { version: string } | undefined;
     return result?.version || '000';
   }
 
@@ -51,17 +59,24 @@ export class MigrationRunner {
 
         const transaction = this.db.transaction(() => {
           migration.up(this.db);
-          this.db.prepare(`
+          this.db
+            .prepare(
+              `
             INSERT INTO schema_version (version, description, applied_at)
             VALUES (?, ?, ?)
-          `).run(migration.version, migration.description, Date.now());
+          `,
+            )
+            .run(migration.version, migration.description, Date.now());
         });
 
         try {
           transaction();
           logger.info(`Migration ${migration.version} completed successfully`);
         } catch (error) {
-          logger.error(`Migration ${migration.version} failed`, error instanceof Error ? error : new Error(String(error)));
+          logger.error(
+            `Migration ${migration.version} failed`,
+            error instanceof Error ? error : new Error(String(error)),
+          );
           throw error;
         }
       }
@@ -273,16 +288,32 @@ export class MigrationRunner {
           `);
 
           // Create indexes for better query performance
-          db.exec(`CREATE INDEX IF NOT EXISTS idx_visual_baselines_branch ON visual_baselines (branch)`);
-          db.exec(`CREATE INDEX IF NOT EXISTS idx_visual_baselines_test_name ON visual_baselines (test_name)`);
-          db.exec(`CREATE INDEX IF NOT EXISTS idx_visual_comparisons_run_id ON visual_comparisons (run_id)`);
-          db.exec(`CREATE INDEX IF NOT EXISTS idx_visual_comparisons_passed ON visual_comparisons (passed)`);
+          db.exec(
+            `CREATE INDEX IF NOT EXISTS idx_visual_baselines_branch ON visual_baselines (branch)`,
+          );
+          db.exec(
+            `CREATE INDEX IF NOT EXISTS idx_visual_baselines_test_name ON visual_baselines (test_name)`,
+          );
+          db.exec(
+            `CREATE INDEX IF NOT EXISTS idx_visual_comparisons_run_id ON visual_comparisons (run_id)`,
+          );
+          db.exec(
+            `CREATE INDEX IF NOT EXISTS idx_visual_comparisons_passed ON visual_comparisons (passed)`,
+          );
           db.exec(`CREATE INDEX IF NOT EXISTS idx_a11y_results_run_id ON a11y_results (run_id)`);
           db.exec(`CREATE INDEX IF NOT EXISTS idx_a11y_results_passed ON a11y_results (passed)`);
-          db.exec(`CREATE INDEX IF NOT EXISTS idx_performance_metrics_run_id ON performance_metrics (run_id)`);
-          db.exec(`CREATE INDEX IF NOT EXISTS idx_test_results_visual_enabled ON test_results (visual_enabled)`);
-          db.exec(`CREATE INDEX IF NOT EXISTS idx_test_results_a11y_enabled ON test_results (a11y_enabled)`);
-          db.exec(`CREATE INDEX IF NOT EXISTS idx_test_results_git_branch ON test_results (git_branch)`);
+          db.exec(
+            `CREATE INDEX IF NOT EXISTS idx_performance_metrics_run_id ON performance_metrics (run_id)`,
+          );
+          db.exec(
+            `CREATE INDEX IF NOT EXISTS idx_test_results_visual_enabled ON test_results (visual_enabled)`,
+          );
+          db.exec(
+            `CREATE INDEX IF NOT EXISTS idx_test_results_a11y_enabled ON test_results (a11y_enabled)`,
+          );
+          db.exec(
+            `CREATE INDEX IF NOT EXISTS idx_test_results_git_branch ON test_results (git_branch)`,
+          );
         },
         down: (db: Database.Database) => {
           // Rollback Phase 2 tables (destructive operation)
@@ -297,9 +328,11 @@ export class MigrationRunner {
 
           // Note: Cannot easily remove columns from SQLite without recreating table
           // This would be destructive to Phase 1 data, so we leave the columns
-          logger.warn('Phase 2 rollback: Cannot remove added columns from test_results table without data loss');
-        }
-      }
+          logger.warn(
+            'Phase 2 rollback: Cannot remove added columns from test_results table without data loss',
+          );
+        },
+      },
     ];
   }
 }
@@ -313,7 +346,10 @@ export async function applyPhase2Migration(dbPath: string): Promise<void> {
     await migrationRunner.runMigrations();
     logger.info('Phase 2 database migration completed successfully');
   } catch (error) {
-    logger.error('Phase 2 database migration failed', error instanceof Error ? error : new Error(String(error)));
+    logger.error(
+      'Phase 2 database migration failed',
+      error instanceof Error ? error : new Error(String(error)),
+    );
     throw error;
   } finally {
     db.close();
@@ -327,9 +363,9 @@ export const Phase2Migration: Migration = {
   up: (db: Database.Database) => {
     const migrationRunner = new MigrationRunner(db);
     const migrations = migrationRunner['getMigrations']();
-    const phase2Migration = migrations.find(m => m.version === '002');
+    const phase2Migration = migrations.find((m) => m.version === '002');
     if (phase2Migration) {
       phase2Migration.up(db);
     }
-  }
+  },
 };

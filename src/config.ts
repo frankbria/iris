@@ -106,15 +106,21 @@ export function validateConfig(config: IrisConfig): string[] {
   const errors: string[] = [];
 
   if (config.ai.provider === 'openai' && !config.ai.apiKey) {
-    errors.push('OpenAI API key is required. Set OPENAI_API_KEY environment variable or configure in ~/.iris/config.json');
+    errors.push(
+      'OpenAI API key is required. Set OPENAI_API_KEY environment variable or configure in ~/.iris/config.json',
+    );
   }
 
   if (config.ai.provider === 'anthropic' && !config.ai.apiKey) {
-    errors.push('Anthropic API key is required. Set ANTHROPIC_API_KEY environment variable or configure in ~/.iris/config.json');
+    errors.push(
+      'Anthropic API key is required. Set ANTHROPIC_API_KEY environment variable or configure in ~/.iris/config.json',
+    );
   }
 
   if (config.ai.provider === 'ollama' && !config.ai.endpoint) {
-    errors.push('Ollama endpoint is required. Set OLLAMA_ENDPOINT environment variable or configure in ~/.iris/config.json');
+    errors.push(
+      'Ollama endpoint is required. Set OLLAMA_ENDPOINT environment variable or configure in ~/.iris/config.json',
+    );
   }
 
   if (config.watch.debounceMs < 100) {

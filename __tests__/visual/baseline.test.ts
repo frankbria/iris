@@ -35,7 +35,9 @@ describe('BaselineManager', () => {
     // Setup path mock
     mockPath.join.mockImplementation((...args) => args.join('/'));
     mockPath.dirname.mockImplementation((p) => p.split('/').slice(0, -1).join('/'));
-    mockPath.extname.mockImplementation((file) => file.endsWith('.png') ? '.png' : file.endsWith('.json') ? '.json' : '.txt');
+    mockPath.extname.mockImplementation((file) =>
+      file.endsWith('.png') ? '.png' : file.endsWith('.json') ? '.json' : '.txt',
+    );
     mockPath.basename.mockImplementation((file, ext) => {
       const name = file.split('/').pop() || '';
       return ext ? name.replace(ext, '') : name;
@@ -116,10 +118,9 @@ describe('BaselineManager', () => {
 
       // Assert
       expect(result.success).toBe(true);
-      expect(mockFs.mkdirSync).toHaveBeenCalledWith(
-        expect.stringContaining('feature-branch'),
-        { recursive: true }
-      );
+      expect(mockFs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('feature-branch'), {
+        recursive: true,
+      });
     });
   });
 
@@ -235,7 +236,7 @@ describe('BaselineManager', () => {
       jest.spyOn(baselineManager, 'getCurrentBranch').mockResolvedValue('main');
 
       mockFs.existsSync
-        .mockReturnValueOnce(true)  // Image exists
+        .mockReturnValueOnce(true) // Image exists
         .mockReturnValueOnce(true); // Metadata exists
       mockFs.statSync.mockReturnValue(mockStats as any);
       mockFs.readFileSync.mockReturnValue(JSON.stringify(mockMetadata));
@@ -371,8 +372,8 @@ describe('BaselineManager', () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readdirSync.mockReturnValue(mockFiles as any);
       mockFs.statSync
-        .mockReturnValueOnce({ mtime: oldDate, isFile: () => true } as any)     // old-test.png
-        .mockReturnValueOnce({ mtime: oldDate, isFile: () => true } as any)     // old-test.json
+        .mockReturnValueOnce({ mtime: oldDate, isFile: () => true } as any) // old-test.png
+        .mockReturnValueOnce({ mtime: oldDate, isFile: () => true } as any) // old-test.json
         .mockReturnValueOnce({ mtime: recentDate, isFile: () => true } as any) // recent-test.png
         .mockReturnValueOnce({ mtime: recentDate, isFile: () => true } as any); // recent-test.json
 

@@ -38,9 +38,13 @@ describe('Database Migration', () => {
     it('should initialize schema versioning table', () => {
       const migrationRunner = new MigrationRunner(db);
 
-      const tables = db.prepare(`
+      const tables = db
+        .prepare(
+          `
         SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'
-      `).all() as Array<{ name: string }>;
+      `,
+        )
+        .all() as Array<{ name: string }>;
 
       expect(tables).toHaveLength(1);
       expect(tables[0].name).toBe('schema_version');
@@ -66,9 +70,14 @@ describe('Database Migration', () => {
       expect(migrationRunner.getCurrentVersion()).toBe('002');
 
       // Verify Phase 2 tables were created
-      const tables = db.prepare(`
+      const tables = db
+        .prepare(
+          `
         SELECT name FROM sqlite_master WHERE type='table' ORDER BY name
-      `).all().map((row: any) => row.name);
+      `,
+        )
+        .all()
+        .map((row: any) => row.name);
 
       const expectedTables = [
         'a11y_reports',
@@ -80,10 +89,10 @@ describe('Database Migration', () => {
         'test_results',
         'visual_baselines',
         'visual_comparisons',
-        'visual_reports'
+        'visual_reports',
       ];
 
-      expectedTables.forEach(tableName => {
+      expectedTables.forEach((tableName) => {
         expect(tables).toContain(tableName);
       });
     });
@@ -108,9 +117,14 @@ describe('Database Migration', () => {
       const migrationRunner = new MigrationRunner(db);
       await migrationRunner.runMigrations();
 
-      const indexes = db.prepare(`
+      const indexes = db
+        .prepare(
+          `
         SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'
-      `).all().map((row: any) => row.name);
+      `,
+        )
+        .all()
+        .map((row: any) => row.name);
 
       const expectedIndexes = [
         'idx_visual_baselines_branch',
@@ -122,10 +136,10 @@ describe('Database Migration', () => {
         'idx_performance_metrics_run_id',
         'idx_test_results_visual_enabled',
         'idx_test_results_a11y_enabled',
-        'idx_test_results_git_branch'
+        'idx_test_results_git_branch',
       ];
 
-      expectedIndexes.forEach(indexName => {
+      expectedIndexes.forEach((indexName) => {
         expect(indexes).toContain(indexName);
       });
     });
@@ -145,9 +159,7 @@ describe('Database Migration', () => {
       expect(migrationRunner.getCurrentVersion()).toBe('002');
 
       // Should not have run migration again
-      expect(consoleSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining('Running migration 002')
-      );
+      expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('Running migration 002'));
 
       consoleSpy.mockRestore();
     });
@@ -163,7 +175,9 @@ describe('Database Migration', () => {
       insertStmt.run('test instruction 2', 'error', '2023-01-02T00:00:00Z');
 
       // Verify data exists before migration
-      const beforeMigration = db.prepare('SELECT COUNT(*) as count FROM test_results').get() as { count: number };
+      const beforeMigration = db.prepare('SELECT COUNT(*) as count FROM test_results').get() as {
+        count: number;
+      };
       expect(beforeMigration.count).toBe(2);
 
       // Run migration
@@ -171,17 +185,23 @@ describe('Database Migration', () => {
       await migrationRunner.runMigrations();
 
       // Verify data still exists after migration
-      const afterMigration = db.prepare('SELECT COUNT(*) as count FROM test_results').get() as { count: number };
+      const afterMigration = db.prepare('SELECT COUNT(*) as count FROM test_results').get() as {
+        count: number;
+      };
       expect(afterMigration.count).toBe(2);
 
       // Verify original data integrity
-      const originalData = db.prepare(`
+      const originalData = db
+        .prepare(
+          `
         SELECT instruction, status FROM test_results ORDER BY instruction
-      `).all();
+      `,
+        )
+        .all();
 
       expect(originalData).toEqual([
         { instruction: 'test instruction 1', status: 'success' },
-        { instruction: 'test instruction 2', status: 'error' }
+        { instruction: 'test instruction 2', status: 'error' },
       ]);
     });
   });
@@ -196,9 +216,13 @@ describe('Database Migration', () => {
       Phase2Migration.up(db);
 
       // Verify tables were created
-      const visualBaselines = db.prepare(`
+      const visualBaselines = db
+        .prepare(
+          `
         SELECT name FROM sqlite_master WHERE type='table' AND name='visual_baselines'
-      `).get();
+      `,
+        )
+        .get();
 
       expect(visualBaselines).toBeTruthy();
     });

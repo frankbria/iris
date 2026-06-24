@@ -13,18 +13,20 @@ export const GitInfoSchema = z.object({
   author: z.string(),
   timestamp: z.date(),
   message: z.string(),
-  isDirty: z.boolean()
+  isDirty: z.boolean(),
 });
 
 export const GitDiffSchema = z.object({
   file: z.string(),
   insertions: z.number(),
   deletions: z.number(),
-  changes: z.array(z.object({
-    type: z.enum(['add', 'delete', 'modify']),
-    line: z.number(),
-    content: z.string()
-  }))
+  changes: z.array(
+    z.object({
+      type: z.enum(['add', 'delete', 'modify']),
+      line: z.number(),
+      content: z.string(),
+    }),
+  ),
 });
 
 // Performance monitoring schemas
@@ -33,7 +35,7 @@ export const PerformanceMetricSchema = z.object({
   value: z.number(),
   unit: z.string(),
   timestamp: z.date(),
-  category: z.enum(['timing', 'memory', 'network', 'rendering', 'custom'])
+  category: z.enum(['timing', 'memory', 'network', 'rendering', 'custom']),
 });
 
 export const PerformanceReportSchema = z.object({
@@ -46,15 +48,17 @@ export const PerformanceReportSchema = z.object({
     domContentLoadedEventEnd: z.number(),
     firstContentfulPaint: z.number().optional(),
     largestContentfulPaint: z.number().optional(),
-    timeToInteractive: z.number().optional()
+    timeToInteractive: z.number().optional(),
   }),
-  resources: z.array(z.object({
-    name: z.string(),
-    type: z.string(),
-    size: z.number(),
-    duration: z.number(),
-    transferSize: z.number()
-  }))
+  resources: z.array(
+    z.object({
+      name: z.string(),
+      type: z.string(),
+      size: z.number(),
+      duration: z.number(),
+      transferSize: z.number(),
+    }),
+  ),
 });
 
 // Image processing schemas
@@ -65,7 +69,7 @@ export const ImageMetadataSchema = z.object({
   size: z.number(),
   colorSpace: z.string().optional(),
   hasAlpha: z.boolean(),
-  checksum: z.string()
+  checksum: z.string(),
 });
 
 export const ImageComparisonSchema = z.object({
@@ -75,15 +79,17 @@ export const ImageComparisonSchema = z.object({
   pixelDifference: z.number(),
   dimensions: z.object({
     width: z.number(),
-    height: z.number()
-  }),
-  regions: z.array(z.object({
-    x: z.number(),
-    y: z.number(),
-    width: z.number(),
     height: z.number(),
-    difference: z.number()
-  }))
+  }),
+  regions: z.array(
+    z.object({
+      x: z.number(),
+      y: z.number(),
+      width: z.number(),
+      height: z.number(),
+      difference: z.number(),
+    }),
+  ),
 });
 
 // Error handling schemas
@@ -95,7 +101,7 @@ export const ErrorContextSchema = z.object({
   stack: z.string().optional(),
   details: z.record(z.any()).optional(),
   severity: z.enum(['low', 'medium', 'high', 'critical']),
-  category: z.enum(['validation', 'network', 'filesystem', 'browser', 'system', 'user'])
+  category: z.enum(['validation', 'network', 'filesystem', 'browser', 'system', 'user']),
 });
 
 export const RetryConfigSchema = z.object({
@@ -103,7 +109,7 @@ export const RetryConfigSchema = z.object({
   delayMs: z.number().min(0),
   backoffMultiplier: z.number().min(1).default(2),
   maxDelayMs: z.number().min(0).default(30000),
-  retryableErrors: z.array(z.string()).optional()
+  retryableErrors: z.array(z.string()).optional(),
 });
 
 // TypeScript types derived from schemas
@@ -170,7 +176,7 @@ export class UtilityError extends Error {
   constructor(
     message: string,
     public code: string,
-    public context?: ErrorContext
+    public context?: ErrorContext,
   ) {
     super(message);
     this.name = 'UtilityError';
@@ -186,32 +192,31 @@ export class ValidationError extends UtilityError {
       correlationId: generateCorrelationId(),
       severity: 'medium' as const,
       category: 'validation' as const,
-      details: { field, value }
+      details: { field, value },
     });
   }
 }
 
 export class RetryableError extends UtilityError {
-  constructor(message: string, public isRetryable: boolean = true) {
+  constructor(
+    message: string,
+    public isRetryable: boolean = true,
+  ) {
     super(message, 'RETRYABLE_ERROR');
   }
 }
 
 export class TimeoutError extends UtilityError {
   constructor(operation: string, timeoutMs: number) {
-    super(
-      `Operation '${operation}' timed out after ${timeoutMs}ms`,
-      'TIMEOUT_ERROR',
-      {
-        code: 'TIMEOUT_ERROR',
-        message: `Operation '${operation}' timed out after ${timeoutMs}ms`,
-        timestamp: new Date(),
-        correlationId: generateCorrelationId(),
-        severity: 'high' as const,
-        category: 'system' as const,
-        details: { operation, timeoutMs }
-      }
-    );
+    super(`Operation '${operation}' timed out after ${timeoutMs}ms`, 'TIMEOUT_ERROR', {
+      code: 'TIMEOUT_ERROR',
+      message: `Operation '${operation}' timed out after ${timeoutMs}ms`,
+      timestamp: new Date(),
+      correlationId: generateCorrelationId(),
+      severity: 'high' as const,
+      category: 'system' as const,
+      details: { operation, timeoutMs },
+    });
   }
 }
 
@@ -232,10 +237,10 @@ export function isRetryableError(error: Error): boolean {
     /connection/i,
     /ECONNRESET/,
     /ENOTFOUND/,
-    /ETIMEDOUT/
+    /ETIMEDOUT/,
   ];
 
-  return retryablePatterns.some(pattern => pattern.test(error.message));
+  return retryablePatterns.some((pattern) => pattern.test(error.message));
 }
 
 export function createLogger(name: string): Logger {
@@ -243,19 +248,36 @@ export function createLogger(name: string): Logger {
 
   return {
     debug: (message: string, context?: Record<string, any>) => {
-      console.debug(`[${new Date().toISOString()}] [DEBUG] [${name}] [${correlationId}] ${message}`, context);
+      console.debug(
+        `[${new Date().toISOString()}] [DEBUG] [${name}] [${correlationId}] ${message}`,
+        context,
+      );
     },
     info: (message: string, context?: Record<string, any>) => {
-      console.info(`[${new Date().toISOString()}] [INFO] [${name}] [${correlationId}] ${message}`, context);
+      console.info(
+        `[${new Date().toISOString()}] [INFO] [${name}] [${correlationId}] ${message}`,
+        context,
+      );
     },
     warn: (message: string, context?: Record<string, any>) => {
-      console.warn(`[${new Date().toISOString()}] [WARN] [${name}] [${correlationId}] ${message}`, context);
+      console.warn(
+        `[${new Date().toISOString()}] [WARN] [${name}] [${correlationId}] ${message}`,
+        context,
+      );
     },
     error: (message: string, error?: Error, context?: Record<string, any>) => {
-      console.error(`[${new Date().toISOString()}] [ERROR] [${name}] [${correlationId}] ${message}`, error, context);
+      console.error(
+        `[${new Date().toISOString()}] [ERROR] [${name}] [${correlationId}] ${message}`,
+        error,
+        context,
+      );
     },
     fatal: (message: string, error?: Error, context?: Record<string, any>) => {
-      console.error(`[${new Date().toISOString()}] [FATAL] [${name}] [${correlationId}] ${message}`, error, context);
-    }
+      console.error(
+        `[${new Date().toISOString()}] [FATAL] [${name}] [${correlationId}] ${message}`,
+        error,
+        context,
+      );
+    },
   };
 }

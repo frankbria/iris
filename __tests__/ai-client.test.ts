@@ -46,7 +46,7 @@ describe('AI Client', () => {
     it('should not be available without API key', async () => {
       const configWithoutKey = {
         ...config,
-        ai: { ...config.ai, apiKey: undefined }
+        ai: { ...config.ai, apiKey: undefined },
       };
       const client = createAIClient(configWithoutKey);
       const isAvailable = await client.isAvailable();
@@ -55,20 +55,22 @@ describe('AI Client', () => {
 
     it('should translate instruction successfully', async () => {
       mockCreate.mockResolvedValue({
-        choices: [{
-          message: {
-            content: JSON.stringify({
-              actions: [{ type: 'click', selector: '#submit' }],
-              confidence: 0.9,
-              reasoning: 'Clear click instruction'
-            })
-          }
-        }]
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                actions: [{ type: 'click', selector: '#submit' }],
+                confidence: 0.9,
+                reasoning: 'Clear click instruction',
+              }),
+            },
+          },
+        ],
       });
 
       const client = createAIClient(config);
       const result = await client.translateInstruction({
-        instruction: 'click the submit button'
+        instruction: 'click the submit button',
       });
 
       expect(result.actions).toHaveLength(1);
@@ -82,7 +84,7 @@ describe('AI Client', () => {
 
       const client = createAIClient(config);
       const result = await client.translateInstruction({
-        instruction: 'click submit'
+        instruction: 'click submit',
       });
 
       expect(result.actions).toHaveLength(0);
@@ -116,7 +118,7 @@ describe('AI Client', () => {
     it('should return placeholder response', async () => {
       const client = createAIClient(config);
       const result = await client.translateInstruction({
-        instruction: 'click submit'
+        instruction: 'click submit',
       });
 
       expect(result.actions).toHaveLength(0);
@@ -164,18 +166,19 @@ describe('AI Client', () => {
     it('should translate instruction via Ollama API', async () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve({
-          response: JSON.stringify({
-            actions: [{ type: 'click', selector: 'button' }],
-            confidence: 0.8,
-            reasoning: 'Ollama translation'
-          })
-        })
+        json: () =>
+          Promise.resolve({
+            response: JSON.stringify({
+              actions: [{ type: 'click', selector: 'button' }],
+              confidence: 0.8,
+              reasoning: 'Ollama translation',
+            }),
+          }),
       });
 
       const client = createAIClient(config);
       const result = await client.translateInstruction({
-        instruction: 'click button'
+        instruction: 'click button',
       });
 
       expect(result.actions).toHaveLength(1);
@@ -191,7 +194,7 @@ describe('AI Client', () => {
 
       const client = createAIClient(config);
       const result = await client.translateInstruction({
-        instruction: 'click button'
+        instruction: 'click button',
       });
 
       expect(result.actions).toHaveLength(0);

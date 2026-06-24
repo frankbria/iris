@@ -16,7 +16,11 @@ export class VisualDiffEngine {
   /**
    * Compare two images using pixel matching
    */
-  async compare(baselineBuffer: Buffer, currentBuffer: Buffer, options: DiffOptions): Promise<DiffResult> {
+  async compare(
+    baselineBuffer: Buffer,
+    currentBuffer: Buffer,
+    options: DiffOptions,
+  ): Promise<DiffResult> {
     try {
       // Memory management: check image sizes
       if (baselineBuffer.length > this.maxImageSize || currentBuffer.length > this.maxImageSize) {
@@ -82,8 +86,12 @@ export class VisualDiffEngine {
 
           // Simple RGB difference check
           const rDiff = Math.abs(baseline.buffer[bufferIndex] - current.buffer[bufferIndex]);
-          const gDiff = Math.abs(baseline.buffer[bufferIndex + 1] - current.buffer[bufferIndex + 1]);
-          const bDiff = Math.abs(baseline.buffer[bufferIndex + 2] - current.buffer[bufferIndex + 2]);
+          const gDiff = Math.abs(
+            baseline.buffer[bufferIndex + 1] - current.buffer[bufferIndex + 1],
+          );
+          const bDiff = Math.abs(
+            baseline.buffer[bufferIndex + 2] - current.buffer[bufferIndex + 2],
+          );
 
           if (rDiff > 10 || gDiff > 10 || bDiff > 10) {
             sampleDiff++;
@@ -120,7 +128,7 @@ export class VisualDiffEngine {
           aaColor: options.diffColor,
           diffColor: options.diffColor,
           diffMask: options.diffMask,
-        }
+        },
       );
 
       // Calculate similarity
@@ -128,7 +136,11 @@ export class VisualDiffEngine {
       const passed = similarity >= options.threshold;
 
       // Generate diff image
-      const diffImageBuffer = await this.generateDiffImage(diffBuffer, baseline.width, baseline.height);
+      const diffImageBuffer = await this.generateDiffImage(
+        diffBuffer,
+        baseline.width,
+        baseline.height,
+      );
 
       const result = {
         success: true,
@@ -198,9 +210,15 @@ export class VisualDiffEngine {
   async analyzeRegions(
     diffBuffer: Buffer,
     width: number,
-    height: number
+    height: number,
   ): Promise<Array<{ x: number; y: number; width: number; height: number; significance: number }>> {
-    const regions: Array<{ x: number; y: number; width: number; height: number; significance: number }> = [];
+    const regions: Array<{
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      significance: number;
+    }> = [];
     const visited = new Set<number>();
     const minRegionSize = 100; // Minimum pixels for a significant region
 
@@ -238,12 +256,14 @@ export class VisualDiffEngine {
   /**
    * Classify the type of visual change based on analysis
    */
-  classifyChange(analysis: DiffAnalysis): 'layout' | 'content' | 'styling' | 'animation' | 'unknown' {
+  classifyChange(
+    analysis: DiffAnalysis,
+  ): 'layout' | 'content' | 'styling' | 'animation' | 'unknown' {
     const { similarity, regions } = analysis;
 
     // Layout changes: large regions spanning significant width/height
-    const hasLargeRegions = regions.some(r =>
-      (r.width > 500 || r.height > 500) && r.significance > 0.5
+    const hasLargeRegions = regions.some(
+      (r) => (r.width > 500 || r.height > 500) && r.significance > 0.5,
     );
 
     if (similarity < 0.9 && hasLargeRegions) {
@@ -251,10 +271,9 @@ export class VisualDiffEngine {
     }
 
     // Content changes: medium-sized focused regions
-    const hasContentRegions = regions.some(r =>
-      r.width > 100 && r.width < 800 &&
-      r.height > 50 && r.height < 600 &&
-      r.significance > 0.4
+    const hasContentRegions = regions.some(
+      (r) =>
+        r.width > 100 && r.width < 800 && r.height > 50 && r.height < 600 && r.significance > 0.4,
     );
 
     if (similarity < 0.95 && hasContentRegions) {
@@ -262,8 +281,8 @@ export class VisualDiffEngine {
     }
 
     // Styling changes: small distributed regions
-    const hasSmallRegions = regions.length > 1 &&
-      regions.every(r => r.width < 200 && r.height < 200);
+    const hasSmallRegions =
+      regions.length > 1 && regions.every((r) => r.width < 200 && r.height < 200);
 
     if (similarity < 0.98 && hasSmallRegions) {
       return 'styling';
@@ -309,10 +328,7 @@ export class VisualDiffEngine {
     const image = sharp(buffer);
     const metadata = await image.metadata();
 
-    const processedBuffer = await image
-      .raw()
-      .ensureAlpha()
-      .toBuffer();
+    const processedBuffer = await image.raw().ensureAlpha().toBuffer();
 
     return {
       buffer: processedBuffer,
@@ -346,7 +362,7 @@ export class VisualDiffEngine {
     height: number,
     startX: number,
     startY: number,
-    visited: Set<number>
+    visited: Set<number>,
   ): { pixels: number[] } {
     const pixels: number[] = [];
     const stack: Array<{ x: number; y: number }> = [{ x: startX, y: startY }];
@@ -369,12 +385,7 @@ export class VisualDiffEngine {
       pixels.push(pixelIndex);
 
       // Add neighboring pixels
-      stack.push(
-        { x: x + 1, y },
-        { x: x - 1, y },
-        { x, y: y + 1 },
-        { x, y: y - 1 }
-      );
+      stack.push({ x: x + 1, y }, { x: x - 1, y }, { x, y: y + 1 }, { x, y: y - 1 });
     }
 
     return { pixels };
@@ -385,7 +396,7 @@ export class VisualDiffEngine {
    */
   private calculateRegionBounds(
     pixels: number[],
-    width: number
+    width: number,
   ): { minX: number; maxX: number; minY: number; maxY: number } {
     let minX = width;
     let maxX = 0;
@@ -408,10 +419,26 @@ export class VisualDiffEngine {
   /**
    * Generate cache key from image buffers and options
    */
-  private generateCacheKey(baselineBuffer: Buffer, currentBuffer: Buffer, options: DiffOptions): string {
-    const baselineHash = crypto.createHash('sha256').update(baselineBuffer).digest('hex').substring(0, 16);
-    const currentHash = crypto.createHash('sha256').update(currentBuffer).digest('hex').substring(0, 16);
-    const optionsHash = crypto.createHash('sha256').update(JSON.stringify(options)).digest('hex').substring(0, 8);
+  private generateCacheKey(
+    baselineBuffer: Buffer,
+    currentBuffer: Buffer,
+    options: DiffOptions,
+  ): string {
+    const baselineHash = crypto
+      .createHash('sha256')
+      .update(baselineBuffer)
+      .digest('hex')
+      .substring(0, 16);
+    const currentHash = crypto
+      .createHash('sha256')
+      .update(currentBuffer)
+      .digest('hex')
+      .substring(0, 16);
+    const optionsHash = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(options))
+      .digest('hex')
+      .substring(0, 8);
     return `${baselineHash}-${currentHash}-${optionsHash}`;
   }
 

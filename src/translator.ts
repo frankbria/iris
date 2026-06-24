@@ -17,7 +17,10 @@ export interface TranslationResult {
  * Translate a natural language instruction into Playwright actions.
  * First tries pattern matching, then falls back to AI if configured.
  */
-export async function translate(instruction: string, context?: { url?: string }): Promise<TranslationResult> {
+export async function translate(
+  instruction: string,
+  context?: { url?: string },
+): Promise<TranslationResult> {
   // Try pattern matching first
   const patternResult = translateWithPatterns(instruction);
   if (patternResult.actions.length > 0) {
@@ -40,12 +43,7 @@ function translateWithPatterns(instruction: string): TranslationResult {
   const trimmed = instruction.trim();
 
   // Enhanced click patterns
-  const clickPatterns = [
-    /^click (.+)$/i,
-    /^click on (.+)$/i,
-    /^press (.+)$/i,
-    /^tap (.+)$/i,
-  ];
+  const clickPatterns = [/^click (.+)$/i, /^click on (.+)$/i, /^press (.+)$/i, /^tap (.+)$/i];
 
   for (const pattern of clickPatterns) {
     const match = pattern.exec(trimmed);
@@ -60,9 +58,7 @@ function translateWithPatterns(instruction: string): TranslationResult {
   }
 
   // Enhanced fill patterns
-  const fillPatterns = [
-    /^fill (.+) with (.+)$/i,
-  ];
+  const fillPatterns = [/^fill (.+) with (.+)$/i];
 
   for (const pattern of fillPatterns) {
     const match = pattern.exec(trimmed);
@@ -96,12 +92,7 @@ function translateWithPatterns(instruction: string): TranslationResult {
   }
 
   // Enhanced navigation patterns
-  const navPatterns = [
-    /^navigate to (.+)$/i,
-    /^go to (.+)$/i,
-    /^visit (.+)$/i,
-    /^open (.+)$/i,
-  ];
+  const navPatterns = [/^navigate to (.+)$/i, /^go to (.+)$/i, /^visit (.+)$/i, /^open (.+)$/i];
 
   for (const pattern of navPatterns) {
     const match = pattern.exec(trimmed);
@@ -123,7 +114,10 @@ function translateWithPatterns(instruction: string): TranslationResult {
   };
 }
 
-async function translateWithAI(instruction: string, context?: { url?: string }): Promise<TranslationResult> {
+async function translateWithAI(
+  instruction: string,
+  context?: { url?: string },
+): Promise<TranslationResult> {
   try {
     const config = loadConfig();
     const configErrors = validateConfig(config);

@@ -15,17 +15,13 @@ export class OpenAIVisionClient extends BaseAIVisionClient {
     super(config);
   }
 
-  async translateInstruction(
-    request: AITranslationRequest
-  ): Promise<AITranslationResponse> {
+  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
     // For now, delegate to text-only implementation
     // Vision-enhanced translation will be added in future iteration
     throw new Error('Vision-enhanced translation not yet implemented');
   }
 
-  async analyzeVisualDiff(
-    request: AIVisionRequest
-  ): Promise<AIVisionResponse> {
+  async analyzeVisualDiff(request: AIVisionRequest): Promise<AIVisionResponse> {
     if (!this.config.apiKey) {
       throw new Error('OpenAI API key not configured');
     }
@@ -149,16 +145,12 @@ export class AnthropicVisionClient extends BaseAIVisionClient {
     super(config);
   }
 
-  async translateInstruction(
-    request: AITranslationRequest
-  ): Promise<AITranslationResponse> {
+  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
     // Stub implementation - vision-enhanced translation future feature
     throw new Error('Anthropic vision translation not yet implemented');
   }
 
-  async analyzeVisualDiff(
-    request: AIVisionRequest
-  ): Promise<AIVisionResponse> {
+  async analyzeVisualDiff(request: AIVisionRequest): Promise<AIVisionResponse> {
     if (!this.config.apiKey) {
       throw new Error('Anthropic API key not configured');
     }
@@ -271,16 +263,12 @@ export class OllamaVisionClient extends BaseAIVisionClient {
     super(config);
   }
 
-  async translateInstruction(
-    request: AITranslationRequest
-  ): Promise<AITranslationResponse> {
+  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
     // Stub implementation - vision-enhanced translation future feature
     throw new Error('Ollama vision translation not yet implemented');
   }
 
-  async analyzeVisualDiff(
-    request: AIVisionRequest
-  ): Promise<AIVisionResponse> {
+  async analyzeVisualDiff(request: AIVisionRequest): Promise<AIVisionResponse> {
     if (!this.config.endpoint) {
       throw new Error('Ollama endpoint not configured');
     }
@@ -362,8 +350,7 @@ Respond with JSON only:
 
       const data = await response.json();
       return data.models?.some(
-        (m: { name: string }) =>
-          m.name.includes('llava') || m.name.includes('bakllava')
+        (m: { name: string }) => m.name.includes('llava') || m.name.includes('bakllava'),
       );
     } catch {
       return false;

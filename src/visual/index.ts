@@ -22,29 +22,22 @@ export type {
   DiffAnalysis,
   VisualTestOptions,
   CaptureStabilizationOptions,
-  AIVisualAnalysis
+  AIVisualAnalysis,
 } from './types';
 
 // Import types for function signatures
-import type {
-  VisualTestConfig,
-  VisualDiffResult
-} from './types';
+import type { VisualTestConfig, VisualDiffResult } from './types';
 
 // Error classes
 export {
   VisualTestError,
   BaselineNotFoundError,
   ScreenshotCaptureError,
-  DiffAnalysisError
+  DiffAnalysisError,
 } from './types';
 
 // Zod schemas for validation
-export {
-  VisualTestConfigSchema,
-  VisualDiffResultSchema,
-  VisualReportSchema
-} from './types';
+export { VisualTestConfigSchema, VisualDiffResultSchema, VisualReportSchema } from './types';
 
 // Core engines
 export { VisualCaptureEngine } from './capture';
@@ -61,20 +54,14 @@ export type {
   AIProviderConfig,
   PreparedImageForAI,
   AIAnalysisRequest,
-  AIAnalysisResponse
+  AIAnalysisResponse,
 } from './ai-classifier';
 
 // Visual Test Runner types
-export type {
-  VisualTestRunnerConfig,
-  VisualTestResult
-} from './visual-runner';
+export type { VisualTestRunnerConfig, VisualTestResult } from './visual-runner';
 
 // Visual Reporter types
-export type {
-  ReportConfig,
-  ReportArtifacts
-} from './reporter';
+export type { ReportConfig, ReportArtifacts } from './reporter';
 
 // Import implementations for the public API
 import { VisualCaptureEngine } from './capture';
@@ -104,7 +91,9 @@ import { AIVisualClassifier } from './ai-classifier';
 export async function runVisualTest(config: VisualTestConfig): Promise<VisualDiffResult> {
   // Basic implementation using the underlying engines
   // This is a simplified version - full orchestration would be more complex
-  throw new Error('Full visual test orchestration not yet implemented - use VisualCaptureEngine, VisualDiffEngine, and BaselineManager directly');
+  throw new Error(
+    'Full visual test orchestration not yet implemented - use VisualCaptureEngine, VisualDiffEngine, and BaselineManager directly',
+  );
 }
 
 /**
@@ -117,7 +106,7 @@ export async function runVisualTest(config: VisualTestConfig): Promise<VisualDif
 export async function generateVisualReport(
   results: VisualDiffResult[],
   format: 'html' | 'json' | 'junit' = 'html',
-  outputPath?: string
+  outputPath?: string,
 ): Promise<string> {
   // Basic report generation - simplified implementation
   if (format === 'json') {
@@ -137,10 +126,7 @@ export async function generateVisualReport(
  * @param testNames Test names to update baselines for
  * @param branch Git branch for baseline storage
  */
-export async function updateBaselines(
-  testNames: string[],
-  branch: string = 'main'
-): Promise<void> {
+export async function updateBaselines(testNames: string[], branch: string = 'main'): Promise<void> {
   // Basic baseline update implementation
   throw new Error('Baseline update requires test execution context - use BaselineManager directly');
 }
