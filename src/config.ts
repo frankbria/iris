@@ -36,6 +36,54 @@ const DEFAULT_CONFIG: IrisConfig = {
   },
 };
 
+/**
+ * Load environment variables from a `.env` file in `cwd` into `process.env`.
+ *
+ * Supports `KEY=value`, the `export KEY=value` prefix, `# comments`, blank
+ * lines, surrounding single/double quotes, and inline `# comments` on unquoted
+ * values. Existing `process.env` values always win, so real shell-exported
+ * variables take precedence over the file. A missing `.env` is a silent no-op.
+ *
+ * ponytail: minimal parser, not full POSIX shell quoting — swap for the `dotenv`
+ * package if multiline values or `${VAR}` expansion are ever needed.
+ */
+export function loadDotenv(cwd: string = process.cwd()): void {
+  let content: string;
+  try {
+    content = fs.readFileSync(path.join(cwd, '.env'), 'utf8');
+  } catch {
+    return; // no .env file — nothing to load
+  }
+
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+
+    const key = line
+      .slice(0, eq)
+      .trim()
+      .replace(/^export\s+/, '');
+    if (!key) continue;
+
+    let value = line.slice(eq + 1).trim();
+    const quoted = value.match(/^(['"])([\s\S]*)\1$/);
+    if (quoted) {
+      value = quoted[2];
+    } else {
+      // Strip a whitespace-preceded inline comment from unquoted values.
+      const hash = value.search(/\s#/);
+      if (hash !== -1) value = value.slice(0, hash).trim();
+    }
+
+    if (!(key in process.env)) {
+      process.env[key] = value;
+    }
+  }
+}
+
 export function getConfigPath(): string {
   return path.join(os.homedir(), '.iris', 'config.json');
 }

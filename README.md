@@ -92,8 +92,16 @@ npm run verify
 ```
 
 IRIS reads its credentials from environment variables (see `.env.example` for the
-full list). Export them in your shell, or use a loader such as `direnv`/`dotenv` —
-the CLI does not read a `.env` file on its own.
+full list). Copy the example to `.env` and fill in what you need — the CLI
+auto-loads `.env` from the working directory at startup:
+
+```bash
+cp .env.example .env
+# edit .env with your keys
+```
+
+Shell-exported variables take precedence over `.env`, so `export OPENAI_API_KEY=…`
+always overrides a file value.
 
 ### Try the Demo (Fastest Way)
 
