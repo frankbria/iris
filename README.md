@@ -602,7 +602,7 @@ See **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** for compl
 ## Dependencies
 
 **Core:**
-- Node.js >=18.0.0
+- Node.js >=20.0.0
 - TypeScript 5.1.6
 - Playwright 1.35.0
 - Commander 11.0.0
