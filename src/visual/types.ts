@@ -124,6 +124,7 @@ export interface BaselineMetadata {
   viewport: Viewport;
   gitBranch?: string;
   gitCommit?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 }
 
@@ -268,7 +269,7 @@ export class VisualTestError extends Error {
   constructor(
     message: string,
     public code: string,
-    public details?: Record<string, any>,
+    public details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'VisualTestError';
@@ -286,13 +287,13 @@ export class BaselineNotFoundError extends VisualTestError {
 }
 
 export class ScreenshotCaptureError extends VisualTestError {
-  constructor(message: string, details?: Record<string, any>) {
+  constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'SCREENSHOT_CAPTURE_ERROR', details);
   }
 }
 
 export class DiffAnalysisError extends VisualTestError {
-  constructor(message: string, details?: Record<string, any>) {
+  constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'DIFF_ANALYSIS_ERROR', details);
   }
 }

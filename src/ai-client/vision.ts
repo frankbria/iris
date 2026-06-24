@@ -15,7 +15,7 @@ export class OpenAIVisionClient extends BaseAIVisionClient {
     super(config);
   }
 
-  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
+  async translateInstruction(_request: AITranslationRequest): Promise<AITranslationResponse> {
     // For now, delegate to text-only implementation
     // Vision-enhanced translation will be added in future iteration
     throw new Error('Vision-enhanced translation not yet implemented');
@@ -145,7 +145,7 @@ export class AnthropicVisionClient extends BaseAIVisionClient {
     super(config);
   }
 
-  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
+  async translateInstruction(_request: AITranslationRequest): Promise<AITranslationResponse> {
     // Stub implementation - vision-enhanced translation future feature
     throw new Error('Anthropic vision translation not yet implemented');
   }
@@ -263,7 +263,7 @@ export class OllamaVisionClient extends BaseAIVisionClient {
     super(config);
   }
 
-  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
+  async translateInstruction(_request: AITranslationRequest): Promise<AITranslationResponse> {
     // Stub implementation - vision-enhanced translation future feature
     throw new Error('Ollama vision translation not yet implemented');
   }

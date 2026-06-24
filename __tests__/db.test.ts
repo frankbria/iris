@@ -1,4 +1,4 @@
-import { initializeDatabase, insertTestRun, getTestRuns, TestRun } from '../src/db';
+import { initializeDatabase, insertTestRun, getTestRuns } from '../src/db';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -60,14 +60,14 @@ describe('Database Module', () => {
     const endTime = new Date(startTime.getTime() + 1000);
 
     // Insert test records
-    const id1 = insertTestRun(db, {
+    insertTestRun(db, {
       instruction: 'click #button1',
       status: 'success',
       startTime,
       endTime,
     });
 
-    const id2 = insertTestRun(db, {
+    insertTestRun(db, {
       instruction: 'click #button2',
       status: 'error',
       startTime,

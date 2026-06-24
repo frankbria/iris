@@ -6,7 +6,6 @@
 
 import { Page } from 'playwright';
 import { KeyboardTester } from '../../src/a11y/keyboard-tester';
-import type { KeyboardTestResult } from '../../src/a11y/types';
 
 describe('KeyboardTester', () => {
   let mockPage: jest.Mocked<Page>;
@@ -219,7 +218,7 @@ describe('KeyboardTester', () => {
       };
       keyboardTester = new KeyboardTester(configWithEscapeTest);
 
-      mockPage.evaluate.mockImplementation((fn: any, ...args) => {
+      mockPage.evaluate.mockImplementation((fn: any, ..._args) => {
         if (fn.toString().includes('dialog')) {
           return Promise.resolve([
             {

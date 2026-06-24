@@ -4,7 +4,6 @@ jest.mock('path');
 jest.mock('simple-git');
 
 import { BaselineManager } from '../../src/visual/baseline';
-import { BaselineInfo, BaselineMetadata } from '../../src/visual/types';
 import * as fs from 'fs';
 import * as path from 'path';
 import { simpleGit, SimpleGit } from 'simple-git';
@@ -188,7 +187,7 @@ describe('BaselineManager', () => {
       const mockMetadata = { url: 'https://example.com', timestamp: 1234567890 };
 
       // Directly specify the branch to avoid getCurrentBranch complexity
-      const result = await baselineManager.loadBaseline(mockTestName, 'feature-branch');
+      await baselineManager.loadBaseline(mockTestName, 'feature-branch');
 
       // Mock for the specific paths this test will use
       mockFs.existsSync
@@ -210,7 +209,7 @@ describe('BaselineManager', () => {
         .mockReturnValueOnce(JSON.stringify(mockMetadata));
 
       // Act
-      const result2 = await baselineManager.loadBaseline(mockTestName, 'feature-branch');
+      await baselineManager.loadBaseline(mockTestName, 'feature-branch');
 
       // This test is complex due to mocking issues. Let's skip it for now
       // and focus on completing the other tests
@@ -381,7 +380,6 @@ describe('BaselineManager', () => {
       mockGit.branch.mockResolvedValue({ current: 'main' } as any);
 
       // Mock the deleteBaseline method to return success for old files only
-      const originalDeleteBaseline = baselineManager.deleteBaseline;
       jest.spyOn(baselineManager, 'deleteBaseline').mockImplementation(async (testName: string) => {
         if (testName === 'old-test') {
           return { success: true };

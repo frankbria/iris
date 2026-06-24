@@ -93,7 +93,7 @@ export class AnthropicTextClient extends BaseAIClient {
     super(config);
   }
 
-  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
+  async translateInstruction(_request: AITranslationRequest): Promise<AITranslationResponse> {
     // Note: This is a placeholder for Anthropic integration
     // In a real implementation, you would use the Anthropic SDK
     console.warn('Anthropic client not yet implemented, falling back to pattern matching');

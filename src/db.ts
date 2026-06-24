@@ -38,7 +38,7 @@ export interface A11yTestResult {
   timestamp: Date;
 }
 
-const SCHEMA_VERSION = 1;
+const _SCHEMA_VERSION = 1;
 
 /**
  * Initialize SQLite database and create all tables if they don't exist.
@@ -160,6 +160,7 @@ export function getTestRuns(db: Database.Database, limit?: number): TestRun[] {
   const stmt = db.prepare(query);
   const rows = limit ? stmt.all(limit) : stmt.all();
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return rows.map((row: any) => ({
     id: row.id,
     instruction: row.instruction,
@@ -211,6 +212,7 @@ export function getVisualTestResults(
   },
 ): VisualTestResult[] {
   let query = 'SELECT * FROM visual_test_results WHERE 1=1';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params: any[] = [];
 
   if (options?.testRunId !== undefined) {
@@ -238,6 +240,7 @@ export function getVisualTestResults(
   const stmt = db.prepare(query);
   const rows = stmt.all(...params);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return rows.map((row: any) => ({
     id: row.id,
     testRunId: row.test_run_id,
@@ -297,6 +300,7 @@ export function getA11yTestResults(
   },
 ): A11yTestResult[] {
   let query = 'SELECT * FROM a11y_test_results WHERE 1=1';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params: any[] = [];
 
   if (options?.testRunId !== undefined) {
@@ -324,6 +328,7 @@ export function getA11yTestResults(
   const stmt = db.prepare(query);
   const rows = stmt.all(...params);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return rows.map((row: any) => ({
     id: row.id,
     testRunId: row.test_run_id,
@@ -362,6 +367,7 @@ export function getVisualTestStats(
     WHERE test_run_id = ?
   `);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = stmt.get(testRunId) as any;
 
   return {
@@ -404,6 +410,7 @@ export function getA11yTestStats(
     WHERE test_run_id = ?
   `);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result = stmt.get(testRunId) as any;
 
   return {

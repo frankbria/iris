@@ -63,25 +63,31 @@ export class AxeRunner {
       const axeResults = await axeBuilder.analyze();
 
       // Transform violations to our format
-      const violations: A11yViolation[] = axeResults.violations.map((violation: any) => ({
-        id: violation.id,
-        impact: violation.impact || 'moderate',
-        tags: violation.tags || [],
-        description: violation.description || '',
-        help: violation.help || '',
-        helpUrl: violation.helpUrl || '',
-        nodes: violation.nodes.map((node: any) => ({
-          target: node.target || [],
-          html: node.html || '',
-          failureSummary: node.failureSummary,
-          element: node.target?.[0],
-        })),
-      }));
+      const violations: A11yViolation[] = axeResults.violations.map(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (violation: any) => ({
+          id: violation.id,
+          impact: violation.impact || 'moderate',
+          tags: violation.tags || [],
+          description: violation.description || '',
+          help: violation.help || '',
+          helpUrl: violation.helpUrl || '',
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          nodes: violation.nodes.map((node: any) => ({
+            target: node.target || [],
+            html: node.html || '',
+            failureSummary: node.failureSummary,
+            element: node.target?.[0],
+          })),
+        }),
+      );
 
       // Transform passes
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const passes = axeResults.passes.map((pass: any) => ({
         id: pass.id,
         description: pass.description || '',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         nodes: pass.nodes.map((node: any) => ({
           target: node.target || [],
           html: node.html || '',
@@ -89,9 +95,11 @@ export class AxeRunner {
       }));
 
       // Transform incomplete
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const incomplete = axeResults.incomplete.map((inc: any) => ({
         id: inc.id,
         description: inc.description || '',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         nodes: inc.nodes.map((node: any) => ({
           target: node.target || [],
           html: node.html || '',
@@ -99,6 +107,7 @@ export class AxeRunner {
       }));
 
       // Transform inapplicable
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const inapplicable = axeResults.inapplicable.map((inap: any) => ({
         id: inap.id,
         description: inap.description || '',
@@ -157,20 +166,24 @@ export class AxeRunner {
       const axeResults = await axeBuilder.analyze();
 
       // Transform results similar to run() method
-      const violations: A11yViolation[] = axeResults.violations.map((violation: any) => ({
-        id: violation.id,
-        impact: violation.impact || 'moderate',
-        tags: violation.tags || [],
-        description: violation.description || '',
-        help: violation.help || '',
-        helpUrl: violation.helpUrl || '',
-        nodes: violation.nodes.map((node: any) => ({
-          target: node.target || [],
-          html: node.html || '',
-          failureSummary: node.failureSummary,
-          element: node.target?.[0],
-        })),
-      }));
+      const violations: A11yViolation[] = axeResults.violations.map(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (violation: any) => ({
+          id: violation.id,
+          impact: violation.impact || 'moderate',
+          tags: violation.tags || [],
+          description: violation.description || '',
+          help: violation.help || '',
+          helpUrl: violation.helpUrl || '',
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          nodes: violation.nodes.map((node: any) => ({
+            target: node.target || [],
+            html: node.html || '',
+            failureSummary: node.failureSummary,
+            element: node.target?.[0],
+          })),
+        }),
+      );
 
       return {
         testName: `${testName}_${selector}`,

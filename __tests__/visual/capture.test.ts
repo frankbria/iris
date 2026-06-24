@@ -1,8 +1,6 @@
 import { Page } from 'playwright';
 import { VisualCaptureEngine } from '../../src/visual/capture';
-import { CaptureConfig, CaptureResult } from '../../src/visual/types';
-import * as fs from 'fs';
-import * as path from 'path';
+import { CaptureConfig } from '../../src/visual/types';
 
 // Mock dependencies
 jest.mock('sharp');

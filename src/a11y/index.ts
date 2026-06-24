@@ -93,7 +93,7 @@ export type { AccessibilityRunnerConfig, AccessibilityTestResult } from './a11y-
  * console.log(`A11y test ${result.passed ? 'passed' : 'failed'}: ${result.violations.length} violations`);
  * ```
  */
-export async function runA11yTest(config: A11yTestConfig): Promise<A11yResult> {
+export async function runA11yTest(_config: A11yTestConfig): Promise<A11yResult> {
   // TODO: Implement accessibility test execution
   throw new Error('Accessibility testing not yet implemented - Phase 2 in progress');
 }
@@ -105,8 +105,8 @@ export async function runA11yTest(config: A11yTestConfig): Promise<A11yResult> {
  * @param tests Array of keyboard navigation tests to run
  */
 export async function runKeyboardTests(
-  config: A11yTestConfig,
-  tests: KeyboardNavigationTest[],
+  _config: A11yTestConfig,
+  _tests: KeyboardNavigationTest[],
 ): Promise<KeyboardTestResult> {
   // TODO: Implement keyboard navigation testing
   throw new Error('Keyboard navigation testing not yet implemented - Phase 2 in progress');
@@ -119,8 +119,8 @@ export async function runKeyboardTests(
  * @param tests Array of screen reader tests to run
  */
 export async function runScreenReaderTests(
-  config: A11yTestConfig,
-  tests: ScreenReaderTest[],
+  _config: A11yTestConfig,
+  _tests: ScreenReaderTest[],
 ): Promise<ScreenReaderTestResult> {
   // TODO: Implement screen reader simulation testing
   throw new Error('Screen reader simulation testing not yet implemented - Phase 2 in progress');
@@ -139,8 +139,8 @@ export async function generateA11yReport(
     keyboardResults: KeyboardTestResult[];
     screenReaderResults: ScreenReaderTestResult[];
   },
-  format: 'html' | 'json' | 'junit' = 'html',
-  outputPath?: string,
+  _format: 'html' | 'json' | 'junit' = 'html',
+  _outputPath?: string,
 ): Promise<string> {
   // TODO: Implement accessibility report generation
   throw new Error('Accessibility report generation not yet implemented - Phase 2 in progress');
@@ -154,7 +154,7 @@ export async function generateA11yReport(
  */
 export async function checkWcagCompliance(
   url: string,
-  level: WcagLevel = 'AA',
+  _level: WcagLevel = 'AA',
 ): Promise<ComplianceStatus> {
   // TODO: Implement WCAG compliance checking
   throw new Error('WCAG compliance checking not yet implemented - Phase 2 in progress');

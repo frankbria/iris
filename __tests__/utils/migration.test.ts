@@ -36,7 +36,7 @@ describe('Database Migration', () => {
 
   describe('MigrationRunner', () => {
     it('should initialize schema versioning table', () => {
-      const migrationRunner = new MigrationRunner(db);
+      new MigrationRunner(db);
 
       const tables = db
         .prepare(
@@ -212,7 +212,7 @@ describe('Database Migration', () => {
       expect(Phase2Migration.description).toContain('Phase 2');
 
       // Should be able to run the migration directly
-      const migrationRunner = new MigrationRunner(db);
+      new MigrationRunner(db);
       Phase2Migration.up(db);
 
       // Verify tables were created

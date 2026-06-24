@@ -74,8 +74,8 @@ export { Migration, MigrationRunner, applyPhase2Migration, Phase2Migration } fro
  * @param options Processing options
  */
 export async function processImage(
-  imagePath: string,
-  options?: {
+  _imagePath: string,
+  _options?: {
     resize?: { width: number; height: number };
     format?: 'png' | 'jpeg' | 'webp';
     quality?: number;
@@ -90,7 +90,7 @@ export async function processImage(
  *
  * @param repoPath Path to Git repository
  */
-export async function getGitInfo(repoPath: string): Promise<GitInfo> {
+export async function getGitInfo(_repoPath: string): Promise<GitInfo> {
   // TODO: Implement Git integration
   throw new Error('Git integration not yet implemented - Phase 2 in progress');
 }
@@ -103,9 +103,9 @@ export async function getGitInfo(repoPath: string): Promise<GitInfo> {
  * @param options Comparison options
  */
 export async function compareImages(
-  baselinePath: string,
-  candidatePath: string,
-  options?: {
+  _baselinePath: string,
+  _candidatePath: string,
+  _options?: {
     threshold?: number;
     includeRegions?: boolean;
   },
@@ -121,8 +121,8 @@ export async function compareImages(
  * @param name Metric name
  */
 export async function withPerformanceMonitoring<T>(
-  fn: () => Promise<T>,
-  name: string,
+  _fn: () => Promise<T>,
+  _name: string,
 ): Promise<{ result: T; metrics: PerformanceMetric[] }> {
   // TODO: Implement performance monitoring
   throw new Error('Performance monitoring not yet implemented - Phase 2 in progress');

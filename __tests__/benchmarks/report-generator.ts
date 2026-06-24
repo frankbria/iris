@@ -5,7 +5,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { BenchmarkSuite, BenchmarkResult, compareBenchmarks } from './bench-utils';
+import { BenchmarkSuite, compareBenchmarks } from './bench-utils';
 
 interface ReportOptions {
   outputDir?: string;

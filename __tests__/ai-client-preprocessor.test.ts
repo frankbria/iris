@@ -1,8 +1,4 @@
-import {
-  ImagePreprocessor,
-  createPreprocessor,
-  PreprocessorConfig,
-} from '../src/ai-client/preprocessor';
+import { ImagePreprocessor, createPreprocessor } from '../src/ai-client/preprocessor';
 import sharp from 'sharp';
 
 describe('ImagePreprocessor', () => {

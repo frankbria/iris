@@ -19,6 +19,7 @@ program
     ) => {
       const startTime = new Date();
       let status: 'success' | 'error' = 'success';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const executionResults: any[] = [];
 
       try {
@@ -357,10 +358,12 @@ program
           testHeadingStructure: options.includeScreenreader,
           simulateScreenReader: options.includeScreenreader,
         },
-        failureThreshold: options.failOn.split(',').reduce((acc: any, impact: string) => {
-          acc[impact.trim()] = true;
-          return acc;
-        }, {}),
+        failureThreshold: options.failOn
+          .split(',')
+          .reduce((acc: Record<string, boolean>, impact: string) => {
+            acc[impact.trim()] = true;
+            return acc;
+          }, {}),
         reporting: {
           includePassedTests: false,
           groupByImpact: true,

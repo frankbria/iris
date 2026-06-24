@@ -1,5 +1,4 @@
 import { FileWatcher, createWatcher } from '../src/watcher';
-import * as path from 'path';
 
 // Mock chokidar
 jest.mock('chokidar', () => ({

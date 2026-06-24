@@ -1,5 +1,5 @@
 import { VisualDiffEngine } from '../../src/visual/diff';
-import { DiffOptions, DiffResult, DiffAnalysis } from '../../src/visual/types';
+import { DiffOptions, DiffAnalysis } from '../../src/visual/types';
 import pixelmatch from 'pixelmatch';
 import sharp from 'sharp';
 

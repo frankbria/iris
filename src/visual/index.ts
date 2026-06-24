@@ -63,13 +63,6 @@ export type { VisualTestRunnerConfig, VisualTestResult } from './visual-runner';
 // Visual Reporter types
 export type { ReportConfig, ReportArtifacts } from './reporter';
 
-// Import implementations for the public API
-import { VisualCaptureEngine } from './capture';
-import { VisualDiffEngine } from './diff';
-import { BaselineManager } from './baseline';
-import { StorageManager } from './storage';
-import { AIVisualClassifier } from './ai-classifier';
-
 /**
  * Main entry point for visual regression testing.
  *
@@ -88,7 +81,7 @@ import { AIVisualClassifier } from './ai-classifier';
  * console.log(`Test ${result.passed ? 'passed' : 'failed'}: ${result.similarity}`);
  * ```
  */
-export async function runVisualTest(config: VisualTestConfig): Promise<VisualDiffResult> {
+export async function runVisualTest(_config: VisualTestConfig): Promise<VisualDiffResult> {
   // Basic implementation using the underlying engines
   // This is a simplified version - full orchestration would be more complex
   throw new Error(
@@ -126,7 +119,10 @@ export async function generateVisualReport(
  * @param testNames Test names to update baselines for
  * @param branch Git branch for baseline storage
  */
-export async function updateBaselines(testNames: string[], branch: string = 'main'): Promise<void> {
+export async function updateBaselines(
+  testNames: string[],
+  _branch: string = 'main',
+): Promise<void> {
   // Basic baseline update implementation
   throw new Error('Baseline update requires test execution context - use BaselineManager directly');
 }

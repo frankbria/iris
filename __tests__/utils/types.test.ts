@@ -4,7 +4,6 @@ import {
   PerformanceMetricSchema,
   ImageMetadataSchema,
   ImageComparisonSchema,
-  ErrorContextSchema,
   RetryConfigSchema,
   UtilityError,
   ValidationError,
