@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import * as path from 'path';
 import * as os from 'os';
+import { loadDotenv } from './config';
 
 const program = new Command();
 program.name('iris').description('Interface Recognition & Interaction Suite').version('0.0.1');
@@ -404,6 +405,7 @@ program
   });
 
 export async function runCli(args: string[]): Promise<void> {
+  loadDotenv(); // pick up .env before any command reads process.env
   await program.parseAsync(args, { from: 'node' });
 }
 

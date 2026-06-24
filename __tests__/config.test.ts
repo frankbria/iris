@@ -1,4 +1,4 @@
-import { loadConfig, validateConfig, saveConfig } from '../src/config';
+import { loadConfig, validateConfig, saveConfig, loadDotenv } from '../src/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -257,5 +257,63 @@ describe('Config System', () => {
         realFs.rmSync(tmpHome, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe('loadDotenv', () => {
+  const realFs = jest.requireActual('fs') as typeof fs;
+  const realOs = jest.requireActual('os') as typeof os;
+  let tmpDir: string;
+
+  const TEST_KEYS = ['OPENAI_API_KEY', 'IRIS_DB_PATH', 'FROM_SHELL', 'QUOTED'];
+  const clearKeys = () => TEST_KEYS.forEach((k) => delete process.env[k]);
+
+  function writeEnv(contents: string): void {
+    realFs.writeFileSync(path.join(tmpDir, '.env'), contents);
+  }
+
+  beforeEach(() => {
+    tmpDir = realFs.mkdtempSync(path.join(realOs.tmpdir(), 'iris-env-'));
+    // Route the globally-mocked fs.readFileSync to the real implementation so
+    // loadDotenv reads the temp .env we just wrote.
+    mockFs.readFileSync.mockImplementation(realFs.readFileSync as typeof fs.readFileSync);
+    clearKeys();
+  });
+
+  afterEach(() => {
+    realFs.rmSync(tmpDir, { recursive: true, force: true });
+    clearKeys();
+  });
+
+  it('loads KEY=value pairs into process.env', () => {
+    writeEnv('OPENAI_API_KEY=sk-from-file\nIRIS_DB_PATH=/tmp/iris.db\n');
+    loadDotenv(tmpDir);
+    expect(process.env.OPENAI_API_KEY).toBe('sk-from-file');
+    expect(process.env.IRIS_DB_PATH).toBe('/tmp/iris.db');
+  });
+
+  it('does not override existing process.env values (shell wins)', () => {
+    process.env.FROM_SHELL = 'real-value';
+    writeEnv('FROM_SHELL=file-value\n');
+    loadDotenv(tmpDir);
+    expect(process.env.FROM_SHELL).toBe('real-value');
+  });
+
+  it('skips comments/blank lines and strips quotes and inline comments', () => {
+    writeEnv('# a comment\n\nQUOTED="hello world"\nOPENAI_API_KEY=sk-abc   # inline note\n');
+    loadDotenv(tmpDir);
+    expect(process.env.QUOTED).toBe('hello world');
+    expect(process.env.OPENAI_API_KEY).toBe('sk-abc');
+  });
+
+  it('handles the `export KEY=value` prefix', () => {
+    writeEnv('export IRIS_DB_PATH=/data/iris.db\n');
+    loadDotenv(tmpDir);
+    expect(process.env.IRIS_DB_PATH).toBe('/data/iris.db');
+  });
+
+  it('is a no-op when no .env file exists', () => {
+    expect(() => loadDotenv(tmpDir)).not.toThrow();
+    expect(process.env.OPENAI_API_KEY).toBeUndefined();
   });
 });
