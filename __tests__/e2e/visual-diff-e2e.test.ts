@@ -24,7 +24,7 @@ jest.mock('../../src/visual/ai-classifier', () => {
         suggestions: ['Review layout changes for consistency'],
         isIntentional: false,
         changeType: 'layout',
-        reasoning: 'Layout shift detected in navigation area'
+        reasoning: 'Layout shift detected in navigation area',
       }),
       getCostStats: jest.fn().mockReturnValue({
         totalCost: 0,
@@ -34,10 +34,10 @@ jest.mock('../../src/visual/ai-classifier', () => {
         cacheHitCount: 0,
         cacheHitRate: 0,
         costByProvider: {},
-        costByModel: {}
+        costByModel: {},
       }),
-      close: jest.fn()
-    }))
+      close: jest.fn(),
+    })),
   };
 });
 
@@ -99,7 +99,7 @@ describe('Visual Diff CLI E2E Tests', () => {
         pages: ['data:text/html,' + encodeURIComponent(testHtml)],
         baseline: {
           strategy: 'branch',
-          reference: 'main'
+          reference: 'main',
         },
         capture: {
           viewport: { width: 1920, height: 1080 },
@@ -112,8 +112,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: true,
             delay: 100,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -121,11 +121,11 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 1
+          maxConcurrency: 1,
         },
         devices: ['desktop'],
         updateBaseline: true,
-        failOn: 'breaking'
+        failOn: 'breaking',
       };
 
       const runner = new VisualTestRunner(config);
@@ -150,7 +150,7 @@ describe('Visual Diff CLI E2E Tests', () => {
       const config: VisualTestRunnerConfig = {
         pages: [
           'data:text/html,' + encodeURIComponent(page1Html),
-          'data:text/html,' + encodeURIComponent(page2Html)
+          'data:text/html,' + encodeURIComponent(page2Html),
         ],
         baseline: { strategy: 'branch', reference: 'main' },
         capture: {
@@ -164,8 +164,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -173,9 +173,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 2
+          maxConcurrency: 2,
         },
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const runner = new VisualTestRunner(config);
@@ -207,8 +207,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -216,9 +216,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 1
+          maxConcurrency: 1,
         },
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const baselineRunner = new VisualTestRunner(baselineConfig);
@@ -230,7 +230,7 @@ describe('Visual Diff CLI E2E Tests', () => {
       const diffConfig: VisualTestRunnerConfig = {
         ...baselineConfig,
         pages: ['data:text/html,' + encodeURIComponent(modifiedHtml)],
-        updateBaseline: false
+        updateBaseline: false,
       };
 
       const diffRunner = new VisualTestRunner(diffConfig);
@@ -262,8 +262,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -271,9 +271,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 1
+          maxConcurrency: 1,
         },
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const baselineRunner = new VisualTestRunner(baselineConfig);
@@ -282,7 +282,7 @@ describe('Visual Diff CLI E2E Tests', () => {
       // Run comparison with same content
       const compareRunner = new VisualTestRunner({
         ...baselineConfig,
-        updateBaseline: false
+        updateBaseline: false,
       });
       const result = await compareRunner.run();
 
@@ -296,8 +296,10 @@ describe('Visual Diff CLI E2E Tests', () => {
     });
 
     it('should respect pixel difference threshold', async () => {
-      const baselineHtml = '<html><body><div style="width:100px;height:100px;background:red"></div></body></html>';
-      const modifiedHtml = '<html><body><div style="width:100px;height:100px;background:rgb(255,10,0)"></div></body></html>';
+      const baselineHtml =
+        '<html><body><div style="width:100px;height:100px;background:red"></div></body></html>';
+      const modifiedHtml =
+        '<html><body><div style="width:100px;height:100px;background:rgb(255,10,0)"></div></body></html>';
 
       // Create baseline
       const baselineConfig: VisualTestRunnerConfig = {
@@ -314,8 +316,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.01, // Very strict threshold
@@ -323,9 +325,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 1
+          maxConcurrency: 1,
         },
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const baselineRunner = new VisualTestRunner(baselineConfig);
@@ -335,7 +337,7 @@ describe('Visual Diff CLI E2E Tests', () => {
       const strictRunner = new VisualTestRunner({
         ...baselineConfig,
         pages: ['data:text/html,' + encodeURIComponent(modifiedHtml)],
-        updateBaseline: false
+        updateBaseline: false,
       });
       const strictResult = await strictRunner.run();
 
@@ -344,7 +346,7 @@ describe('Visual Diff CLI E2E Tests', () => {
         ...baselineConfig,
         pages: ['data:text/html,' + encodeURIComponent(modifiedHtml)],
         diff: { ...baselineConfig.diff, threshold: 0.5 },
-        updateBaseline: false
+        updateBaseline: false,
       });
       const lenientResult = await lenientRunner.run();
 
@@ -355,8 +357,10 @@ describe('Visual Diff CLI E2E Tests', () => {
 
   describe('AI Semantic Analysis Integration', () => {
     it('should provide AI classification when semantic analysis is enabled', async () => {
-      const baselineHtml = '<html><body><button style="margin-left:0px">Click</button></body></html>';
-      const modifiedHtml = '<html><body><button style="margin-left:50px">Click</button></body></html>';
+      const baselineHtml =
+        '<html><body><button style="margin-left:0px">Click</button></body></html>';
+      const modifiedHtml =
+        '<html><body><button style="margin-left:50px">Click</button></body></html>';
 
       // Create baseline
       const baselineConfig: VisualTestRunnerConfig = {
@@ -373,8 +377,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.05,
@@ -382,9 +386,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 1
+          maxConcurrency: 1,
         },
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const baselineRunner = new VisualTestRunner(baselineConfig);
@@ -394,13 +398,13 @@ describe('Visual Diff CLI E2E Tests', () => {
       const aiRunner = new VisualTestRunner({
         ...baselineConfig,
         pages: ['data:text/html,' + encodeURIComponent(modifiedHtml)],
-        updateBaseline: false
+        updateBaseline: false,
       });
       const result = await aiRunner.run();
 
       // Assertions
       if (result.summary.failed > 0) {
-        const failedResult = result.results.find(r => !r.passed);
+        const failedResult = result.results.find((r) => !r.passed);
         expect(failedResult).toBeDefined();
 
         if (failedResult?.aiAnalysis) {
@@ -433,8 +437,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.01,
@@ -442,9 +446,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 1
+          maxConcurrency: 1,
         },
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const baselineRunner = new VisualTestRunner(config);
@@ -454,12 +458,12 @@ describe('Visual Diff CLI E2E Tests', () => {
       const testRunner = new VisualTestRunner({
         ...config,
         pages: ['data:text/html,' + encodeURIComponent(minorChangeHtml)],
-        updateBaseline: false
+        updateBaseline: false,
       });
       const result = await testRunner.run();
 
       if (result.summary.failed > 0) {
-        const failedResult = result.results.find(r => !r.passed);
+        const failedResult = result.results.find((r) => !r.passed);
         expect(failedResult?.severity).toBeDefined();
         expect(['minor', 'moderate', 'breaking']).toContain(failedResult?.severity);
       }
@@ -484,8 +488,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -493,10 +497,10 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 3
+          maxConcurrency: 3,
         },
         devices: ['desktop', 'tablet', 'mobile'],
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const runner = new VisualTestRunner(config);
@@ -528,8 +532,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -537,10 +541,10 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 2
+          maxConcurrency: 2,
         },
         devices: ['desktop', 'mobile'],
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const baselineRunner = new VisualTestRunner(baselineConfig);
@@ -551,13 +555,13 @@ describe('Visual Diff CLI E2E Tests', () => {
       const testRunner = new VisualTestRunner({
         ...baselineConfig,
         pages: ['data:text/html,' + encodeURIComponent(modifiedHtml)],
-        updateBaseline: false
+        updateBaseline: false,
       });
       const result = await testRunner.run();
 
       // 1 page × 2 devices.
       expect(result.summary.totalComparisons).toBe(2);
-      expect(result.results.filter(r => !r.passed).length).toBeGreaterThanOrEqual(0);
+      expect(result.results.filter((r) => !r.passed).length).toBeGreaterThanOrEqual(0);
     });
   });
 
@@ -580,8 +584,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -589,13 +593,13 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 1
+          maxConcurrency: 1,
         },
         updateBaseline: true,
         output: {
           format: 'json',
-          path: reportPath
-        }
+          path: reportPath,
+        },
       };
 
       const runner = new VisualTestRunner(config);
@@ -629,8 +633,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.05,
@@ -638,9 +642,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 1
+          maxConcurrency: 1,
         },
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const baselineRunner = new VisualTestRunner(baselineConfig);
@@ -650,7 +654,7 @@ describe('Visual Diff CLI E2E Tests', () => {
       const testRunner = new VisualTestRunner({
         ...baselineConfig,
         pages: ['data:text/html,' + encodeURIComponent(modifiedHtml)],
-        updateBaseline: false
+        updateBaseline: false,
       });
       const result = await testRunner.run();
 
@@ -664,8 +668,10 @@ describe('Visual Diff CLI E2E Tests', () => {
 
   describe('Concurrency and Performance', () => {
     it('should handle concurrent comparisons efficiently', async () => {
-      const pages = Array.from({ length: 5 }, (_, i) =>
-        `data:text/html,${encodeURIComponent(`<html><body><h1>Page ${i}</h1></body></html>`)}`
+      const pages = Array.from(
+        { length: 5 },
+        (_, i) =>
+          `data:text/html,${encodeURIComponent(`<html><body><h1>Page ${i}</h1></body></html>`)}`,
       );
 
       const config: VisualTestRunnerConfig = {
@@ -682,8 +688,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -691,9 +697,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 3
+          maxConcurrency: 3,
         },
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const startTime = Date.now();
@@ -738,8 +744,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -747,9 +753,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 1
+          maxConcurrency: 1,
         },
-        updateBaseline: false
+        updateBaseline: false,
       };
 
       const runner = new VisualTestRunner(config);
@@ -761,10 +767,7 @@ describe('Visual Diff CLI E2E Tests', () => {
       const validHtml = '<html><body><h1>Valid Page</h1></body></html>';
 
       const config: VisualTestRunnerConfig = {
-        pages: [
-          'data:text/html,' + encodeURIComponent(validHtml),
-          'http://invalid-test-url.test'
-        ],
+        pages: ['data:text/html,' + encodeURIComponent(validHtml), 'http://invalid-test-url.test'],
         baseline: { strategy: 'branch', reference: 'main' },
         capture: {
           viewport: { width: 800, height: 600 },
@@ -777,8 +780,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -786,9 +789,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 2
+          maxConcurrency: 2,
         },
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const runner = new VisualTestRunner(config);
@@ -831,8 +834,8 @@ describe('Visual Diff CLI E2E Tests', () => {
             disableAnimations: false,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 1000
-          }
+            networkIdleTimeout: 1000,
+          },
         },
         diff: {
           threshold: 0.1,
@@ -840,9 +843,9 @@ describe('Visual Diff CLI E2E Tests', () => {
           aiProvider: 'openai',
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 1
+          maxConcurrency: 1,
         },
-        updateBaseline: true
+        updateBaseline: true,
       };
 
       const baselineRunner = new VisualTestRunner(baselineConfig);
@@ -854,7 +857,7 @@ describe('Visual Diff CLI E2E Tests', () => {
       const testRunner = new VisualTestRunner({
         ...baselineConfig,
         pages: ['data:text/html,' + encodeURIComponent(html2)],
-        updateBaseline: false
+        updateBaseline: false,
       });
       const result = await testRunner.run();
 

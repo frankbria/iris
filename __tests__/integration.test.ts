@@ -9,7 +9,7 @@ jest.mock('../src/translator', () => ({
     actions: [{ type: 'click', selector: '#test' }],
     method: 'pattern',
     confidence: 0.9,
-    reasoning: 'Test translation'
+    reasoning: 'Test translation',
   }),
 }));
 
@@ -28,7 +28,7 @@ jest.mock('../src/executor', () => ({
       success: true,
       action: { type: 'click', selector: '#test' },
       duration: 100,
-      context: { url: 'http://example.com', timestamp: Date.now() }
+      context: { url: 'http://example.com', timestamp: Date.now() },
     }),
     cleanup: jest.fn().mockResolvedValue(undefined),
   })),

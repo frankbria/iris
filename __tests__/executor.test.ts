@@ -52,12 +52,24 @@ describe('ActionExecutor', () => {
       // If module doesn't exist yet, create a placeholder
       ActionExecutor = class ActionExecutor {
         constructor(options?: ActionExecutorOptions) {}
-        async launchBrowser(): Promise<Browser> { throw new Error('Not implemented'); }
-        async createPage(): Promise<Page> { throw new Error('Not implemented'); }
-        async executeAction(action: Action, page: Page): Promise<ExecutionResult> { throw new Error('Not implemented'); }
-        async executeActions(actions: Action[], page: Page): Promise<ExecutionResult[]> { throw new Error('Not implemented'); }
-        async cleanup(): Promise<void> { throw new Error('Not implemented'); }
-        async getPageContext(page: Page): Promise<PageContext> { throw new Error('Not implemented'); }
+        async launchBrowser(): Promise<Browser> {
+          throw new Error('Not implemented');
+        }
+        async createPage(): Promise<Page> {
+          throw new Error('Not implemented');
+        }
+        async executeAction(action: Action, page: Page): Promise<ExecutionResult> {
+          throw new Error('Not implemented');
+        }
+        async executeActions(actions: Action[], page: Page): Promise<ExecutionResult[]> {
+          throw new Error('Not implemented');
+        }
+        async cleanup(): Promise<void> {
+          throw new Error('Not implemented');
+        }
+        async getPageContext(page: Page): Promise<PageContext> {
+          throw new Error('Not implemented');
+        }
       };
     }
   });
@@ -322,8 +334,8 @@ describe('ActionExecutor', () => {
       const action: Action = { type: 'click', selector: '#btn' };
 
       // Add delay to mock
-      (click as jest.Mock).mockImplementation(() =>
-        new Promise(resolve => setTimeout(resolve, 100))
+      (click as jest.Mock).mockImplementation(
+        () => new Promise((resolve) => setTimeout(resolve, 100)),
       );
 
       const result = await executor.executeAction(action, page);
@@ -426,9 +438,7 @@ describe('ActionExecutor', () => {
       mockPage.url
         .mockReturnValueOnce('https://page1.com')
         .mockReturnValueOnce('https://page2.com');
-      mockPage.title
-        .mockResolvedValueOnce('Page 1')
-        .mockResolvedValueOnce('Page 2');
+      mockPage.title.mockResolvedValueOnce('Page 1').mockResolvedValueOnce('Page 2');
 
       const results = await executor.executeActions(actions, page);
 
@@ -447,7 +457,7 @@ describe('ActionExecutor', () => {
       executor = new ActionExecutor({
         retryAttempts: 3,
         retryDelay: 100,
-        trackContext: false
+        trackContext: false,
       });
       page = await executor.createPage();
     });
@@ -500,7 +510,7 @@ describe('ActionExecutor', () => {
     it('should not retry on certain error types', async () => {
       const executorNoRetry = new ActionExecutor({
         retryAttempts: 3,
-        retryDelay: 100
+        retryDelay: 100,
       });
       const pageNoRetry = await executorNoRetry.createPage();
       const action: Action = { type: 'navigate', url: 'invalid://url' };
@@ -577,9 +587,7 @@ describe('ActionExecutor', () => {
     it('should handle page being null or undefined', async () => {
       const action: Action = { type: 'click', selector: '#btn' };
 
-      await expect(
-        executor.executeAction(action, null)
-      ).rejects.toThrow();
+      await expect(executor.executeAction(action, null)).rejects.toThrow();
     });
 
     it('should handle browser being closed during execution', async () => {
@@ -606,9 +614,7 @@ describe('ActionExecutor', () => {
       ];
 
       // Execute actions concurrently (though not recommended)
-      const promises = actions.map(action =>
-        executor.executeAction(action, page)
-      );
+      const promises = actions.map((action) => executor.executeAction(action, page));
 
       const results = await Promise.all(promises);
 
@@ -624,18 +630,18 @@ describe('ActionExecutor', () => {
         {
           action: { type: 'click', selector: '#missing' } as Action,
           mockError: new Error('Element not found: selector: "#missing"'),
-          expectedError: 'Element not found: selector: "#missing"'
+          expectedError: 'Element not found: selector: "#missing"',
         },
         {
           action: { type: 'fill', selector: '#readonly', text: 'test' } as Action,
           mockError: new Error('Element is read-only'),
-          expectedError: 'Element is read-only'
+          expectedError: 'Element is read-only',
         },
         {
           action: { type: 'navigate', url: 'https://blocked.com' } as Action,
           mockError: new Error('net::ERR_BLOCKED_BY_CLIENT'),
-          expectedError: 'net::ERR_BLOCKED_BY_CLIENT'
-        }
+          expectedError: 'net::ERR_BLOCKED_BY_CLIENT',
+        },
       ];
 
       for (const testCase of testCases) {
@@ -676,10 +682,7 @@ describe('ActionExecutor', () => {
       expect(result1.success).toBe(true);
       expect(result2.success).toBe(true);
 
-      await Promise.all([
-        executor1.cleanup(),
-        executor2.cleanup(),
-      ]);
+      await Promise.all([executor1.cleanup(), executor2.cleanup()]);
     });
 
     it('should properly cleanup resources on multiple cleanup calls', async () => {

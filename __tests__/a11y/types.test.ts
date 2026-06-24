@@ -8,7 +8,7 @@ import {
   A11yTestError,
   AxeRunnerError,
   KeyboardNavigationError,
-  ScreenReaderError
+  ScreenReaderError,
 } from '../../src/a11y/types';
 
 describe('Accessibility Testing Types', () => {
@@ -23,11 +23,11 @@ describe('Accessibility Testing Types', () => {
           wcag2aa: true,
           wcag2aaa: false,
           section508: false,
-          bestPractice: true
+          bestPractice: true,
         },
         tags: ['wcag2a', 'wcag2aa'],
         excludeRules: ['color-contrast'],
-        timeout: 10000
+        timeout: 10000,
       };
 
       const result = A11yTestConfigSchema.safeParse(validConfig);
@@ -42,7 +42,7 @@ describe('Accessibility Testing Types', () => {
     it('should apply default values for rules and timeout', () => {
       const minimalConfig = {
         testName: 'basic-test',
-        url: 'https://example.com'
+        url: 'https://example.com',
       };
 
       const result = A11yTestConfigSchema.safeParse(minimalConfig);
@@ -56,7 +56,7 @@ describe('Accessibility Testing Types', () => {
     it('should reject invalid URL', () => {
       const invalidConfig = {
         testName: 'test',
-        url: 'not-a-valid-url'
+        url: 'not-a-valid-url',
       };
 
       const result = A11yTestConfigSchema.safeParse(invalidConfig);
@@ -66,7 +66,7 @@ describe('Accessibility Testing Types', () => {
     it('should reject empty test name', () => {
       const invalidConfig = {
         testName: '',
-        url: 'https://example.com'
+        url: 'https://example.com',
       };
 
       const result = A11yTestConfigSchema.safeParse(invalidConfig);
@@ -88,9 +88,9 @@ describe('Accessibility Testing Types', () => {
             target: ['.low-contrast-text'],
             html: '<span class="low-contrast-text">Text</span>',
             failureSummary: 'Fix this: Element has insufficient color contrast',
-            element: 'span'
-          }
-        ]
+            element: 'span',
+          },
+        ],
       };
 
       const result = A11yViolationSchema.safeParse(validViolation);
@@ -110,7 +110,7 @@ describe('Accessibility Testing Types', () => {
         description: 'Test description',
         help: 'Test help',
         helpUrl: 'https://example.com',
-        nodes: []
+        nodes: [],
       };
 
       const result = A11yViolationSchema.safeParse(invalidViolation);
@@ -133,15 +133,15 @@ describe('Accessibility Testing Types', () => {
             description: 'Color contrast issue',
             help: 'Increase contrast',
             helpUrl: 'https://example.com',
-            nodes: [{ target: ['.test'], html: '<div class="test"></div>' }]
-          }
+            nodes: [{ target: ['.test'], html: '<div class="test"></div>' }],
+          },
         ],
         passes: [
           {
             id: 'heading-order',
             description: 'Heading levels should increase by one',
-            nodes: [{ target: ['h1'], html: '<h1>Title</h1>' }]
-          }
+            nodes: [{ target: ['h1'], html: '<h1>Title</h1>' }],
+          },
         ],
         incomplete: [],
         inapplicable: [],
@@ -150,12 +150,12 @@ describe('Accessibility Testing Types', () => {
           violations: 1,
           passes: 49,
           incomplete: 0,
-          inapplicable: 5
+          inapplicable: 5,
         },
         testRunner: {
           name: 'axe-core',
-          version: '4.6.0'
-        }
+          version: '4.6.0',
+        },
       };
 
       const result = A11yResultSchema.safeParse(validResult);
@@ -180,24 +180,24 @@ describe('Accessibility Testing Types', () => {
             expectedBehavior: 'Focus should move to button',
             actualBehavior: 'Focus moved to button',
             success: true,
-            timestamp: new Date()
-          }
+            timestamp: new Date(),
+          },
         ],
         focusOrder: [
           {
             element: 'button',
             tabIndex: 0,
             focusable: true,
-            visible: true
-          }
+            visible: true,
+          },
         ],
         trapTests: [
           {
             container: '.modal',
             trapped: true,
-            escapeMethod: 'Escape key'
-          }
-        ]
+            escapeMethod: 'Escape key',
+          },
+        ],
       };
 
       const result = KeyboardTestResultSchema.safeParse(validResult);
@@ -222,24 +222,24 @@ describe('Accessibility Testing Types', () => {
             actualText: 'Submit button',
             role: 'button',
             properties: { 'aria-label': 'Submit' },
-            success: true
-          }
+            success: true,
+          },
         ],
         landmarkStructure: [
           {
             type: 'main',
             label: 'Main content',
             element: 'main',
-            level: 1
-          }
+            level: 1,
+          },
         ],
         headingStructure: [
           {
             level: 1,
             text: 'Page Title',
-            element: 'h1'
-          }
-        ]
+            element: 'h1',
+          },
+        ],
       };
 
       const result = ScreenReaderTestResultSchema.safeParse(validResult);

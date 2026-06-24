@@ -80,7 +80,11 @@ export class VisualCaptureEngine {
   /**
    * Generate metadata for a successful capture
    */
-  async generateMetadata(page: Page, buffer: Buffer, config: CaptureConfig): Promise<CaptureMetadata> {
+  async generateMetadata(
+    page: Page,
+    buffer: Buffer,
+    config: CaptureConfig,
+  ): Promise<CaptureMetadata> {
     const url = page.url();
     const title = await page.title();
     const viewport = await page.evaluate(() => ({
@@ -111,10 +115,12 @@ export class VisualCaptureEngine {
     try {
       const url = page.url();
       const title = await page.title().catch(() => 'Unknown');
-      const viewport = await page.evaluate(() => ({
-        width: window.innerWidth,
-        height: window.innerHeight,
-      })).catch(() => ({ width: 0, height: 0 }));
+      const viewport = await page
+        .evaluate(() => ({
+          width: window.innerWidth,
+          height: window.innerHeight,
+        }))
+        .catch(() => ({ width: 0, height: 0 }));
 
       return {
         url,

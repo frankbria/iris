@@ -39,7 +39,7 @@ export async function benchmark(
     iterations?: number;
     warmup?: number;
     timeout?: number;
-  } = {}
+  } = {},
 ): Promise<BenchmarkResult> {
   const { iterations = 10, warmup = 2, timeout = 60000 } = options;
 
@@ -101,7 +101,7 @@ export async function benchmark(
  */
 export async function benchmarkSuite(
   name: string,
-  benchmarks: Array<{ name: string; fn: () => Promise<void> | void; options?: any }>
+  benchmarks: Array<{ name: string; fn: () => Promise<void> | void; options?: any }>,
 ): Promise<BenchmarkSuite> {
   const results: BenchmarkResult[] = [];
   const suiteStart = Date.now();
@@ -116,7 +116,7 @@ export async function benchmarkSuite(
   const suiteDuration = Date.now() - suiteStart;
   const totalIterations = results.reduce((sum, r) => sum + r.iterations, 0);
   const avgThroughput = results.reduce((sum, r) => sum + r.throughput, 0) / results.length;
-  const peakMemory = Math.max(...results.map(r => r.memoryUsage.heapUsed));
+  const peakMemory = Math.max(...results.map((r) => r.memoryUsage.heapUsed));
 
   return {
     name,
@@ -139,14 +139,16 @@ export function formatResults(suite: BenchmarkSuite): string {
   lines.push(`Benchmark Suite: ${suite.name}`);
   lines.push(`${'='.repeat(100)}`);
   lines.push(
-    `| ${'Benchmark'.padEnd(40)} | ${'Avg Time'.padStart(12)} | ${'Min Time'.padStart(12)} | ${'Max Time'.padStart(12)} | ${'Throughput'.padStart(15)} |`
+    `| ${'Benchmark'.padEnd(40)} | ${'Avg Time'.padStart(12)} | ${'Min Time'.padStart(12)} | ${'Max Time'.padStart(12)} | ${'Throughput'.padStart(15)} |`,
   );
-  lines.push(`| ${'-'.repeat(40)} | ${'-'.repeat(12)} | ${'-'.repeat(12)} | ${'-'.repeat(12)} | ${'-'.repeat(15)} |`);
+  lines.push(
+    `| ${'-'.repeat(40)} | ${'-'.repeat(12)} | ${'-'.repeat(12)} | ${'-'.repeat(12)} | ${'-'.repeat(15)} |`,
+  );
 
   for (const result of suite.results) {
     const name = result.name.length > 40 ? result.name.substring(0, 37) + '...' : result.name;
     lines.push(
-      `| ${name.padEnd(40)} | ${result.avgTime.toFixed(2).padStart(10)}ms | ${result.minTime.toFixed(2).padStart(10)}ms | ${result.maxTime.toFixed(2).padStart(10)}ms | ${result.throughput.toFixed(2).padStart(12)} op/s |`
+      `| ${name.padEnd(40)} | ${result.avgTime.toFixed(2).padStart(10)}ms | ${result.minTime.toFixed(2).padStart(10)}ms | ${result.maxTime.toFixed(2).padStart(10)}ms | ${result.throughput.toFixed(2).padStart(12)} op/s |`,
     );
   }
 
@@ -185,7 +187,7 @@ export function saveBenchmarkResults(suite: BenchmarkSuite, filepath: string): v
  */
 export function compareBenchmarks(
   baseline: BenchmarkResult,
-  current: BenchmarkResult
+  current: BenchmarkResult,
 ): {
   speedup: number;
   percentChange: number;

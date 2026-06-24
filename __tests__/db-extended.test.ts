@@ -8,7 +8,7 @@ import {
   getVisualTestStats,
   getA11yTestStats,
   VisualTestResult,
-  A11yTestResult
+  A11yTestResult,
 } from '../src/db';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -30,7 +30,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
       instruction: 'test visual and a11y',
       status: 'success',
       startTime: new Date(),
-      endTime: new Date()
+      endTime: new Date(),
     });
   });
 
@@ -47,20 +47,28 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
   describe('Schema and Migration', () => {
     test('initializeDatabase creates all required tables', () => {
       // Verify visual_test_results table
-      const visualTableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='visual_test_results'").get();
+      const visualTableInfo = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='visual_test_results'")
+        .get();
       expect(visualTableInfo).toBeDefined();
 
       // Verify a11y_test_results table
-      const a11yTableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='a11y_test_results'").get();
+      const a11yTableInfo = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='a11y_test_results'")
+        .get();
       expect(a11yTableInfo).toBeDefined();
 
       // Verify schema_version table
-      const schemaTableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'").get();
+      const schemaTableInfo = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+        .get();
       expect(schemaTableInfo).toBeDefined();
     });
 
     test('schema version is tracked correctly', () => {
-      const versionRow = db.prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1').get();
+      const versionRow = db
+        .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
+        .get();
       expect(versionRow).toBeDefined();
       expect(versionRow.version).toBe(1);
     });
@@ -96,7 +104,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: 'Minor layout shift detected in header',
         severity: 'low',
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       };
 
       const id = insertVisualTestResult(db, visualResult);
@@ -117,7 +125,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'new_baseline',
-        timestamp: new Date()
+        timestamp: new Date(),
       };
 
       const id = insertVisualTestResult(db, visualResult);
@@ -142,13 +150,13 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
           aiAnalysis: `Analysis ${i}`,
           severity: 'low',
           status: 'passed',
-          timestamp: new Date()
+          timestamp: new Date(),
         });
       }
 
       const results = getVisualTestResults(db, { testRunId });
       expect(results).toHaveLength(3);
-      expect(results.every(r => r.testRunId === testRunId)).toBe(true);
+      expect(results.every((r) => r.testRunId === testRunId)).toBe(true);
     });
 
     test('getVisualTestResults filters by page', () => {
@@ -163,7 +171,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       insertVisualTestResult(db, {
@@ -177,7 +185,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const results = getVisualTestResults(db, { page: 'home' });
@@ -197,7 +205,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       insertVisualTestResult(db, {
@@ -211,7 +219,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: 'Significant changes',
         severity: 'high',
         status: 'failed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const failedResults = getVisualTestResults(db, { status: 'failed' });
@@ -232,7 +240,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
           aiAnalysis: null,
           severity: null,
           status: 'passed',
-          timestamp: new Date()
+          timestamp: new Date(),
         });
       }
 
@@ -252,7 +260,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       insertVisualTestResult(db, {
@@ -266,7 +274,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: 'medium',
         status: 'failed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       insertVisualTestResult(db, {
@@ -280,7 +288,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'new_baseline',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const stats = getVisualTestStats(db, testRunId);
@@ -304,7 +312,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: true,
         score: 85.5,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       };
 
       const id = insertA11yTestResult(db, a11yResult);
@@ -325,7 +333,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: true,
         score: 75.0,
         status: 'warning',
-        timestamp: new Date()
+        timestamp: new Date(),
       };
 
       const id = insertA11yTestResult(db, a11yResult);
@@ -348,13 +356,13 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
           screenReaderPassed: true,
           score: 90 - i * 5,
           status: 'passed',
-          timestamp: new Date()
+          timestamp: new Date(),
         });
       }
 
       const results = getA11yTestResults(db, { testRunId });
       expect(results).toHaveLength(3);
-      expect(results.every(r => r.testRunId === testRunId)).toBe(true);
+      expect(results.every((r) => r.testRunId === testRunId)).toBe(true);
     });
 
     test('getA11yTestResults filters by page', () => {
@@ -369,7 +377,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: true,
         score: 100,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       insertA11yTestResult(db, {
@@ -383,7 +391,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: false,
         score: 60,
         status: 'failed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const results = getA11yTestResults(db, { page: 'home' });
@@ -403,7 +411,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: true,
         score: 100,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       insertA11yTestResult(db, {
@@ -417,7 +425,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: false,
         score: 40,
         status: 'failed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const failedResults = getA11yTestResults(db, { status: 'failed' });
@@ -438,7 +446,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
           screenReaderPassed: true,
           score: 100,
           status: 'passed',
-          timestamp: new Date()
+          timestamp: new Date(),
         });
       }
 
@@ -458,7 +466,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: true,
         score: 85,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       insertA11yTestResult(db, {
@@ -472,7 +480,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: false,
         score: 50,
         status: 'failed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       insertA11yTestResult(db, {
@@ -486,7 +494,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: false,
         score: 75,
         status: 'warning',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const stats = getA11yTestStats(db, testRunId);
@@ -514,7 +522,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       // Delete the test run
@@ -537,7 +545,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: true,
         score: 100,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       // Delete the test run
@@ -563,7 +571,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       // Insert a11y result
@@ -578,7 +586,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: true,
         score: 100,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const visualResults = getVisualTestResults(db, { testRunId });
@@ -603,7 +611,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const results = getVisualTestResults(db);
@@ -622,7 +630,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: true,
         score: 100,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const results = getA11yTestResults(db);
@@ -641,7 +649,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       insertVisualTestResult(db, {
@@ -655,14 +663,14 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         aiAnalysis: null,
         severity: null,
         status: 'failed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const results = getVisualTestResults(db, {
         testRunId,
         page: 'home',
         status: 'passed',
-        limit: 10
+        limit: 10,
       });
 
       expect(results).toHaveLength(1);
@@ -682,7 +690,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: true,
         score: 100,
         status: 'passed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       insertA11yTestResult(db, {
@@ -696,14 +704,14 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         screenReaderPassed: false,
         score: 60,
         status: 'failed',
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       const results = getA11yTestResults(db, {
         testRunId,
         page: 'home',
         status: 'passed',
-        limit: 10
+        limit: 10,
       });
 
       expect(results).toHaveLength(1);
@@ -716,7 +724,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         instruction: 'empty test',
         status: 'success',
         startTime: new Date(),
-        endTime: new Date()
+        endTime: new Date(),
       });
 
       const stats = getVisualTestStats(db, newTestRunId);
@@ -731,7 +739,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         instruction: 'empty test',
         status: 'success',
         startTime: new Date(),
-        endTime: new Date()
+        endTime: new Date(),
       });
 
       const stats = getA11yTestStats(db, newTestRunId);

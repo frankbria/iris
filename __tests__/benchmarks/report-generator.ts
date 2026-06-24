@@ -22,12 +22,12 @@ export function generateReport(resultsPath: string, options: ReportOptions = {})
     outputDir = '.iris-bench-results',
     format = 'both',
     includeCharts = true,
-    compareWith
+    compareWith,
   } = options;
 
   // Load results
   const results: BenchmarkSuite & { timestamp: string; platform: any } = JSON.parse(
-    fs.readFileSync(resultsPath, 'utf-8')
+    fs.readFileSync(resultsPath, 'utf-8'),
   );
 
   let baseline: BenchmarkSuite | null = null;
@@ -57,7 +57,7 @@ export function generateReport(resultsPath: string, options: ReportOptions = {})
 function generateHTMLReport(
   results: BenchmarkSuite & { timestamp: string; platform: any },
   baseline: BenchmarkSuite | null,
-  includeCharts: boolean
+  includeCharts: boolean,
 ): string {
   const comparisonRows = baseline ? generateComparisonRows(results, baseline) : '';
 
@@ -258,7 +258,7 @@ function generateHTMLReport(
       </div>
       <div class="meta-item">
         <span class="meta-label">Memory</span>
-        <span class="meta-value">${(results.platform.memory / (1024 ** 3)).toFixed(2)} GB</span>
+        <span class="meta-value">${(results.platform.memory / 1024 ** 3).toFixed(2)} GB</span>
       </div>
     </div>
 
@@ -277,7 +277,7 @@ function generateHTMLReport(
       </div>
       <div class="summary-card">
         <h3>Peak Memory</h3>
-        <div class="value">${(results.summary.peakMemory / (1024 ** 2)).toFixed(2)} MB</div>
+        <div class="value">${(results.summary.peakMemory / 1024 ** 2).toFixed(2)} MB</div>
       </div>
     </div>
 
@@ -295,8 +295,9 @@ function generateHTMLReport(
         </tr>
       </thead>
       <tbody>
-        ${results.results.map(result => {
-          const row = `
+        ${results.results
+          .map((result) => {
+            const row = `
             <tr>
               <td>${result.name}</td>
               <td class="number">${result.iterations}</td>
@@ -306,8 +307,9 @@ function generateHTMLReport(
               <td class="number">${result.throughput.toFixed(2)} ops/s</td>
             </tr>
           `;
-          return row;
-        }).join('')}
+            return row;
+          })
+          .join('')}
         ${comparisonRows}
       </tbody>
     </table>
@@ -326,15 +328,19 @@ function generateHTMLReport(
         </tr>
       </thead>
       <tbody>
-        ${results.results.map(result => `
+        ${results.results
+          .map(
+            (result) => `
           <tr>
             <td>${result.name}</td>
-            <td class="number">${(result.memoryUsage.heapUsed / (1024 ** 2)).toFixed(2)} MB</td>
-            <td class="number">${(result.memoryUsage.heapTotal / (1024 ** 2)).toFixed(2)} MB</td>
-            <td class="number">${(result.memoryUsage.external / (1024 ** 2)).toFixed(2)} MB</td>
-            <td class="number">${(result.memoryUsage.rss / (1024 ** 2)).toFixed(2)} MB</td>
+            <td class="number">${(result.memoryUsage.heapUsed / 1024 ** 2).toFixed(2)} MB</td>
+            <td class="number">${(result.memoryUsage.heapTotal / 1024 ** 2).toFixed(2)} MB</td>
+            <td class="number">${(result.memoryUsage.external / 1024 ** 2).toFixed(2)} MB</td>
+            <td class="number">${(result.memoryUsage.rss / 1024 ** 2).toFixed(2)} MB</td>
           </tr>
-        `).join('')}
+        `,
+          )
+          .join('')}
       </tbody>
     </table>
 
@@ -355,7 +361,7 @@ function generateComparisonRows(current: BenchmarkSuite, baseline: BenchmarkSuit
   const rows: string[] = [];
 
   for (const currentResult of current.results) {
-    const baselineResult = baseline.results.find(r => r.name === currentResult.name);
+    const baselineResult = baseline.results.find((r) => r.name === currentResult.name);
     if (baselineResult) {
       const comparison = compareBenchmarks(baselineResult, currentResult);
       const badge = comparison.faster
@@ -375,15 +381,16 @@ function generateComparisonRows(current: BenchmarkSuite, baseline: BenchmarkSuit
  * Generate charts HTML
  */
 function generateChartsHTML(results: BenchmarkSuite): string {
-  const maxTime = Math.max(...results.results.map(r => r.avgTime));
+  const maxTime = Math.max(...results.results.map((r) => r.avgTime));
 
   return `
     <h2>📈 Performance Visualization</h2>
     <div class="chart">
       <h3>Average Execution Time</h3>
-      ${results.results.map(result => {
-        const widthPercent = (result.avgTime / maxTime) * 100;
-        return `
+      ${results.results
+        .map((result) => {
+          const widthPercent = (result.avgTime / maxTime) * 100;
+          return `
           <div class="bar">
             <div class="bar-label" title="${result.name}">${result.name}</div>
             <div class="bar-container">
@@ -392,7 +399,8 @@ function generateChartsHTML(results: BenchmarkSuite): string {
             </div>
           </div>
         `;
-      }).join('')}
+        })
+        .join('')}
     </div>
   `;
 }
@@ -402,7 +410,7 @@ function generateChartsHTML(results: BenchmarkSuite): string {
  */
 function generateMarkdownReport(
   results: BenchmarkSuite & { timestamp: string; platform: any },
-  baseline: BenchmarkSuite | null
+  baseline: BenchmarkSuite | null,
 ): string {
   const lines: string[] = [];
 
@@ -414,13 +422,13 @@ function generateMarkdownReport(
   lines.push(`- **Platform**: ${results.platform.platform} (${results.platform.arch})`);
   lines.push(`- **Node**: ${results.platform.node}`);
   lines.push(`- **CPUs**: ${results.platform.cpus}`);
-  lines.push(`- **Memory**: ${(results.platform.memory / (1024 ** 3)).toFixed(2)} GB\n`);
+  lines.push(`- **Memory**: ${(results.platform.memory / 1024 ** 3).toFixed(2)} GB\n`);
 
   lines.push(`## Summary`);
   lines.push(`- **Total Duration**: ${(results.summary.totalDuration / 1000).toFixed(2)}s`);
   lines.push(`- **Total Iterations**: ${results.summary.totalIterations}`);
   lines.push(`- **Average Throughput**: ${results.summary.avgThroughput.toFixed(2)} ops/s`);
-  lines.push(`- **Peak Memory**: ${(results.summary.peakMemory / (1024 ** 2)).toFixed(2)} MB\n`);
+  lines.push(`- **Peak Memory**: ${(results.summary.peakMemory / 1024 ** 2).toFixed(2)} MB\n`);
 
   lines.push(`## Benchmark Results\n`);
   lines.push(`| Benchmark | Iterations | Avg Time | Min Time | Max Time | Throughput |`);
@@ -428,7 +436,7 @@ function generateMarkdownReport(
 
   for (const result of results.results) {
     lines.push(
-      `| ${result.name} | ${result.iterations} | ${result.avgTime.toFixed(2)}ms | ${result.minTime.toFixed(2)}ms | ${result.maxTime.toFixed(2)}ms | ${result.throughput.toFixed(2)} ops/s |`
+      `| ${result.name} | ${result.iterations} | ${result.avgTime.toFixed(2)}ms | ${result.minTime.toFixed(2)}ms | ${result.maxTime.toFixed(2)}ms | ${result.throughput.toFixed(2)} ops/s |`,
     );
   }
 
@@ -438,12 +446,12 @@ function generateMarkdownReport(
     lines.push(`|-----------|---------|----------|--------|--------|`);
 
     for (const currentResult of results.results) {
-      const baselineResult = baseline.results.find(r => r.name === currentResult.name);
+      const baselineResult = baseline.results.find((r) => r.name === currentResult.name);
       if (baselineResult) {
         const comparison = compareBenchmarks(baselineResult, currentResult);
         const status = comparison.faster ? '✅ Faster' : '❌ Slower';
         lines.push(
-          `| ${currentResult.name} | ${currentResult.avgTime.toFixed(2)}ms | ${baselineResult.avgTime.toFixed(2)}ms | ${comparison.percentChange.toFixed(1)}% | ${status} |`
+          `| ${currentResult.name} | ${currentResult.avgTime.toFixed(2)}ms | ${baselineResult.avgTime.toFixed(2)}ms | ${comparison.percentChange.toFixed(1)}% | ${status} |`,
         );
       }
     }
@@ -455,7 +463,7 @@ function generateMarkdownReport(
 
   for (const result of results.results) {
     lines.push(
-      `| ${result.name} | ${(result.memoryUsage.heapUsed / (1024 ** 2)).toFixed(2)} MB | ${(result.memoryUsage.heapTotal / (1024 ** 2)).toFixed(2)} MB | ${(result.memoryUsage.external / (1024 ** 2)).toFixed(2)} MB | ${(result.memoryUsage.rss / (1024 ** 2)).toFixed(2)} MB |`
+      `| ${result.name} | ${(result.memoryUsage.heapUsed / 1024 ** 2).toFixed(2)} MB | ${(result.memoryUsage.heapTotal / 1024 ** 2).toFixed(2)} MB | ${(result.memoryUsage.external / 1024 ** 2).toFixed(2)} MB | ${(result.memoryUsage.rss / 1024 ** 2).toFixed(2)} MB |`,
     );
   }
 
@@ -484,7 +492,7 @@ if (require.main === module) {
   generateReport(resultsPath, {
     format: 'both',
     includeCharts: true,
-    compareWith: baselinePath
+    compareWith: baselinePath,
   });
 
   console.log('\n✅ Report generation completed!');

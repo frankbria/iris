@@ -5,7 +5,7 @@ import {
   VisualTestError,
   BaselineNotFoundError,
   ScreenshotCaptureError,
-  DiffAnalysisError
+  DiffAnalysisError,
 } from '../../src/visual/types';
 
 describe('Visual Testing Types', () => {
@@ -18,7 +18,7 @@ describe('Visual Testing Types', () => {
         threshold: 0.1,
         waitForTimeout: 5000,
         disableAnimations: true,
-        fullPage: false
+        fullPage: false,
       };
 
       const result = VisualTestConfigSchema.safeParse(validConfig);
@@ -33,7 +33,7 @@ describe('Visual Testing Types', () => {
       const invalidConfig = {
         testName: '', // Empty string should fail
         url: 'not-a-url', // Invalid URL
-        threshold: 1.5 // Threshold > 1 should fail
+        threshold: 1.5, // Threshold > 1 should fail
       };
 
       const result = VisualTestConfigSchema.safeParse(invalidConfig);
@@ -43,7 +43,7 @@ describe('Visual Testing Types', () => {
     it('should apply default values', () => {
       const minimalConfig = {
         testName: 'test',
-        url: 'https://example.com'
+        url: 'https://example.com',
       };
 
       const result = VisualTestConfigSchema.safeParse(minimalConfig);
@@ -62,8 +62,8 @@ describe('Visual Testing Types', () => {
         url: 'https://example.com',
         ignoreRegions: [
           { x: 0, y: 0, width: 100, height: 50 },
-          { x: 200, y: 100, width: 150, height: 75 }
-        ]
+          { x: 200, y: 100, width: 150, height: 75 },
+        ],
       };
 
       const result = VisualTestConfigSchema.safeParse(configWithRegions);
@@ -89,7 +89,7 @@ describe('Visual Testing Types', () => {
         diffPath: '/path/to/diff.png',
         timestamp: new Date(),
         viewport: { width: 1920, height: 1080 },
-        metadata: { browser: 'chromium' }
+        metadata: { browser: 'chromium' },
       };
 
       const result = VisualDiffResultSchema.safeParse(validResult);
@@ -111,7 +111,7 @@ describe('Visual Testing Types', () => {
         baselineExists: true,
         screenshotPath: '/path/to/screenshot.png',
         timestamp: new Date(),
-        viewport: { width: 1920, height: 1080 }
+        viewport: { width: 1920, height: 1080 },
       };
 
       const result = VisualDiffResultSchema.safeParse(invalidResult);
@@ -128,7 +128,7 @@ describe('Visual Testing Types', () => {
           total: 10,
           passed: 8,
           failed: 2,
-          newBaselines: 1
+          newBaselines: 1,
         },
         results: [],
         environment: {
@@ -136,8 +136,8 @@ describe('Visual Testing Types', () => {
           viewport: { width: 1920, height: 1080 },
           platform: 'linux',
           gitBranch: 'main',
-          gitCommit: 'abc123'
-        }
+          gitCommit: 'abc123',
+        },
       };
 
       const result = VisualReportSchema.safeParse(validReport);
@@ -169,7 +169,7 @@ describe('Visual Testing Types', () => {
       expect(error.message).toContain('/path/to/baseline.png');
       expect(error.details).toEqual({
         testName: 'test-name',
-        baselinePath: '/path/to/baseline.png'
+        baselinePath: '/path/to/baseline.png',
       });
     });
 

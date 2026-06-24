@@ -18,25 +18,29 @@ describe('Performance Optimizations', () => {
           width: 100,
           height: 100,
           channels: 4,
-          background: { r: 255, g: 0, b: 0, alpha: 1 }
-        }
-      }).png().toBuffer();
+          background: { r: 255, g: 0, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
 
       const currentBuffer = await sharp({
         create: {
           width: 100,
           height: 100,
           channels: 4,
-          background: { r: 255, g: 0, b: 0, alpha: 1 }
-        }
-      }).png().toBuffer();
+          background: { r: 255, g: 0, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
 
       const options = {
         threshold: 0.9,
         includeAA: false,
         alpha: 0.1,
         diffMask: true,
-        diffColor: [255, 0, 0] as [number, number, number]
+        diffColor: [255, 0, 0] as [number, number, number],
       };
 
       // First comparison (should compute)
@@ -63,9 +67,11 @@ describe('Performance Optimizations', () => {
           width: 50,
           height: 50,
           channels: 4,
-          background: { r: 0, g: 0, b: 0, alpha: 1 }
-        }
-      }).png().toBuffer();
+          background: { r: 0, g: 0, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
 
       // Add to cache
       await diffEngine.compare(buffer, buffer, {
@@ -73,7 +79,7 @@ describe('Performance Optimizations', () => {
         includeAA: false,
         alpha: 0.1,
         diffMask: true,
-        diffColor: [255, 0, 0]
+        diffColor: [255, 0, 0],
       });
 
       expect(diffEngine.getCacheStats().size).toBe(1);
@@ -95,16 +101,18 @@ describe('Performance Optimizations', () => {
             width: 10 + i,
             height: 10,
             channels: 4,
-            background: { r: i % 255, g: 0, b: 0, alpha: 1 }
-          }
-        }).png().toBuffer();
+            background: { r: i % 255, g: 0, b: 0, alpha: 1 },
+          },
+        })
+          .png()
+          .toBuffer();
 
         await diffEngine.compare(buffer, buffer, {
           threshold: 0.9,
           includeAA: false,
           alpha: 0.1,
           diffMask: true,
-          diffColor: [255, 0, 0]
+          diffColor: [255, 0, 0],
         });
       }
 
@@ -124,18 +132,22 @@ describe('Performance Optimizations', () => {
           width: 2000,
           height: 1200,
           channels: 4,
-          background: { r: 255, g: 255, b: 255, alpha: 1 }
-        }
-      }).png().toBuffer();
+          background: { r: 255, g: 255, b: 255, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
 
       const currentBuffer = await sharp({
         create: {
           width: 2000,
           height: 1200,
           channels: 4,
-          background: { r: 0, g: 0, b: 0, alpha: 1 }
-        }
-      }).png().toBuffer();
+          background: { r: 0, g: 0, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
 
       const start = Date.now();
       const result = await diffEngine.compare(baselineBuffer, currentBuffer, {
@@ -143,7 +155,7 @@ describe('Performance Optimizations', () => {
         includeAA: false,
         alpha: 0.1,
         diffMask: true,
-        diffColor: [255, 0, 0]
+        diffColor: [255, 0, 0],
       });
       const duration = Date.now() - start;
 
@@ -167,25 +179,29 @@ describe('Performance Optimizations', () => {
           width: 2000,
           height: 1200,
           channels: 4,
-          background: { r: 100, g: 100, b: 100, alpha: 1 }
-        }
-      }).png().toBuffer();
+          background: { r: 100, g: 100, b: 100, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
 
       const currentBuffer = await sharp({
         create: {
           width: 2000,
           height: 1200,
           channels: 4,
-          background: { r: 105, g: 105, b: 105, alpha: 1 }
-        }
-      }).png().toBuffer();
+          background: { r: 105, g: 105, b: 105, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
 
       const result = await diffEngine.compare(baselineBuffer, currentBuffer, {
         threshold: 0.9,
         includeAA: false,
         alpha: 0.1,
         diffMask: true,
-        diffColor: [255, 0, 0]
+        diffColor: [255, 0, 0],
       });
 
       // Should complete full comparison
@@ -207,16 +223,18 @@ describe('Performance Optimizations', () => {
           width: 1000,
           height: 1000,
           channels: 4,
-          background: { r: 255, g: 0, b: 0, alpha: 1 }
-        }
-      }).png().toBuffer();
+          background: { r: 255, g: 0, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
 
       const result = await diffEngine.compare(largeBuffer, largeBuffer, {
         threshold: 0.9,
         includeAA: false,
         alpha: 0.1,
         diffMask: true,
-        diffColor: [255, 0, 0]
+        diffColor: [255, 0, 0],
       });
 
       expect(result.success).toBe(false);
@@ -269,15 +287,17 @@ describe('Performance Optimizations', () => {
           width: 1000,
           height: 1000,
           channels: 4,
-          background: { r: 255, g: 0, b: 0, alpha: 1 }
-        }
-      }).png({ compressionLevel: 0 }).toBuffer();
+          background: { r: 255, g: 0, b: 0, alpha: 1 },
+        },
+      })
+        .png({ compressionLevel: 0 })
+        .toBuffer();
 
       const originalSize = largeBuffer.length;
 
       // Save with auto-optimization
       const result = await storageManager.saveImage('test', 'compression-test', largeBuffer, {
-        autoOptimize: true
+        autoOptimize: true,
       });
 
       // Compressed size should be smaller
@@ -293,12 +313,14 @@ describe('Performance Optimizations', () => {
           width: 100,
           height: 100,
           channels: 4,
-          background: { r: 255, g: 0, b: 0, alpha: 1 }
-        }
-      }).png().toBuffer();
+          background: { r: 255, g: 0, b: 0, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
 
       const smallResult = await storageManager.saveImage('test', 'small', smallBuffer, {
-        autoOptimize: true
+        autoOptimize: true,
       });
 
       expect(smallResult.format).toBe('png');
@@ -309,12 +331,14 @@ describe('Performance Optimizations', () => {
           width: 800,
           height: 800,
           channels: 4,
-          background: { r: 255, g: 0, b: 0, alpha: 1 }
-        }
-      }).png({ compressionLevel: 0 }).toBuffer();
+          background: { r: 255, g: 0, b: 0, alpha: 1 },
+        },
+      })
+        .png({ compressionLevel: 0 })
+        .toBuffer();
 
       const mediumResult = await storageManager.saveImage('test', 'medium', mediumBuffer, {
-        autoOptimize: true
+        autoOptimize: true,
       });
 
       expect(['webp', 'jpeg']).toContain(mediumResult.format);
@@ -326,13 +350,15 @@ describe('Performance Optimizations', () => {
           width: 500,
           height: 500,
           channels: 4,
-          background: { r: 100, g: 100, b: 100, alpha: 1 }
-        }
-      }).png().toBuffer();
+          background: { r: 100, g: 100, b: 100, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
 
       const result = await storageManager.saveImage('test', 'progressive', buffer, {
         format: 'jpeg',
-        quality: 85
+        quality: 85,
       });
 
       expect(result.format).toBe('jpeg');
@@ -348,7 +374,7 @@ describe('Performance Optimizations', () => {
         pages: ['/', '/about', '/contact'],
         baseline: {
           strategy: 'branch' as const,
-          reference: 'main'
+          reference: 'main',
         },
         capture: {
           viewport: { width: 1920, height: 1080 },
@@ -361,8 +387,8 @@ describe('Performance Optimizations', () => {
             disableAnimations: true,
             delay: 0,
             waitForNetworkIdle: false,
-            networkIdleTimeout: 5000
-          }
+            networkIdleTimeout: 5000,
+          },
         },
         diff: {
           threshold: 0.9,
@@ -370,9 +396,9 @@ describe('Performance Optimizations', () => {
           aiProvider: 'claude' as any,
           antiAliasing: true,
           regions: [],
-          maxConcurrency: 3
+          maxConcurrency: 3,
         },
-        devices: ['desktop', 'mobile']
+        devices: ['desktop', 'mobile'],
       };
 
       const runner = new VisualTestRunner(config);

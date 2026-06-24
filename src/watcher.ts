@@ -183,7 +183,9 @@ export class FileWatcher {
           // Execute each action and report progress
           for (let i = 0; i < result.actions.length; i++) {
             const action = result.actions[i];
-            console.log(`   [${i + 1}/${result.actions.length}] Executing: ${action.type} ${action.type === 'navigate' ? action.url : action.selector}${action.type === 'fill' ? ` = "${action.text}"` : ''}`);
+            console.log(
+              `   [${i + 1}/${result.actions.length}] Executing: ${action.type} ${action.type === 'navigate' ? action.url : action.selector}${action.type === 'fill' ? ` = "${action.text}"` : ''}`,
+            );
 
             const execResult = await this.executor.executeAction(action, this.page);
             executionResults.push(execResult);
@@ -201,7 +203,7 @@ export class FileWatcher {
           }
 
           // Final execution status
-          const successCount = executionResults.filter(r => r.success).length;
+          const successCount = executionResults.filter((r) => r.success).length;
           const totalCount = executionResults.length;
 
           if (successCount === totalCount) {
@@ -210,10 +212,12 @@ export class FileWatcher {
             console.log(`\n⚠️  ${successCount}/${totalCount} actions completed successfully`);
             status = 'error';
           }
-
         } catch (executionError) {
           status = 'error';
-          console.error('\n❌ Browser execution failed:', executionError instanceof Error ? executionError.message : executionError);
+          console.error(
+            '\n❌ Browser execution failed:',
+            executionError instanceof Error ? executionError.message : executionError,
+          );
 
           // Try to recover browser session
           await this.recoverBrowserSession();
@@ -221,7 +225,6 @@ export class FileWatcher {
       } else {
         console.log('\n🔍 Translation mode - actions not executed');
       }
-
     } catch (error) {
       status = 'error';
       console.error('❌ Error processing instruction:', error);
@@ -237,7 +240,7 @@ export class FileWatcher {
           // Include execution details in the instruction field
           let instructionDetail = `${this.options.instruction} (triggered by ${event.type}: ${event.path})`;
           if (this.options.execute && executionResults.length > 0) {
-            const successCount = executionResults.filter(r => r.success).length;
+            const successCount = executionResults.filter((r) => r.success).length;
             instructionDetail += ` - Executed: ${successCount}/${executionResults.length} actions`;
           }
 
@@ -275,8 +278,8 @@ export class FileWatcher {
         retryDelay: this.options.retryDelay,
         browserOptions: {
           headless: this.options.headless,
-          devtools: !this.options.headless // Enable devtools in non-headless mode
-        }
+          devtools: !this.options.headless, // Enable devtools in non-headless mode
+        },
       };
 
       this.executor = new ActionExecutor(executorOptions);
@@ -287,7 +290,9 @@ export class FileWatcher {
       console.log('✅ Browser session initialized');
     } catch (error) {
       this.browserSessionActive = false;
-      throw new Error(`Browser session initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Browser session initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
     }
   }
 
@@ -333,18 +338,25 @@ export class FileWatcher {
       await this.cleanupBrowserSession();
 
       // Wait a moment before retrying
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Reinitialize
       await this.initializeBrowserSession();
       console.log('✅ Browser session recovered');
     } catch (error) {
-      console.error('❌ Browser session recovery failed:', error instanceof Error ? error.message : error);
+      console.error(
+        '❌ Browser session recovery failed:',
+        error instanceof Error ? error.message : error,
+      );
       this.browserSessionActive = false;
     }
   }
 
-  getStatus(): { isRunning: boolean; options: Required<WatchOptions>; browserSessionActive: boolean } {
+  getStatus(): {
+    isRunning: boolean;
+    options: Required<WatchOptions>;
+    browserSessionActive: boolean;
+  } {
     return {
       isRunning: this.isRunning,
       options: this.options,
@@ -369,14 +381,16 @@ export interface WatchExecutionOptions {
 export async function watchFiles(
   target?: string,
   instruction?: string,
-  executionOptions?: WatchExecutionOptions
+  executionOptions?: WatchExecutionOptions,
 ): Promise<void> {
   const options: WatchOptions = {};
 
   if (target) {
     // If target is a URL, we can't watch it directly
     if (target.startsWith('http://') || target.startsWith('https://')) {
-      throw new Error('Cannot watch remote URLs. Please specify a local directory or file pattern.');
+      throw new Error(
+        'Cannot watch remote URLs. Please specify a local directory or file pattern.',
+      );
     }
 
     // If target is a specific file or directory, adjust patterns
@@ -385,7 +399,7 @@ export async function watchFiles(
       options.patterns = [target];
     } else {
       // Target is a specific path
-      const stat = await import('fs').then(fs => fs.promises.stat(target).catch(() => null));
+      const stat = await import('fs').then((fs) => fs.promises.stat(target).catch(() => null));
       if (stat?.isDirectory()) {
         options.cwd = target;
       } else {

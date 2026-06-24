@@ -19,7 +19,7 @@ const RESULTS_DIR = '.iris-bench-results';
 async function generateTestImage(
   width: number,
   height: number,
-  pattern: 'solid' | 'gradient' | 'complex' = 'solid'
+  pattern: 'solid' | 'gradient' | 'complex' = 'solid',
 ): Promise<Buffer> {
   if (pattern === 'solid') {
     return sharp({
@@ -27,9 +27,11 @@ async function generateTestImage(
         width,
         height,
         channels: 4,
-        background: { r: 128, g: 128, b: 128, alpha: 1 }
-      }
-    }).png().toBuffer();
+        background: { r: 128, g: 128, b: 128, alpha: 1 },
+      },
+    })
+      .png()
+      .toBuffer();
   }
 
   if (pattern === 'gradient') {
@@ -73,7 +75,7 @@ async function createVariant(baseBuffer: Buffer, changePercent: number = 5): Pro
 
   // Add small changes (brightness adjustment)
   return image
-    .modulate({ brightness: 1 + (changePercent / 100) })
+    .modulate({ brightness: 1 + changePercent / 100 })
     .png()
     .toBuffer();
 }
@@ -93,7 +95,7 @@ async function benchmarkSinglePageDiff() {
       includeAA: true,
       alpha: 0.1,
       diffMask: true,
-      diffColor: [255, 0, 0]
+      diffColor: [255, 0, 0],
     });
   };
 }
@@ -119,7 +121,7 @@ async function benchmarkMultiPageSequential(pageCount: number) {
         includeAA: true,
         alpha: 0.1,
         diffMask: true,
-        diffColor: [255, 0, 0]
+        diffColor: [255, 0, 0],
       });
     }
   };
@@ -140,15 +142,15 @@ async function benchmarkMultiPageParallel(pageCount: number) {
 
   return async () => {
     await Promise.all(
-      pages.map(page =>
+      pages.map((page) =>
         diffEngine.compare(page.baseline, page.current, {
           threshold: 0.95,
           includeAA: true,
           alpha: 0.1,
           diffMask: true,
-          diffColor: [255, 0, 0]
-        })
-      )
+          diffColor: [255, 0, 0],
+        }),
+      ),
     );
   };
 }
@@ -166,7 +168,7 @@ async function benchmarkMultiDevice(deviceCount: number) {
     { width: 3840, height: 2160, name: '4k' },
     { width: 1366, height: 768, name: 'laptop' },
     { width: 414, height: 896, name: 'mobile-xl' },
-    { width: 320, height: 568, name: 'mobile-sm' }
+    { width: 320, height: 568, name: 'mobile-sm' },
   ];
 
   const tests: Array<{ baseline: Buffer; current: Buffer }> = [];
@@ -179,15 +181,15 @@ async function benchmarkMultiDevice(deviceCount: number) {
 
   return async () => {
     await Promise.all(
-      tests.map(test =>
+      tests.map((test) =>
         diffEngine.compare(test.baseline, test.current, {
           threshold: 0.95,
           includeAA: true,
           alpha: 0.1,
           diffMask: true,
-          diffColor: [255, 0, 0]
-        })
-      )
+          diffColor: [255, 0, 0],
+        }),
+      ),
     );
   };
 }
@@ -205,7 +207,7 @@ async function benchmarkCacheHit() {
     includeAA: true,
     alpha: 0.1,
     diffMask: true,
-    diffColor: [255, 0, 0] as [number, number, number]
+    diffColor: [255, 0, 0] as [number, number, number],
   };
 
   // Prime the cache
@@ -232,7 +234,7 @@ async function benchmarkCacheMiss() {
       includeAA: true,
       alpha: 0.1,
       diffMask: true,
-      diffColor: [255, 0, 0]
+      diffColor: [255, 0, 0],
     });
   };
 }
@@ -253,7 +255,7 @@ async function benchmarkImageStorage() {
   return async () => {
     for (let i = 0; i < images.length; i++) {
       await storageManager.saveImage('benchmark', `test-${i}`, images[i], {
-        autoOptimize: true
+        autoOptimize: true,
       });
     }
   };
@@ -274,7 +276,7 @@ async function benchmarkImageSize(width: number, height: number, label: string) 
       includeAA: true,
       alpha: 0.1,
       diffMask: true,
-      diffColor: [255, 0, 0]
+      diffColor: [255, 0, 0],
     });
   };
 }
@@ -292,9 +294,11 @@ async function benchmarkEarlyExit() {
       width: 2560,
       height: 1440,
       channels: 4,
-      background: { r: 0, g: 0, b: 0, alpha: 1 }
-    }
-  }).png().toBuffer();
+      background: { r: 0, g: 0, b: 0, alpha: 1 },
+    },
+  })
+    .png()
+    .toBuffer();
 
   return async () => {
     await diffEngine.compare(baseline, current, {
@@ -302,7 +306,7 @@ async function benchmarkEarlyExit() {
       includeAA: true,
       alpha: 0.1,
       diffMask: true,
-      diffColor: [255, 0, 0]
+      diffColor: [255, 0, 0],
     });
   };
 }
@@ -325,83 +329,83 @@ async function runVisualBenchmarks() {
     {
       name: 'Single Page (1920x1080)',
       fn: await benchmarkSinglePageDiff(),
-      options: { iterations: 50, warmup: 5 }
+      options: { iterations: 50, warmup: 5 },
     },
     {
       name: '10 Pages Sequential',
       fn: await benchmarkMultiPageSequential(10),
-      options: { iterations: 10, warmup: 2 }
+      options: { iterations: 10, warmup: 2 },
     },
     {
       name: '10 Pages Parallel',
       fn: await benchmarkMultiPageParallel(10),
-      options: { iterations: 10, warmup: 2 }
+      options: { iterations: 10, warmup: 2 },
     },
     {
       name: '50 Pages Sequential',
       fn: await benchmarkMultiPageSequential(50),
-      options: { iterations: 3, warmup: 1 }
+      options: { iterations: 3, warmup: 1 },
     },
     {
       name: '50 Pages Parallel',
       fn: await benchmarkMultiPageParallel(50),
-      options: { iterations: 3, warmup: 1 }
+      options: { iterations: 3, warmup: 1 },
     },
     {
       name: '2 Devices Parallel',
       fn: await benchmarkMultiDevice(2),
-      options: { iterations: 20, warmup: 3 }
+      options: { iterations: 20, warmup: 3 },
     },
     {
       name: '4 Devices Parallel',
       fn: await benchmarkMultiDevice(4),
-      options: { iterations: 15, warmup: 3 }
+      options: { iterations: 15, warmup: 3 },
     },
     {
       name: '8 Devices Parallel',
       fn: await benchmarkMultiDevice(8),
-      options: { iterations: 10, warmup: 2 }
+      options: { iterations: 10, warmup: 2 },
     },
     {
       name: 'Cache Hit',
       fn: await benchmarkCacheHit(),
-      options: { iterations: 100, warmup: 10 }
+      options: { iterations: 100, warmup: 10 },
     },
     {
       name: 'Cache Miss',
       fn: await benchmarkCacheMiss(),
-      options: { iterations: 50, warmup: 5 }
+      options: { iterations: 50, warmup: 5 },
     },
     {
       name: 'Image Storage (10 images)',
       fn: await benchmarkImageStorage(),
-      options: { iterations: 5, warmup: 1 }
+      options: { iterations: 5, warmup: 1 },
     },
     {
       name: 'HD (1280x720)',
       fn: await benchmarkImageSize(1280, 720, 'HD'),
-      options: { iterations: 50, warmup: 5 }
+      options: { iterations: 50, warmup: 5 },
     },
     {
       name: 'Full HD (1920x1080)',
       fn: await benchmarkImageSize(1920, 1080, 'Full HD'),
-      options: { iterations: 50, warmup: 5 }
+      options: { iterations: 50, warmup: 5 },
     },
     {
       name: '2K (2560x1440)',
       fn: await benchmarkImageSize(2560, 1440, '2K'),
-      options: { iterations: 30, warmup: 3 }
+      options: { iterations: 30, warmup: 3 },
     },
     {
       name: '4K (3840x2160)',
       fn: await benchmarkImageSize(3840, 2160, '4K'),
-      options: { iterations: 15, warmup: 2 }
+      options: { iterations: 15, warmup: 2 },
     },
     {
       name: 'Early Exit (Large Different Images)',
       fn: await benchmarkEarlyExit(),
-      options: { iterations: 50, warmup: 5 }
-    }
+      options: { iterations: 50, warmup: 5 },
+    },
   ]);
 
   // Display results
@@ -428,7 +432,7 @@ if (require.main === module) {
       console.log('\n✅ All visual benchmarks completed!');
       process.exit(0);
     })
-    .catch(error => {
+    .catch((error) => {
       console.error('\n❌ Benchmark failed:', error);
       process.exit(1);
     });

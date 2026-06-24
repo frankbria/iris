@@ -68,7 +68,7 @@ class LRUNode {
     public key: string,
     public value: CacheEntry,
     public prev: LRUNode | null = null,
-    public next: LRUNode | null = null
+    public next: LRUNode | null = null,
   ) {}
 }
 
@@ -128,12 +128,7 @@ export class AIVisionCache {
    * @param model - Model identifier
    * @returns Cache key string
    */
-  generateKey(
-    baselineHash: string,
-    currentHash: string,
-    provider: string,
-    model: string
-  ): string {
+  generateKey(baselineHash: string, currentHash: string, provider: string, model: string): string {
     return `${provider}:${model}:${baselineHash}:${currentHash}`;
   }
 
@@ -163,7 +158,7 @@ export class AIVisionCache {
 
     // Check persistent cache
     const stmt = this.db.prepare(
-      'SELECT value, timestamp, provider, model, hits FROM ai_vision_cache WHERE key = ?'
+      'SELECT value, timestamp, provider, model, hits FROM ai_vision_cache WHERE key = ?',
     );
     const row = stmt.get(key) as
       | {
@@ -229,12 +224,7 @@ export class AIVisionCache {
    * @param provider - AI provider name
    * @param model - Model identifier
    */
-  set(
-    key: string,
-    value: AIVisionResponse,
-    provider: string,
-    model: string
-  ): void {
+  set(key: string, value: AIVisionResponse, provider: string, model: string): void {
     const timestamp = Date.now();
     const entry: CacheEntry = {
       key,
@@ -336,9 +326,7 @@ export class AIVisionCache {
    * Increment hit count in persistent cache
    */
   private incrementHitCount(key: string): void {
-    const stmt = this.db.prepare(
-      'UPDATE ai_vision_cache SET hits = hits + 1 WHERE key = ?'
-    );
+    const stmt = this.db.prepare('UPDATE ai_vision_cache SET hits = hits + 1 WHERE key = ?');
     stmt.run(key);
   }
 
@@ -393,9 +381,7 @@ export class AIVisionCache {
    */
   pruneExpired(): number {
     const cutoff = Date.now() - this.config.ttlMs;
-    const stmt = this.db.prepare(
-      'DELETE FROM ai_vision_cache WHERE timestamp < ?'
-    );
+    const stmt = this.db.prepare('DELETE FROM ai_vision_cache WHERE timestamp < ?');
     const result = stmt.run(cutoff);
 
     if (this.config.debug) {
@@ -411,9 +397,7 @@ export class AIVisionCache {
    * @returns Cache statistics
    */
   getStats(): CacheStats {
-    const countStmt = this.db.prepare(
-      'SELECT COUNT(*) as count FROM ai_vision_cache'
-    );
+    const countStmt = this.db.prepare('SELECT COUNT(*) as count FROM ai_vision_cache');
     const { count } = countStmt.get() as { count: number };
 
     const totalRequests = this.hits + this.misses;

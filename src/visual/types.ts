@@ -4,28 +4,36 @@ import { z } from 'zod';
 export const VisualTestConfigSchema = z.object({
   testName: z.string().min(1),
   url: z.string().url(),
-  viewport: z.object({
-    width: z.number().min(320),
-    height: z.number().min(240)
-  }).optional(),
+  viewport: z
+    .object({
+      width: z.number().min(320),
+      height: z.number().min(240),
+    })
+    .optional(),
   selector: z.string().optional(),
   threshold: z.number().min(0).max(1).default(0.1),
-  ignoreRegions: z.array(z.object({
-    x: z.number(),
-    y: z.number(),
-    width: z.number(),
-    height: z.number()
-  })).optional(),
+  ignoreRegions: z
+    .array(
+      z.object({
+        x: z.number(),
+        y: z.number(),
+        width: z.number(),
+        height: z.number(),
+      }),
+    )
+    .optional(),
   waitForSelector: z.string().optional(),
   waitForTimeout: z.number().min(0).max(30000).default(5000),
   disableAnimations: z.boolean().default(true),
   fullPage: z.boolean().default(false),
-  clip: z.object({
-    x: z.number(),
-    y: z.number(),
-    width: z.number(),
-    height: z.number()
-  }).optional()
+  clip: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      width: z.number(),
+      height: z.number(),
+    })
+    .optional(),
 });
 
 export const VisualDiffResultSchema = z.object({
@@ -41,9 +49,9 @@ export const VisualDiffResultSchema = z.object({
   timestamp: z.date(),
   viewport: z.object({
     width: z.number(),
-    height: z.number()
+    height: z.number(),
   }),
-  metadata: z.record(z.any()).optional()
+  metadata: z.record(z.any()).optional(),
 });
 
 export const VisualReportSchema = z.object({
@@ -53,19 +61,19 @@ export const VisualReportSchema = z.object({
     total: z.number(),
     passed: z.number(),
     failed: z.number(),
-    newBaselines: z.number()
+    newBaselines: z.number(),
   }),
   results: z.array(VisualDiffResultSchema),
   environment: z.object({
     browser: z.string(),
     viewport: z.object({
       width: z.number(),
-      height: z.number()
+      height: z.number(),
     }),
     platform: z.string(),
     gitBranch: z.string().optional(),
-    gitCommit: z.string().optional()
-  })
+    gitCommit: z.string().optional(),
+  }),
 });
 
 // TypeScript types derived from schemas
@@ -260,7 +268,7 @@ export class VisualTestError extends Error {
   constructor(
     message: string,
     public code: string,
-    public details?: Record<string, any>
+    public details?: Record<string, any>,
   ) {
     super(message);
     this.name = 'VisualTestError';
@@ -272,7 +280,7 @@ export class BaselineNotFoundError extends VisualTestError {
     super(
       `Baseline not found for test '${testName}' at path '${baselinePath}'`,
       'BASELINE_NOT_FOUND',
-      { testName, baselinePath }
+      { testName, baselinePath },
     );
   }
 }

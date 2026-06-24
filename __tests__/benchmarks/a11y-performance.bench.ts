@@ -5,7 +5,12 @@
 
 import { chromium, Browser, Page } from 'playwright';
 import { AxeRunner } from '../../src/a11y/axe-integration';
-import { initializeDatabase, insertA11yTestResult, insertTestRun, A11yTestResult } from '../../src/db';
+import {
+  initializeDatabase,
+  insertA11yTestResult,
+  insertTestRun,
+  A11yTestResult,
+} from '../../src/db';
 import { benchmark, benchmarkSuite, formatResults, saveBenchmarkResults } from './bench-utils';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -76,13 +81,16 @@ function generateTestHTML(complexity: 'simple' | 'medium' | 'complex'): string {
   }
 
   // Complex page with many elements
-  const items = Array.from({ length: 100 }, (_, i) => `
+  const items = Array.from(
+    { length: 100 },
+    (_, i) => `
     <article>
       <h3>Item ${i + 1}</h3>
       <p>Description for item ${i + 1}</p>
       <button aria-label="Action for item ${i + 1}">Action</button>
     </article>
-  `).join('\n');
+  `,
+  ).join('\n');
 
   return `
     <!DOCTYPE html>
@@ -147,7 +155,10 @@ function generateTestHTML(complexity: 'simple' | 'medium' | 'complex'): string {
 /**
  * Benchmark: Single page axe-core scan
  */
-async function benchmarkSinglePageAxe(browser: Browser, complexity: 'simple' | 'medium' | 'complex') {
+async function benchmarkSinglePageAxe(
+  browser: Browser,
+  complexity: 'simple' | 'medium' | 'complex',
+) {
   const context = await browser.newContext();
   const page = await context.newPage();
   const html = generateTestHTML(complexity);
@@ -159,7 +170,7 @@ async function benchmarkSinglePageAxe(browser: Browser, complexity: 'simple' | '
     include: [],
     exclude: [],
     disableRules: [],
-    timeout: 30000
+    timeout: 30000,
   });
 
   return async () => {
@@ -188,7 +199,7 @@ async function benchmarkMultiPageAxeSequential(browser: Browser, pageCount: numb
       include: [],
       exclude: [],
       disableRules: [],
-      timeout: 30000
+      timeout: 30000,
     });
     runners.push(runner);
   }
@@ -220,15 +231,13 @@ async function benchmarkMultiPageAxeParallel(browser: Browser, pageCount: number
       include: [],
       exclude: [],
       disableRules: [],
-      timeout: 30000
+      timeout: 30000,
     });
     runners.push(runner);
   }
 
   return async () => {
-    await Promise.all(
-      pages.map((page, i) => runners[i].run(page, `page-${i}`, 'data:text/html'))
-    );
+    await Promise.all(pages.map((page, i) => runners[i].run(page, `page-${i}`, 'data:text/html')));
   };
 }
 
@@ -242,7 +251,7 @@ function benchmarkDatabaseWrites(recordCount: number) {
   const testRunId = insertTestRun(db, {
     instruction: 'Benchmark test',
     status: 'success',
-    startTime: new Date()
+    startTime: new Date(),
   });
 
   const testResults: A11yTestResult[] = [];
@@ -258,7 +267,7 @@ function benchmarkDatabaseWrites(recordCount: number) {
       screenReaderPassed: Math.random() > 0.5,
       score: Math.random() * 100,
       status: Math.random() > 0.7 ? 'passed' : 'failed',
-      timestamp: new Date()
+      timestamp: new Date(),
     });
   }
 
@@ -278,7 +287,7 @@ function benchmarkDatabaseBatchWrites(recordCount: number) {
   const testRunId = insertTestRun(db, {
     instruction: 'Benchmark batch test',
     status: 'success',
-    startTime: new Date()
+    startTime: new Date(),
   });
 
   const testResults: A11yTestResult[] = [];
@@ -294,7 +303,7 @@ function benchmarkDatabaseBatchWrites(recordCount: number) {
       screenReaderPassed: Math.random() > 0.5,
       score: Math.random() * 100,
       status: Math.random() > 0.7 ? 'passed' : 'failed',
-      timestamp: new Date()
+      timestamp: new Date(),
     });
   }
 
@@ -318,7 +327,15 @@ async function benchmarkRuleSpecificScan(browser: Browser, ruleCount: number) {
   const html = generateTestHTML('complex');
   await page.setContent(html);
 
-  const allTags = ['wcag2a', 'wcag2aa', 'wcag2aaa', 'wcag21a', 'wcag21aa', 'section508', 'best-practice'];
+  const allTags = [
+    'wcag2a',
+    'wcag2aa',
+    'wcag2aaa',
+    'wcag21a',
+    'wcag21aa',
+    'section508',
+    'best-practice',
+  ];
   const tags = allTags.slice(0, Math.min(ruleCount, allTags.length));
 
   const axeRunner = new AxeRunner({
@@ -327,7 +344,7 @@ async function benchmarkRuleSpecificScan(browser: Browser, ruleCount: number) {
     include: [],
     exclude: [],
     disableRules: [],
-    timeout: 30000
+    timeout: 30000,
   });
 
   return async () => {
@@ -359,73 +376,73 @@ async function runA11yBenchmarks() {
       {
         name: 'Simple Page Axe Scan',
         fn: await benchmarkSinglePageAxe(browser, 'simple'),
-        options: { iterations: 30, warmup: 3 }
+        options: { iterations: 30, warmup: 3 },
       },
       {
         name: 'Medium Page Axe Scan',
         fn: await benchmarkSinglePageAxe(browser, 'medium'),
-        options: { iterations: 25, warmup: 3 }
+        options: { iterations: 25, warmup: 3 },
       },
       {
         name: 'Complex Page Axe Scan',
         fn: await benchmarkSinglePageAxe(browser, 'complex'),
-        options: { iterations: 15, warmup: 2 }
+        options: { iterations: 15, warmup: 2 },
       },
       {
         name: '5 Pages Sequential Axe Scan',
         fn: await benchmarkMultiPageAxeSequential(browser, 5),
-        options: { iterations: 8, warmup: 2 }
+        options: { iterations: 8, warmup: 2 },
       },
       {
         name: '5 Pages Parallel Axe Scan',
         fn: await benchmarkMultiPageAxeParallel(browser, 5),
-        options: { iterations: 8, warmup: 2 }
+        options: { iterations: 8, warmup: 2 },
       },
       {
         name: '10 Pages Sequential Axe Scan',
         fn: await benchmarkMultiPageAxeSequential(browser, 10),
-        options: { iterations: 5, warmup: 1 }
+        options: { iterations: 5, warmup: 1 },
       },
       {
         name: '10 Pages Parallel Axe Scan',
         fn: await benchmarkMultiPageAxeParallel(browser, 10),
-        options: { iterations: 5, warmup: 1 }
+        options: { iterations: 5, warmup: 1 },
       },
       {
         name: 'DB Write 10 Records',
         fn: benchmarkDatabaseWrites(10),
-        options: { iterations: 50, warmup: 5 }
+        options: { iterations: 50, warmup: 5 },
       },
       {
         name: 'DB Write 50 Records',
         fn: benchmarkDatabaseWrites(50),
-        options: { iterations: 20, warmup: 3 }
+        options: { iterations: 20, warmup: 3 },
       },
       {
         name: 'DB Write 100 Records',
         fn: benchmarkDatabaseWrites(100),
-        options: { iterations: 10, warmup: 2 }
+        options: { iterations: 10, warmup: 2 },
       },
       {
         name: 'DB Batch Write 100 Records',
         fn: benchmarkDatabaseBatchWrites(100),
-        options: { iterations: 15, warmup: 2 }
+        options: { iterations: 15, warmup: 2 },
       },
       {
         name: 'WCAG 2A Rules Only',
         fn: await benchmarkRuleSpecificScan(browser, 1),
-        options: { iterations: 20, warmup: 3 }
+        options: { iterations: 20, warmup: 3 },
       },
       {
         name: 'WCAG 2A + 2AA Rules',
         fn: await benchmarkRuleSpecificScan(browser, 2),
-        options: { iterations: 20, warmup: 3 }
+        options: { iterations: 20, warmup: 3 },
       },
       {
         name: 'All WCAG Rules',
         fn: await benchmarkRuleSpecificScan(browser, 5),
-        options: { iterations: 15, warmup: 2 }
-      }
+        options: { iterations: 15, warmup: 2 },
+      },
     ]);
 
     // Display results
@@ -455,7 +472,7 @@ if (require.main === module) {
       console.log('\n✅ All accessibility benchmarks completed!');
       process.exit(0);
     })
-    .catch(error => {
+    .catch((error) => {
       console.error('\n❌ Benchmark failed:', error);
       process.exit(1);
     });

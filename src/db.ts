@@ -58,7 +58,9 @@ export function initializeDatabase(dbPath: string): Database.Database {
   `);
 
   // Check current schema version
-  const versionRow = db.prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1').get() as { version: number } | undefined;
+  const versionRow = db
+    .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
+    .get() as { version: number } | undefined;
   const currentVersion = versionRow?.version || 0;
 
   // Apply migrations
@@ -141,7 +143,7 @@ export function insertTestRun(db: Database.Database, testRun: TestRun): number {
     testRun.instruction,
     testRun.status,
     testRun.startTime.toISOString(),
-    testRun.endTime?.toISOString() || null
+    testRun.endTime?.toISOString() || null,
   );
 
   return result.lastInsertRowid as number;
@@ -163,7 +165,7 @@ export function getTestRuns(db: Database.Database, limit?: number): TestRun[] {
     instruction: row.instruction,
     status: row.status,
     startTime: new Date(row.start_time),
-    endTime: row.end_time ? new Date(row.end_time) : undefined
+    endTime: row.end_time ? new Date(row.end_time) : undefined,
   }));
 }
 
@@ -190,7 +192,7 @@ export function insertVisualTestResult(db: Database.Database, result: VisualTest
     result.aiAnalysis,
     result.severity,
     result.status,
-    result.timestamp.toISOString()
+    result.timestamp.toISOString(),
   );
 
   return insertResult.lastInsertRowid as number;
@@ -206,7 +208,7 @@ export function getVisualTestResults(
     page?: string;
     status?: 'passed' | 'failed' | 'new_baseline';
     limit?: number;
-  }
+  },
 ): VisualTestResult[] {
   let query = 'SELECT * FROM visual_test_results WHERE 1=1';
   const params: any[] = [];
@@ -248,7 +250,7 @@ export function getVisualTestResults(
     aiAnalysis: row.ai_analysis,
     severity: row.severity,
     status: row.status,
-    timestamp: new Date(row.timestamp)
+    timestamp: new Date(row.timestamp),
   }));
 }
 
@@ -276,7 +278,7 @@ export function insertA11yTestResult(db: Database.Database, result: A11yTestResu
     result.screenReaderPassed ? 1 : 0,
     result.score,
     result.status,
-    result.timestamp.toISOString()
+    result.timestamp.toISOString(),
   );
 
   return insertResult.lastInsertRowid as number;
@@ -292,7 +294,7 @@ export function getA11yTestResults(
     page?: string;
     status?: 'passed' | 'failed' | 'warning';
     limit?: number;
-  }
+  },
 ): A11yTestResult[] {
   let query = 'SELECT * FROM a11y_test_results WHERE 1=1';
   const params: any[] = [];
@@ -334,14 +336,17 @@ export function getA11yTestResults(
     screenReaderPassed: row.screen_reader_passed === 1,
     score: row.score,
     status: row.status,
-    timestamp: new Date(row.timestamp)
+    timestamp: new Date(row.timestamp),
   }));
 }
 
 /**
  * Get visual test result statistics for a test run.
  */
-export function getVisualTestStats(db: Database.Database, testRunId: number): {
+export function getVisualTestStats(
+  db: Database.Database,
+  testRunId: number,
+): {
   total: number;
   passed: number;
   failed: number;
@@ -363,14 +368,17 @@ export function getVisualTestStats(db: Database.Database, testRunId: number): {
     total: result.total || 0,
     passed: result.passed || 0,
     failed: result.failed || 0,
-    newBaselines: result.new_baselines || 0
+    newBaselines: result.new_baselines || 0,
   };
 }
 
 /**
  * Get accessibility test result statistics for a test run.
  */
-export function getA11yTestStats(db: Database.Database, testRunId: number): {
+export function getA11yTestStats(
+  db: Database.Database,
+  testRunId: number,
+): {
   total: number;
   passed: number;
   failed: number;
@@ -407,7 +415,7 @@ export function getA11yTestStats(db: Database.Database, testRunId: number): {
       critical: result.total_critical || 0,
       serious: result.total_serious || 0,
       moderate: result.total_moderate || 0,
-      minor: result.total_minor || 0
-    }
+      minor: result.total_minor || 0,
+    },
   };
 }

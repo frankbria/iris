@@ -39,7 +39,7 @@ export class VisualReporter {
       includeScreenshots: config.includeScreenshots !== false,
       includePassedTests: config.includePassedTests !== false,
       relativePaths: config.relativePaths !== false,
-      timestamp: config.timestamp || new Date()
+      timestamp: config.timestamp || new Date(),
     };
   }
 
@@ -83,8 +83,8 @@ export class VisualReporter {
 
     return {
       reportPath: outputPath,
-      screenshotPaths: results.results.map(r => r.screenshotPath),
-      artifactDir
+      screenshotPaths: results.results.map((r) => r.screenshotPath),
+      artifactDir,
     };
   }
 
@@ -142,12 +142,16 @@ export class VisualReporter {
         <div class="stat-label">Failed</div>
         <div class="stat-value">${summary.failed}</div>
       </div>
-      ${summary.newBaselines > 0 ? `
+      ${
+        summary.newBaselines > 0
+          ? `
       <div class="stat-card new">
         <div class="stat-label">New Baselines</div>
         <div class="stat-value">${summary.newBaselines}</div>
       </div>
-      ` : ''}
+      `
+          : ''
+      }
     </section>
 
     <!-- Severity Breakdown -->
@@ -158,11 +162,15 @@ export class VisualReporter {
       <button class="filter-btn active" data-filter="all">All Tests</button>
       <button class="filter-btn" data-filter="failed">Failed Only</button>
       <button class="filter-btn" data-filter="passed">Passed Only</button>
-      ${Object.keys(summary.severityCounts).length > 0 ? `
+      ${
+        Object.keys(summary.severityCounts).length > 0
+          ? `
       <button class="filter-btn" data-filter="breaking">Breaking</button>
       <button class="filter-btn" data-filter="moderate">Moderate</button>
       <button class="filter-btn" data-filter="minor">Minor</button>
-      ` : ''}
+      `
+          : ''
+      }
     </section>
 
     <!-- Test Results -->
@@ -193,24 +201,36 @@ export class VisualReporter {
     <section class="severity-breakdown">
       <h2>Severity Breakdown</h2>
       <div class="severity-stats">
-        ${severityCounts.breaking ? `
+        ${
+          severityCounts.breaking
+            ? `
         <div class="severity-card breaking">
           <div class="severity-label">Breaking</div>
           <div class="severity-value">${severityCounts.breaking}</div>
         </div>
-        ` : ''}
-        ${severityCounts.moderate ? `
+        `
+            : ''
+        }
+        ${
+          severityCounts.moderate
+            ? `
         <div class="severity-card moderate">
           <div class="severity-label">Moderate</div>
           <div class="severity-value">${severityCounts.moderate}</div>
         </div>
-        ` : ''}
-        ${severityCounts.minor ? `
+        `
+            : ''
+        }
+        ${
+          severityCounts.minor
+            ? `
         <div class="severity-card minor">
           <div class="severity-label">Minor</div>
           <div class="severity-value">${severityCounts.minor}</div>
         </div>
-        ` : ''}
+        `
+            : ''
+        }
       </div>
     </section>`;
   }
@@ -220,7 +240,7 @@ export class VisualReporter {
    */
   private generateTestResultCards(results: VisualTestResult['results']): string {
     return results
-      .filter(result => this.config.includePassedTests || !result.passed)
+      .filter((result) => this.config.includePassedTests || !result.passed)
       .map((result, index) => {
         const statusClass = result.passed ? 'passed' : 'failed';
         const severityClass = result.severity || '';
@@ -254,7 +274,9 @@ export class VisualReporter {
             </div>
           </div>
 
-          ${result.aiAnalysis ? `
+          ${
+            result.aiAnalysis
+              ? `
           <div class="ai-analysis">
             <h4>AI Analysis</h4>
             <div class="analysis-content">
@@ -267,9 +289,13 @@ export class VisualReporter {
               </div>
             </div>
           </div>
-          ` : ''}
+          `
+              : ''
+          }
 
-          ${!result.passed && this.config.includeScreenshots ? `
+          ${
+            !result.passed && this.config.includeScreenshots
+              ? `
           <div class="diff-viewer">
             <div class="diff-controls">
               <button class="diff-mode-btn active" data-mode="side-by-side">Side by Side</button>
@@ -278,25 +304,35 @@ export class VisualReporter {
             </div>
 
             <div class="diff-images side-by-side">
-              ${result.baselinePath ? `
+              ${
+                result.baselinePath
+                  ? `
               <div class="image-container">
                 <div class="image-label">Baseline</div>
                 <img src="${this.getRelativePath(result.baselinePath!)}" alt="Baseline" class="comparison-image baseline">
               </div>
-              ` : ''}
+              `
+                  : ''
+              }
               <div class="image-container">
                 <div class="image-label">Current</div>
                 <img src="${this.getRelativePath(result.screenshotPath)}" alt="Current" class="comparison-image current">
               </div>
-              ${result.diffPath ? `
+              ${
+                result.diffPath
+                  ? `
               <div class="image-container">
                 <div class="image-label">Difference</div>
                 <img src="${this.getRelativePath(result.diffPath!)}" alt="Diff" class="comparison-image diff">
               </div>
-              ` : ''}
+              `
+                  : ''
+              }
             </div>
           </div>
-          ` : ''}
+          `
+              : ''
+          }
         </div>`;
       })
       .join('\n');
@@ -309,19 +345,23 @@ export class VisualReporter {
     // Filter results based on configuration
     const filteredResults = this.config.includePassedTests
       ? results.results
-      : results.results.filter(r => !r.passed);
+      : results.results.filter((r) => !r.passed);
 
-    return JSON.stringify({
-      metadata: {
-        title: this.config.title,
-        timestamp: this.config.timestamp,
-        format: 'json',
-        version: '1.0.0'
+    return JSON.stringify(
+      {
+        metadata: {
+          title: this.config.title,
+          timestamp: this.config.timestamp,
+          format: 'json',
+          version: '1.0.0',
+        },
+        summary: results.summary,
+        results: filteredResults,
+        duration: results.duration,
       },
-      summary: results.summary,
-      results: filteredResults,
-      duration: results.duration
-    }, null, 2);
+      null,
+      2,
+    );
   }
 
   /**
@@ -341,29 +381,41 @@ export class VisualReporter {
 
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="${this.escapeXml(this.config.title!)}" tests="${summary.totalComparisons}" failures="${summary.failed}" time="${(duration / 1000).toFixed(3)}">
-${Object.entries(testsuites).map(([suiteName, tests]: [string, any]) => {
-  const suiteTests = tests as VisualTestResult['results'];
-  const suiteFailed = suiteTests.filter(t => !t.passed).length;
-  const suiteTime = duration / summary.totalComparisons / 1000;
+${Object.entries(testsuites)
+  .map(([suiteName, tests]: [string, any]) => {
+    const suiteTests = tests as VisualTestResult['results'];
+    const suiteFailed = suiteTests.filter((t) => !t.passed).length;
+    const suiteTime = duration / summary.totalComparisons / 1000;
 
-  return `  <testsuite name="${this.escapeXml(suiteName)}" tests="${suiteTests.length}" failures="${suiteFailed}" time="${suiteTime.toFixed(3)}">
-${suiteTests.map((test, index) => {
-  const testName = `${test.page} [${test.device}]`;
-  const testTime = (duration / summary.totalComparisons / 1000).toFixed(3);
+    return `  <testsuite name="${this.escapeXml(suiteName)}" tests="${suiteTests.length}" failures="${suiteFailed}" time="${suiteTime.toFixed(3)}">
+${suiteTests
+  .map((test, index) => {
+    const testName = `${test.page} [${test.device}]`;
+    const testTime = (duration / summary.totalComparisons / 1000).toFixed(3);
 
-  return `    <testcase name="${this.escapeXml(testName)}" classname="${this.escapeXml(suiteName)}" time="${testTime}">
-${!test.passed ? `      <failure message="Visual regression detected" type="VisualDiff">
+    return `    <testcase name="${this.escapeXml(testName)}" classname="${this.escapeXml(suiteName)}" time="${testTime}">
+${
+  !test.passed
+    ? `      <failure message="Visual regression detected" type="VisualDiff">
 Similarity: ${(test.similarity * 100).toFixed(2)}%
 Pixel Difference: ${(test.pixelDifference * 100).toFixed(2)}%
 Threshold: ${(test.threshold * 100).toFixed(2)}%
 Severity: ${test.severity || 'unknown'}
-${test.aiAnalysis ? `AI Classification: ${test.aiAnalysis.classification}
-AI Description: ${test.aiAnalysis.description}` : ''}
-      </failure>` : ''}
+${
+  test.aiAnalysis
+    ? `AI Classification: ${test.aiAnalysis.classification}
+AI Description: ${test.aiAnalysis.description}`
+    : ''
+}
+      </failure>`
+    : ''
+}
     </testcase>`;
-}).join('\n')}
+  })
+  .join('\n')}
   </testsuite>`;
-}).join('\n')}
+  })
+  .join('\n')}
 </testsuites>`;
 
     return xml;
@@ -937,9 +989,9 @@ AI Description: ${test.aiAnalysis.description}` : ''}
       '<': '&lt;',
       '>': '&gt;',
       '"': '&quot;',
-      "'": '&#039;'
+      "'": '&#039;',
     };
-    return text.replace(/[&<>"']/g, m => map[m]);
+    return text.replace(/[&<>"']/g, (m) => map[m]);
   }
 
   /**
@@ -959,7 +1011,7 @@ AI Description: ${test.aiAnalysis.description}` : ''}
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit'
+      second: '2-digit',
     });
   }
 

@@ -26,8 +26,12 @@ describe('Database Module', () => {
     expect(fs.existsSync(testDbPath)).toBe(true);
 
     // Verify table structure by attempting to insert a record
-    const stmt = db.prepare('INSERT INTO test_results (instruction, status, start_time, end_time) VALUES (?, ?, ?, ?)');
-    expect(() => stmt.run('test instruction', 'success', new Date().toISOString(), new Date().toISOString())).not.toThrow();
+    const stmt = db.prepare(
+      'INSERT INTO test_results (instruction, status, start_time, end_time) VALUES (?, ?, ?, ?)',
+    );
+    expect(() =>
+      stmt.run('test instruction', 'success', new Date().toISOString(), new Date().toISOString()),
+    ).not.toThrow();
 
     db.close();
   });
@@ -41,7 +45,7 @@ describe('Database Module', () => {
       instruction: 'click #button',
       status: 'success',
       startTime,
-      endTime
+      endTime,
     });
 
     expect(typeof runId).toBe('number');
@@ -60,22 +64,22 @@ describe('Database Module', () => {
       instruction: 'click #button1',
       status: 'success',
       startTime,
-      endTime
+      endTime,
     });
 
     const id2 = insertTestRun(db, {
       instruction: 'click #button2',
       status: 'error',
       startTime,
-      endTime
+      endTime,
     });
 
     const runs = getTestRuns(db);
 
     expect(runs).toHaveLength(2);
     // Verify both records exist regardless of order
-    const instructions = runs.map(r => r.instruction);
-    const statuses = runs.map(r => r.status);
+    const instructions = runs.map((r) => r.instruction);
+    const statuses = runs.map((r) => r.status);
 
     expect(instructions).toContain('click #button1');
     expect(instructions).toContain('click #button2');
@@ -96,7 +100,7 @@ describe('Database Module', () => {
         instruction: `click #button${i}`,
         status: 'success',
         startTime,
-        endTime
+        endTime,
       });
     }
 

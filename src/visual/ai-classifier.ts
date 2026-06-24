@@ -212,7 +212,10 @@ export class AIVisualClassifier {
    * @param maxWidth - Maximum width (default: 1024)
    * @returns Prepared image metadata
    */
-  async prepareImageForAI(imageBuffer: Buffer, maxWidth: number = 1024): Promise<PreparedImageForAI> {
+  async prepareImageForAI(
+    imageBuffer: Buffer,
+    maxWidth: number = 1024,
+  ): Promise<PreparedImageForAI> {
     try {
       const processed = await this.preprocessor.preprocess(imageBuffer);
 
@@ -223,7 +226,9 @@ export class AIVisualClassifier {
         height: processed.dimensions.height,
       };
     } catch (error) {
-      throw new Error(`Failed to prepare image for AI: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to prepare image for AI: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
     }
   }
 
@@ -275,9 +280,7 @@ export class AIVisualClassifier {
     const pLimit = (await import('p-limit')).default;
     const limit = pLimit(concurrency);
 
-    const tasks = requests.map(req =>
-      limit(() => this.analyzeChange(req))
-    );
+    const tasks = requests.map((req) => limit(() => this.analyzeChange(req)));
 
     return Promise.all(tasks);
   }
@@ -292,7 +295,7 @@ export class AIVisualClassifier {
    */
   private mapVisionResponseToAnalysisResponse(
     visionResponse: AIVisionResponse,
-    context?: AIAnalysisRequest['context']
+    context?: AIAnalysisRequest['context'],
   ): AIAnalysisResponse {
     // Map severity levels
     const severity = this.mapSeverity(visionResponse.severity);
@@ -325,7 +328,9 @@ export class AIVisualClassifier {
   /**
    * Map Phase 2A severity to legacy severity levels
    */
-  private mapSeverity(severity: 'none' | 'minor' | 'moderate' | 'breaking'): 'low' | 'medium' | 'high' | 'critical' {
+  private mapSeverity(
+    severity: 'none' | 'minor' | 'moderate' | 'breaking',
+  ): 'low' | 'medium' | 'high' | 'critical' {
     switch (severity) {
       case 'none':
         return 'low';
@@ -354,7 +359,7 @@ export class AIVisualClassifier {
    * Map Phase 2A categories to primary change type
    */
   private mapCategoriesToChangeType(
-    categories: Array<'layout' | 'text' | 'color' | 'spacing' | 'content'>
+    categories: Array<'layout' | 'text' | 'color' | 'spacing' | 'content'>,
   ): 'layout' | 'color' | 'content' | 'typography' | 'animation' | 'unknown' {
     if (categories.length === 0) {
       return 'unknown';
@@ -378,7 +383,7 @@ export class AIVisualClassifier {
     const firstCategory = categories[0];
     if (firstCategory === 'text') return 'typography';
     if (firstCategory === 'spacing') return 'layout';
-    return firstCategory as any || 'unknown';
+    return (firstCategory as any) || 'unknown';
   }
 
   /**
@@ -386,7 +391,7 @@ export class AIVisualClassifier {
    */
   private buildClassification(
     severity: 'none' | 'minor' | 'moderate' | 'breaking',
-    isIntentional: boolean
+    isIntentional: boolean,
   ): string {
     if (severity === 'none') {
       return 'no-change';
@@ -402,7 +407,7 @@ export class AIVisualClassifier {
    */
   private buildDescription(
     visionResponse: AIVisionResponse,
-    context?: AIAnalysisRequest['context']
+    context?: AIAnalysisRequest['context'],
   ): string {
     let description = visionResponse.reasoning;
 
@@ -477,8 +482,11 @@ export class AIVisualClassifier {
    * @param maxWidth - Maximum width (default: 1024)
    * @returns Array of prepared images
    */
-  async prepareImagesForAI(images: Buffer[], maxWidth: number = 1024): Promise<PreparedImageForAI[]> {
-    return Promise.all(images.map(img => this.prepareImageForAI(img, maxWidth)));
+  async prepareImagesForAI(
+    images: Buffer[],
+    maxWidth: number = 1024,
+  ): Promise<PreparedImageForAI[]> {
+    return Promise.all(images.map((img) => this.prepareImageForAI(img, maxWidth)));
   }
 
   /**

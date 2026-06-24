@@ -1,9 +1,5 @@
 import { IrisConfig } from '../config';
-import {
-  AIVisionClient,
-  AIVisionRequest,
-  AIVisionResponse,
-} from './base';
+import { AIVisionClient, AIVisionRequest, AIVisionResponse } from './base';
 import { AIClientFactory } from './factory';
 import { AIVisionCache } from './cache';
 import { CostTracker } from './cost-tracker';
@@ -110,13 +106,10 @@ export class SmartAIVisionClient {
 
     // Initialize cost tracker
     if (this.config.enableCostTracking) {
-      this.costTracker = new CostTracker(
-        this.config.costConfig.dbPath,
-        {
-          dailyLimit: this.config.costConfig.dailyLimit,
-          monthlyLimit: this.config.costConfig.monthlyLimit,
-        }
-      );
+      this.costTracker = new CostTracker(this.config.costConfig.dbPath, {
+        dailyLimit: this.config.costConfig.dailyLimit,
+        monthlyLimit: this.config.costConfig.monthlyLimit,
+      });
     }
   }
 
@@ -126,16 +119,10 @@ export class SmartAIVisionClient {
    * @param request - Vision analysis request
    * @returns Vision analysis response
    */
-  async analyzeVisualDiff(
-    request: AIVisionRequest
-  ): Promise<AIVisionResponse> {
+  async analyzeVisualDiff(request: AIVisionRequest): Promise<AIVisionResponse> {
     // Preprocess images
-    const baselineProcessed = await this.preprocessor.preprocess(
-      request.baseline
-    );
-    const currentProcessed = await this.preprocessor.preprocess(
-      request.current
-    );
+    const baselineProcessed = await this.preprocessor.preprocess(request.baseline);
+    const currentProcessed = await this.preprocessor.preprocess(request.current);
 
     // Check cache
     if (this.cache) {
@@ -143,7 +130,7 @@ export class SmartAIVisionClient {
         baselineProcessed.hash,
         currentProcessed.hash,
         this.irisConfig.ai.provider,
-        this.irisConfig.ai.model || ''
+        this.irisConfig.ai.model || '',
       );
 
       const cached = this.cache.get(cacheKey);
@@ -153,7 +140,7 @@ export class SmartAIVisionClient {
           this.costTracker.trackOperation(
             this.irisConfig.ai.provider,
             this.irisConfig.ai.model || '',
-            true
+            true,
           );
         }
         return cached;
@@ -182,9 +169,7 @@ export class SmartAIVisionClient {
         if (this.costTracker) {
           const budgetStatus = this.costTracker.getBudgetStatus();
           if (budgetStatus.circuitBreakerTriggered) {
-            throw new Error(
-              'Budget limit exceeded - circuit breaker activated'
-            );
+            throw new Error('Budget limit exceeded - circuit breaker activated');
           }
         }
 
@@ -200,7 +185,7 @@ export class SmartAIVisionClient {
           this.costTracker.trackOperation(
             providerName,
             this.getModelForProvider(providerName),
-            false
+            false,
           );
         }
 
@@ -210,14 +195,9 @@ export class SmartAIVisionClient {
             baselineProcessed.hash,
             currentProcessed.hash,
             providerName,
-            this.getModelForProvider(providerName)
+            this.getModelForProvider(providerName),
           );
-          this.cache.set(
-            cacheKey,
-            result,
-            providerName,
-            this.getModelForProvider(providerName)
-          );
+          this.cache.set(cacheKey, result, providerName, this.getModelForProvider(providerName));
         }
 
         return result;
@@ -229,9 +209,7 @@ export class SmartAIVisionClient {
     }
 
     // All providers failed
-    throw new Error(
-      `All providers failed. Last error: ${lastError?.message || 'Unknown error'}`
-    );
+    throw new Error(`All providers failed. Last error: ${lastError?.message || 'Unknown error'}`);
   }
 
   /**
@@ -313,7 +291,7 @@ export class SmartAIVisionClient {
  */
 export function createSmartClient(
   irisConfig: IrisConfig,
-  smartConfig?: SmartClientConfig
+  smartConfig?: SmartClientConfig,
 ): SmartAIVisionClient {
   return new SmartAIVisionClient(irisConfig, smartConfig);
 }

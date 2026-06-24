@@ -52,7 +52,7 @@ describe('Config System', () => {
 
       const configContent = JSON.stringify({
         ai: { model: 'gpt-4' },
-        watch: { debounceMs: 2000 }
+        watch: { debounceMs: 2000 },
       });
 
       mockOs.homedir.mockReturnValue('/home/test');
@@ -117,40 +117,46 @@ describe('Config System', () => {
       const config = {
         ai: { provider: 'openai' as const, model: 'gpt-4o-mini' },
         watch: { patterns: ['**/*.ts'], debounceMs: 1000, ignore: ['node_modules/**'] },
-        browser: { headless: true, timeout: 30000 }
+        browser: { headless: true, timeout: 30000 },
       };
 
       const errors = validateConfig(config);
-      expect(errors).toContain('OpenAI API key is required. Set OPENAI_API_KEY environment variable or configure in ~/.iris/config.json');
+      expect(errors).toContain(
+        'OpenAI API key is required. Set OPENAI_API_KEY environment variable or configure in ~/.iris/config.json',
+      );
     });
 
     it('should validate Anthropic config', () => {
       const config = {
         ai: { provider: 'anthropic' as const, model: 'claude-3-haiku-20240307' },
         watch: { patterns: ['**/*.ts'], debounceMs: 1000, ignore: ['node_modules/**'] },
-        browser: { headless: true, timeout: 30000 }
+        browser: { headless: true, timeout: 30000 },
       };
 
       const errors = validateConfig(config);
-      expect(errors).toContain('Anthropic API key is required. Set ANTHROPIC_API_KEY environment variable or configure in ~/.iris/config.json');
+      expect(errors).toContain(
+        'Anthropic API key is required. Set ANTHROPIC_API_KEY environment variable or configure in ~/.iris/config.json',
+      );
     });
 
     it('should validate Ollama config', () => {
       const config = {
         ai: { provider: 'ollama' as const, model: 'llama2' },
         watch: { patterns: ['**/*.ts'], debounceMs: 1000, ignore: ['node_modules/**'] },
-        browser: { headless: true, timeout: 30000 }
+        browser: { headless: true, timeout: 30000 },
       };
 
       const errors = validateConfig(config);
-      expect(errors).toContain('Ollama endpoint is required. Set OLLAMA_ENDPOINT environment variable or configure in ~/.iris/config.json');
+      expect(errors).toContain(
+        'Ollama endpoint is required. Set OLLAMA_ENDPOINT environment variable or configure in ~/.iris/config.json',
+      );
     });
 
     it('should validate timing constraints', () => {
       const config = {
         ai: { provider: 'openai' as const, apiKey: 'sk-test', model: 'gpt-4o-mini' },
         watch: { patterns: ['**/*.ts'], debounceMs: 50, ignore: ['node_modules/**'] },
-        browser: { headless: true, timeout: 500 }
+        browser: { headless: true, timeout: 500 },
       };
 
       const errors = validateConfig(config);
@@ -162,7 +168,7 @@ describe('Config System', () => {
       const config = {
         ai: { provider: 'openai' as const, apiKey: 'sk-test', model: 'gpt-4o-mini' },
         watch: { patterns: ['**/*.ts'], debounceMs: 1000, ignore: ['node_modules/**'] },
-        browser: { headless: true, timeout: 30000 }
+        browser: { headless: true, timeout: 30000 },
       };
 
       const errors = validateConfig(config);
@@ -175,7 +181,7 @@ describe('Config System', () => {
       const config = {
         ai: { provider: 'openai' as const, apiKey: 'sk-test', model: 'gpt-4o-mini' },
         watch: { patterns: ['**/*.ts'], debounceMs: 1000, ignore: ['node_modules/**'] },
-        browser: { headless: true, timeout: 30000 }
+        browser: { headless: true, timeout: 30000 },
       };
 
       mockOs.homedir.mockReturnValue('/home/test');
@@ -193,7 +199,7 @@ describe('Config System', () => {
       expect(mockFs.writeFileSync).toHaveBeenCalledWith(
         '/home/test/.iris/config.json',
         JSON.stringify(config, null, 2),
-        { mode: 0o600 }
+        { mode: 0o600 },
       );
       // File did not pre-exist, so no chmod is needed (writeFileSync's mode applies)
       expect(mockFs.chmodSync).not.toHaveBeenCalled();

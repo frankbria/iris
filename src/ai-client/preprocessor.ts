@@ -121,10 +121,7 @@ export class ImagePreprocessor {
     const originalHeight = metadata.height || 0;
 
     // Resize if needed
-    if (
-      originalWidth > this.config.maxWidth ||
-      originalHeight > this.config.maxHeight
-    ) {
+    if (originalWidth > this.config.maxWidth || originalHeight > this.config.maxHeight) {
       pipeline = pipeline.resize(this.config.maxWidth, this.config.maxHeight, {
         fit: this.config.maintainAspectRatio ? 'inside' : 'fill',
         withoutEnlargement: true,
@@ -134,18 +131,12 @@ export class ImagePreprocessor {
     // Convert to target format with quality optimization
     let processedBuffer: Buffer;
     if (this.config.format === 'jpeg') {
-      processedBuffer = await pipeline
-        .jpeg({ quality: this.config.quality })
-        .toBuffer();
+      processedBuffer = await pipeline.jpeg({ quality: this.config.quality }).toBuffer();
     } else if (this.config.format === 'png') {
-      processedBuffer = await pipeline
-        .png({ compressionLevel: 9 })
-        .toBuffer();
+      processedBuffer = await pipeline.png({ compressionLevel: 9 }).toBuffer();
     } else {
       // webp
-      processedBuffer = await pipeline
-        .webp({ quality: this.config.quality })
-        .toBuffer();
+      processedBuffer = await pipeline.webp({ quality: this.config.quality }).toBuffer();
     }
 
     // Get final dimensions
@@ -162,9 +153,7 @@ export class ImagePreprocessor {
     // Calculate size reduction
     const processedSize = processedBuffer.length;
     const reductionPercent =
-      originalSize > 0
-        ? Math.round(((originalSize - processedSize) / originalSize) * 100)
-        : 0;
+      originalSize > 0 ? Math.round(((originalSize - processedSize) / originalSize) * 100) : 0;
 
     return {
       buffer: processedBuffer,
@@ -186,9 +175,7 @@ export class ImagePreprocessor {
    * @param inputs - Array of images as Buffer, base64, or file paths
    * @returns Array of preprocessed images
    */
-  async preprocessBatch(
-    inputs: Array<Buffer | string>
-  ): Promise<PreprocessedImage[]> {
+  async preprocessBatch(inputs: Array<Buffer | string>): Promise<PreprocessedImage[]> {
     return Promise.all(inputs.map((input) => this.preprocess(input)));
   }
 
@@ -263,8 +250,6 @@ export class ImagePreprocessor {
 /**
  * Create a preprocessor with default configuration
  */
-export function createPreprocessor(
-  config?: PreprocessorConfig
-): ImagePreprocessor {
+export function createPreprocessor(config?: PreprocessorConfig): ImagePreprocessor {
   return new ImagePreprocessor(config);
 }

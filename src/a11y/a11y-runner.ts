@@ -103,13 +103,13 @@ export class AccessibilityRunner {
       critical: 0,
       serious: 0,
       moderate: 0,
-      minor: 0
+      minor: 0,
     };
 
     try {
       // Launch browser
       this.browser = await chromium.launch({
-        headless: true
+        headless: true,
       });
 
       // Test each page
@@ -126,13 +126,16 @@ export class AccessibilityRunner {
       }
 
       // Calculate overall metrics
-      const totalViolations = Object.values(violationsBySeverity).reduce((sum, count) => sum + count, 0);
+      const totalViolations = Object.values(violationsBySeverity).reduce(
+        (sum, count) => sum + count,
+        0,
+      );
       const score = this.calculateAccessibilityScore(violationsBySeverity, results.length);
       const passed = this.checkOverallPass(results);
 
       // Count keyboard test results
-      const keyboardResults = results.filter(r => r.keyboardResult);
-      const keyboardTestsPassed = keyboardResults.filter(r => r.keyboardResult?.passed).length;
+      const keyboardResults = results.filter((r) => r.keyboardResult);
+      const keyboardTestsPassed = keyboardResults.filter((r) => r.keyboardResult?.passed).length;
       const keyboardTestsFailed = keyboardResults.length - keyboardTestsPassed;
 
       const summary = {
@@ -142,7 +145,7 @@ export class AccessibilityRunner {
         violationsBySeverity,
         pagesTested: results.length,
         keyboardTestsPassed,
-        keyboardTestsFailed
+        keyboardTestsFailed,
       };
 
       const duration = Date.now() - startTime;
@@ -157,9 +160,8 @@ export class AccessibilityRunner {
         summary,
         results,
         reportPath,
-        duration
+        duration,
       };
-
     } finally {
       // Cleanup browser
       if (this.browser) {
@@ -207,9 +209,8 @@ export class AccessibilityRunner {
         page: pagePattern,
         axeResult,
         keyboardResult,
-        screenReaderResult
+        screenReaderResult,
       };
-
     } finally {
       await context.close();
     }
@@ -219,29 +220,36 @@ export class AccessibilityRunner {
    * Check if keyboard tests should run
    */
   private shouldRunKeyboardTests(): boolean {
-    return this.config.keyboard.testFocusOrder ||
-           this.config.keyboard.testTrapDetection ||
-           this.config.keyboard.testArrowKeyNavigation ||
-           this.config.keyboard.testEscapeHandling ||
-           this.config.keyboard.customSequences.length > 0;
+    return (
+      this.config.keyboard.testFocusOrder ||
+      this.config.keyboard.testTrapDetection ||
+      this.config.keyboard.testArrowKeyNavigation ||
+      this.config.keyboard.testEscapeHandling ||
+      this.config.keyboard.customSequences.length > 0
+    );
   }
 
   /**
    * Check if screen reader tests should run
    */
   private shouldRunScreenReaderTests(): boolean {
-    return this.config.screenReader.testAriaLabels ||
-           this.config.screenReader.testLandmarkNavigation ||
-           this.config.screenReader.testImageAltText ||
-           this.config.screenReader.testHeadingStructure ||
-           this.config.screenReader.simulateScreenReader;
+    return (
+      this.config.screenReader.testAriaLabels ||
+      this.config.screenReader.testLandmarkNavigation ||
+      this.config.screenReader.testImageAltText ||
+      this.config.screenReader.testHeadingStructure ||
+      this.config.screenReader.simulateScreenReader
+    );
   }
 
   /**
    * Run screen reader simulation tests
    * Note: This is a basic implementation - full screen reader simulation requires more sophisticated tooling
    */
-  private async runScreenReaderTests(page: Page, testName: string): Promise<ScreenReaderTestResult> {
+  private async runScreenReaderTests(
+    page: Page,
+    testName: string,
+  ): Promise<ScreenReaderTestResult> {
     const announcements: ScreenReaderTestResult['announcements'] = [];
     const landmarkStructure: ScreenReaderTestResult['landmarkStructure'] = [];
     const headingStructure: ScreenReaderTestResult['headingStructure'] = [];
@@ -250,8 +258,10 @@ export class AccessibilityRunner {
       // Test ARIA labels
       if (this.config.screenReader.testAriaLabels) {
         const ariaElements = await page.evaluate(() => {
-          const elements = document.querySelectorAll('[aria-label], [aria-labelledby], [aria-describedby]');
-          return Array.from(elements).map(el => ({
+          const elements = document.querySelectorAll(
+            '[aria-label], [aria-labelledby], [aria-describedby]',
+          );
+          return Array.from(elements).map((el) => ({
             element: el.tagName + (el.id ? `#${el.id}` : ''),
             expectedText: el.getAttribute('aria-label') || '',
             actualText: el.getAttribute('aria-label') || el.textContent?.trim() || '',
@@ -259,9 +269,9 @@ export class AccessibilityRunner {
             properties: {
               'aria-label': el.getAttribute('aria-label') || '',
               'aria-labelledby': el.getAttribute('aria-labelledby') || '',
-              'aria-describedby': el.getAttribute('aria-describedby') || ''
+              'aria-describedby': el.getAttribute('aria-describedby') || '',
             },
-            success: true
+            success: true,
           }));
         });
         announcements.push(...ariaElements);
@@ -270,12 +280,14 @@ export class AccessibilityRunner {
       // Test landmark structure
       if (this.config.screenReader.testLandmarkNavigation) {
         const landmarks = await page.evaluate(() => {
-          const landmarkElements = document.querySelectorAll('[role="banner"], [role="navigation"], [role="main"], [role="complementary"], [role="contentinfo"], header, nav, main, aside, footer');
-          return Array.from(landmarkElements).map(el => ({
+          const landmarkElements = document.querySelectorAll(
+            '[role="banner"], [role="navigation"], [role="main"], [role="complementary"], [role="contentinfo"], header, nav, main, aside, footer',
+          );
+          return Array.from(landmarkElements).map((el) => ({
             type: el.getAttribute('role') || el.tagName.toLowerCase(),
             label: el.getAttribute('aria-label') || undefined,
             element: el.tagName + (el.id ? `#${el.id}` : ''),
-            level: undefined
+            level: undefined,
           }));
         });
         landmarkStructure.push(...landmarks);
@@ -284,13 +296,15 @@ export class AccessibilityRunner {
       // Test heading structure
       if (this.config.screenReader.testHeadingStructure) {
         const headings = await page.evaluate(() => {
-          const headingElements = document.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]');
-          return Array.from(headingElements).map(el => {
+          const headingElements = document.querySelectorAll(
+            'h1, h2, h3, h4, h5, h6, [role="heading"]',
+          );
+          return Array.from(headingElements).map((el) => {
             const level = el.tagName.match(/h(\d)/i)?.[1] || el.getAttribute('aria-level');
             return {
               level: parseInt(level || '1'),
               text: el.textContent?.trim() || '',
-              element: el.tagName + (el.id ? `#${el.id}` : '')
+              element: el.tagName + (el.id ? `#${el.id}` : ''),
             };
           });
         });
@@ -310,11 +324,12 @@ export class AccessibilityRunner {
         passed: headingHierarchyValid && landmarkValid,
         announcements,
         landmarkStructure,
-        headingStructure
+        headingStructure,
       };
-
     } catch (error) {
-      throw new Error(`Screen reader testing failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Screen reader testing failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -340,7 +355,7 @@ export class AccessibilityRunner {
    */
   private calculateAccessibilityScore(
     violations: { critical: number; serious: number; moderate: number; minor: number },
-    pageCount: number
+    pageCount: number,
   ): number {
     // Weighted scoring: critical issues heavily penalized
     const criticalPenalty = violations.critical * 25;
@@ -351,7 +366,7 @@ export class AccessibilityRunner {
     const totalPenalty = criticalPenalty + seriousPenalty + moderatePenalty + minorPenalty;
     const maxPossibleScore = 100 * pageCount;
 
-    const score = Math.max(0, maxPossibleScore - totalPenalty) / maxPossibleScore * 100;
+    const score = (Math.max(0, maxPossibleScore - totalPenalty) / maxPossibleScore) * 100;
 
     return Math.round(score);
   }
@@ -385,7 +400,7 @@ export class AccessibilityRunner {
    */
   private async generateReport(
     results: AccessibilityTestResult['results'],
-    summary: AccessibilityTestResult['summary']
+    summary: AccessibilityTestResult['summary'],
   ): Promise<string> {
     const format = this.config.output?.format || 'json';
     const outputPath = this.config.output?.path || `./a11y-report-${Date.now()}.${format}`;

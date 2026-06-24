@@ -1,9 +1,5 @@
 import { IrisConfig } from '../config';
-import {
-  BaseAIClient,
-  AITranslationRequest,
-  AITranslationResponse,
-} from './base';
+import { BaseAIClient, AITranslationRequest, AITranslationResponse } from './base';
 
 /**
  * OpenAI client for text-based instruction translation
@@ -13,9 +9,7 @@ export class OpenAITextClient extends BaseAIClient {
     super(config);
   }
 
-  async translateInstruction(
-    request: AITranslationRequest
-  ): Promise<AITranslationResponse> {
+  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
     if (!this.config.apiKey) {
       throw new Error('OpenAI API key not configured');
     }
@@ -99,14 +93,10 @@ export class AnthropicTextClient extends BaseAIClient {
     super(config);
   }
 
-  async translateInstruction(
-    request: AITranslationRequest
-  ): Promise<AITranslationResponse> {
+  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
     // Note: This is a placeholder for Anthropic integration
     // In a real implementation, you would use the Anthropic SDK
-    console.warn(
-      'Anthropic client not yet implemented, falling back to pattern matching'
-    );
+    console.warn('Anthropic client not yet implemented, falling back to pattern matching');
     return {
       actions: [],
       confidence: 0,
@@ -127,9 +117,7 @@ export class OllamaTextClient extends BaseAIClient {
     super(config);
   }
 
-  async translateInstruction(
-    request: AITranslationRequest
-  ): Promise<AITranslationResponse> {
+  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
     if (!this.config.endpoint) {
       throw new Error('Ollama endpoint not configured');
     }

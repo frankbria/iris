@@ -20,18 +20,10 @@ export {
 } from './base';
 
 // Text client implementations
-export {
-  OpenAITextClient,
-  AnthropicTextClient,
-  OllamaTextClient,
-} from './text';
+export { OpenAITextClient, AnthropicTextClient, OllamaTextClient } from './text';
 
 // Vision client implementations
-export {
-  OpenAIVisionClient,
-  AnthropicVisionClient,
-  OllamaVisionClient,
-} from './vision';
+export { OpenAIVisionClient, AnthropicVisionClient, OllamaVisionClient } from './vision';
 
 // Image preprocessor
 export {
@@ -42,13 +34,7 @@ export {
 } from './preprocessor';
 
 // Cache
-export {
-  AIVisionCache,
-  CacheConfig,
-  CacheEntry,
-  CacheStats,
-  createCache,
-} from './cache';
+export { AIVisionCache, CacheConfig, CacheEntry, CacheStats, createCache } from './cache';
 
 // Cost tracker
 export {
@@ -62,11 +48,7 @@ export {
 } from './cost-tracker';
 
 // Smart client
-export {
-  SmartAIVisionClient,
-  SmartClientConfig,
-  createSmartClient,
-} from './smart-client';
+export { SmartAIVisionClient, SmartClientConfig, createSmartClient } from './smart-client';
 
 // Factory
 export { AIClientFactory, ClientType, createAIClient } from './factory';

@@ -29,12 +29,8 @@ import { SmartAIVisionClient } from '../../src/ai-client/smart-client';
 import { ImagePreprocessor } from '../../src/ai-client/preprocessor';
 import { AIVisionResponse } from '../../src/ai-client/base';
 
-const MockSmartAIVisionClient = SmartAIVisionClient as jest.MockedClass<
-  typeof SmartAIVisionClient
->;
-const MockImagePreprocessor = ImagePreprocessor as jest.MockedClass<
-  typeof ImagePreprocessor
->;
+const MockSmartAIVisionClient = SmartAIVisionClient as jest.MockedClass<typeof SmartAIVisionClient>;
+const MockImagePreprocessor = ImagePreprocessor as jest.MockedClass<typeof ImagePreprocessor>;
 
 // Type definitions for refactored classifier (to be implemented)
 interface AIProviderConfig {
@@ -128,7 +124,10 @@ class AIVisualClassifier {
     return results;
   }
 
-  async prepareImageForAI(imageBuffer: Buffer, maxWidth: number = 1024): Promise<PreparedImageForAI> {
+  async prepareImageForAI(
+    imageBuffer: Buffer,
+    maxWidth: number = 1024,
+  ): Promise<PreparedImageForAI> {
     const processed = await this.preprocessor.preprocess(imageBuffer);
     return {
       base64: processed.base64,
@@ -217,9 +216,7 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
     // Setup ImagePreprocessor mock
     mockPreprocessor = {
       preprocess: jest.fn().mockResolvedValue(mockPreprocessedImage),
-      preprocessBatch: jest
-        .fn()
-        .mockResolvedValue([mockPreprocessedImage, mockPreprocessedImage]),
+      preprocessBatch: jest.fn().mockResolvedValue([mockPreprocessedImage, mockPreprocessedImage]),
       updateConfig: jest.fn(),
       getConfig: jest.fn().mockReturnValue({
         maxWidth: 2048,
@@ -420,12 +417,8 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
 
       // Should preprocess all three images
       expect(mockPreprocessor.preprocess).toHaveBeenCalledTimes(3);
-      expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(
-        mockBaselineBuffer
-      );
-      expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(
-        mockCurrentBuffer
-      );
+      expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(mockBaselineBuffer);
+      expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(mockCurrentBuffer);
       expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(mockDiffBuffer);
     });
 
@@ -515,7 +508,7 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
 
     it('should handle error when AI provider fails', async () => {
       mockSmartClient.analyzeVisualDiff.mockRejectedValue(
-        new Error('OpenAI API rate limit exceeded')
+        new Error('OpenAI API rate limit exceeded'),
       );
 
       const request: AIAnalysisRequest = {
@@ -524,7 +517,7 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
       };
 
       await expect(classifier.analyzeChange(request)).rejects.toThrow(
-        'OpenAI API rate limit exceeded'
+        'OpenAI API rate limit exceeded',
       );
     });
   });
@@ -590,9 +583,7 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
         },
       ];
 
-      await expect(classifier.batchAnalyze(requests)).rejects.toThrow(
-        'API error'
-      );
+      await expect(classifier.batchAnalyze(requests)).rejects.toThrow('API error');
     });
 
     it('should respect concurrency limit (3 concurrent)', async () => {
@@ -640,9 +631,7 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
     });
 
     it('should handle all requests failing gracefully', async () => {
-      mockSmartClient.analyzeVisualDiff.mockRejectedValue(
-        new Error('All providers unavailable')
-      );
+      mockSmartClient.analyzeVisualDiff.mockRejectedValue(new Error('All providers unavailable'));
 
       const requests: AIAnalysisRequest[] = [
         {
@@ -655,9 +644,7 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
         },
       ];
 
-      await expect(classifier.batchAnalyze(requests)).rejects.toThrow(
-        'All providers unavailable'
-      );
+      await expect(classifier.batchAnalyze(requests)).rejects.toThrow('All providers unavailable');
     });
   });
 
@@ -875,12 +862,8 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
 
       await classifier.analyzeChange(request);
 
-      expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(
-        mockBaselineBuffer
-      );
-      expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(
-        mockCurrentBuffer
-      );
+      expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(mockBaselineBuffer);
+      expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(mockCurrentBuffer);
     });
 
     it('should respect budget limits (circuit breaker)', async () => {
@@ -899,7 +882,7 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
       });
 
       mockSmartClient.analyzeVisualDiff.mockRejectedValue(
-        new Error('Budget limit exceeded - circuit breaker activated')
+        new Error('Budget limit exceeded - circuit breaker activated'),
       );
 
       const request: AIAnalysisRequest = {
@@ -907,9 +890,7 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
         currentImage: mockCurrentBuffer,
       };
 
-      await expect(classifier.analyzeChange(request)).rejects.toThrow(
-        'Budget limit exceeded'
-      );
+      await expect(classifier.analyzeChange(request)).rejects.toThrow('Budget limit exceeded');
     });
 
     it('should handle cache miss scenario', async () => {
@@ -966,9 +947,7 @@ describe('AIVisualClassifier - Refactored with Phase 2A', () => {
       expect(result.mimeType).toBe('image/jpeg');
       expect(result.width).toBe(mockPreprocessedImage.dimensions.width);
       expect(result.height).toBe(mockPreprocessedImage.dimensions.height);
-      expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(
-        mockBaselineBuffer
-      );
+      expect(mockPreprocessor.preprocess).toHaveBeenCalledWith(mockBaselineBuffer);
     });
 
     it('should maintain AIAnalysisRequest format unchanged', async () => {

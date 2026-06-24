@@ -32,33 +32,33 @@ describe('AccessibilityRunner', () => {
       include: [],
       exclude: [],
       disableRules: [],
-      timeout: 10000
+      timeout: 10000,
     },
     keyboard: {
       testFocusOrder: true,
       testTrapDetection: true,
       testArrowKeyNavigation: true,
       testEscapeHandling: true,
-      customSequences: []
+      customSequences: [],
     },
     screenReader: {
       testAriaLabels: true,
       testLandmarkNavigation: true,
       testImageAltText: true,
       testHeadingStructure: true,
-      simulateScreenReader: true
+      simulateScreenReader: true,
     },
     failureThreshold: {
       critical: true,
       serious: true,
       moderate: false,
-      minor: false
+      minor: false,
     },
     reporting: {
       includePassedTests: true,
       groupByImpact: true,
-      includeScreenshots: false
-    }
+      includeScreenshots: false,
+    },
   };
 
   beforeEach(() => {
@@ -66,19 +66,19 @@ describe('AccessibilityRunner', () => {
     mockPage = {
       goto: jest.fn().mockResolvedValue(undefined),
       evaluate: jest.fn().mockResolvedValue([]),
-      close: jest.fn().mockResolvedValue(undefined)
+      close: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     // Mock Playwright BrowserContext
     mockContext = {
       newPage: jest.fn().mockResolvedValue(mockPage),
-      close: jest.fn().mockResolvedValue(undefined)
+      close: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     // Mock Playwright Browser
     mockBrowser = {
       newContext: jest.fn().mockResolvedValue(mockContext),
-      close: jest.fn().mockResolvedValue(undefined)
+      close: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     // Mock chromium.launch
@@ -101,20 +101,20 @@ describe('AccessibilityRunner', () => {
           violations: 0,
           passes: 0,
           incomplete: 0,
-          inapplicable: 0
+          inapplicable: 0,
         },
         testRunner: {
           name: 'axe-core',
-          version: '4.8.0'
-        }
+          version: '4.8.0',
+        },
       }),
       getSeverityCounts: jest.fn().mockReturnValue({
         critical: 0,
         serious: 0,
         moderate: 0,
-        minor: 0
+        minor: 0,
       }),
-      checkThreshold: jest.fn().mockReturnValue(true)
+      checkThreshold: jest.fn().mockReturnValue(true),
     } as any;
 
     (AxeRunner as jest.MockedClass<typeof AxeRunner>).mockImplementation(() => mockAxeRunner);
@@ -126,11 +126,13 @@ describe('AccessibilityRunner', () => {
         passed: true,
         interactions: [],
         focusOrder: [],
-        trapTests: []
-      })
+        trapTests: [],
+      }),
     } as any;
 
-    (KeyboardTester as jest.MockedClass<typeof KeyboardTester>).mockImplementation(() => mockKeyboardTester);
+    (KeyboardTester as jest.MockedClass<typeof KeyboardTester>).mockImplementation(
+      () => mockKeyboardTester,
+    );
 
     accessibilityRunner = new AccessibilityRunner(defaultConfig);
   });
@@ -181,8 +183,8 @@ describe('AccessibilityRunner', () => {
             description: '',
             help: '',
             helpUrl: '',
-            nodes: []
-          }
+            nodes: [],
+          },
         ],
         passes: [],
         incomplete: [],
@@ -192,19 +194,19 @@ describe('AccessibilityRunner', () => {
           violations: 1,
           passes: 0,
           incomplete: 0,
-          inapplicable: 0
+          inapplicable: 0,
         },
         testRunner: {
           name: 'axe-core',
-          version: '4.8.0'
-        }
+          version: '4.8.0',
+        },
       });
 
       mockAxeRunner.getSeverityCounts.mockReturnValueOnce({
         critical: 1,
         serious: 0,
         moderate: 0,
-        minor: 0
+        minor: 0,
       });
 
       const result = await accessibilityRunner.run();
@@ -240,7 +242,7 @@ describe('AccessibilityRunner', () => {
         passed: false, // Keyboard test failed
         interactions: [],
         focusOrder: [],
-        trapTests: []
+        trapTests: [],
       });
 
       const result = await accessibilityRunner.run();
@@ -256,14 +258,14 @@ describe('AccessibilityRunner', () => {
           passed: true,
           interactions: [],
           focusOrder: [],
-          trapTests: []
+          trapTests: [],
         })
         .mockResolvedValueOnce({
           testName: 'keyboard-test-2',
           passed: false,
           interactions: [],
           focusOrder: [],
-          trapTests: []
+          trapTests: [],
         });
 
       const result = await accessibilityRunner.run();
@@ -275,21 +277,29 @@ describe('AccessibilityRunner', () => {
     it('should navigate to correct URLs for pages', async () => {
       await accessibilityRunner.run();
 
-      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000/', { waitUntil: 'networkidle' });
-      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000/about', { waitUntil: 'networkidle' });
+      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000/', {
+        waitUntil: 'networkidle',
+      });
+      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000/about', {
+        waitUntil: 'networkidle',
+      });
     });
 
     it('should handle absolute URLs', async () => {
       const customConfig = {
         ...defaultConfig,
-        pages: ['https://example.com/page1', 'https://example.com/page2']
+        pages: ['https://example.com/page1', 'https://example.com/page2'],
       };
       accessibilityRunner = new AccessibilityRunner(customConfig);
 
       await accessibilityRunner.run();
 
-      expect(mockPage.goto).toHaveBeenCalledWith('https://example.com/page1', { waitUntil: 'networkidle' });
-      expect(mockPage.goto).toHaveBeenCalledWith('https://example.com/page2', { waitUntil: 'networkidle' });
+      expect(mockPage.goto).toHaveBeenCalledWith('https://example.com/page1', {
+        waitUntil: 'networkidle',
+      });
+      expect(mockPage.goto).toHaveBeenCalledWith('https://example.com/page2', {
+        waitUntil: 'networkidle',
+      });
     });
 
     it('should include duration in results', async () => {
@@ -316,8 +326,8 @@ describe('AccessibilityRunner', () => {
           testTrapDetection: false,
           testArrowKeyNavigation: false,
           testEscapeHandling: false,
-          customSequences: []
-        }
+          customSequences: [],
+        },
       };
       accessibilityRunner = new AccessibilityRunner(configNoKeyboard);
 
@@ -340,8 +350,8 @@ describe('AccessibilityRunner', () => {
               actualText: 'Submit',
               role: 'button',
               properties: { 'aria-label': 'Submit' },
-              success: true
-            }
+              success: true,
+            },
           ]);
         }
         if (fn.toString().includes('landmarkElements')) {
@@ -350,14 +360,14 @@ describe('AccessibilityRunner', () => {
               type: 'main',
               label: 'Main content',
               element: 'MAIN',
-              level: undefined
-            }
+              level: undefined,
+            },
           ]);
         }
         if (fn.toString().includes('headingElements')) {
           return Promise.resolve([
             { level: 1, text: 'Title', element: 'H1' },
-            { level: 2, text: 'Subtitle', element: 'H2' }
+            { level: 2, text: 'Subtitle', element: 'H2' },
           ]);
         }
         return Promise.resolve([]);
@@ -379,8 +389,8 @@ describe('AccessibilityRunner', () => {
           testLandmarkNavigation: false,
           testImageAltText: false,
           testHeadingStructure: false,
-          simulateScreenReader: false
-        }
+          simulateScreenReader: false,
+        },
       };
       accessibilityRunner = new AccessibilityRunner(configNoScreenReader);
 
@@ -394,12 +404,12 @@ describe('AccessibilityRunner', () => {
         if (fn.toString().includes('headingElements')) {
           return Promise.resolve([
             { level: 1, text: 'Title', element: 'H1' },
-            { level: 3, text: 'Subtitle', element: 'H3' } // Skipped H2
+            { level: 3, text: 'Subtitle', element: 'H3' }, // Skipped H2
           ]);
         }
         if (fn.toString().includes('landmarkElements')) {
           return Promise.resolve([
-            { type: 'main', label: 'Main', element: 'MAIN', level: undefined }
+            { type: 'main', label: 'Main', element: 'MAIN', level: undefined },
           ]);
         }
         return Promise.resolve([]);
@@ -416,12 +426,12 @@ describe('AccessibilityRunner', () => {
           return Promise.resolve([
             { level: 1, text: 'Title', element: 'H1' },
             { level: 2, text: 'Subtitle', element: 'H2' },
-            { level: 3, text: 'Section', element: 'H3' }
+            { level: 3, text: 'Section', element: 'H3' },
           ]);
         }
         if (fn.toString().includes('landmarkElements')) {
           return Promise.resolve([
-            { type: 'main', label: 'Main', element: 'MAIN', level: undefined }
+            { type: 'main', label: 'Main', element: 'MAIN', level: undefined },
           ]);
         }
         return Promise.resolve([]);
@@ -442,18 +452,15 @@ describe('AccessibilityRunner', () => {
         ...defaultConfig,
         output: {
           format: 'json' as const,
-          path: './test-report.json'
-        }
+          path: './test-report.json',
+        },
       };
       accessibilityRunner = new AccessibilityRunner(configWithReport);
 
       const result = await accessibilityRunner.run();
 
       expect(result.reportPath).toBe('./test-report.json');
-      expect(fs.writeFileSync).toHaveBeenCalledWith(
-        './test-report.json',
-        expect.any(String)
-      );
+      expect(fs.writeFileSync).toHaveBeenCalledWith('./test-report.json', expect.any(String));
 
       fs.writeFileSync.mockRestore();
     });
@@ -475,13 +482,14 @@ describe('AccessibilityRunner', () => {
         ...defaultConfig,
         output: {
           format: 'html' as const,
-          path: './report.html'
-        }
+          path: './report.html',
+        },
       };
       accessibilityRunner = new AccessibilityRunner(configWithHtmlReport);
 
-      await expect(accessibilityRunner.run())
-        .rejects.toThrow("Report format 'html' not yet implemented");
+      await expect(accessibilityRunner.run()).rejects.toThrow(
+        "Report format 'html' not yet implemented",
+      );
     });
   });
 
@@ -491,7 +499,7 @@ describe('AccessibilityRunner', () => {
         critical: 0,
         serious: 0,
         moderate: 0,
-        minor: 0
+        minor: 0,
       });
 
       const result = await accessibilityRunner.run();
@@ -504,7 +512,7 @@ describe('AccessibilityRunner', () => {
         critical: 1,
         serious: 0,
         moderate: 0,
-        minor: 0
+        minor: 0,
       });
 
       const result = await accessibilityRunner.run();

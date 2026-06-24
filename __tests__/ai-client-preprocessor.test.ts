@@ -135,8 +135,7 @@ describe('ImagePreprocessor', () => {
       expect(result.dimensions.height).toBeLessThanOrEqual(2048);
 
       // Aspect ratio should be maintained (3000:2000 = 1.5:1)
-      const aspectRatio =
-        result.dimensions.width / result.dimensions.height;
+      const aspectRatio = result.dimensions.width / result.dimensions.height;
       expect(aspectRatio).toBeCloseTo(1.5, 1);
     });
 
@@ -180,9 +179,7 @@ describe('ImagePreprocessor', () => {
       const lowResult = await lowQuality.preprocess(detailBuffer);
 
       // Lower quality should result in smaller file
-      expect(lowResult.processedSize).toBeLessThan(
-        highResult.processedSize
-      );
+      expect(lowResult.processedSize).toBeLessThan(highResult.processedSize);
     });
 
     it('should calculate consistent hashes for identical images', async () => {
@@ -391,10 +388,7 @@ describe('ImagePreprocessor', () => {
 
       const base64Input = buffer2.toString('base64');
 
-      const results = await preprocessor.preprocessBatch([
-        buffer1,
-        base64Input,
-      ]);
+      const results = await preprocessor.preprocessBatch([buffer1, base64Input]);
 
       expect(results).toHaveLength(2);
       expect(results[0].buffer).toBeInstanceOf(Buffer);
@@ -460,8 +454,7 @@ describe('ImagePreprocessor', () => {
 
       const result = await preprocessor.preprocess(wideBuffer);
 
-      const aspectRatio =
-        result.dimensions.width / result.dimensions.height;
+      const aspectRatio = result.dimensions.width / result.dimensions.height;
       expect(aspectRatio).toBeCloseTo(3.0, 1); // 3000:1000 = 3:1
     });
 

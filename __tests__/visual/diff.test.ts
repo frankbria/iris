@@ -96,7 +96,8 @@ describe('VisualDiffEngine', () => {
         raw: jest.fn().mockReturnThis(),
         ensureAlpha: jest.fn().mockReturnThis(),
         toBuffer: jest.fn().mockResolvedValue(Buffer.from('processed-image')),
-        metadata: jest.fn()
+        metadata: jest
+          .fn()
           .mockResolvedValueOnce({ width: 1920, height: 1080, channels: 4 })
           .mockResolvedValueOnce({ width: 1024, height: 768, channels: 4 }),
       };
@@ -220,9 +221,7 @@ describe('VisualDiffEngine', () => {
       const analysis: DiffAnalysis = {
         similarity: 0.85,
         pixelDifference: 50000,
-        regions: [
-          { x: 0, y: 0, width: 200, height: 1080, significance: 0.8 },
-        ],
+        regions: [{ x: 0, y: 0, width: 200, height: 1080, significance: 0.8 }],
         classification: 'unknown',
       };
 
@@ -238,9 +237,7 @@ describe('VisualDiffEngine', () => {
       const analysis: DiffAnalysis = {
         similarity: 0.92,
         pixelDifference: 15000,
-        regions: [
-          { x: 500, y: 300, width: 300, height: 100, significance: 0.6 },
-        ],
+        regions: [{ x: 500, y: 300, width: 300, height: 100, significance: 0.6 }],
         classification: 'unknown',
       };
 
@@ -275,9 +272,7 @@ describe('VisualDiffEngine', () => {
       const analysis: DiffAnalysis = {
         similarity: 0.98,
         pixelDifference: 2000,
-        regions: [
-          { x: 400, y: 400, width: 100, height: 100, significance: 0.2 },
-        ],
+        regions: [{ x: 400, y: 400, width: 100, height: 100, significance: 0.2 }],
         classification: 'unknown',
       };
 
@@ -293,11 +288,9 @@ describe('VisualDiffEngine', () => {
     it('should return critical severity for major layout changes', () => {
       // Arrange
       const analysis: DiffAnalysis = {
-        similarity: 0.70,
+        similarity: 0.7,
         pixelDifference: 500000,
-        regions: [
-          { x: 0, y: 0, width: 1920, height: 500, significance: 0.9 },
-        ],
+        regions: [{ x: 0, y: 0, width: 1920, height: 500, significance: 0.9 }],
         classification: 'layout',
       };
 
@@ -313,9 +306,7 @@ describe('VisualDiffEngine', () => {
       const analysis: DiffAnalysis = {
         similarity: 0.82,
         pixelDifference: 100000,
-        regions: [
-          { x: 200, y: 200, width: 600, height: 400, significance: 0.7 },
-        ],
+        regions: [{ x: 200, y: 200, width: 600, height: 400, significance: 0.7 }],
         classification: 'content',
       };
 
@@ -331,9 +322,7 @@ describe('VisualDiffEngine', () => {
       const analysis: DiffAnalysis = {
         similarity: 0.91,
         pixelDifference: 25000,
-        regions: [
-          { x: 100, y: 100, width: 200, height: 100, significance: 0.5 },
-        ],
+        regions: [{ x: 100, y: 100, width: 200, height: 100, significance: 0.5 }],
         classification: 'styling',
       };
 
@@ -349,9 +338,7 @@ describe('VisualDiffEngine', () => {
       const analysis: DiffAnalysis = {
         similarity: 0.97,
         pixelDifference: 5000,
-        regions: [
-          { x: 500, y: 500, width: 50, height: 50, significance: 0.2 },
-        ],
+        regions: [{ x: 500, y: 500, width: 50, height: 50, significance: 0.2 }],
         classification: 'animation',
       };
 
@@ -389,7 +376,9 @@ describe('VisualDiffEngine', () => {
       (sharp as any).mockReturnValue(mockSharp);
 
       // Act & Assert
-      await expect(diffEngine.prepareImage(mockBaselineBuffer)).rejects.toThrow('Sharp processing failed');
+      await expect(diffEngine.prepareImage(mockBaselineBuffer)).rejects.toThrow(
+        'Sharp processing failed',
+      );
     });
   });
 

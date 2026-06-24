@@ -17,7 +17,7 @@ describe('KeyboardTester', () => {
     testTrapDetection: true,
     testArrowKeyNavigation: true,
     testEscapeHandling: true,
-    customSequences: []
+    customSequences: [],
   };
 
   beforeEach(() => {
@@ -26,9 +26,9 @@ describe('KeyboardTester', () => {
       evaluate: jest.fn(),
       focus: jest.fn(),
       keyboard: {
-        press: jest.fn()
+        press: jest.fn(),
       },
-      waitForTimeout: jest.fn()
+      waitForTimeout: jest.fn(),
     } as any;
 
     keyboardTester = new KeyboardTester(defaultConfig);
@@ -51,15 +51,15 @@ describe('KeyboardTester', () => {
               focusable: true,
               visible: true,
               tagName: 'BUTTON',
-              role: 'button'
+              role: 'button',
             },
             {
               element: 'INPUT#email',
               tabIndex: 0,
               focusable: true,
               visible: true,
-              tagName: 'INPUT'
-            }
+              tagName: 'INPUT',
+            },
           ]);
         }
         // Second call: testFocusTraps
@@ -92,7 +92,7 @@ describe('KeyboardTester', () => {
         ...defaultConfig,
         testTrapDetection: false,
         testArrowKeyNavigation: false,
-        testEscapeHandling: false
+        testEscapeHandling: false,
       };
       keyboardTester = new KeyboardTester(configWithFocusTest);
 
@@ -103,14 +103,14 @@ describe('KeyboardTester', () => {
           tabIndex: -1,
           focusable: true,
           visible: true,
-          tagName: 'BUTTON'
-        }
+          tagName: 'BUTTON',
+        },
       ]);
 
       const result = await keyboardTester.run(mockPage, 'invalid-focus');
 
       expect(result.passed).toBe(false);
-      expect(result.interactions.some(i => !i.success)).toBe(true);
+      expect(result.interactions.some((i) => !i.success)).toBe(true);
     });
 
     it('should detect focus traps without escape mechanisms', async () => {
@@ -119,7 +119,7 @@ describe('KeyboardTester', () => {
         testTrapDetection: true,
         testArrowKeyNavigation: false,
         testEscapeHandling: false,
-        customSequences: []
+        customSequences: [],
       };
       keyboardTester = new KeyboardTester(configWithTrapTest);
 
@@ -131,8 +131,8 @@ describe('KeyboardTester', () => {
               trapped: true,
               escapeMethod: undefined, // No escape mechanism
               firstElement: 'BUTTON',
-              lastElement: 'BUTTON'
-            }
+              lastElement: 'BUTTON',
+            },
           ]);
         }
         return Promise.resolve([]);
@@ -151,7 +151,7 @@ describe('KeyboardTester', () => {
         testTrapDetection: true,
         testArrowKeyNavigation: false,
         testEscapeHandling: false,
-        customSequences: []
+        customSequences: [],
       };
       keyboardTester = new KeyboardTester(configWithTrapTest);
 
@@ -163,8 +163,8 @@ describe('KeyboardTester', () => {
               trapped: true,
               escapeMethod: 'Escape or Close button',
               firstElement: 'BUTTON',
-              lastElement: 'BUTTON'
-            }
+              lastElement: 'BUTTON',
+            },
           ]);
         }
         return Promise.resolve([]);
@@ -183,7 +183,7 @@ describe('KeyboardTester', () => {
         testTrapDetection: false,
         testArrowKeyNavigation: true,
         testEscapeHandling: false,
-        customSequences: []
+        customSequences: [],
       };
       keyboardTester = new KeyboardTester(configWithArrowTest);
 
@@ -192,8 +192,8 @@ describe('KeyboardTester', () => {
           return Promise.resolve([
             {
               selector: 'DIV.menu',
-              role: 'menu'
-            }
+              role: 'menu',
+            },
           ]);
         }
         if (fn.toString().includes('activeElement')) {
@@ -204,7 +204,7 @@ describe('KeyboardTester', () => {
 
       const result = await keyboardTester.run(mockPage, 'arrow-test');
 
-      expect(result.interactions.some(i => i.key === 'ArrowDown')).toBe(true);
+      expect(result.interactions.some((i) => i.key === 'ArrowDown')).toBe(true);
       expect(mockPage.focus).toHaveBeenCalled();
       expect(mockPage.keyboard.press).toHaveBeenCalledWith('ArrowDown');
     });
@@ -215,7 +215,7 @@ describe('KeyboardTester', () => {
         testTrapDetection: false,
         testArrowKeyNavigation: false,
         testEscapeHandling: true,
-        customSequences: []
+        customSequences: [],
       };
       keyboardTester = new KeyboardTester(configWithEscapeTest);
 
@@ -224,8 +224,8 @@ describe('KeyboardTester', () => {
           return Promise.resolve([
             {
               selector: 'DIV.modal',
-              visible: true
-            }
+              visible: true,
+            },
           ]);
         }
         if (fn.toString().includes('offsetParent')) {
@@ -236,8 +236,8 @@ describe('KeyboardTester', () => {
 
       const result = await keyboardTester.run(mockPage, 'escape-test');
 
-      expect(result.interactions.some(i => i.key === 'Escape')).toBe(true);
-      expect(result.interactions.some(i => i.key === 'Escape' && i.success)).toBe(true);
+      expect(result.interactions.some((i) => i.key === 'Escape')).toBe(true);
+      expect(result.interactions.some((i) => i.key === 'Escape' && i.success)).toBe(true);
     });
 
     it('should execute custom keyboard sequences', async () => {
@@ -251,9 +251,9 @@ describe('KeyboardTester', () => {
             name: 'save-shortcut',
             keys: ['Control', 's'],
             expectedBehavior: 'Save dialog opens',
-            validator: '() => document.querySelector(".save-dialog") !== null'
-          }
-        ]
+            validator: '() => document.querySelector(".save-dialog") !== null',
+          },
+        ],
       };
       keyboardTester = new KeyboardTester(configWithCustom);
 
@@ -261,7 +261,7 @@ describe('KeyboardTester', () => {
 
       const result = await keyboardTester.run(mockPage, 'custom-test');
 
-      expect(result.interactions.some(i => i.target === 'save-shortcut')).toBe(true);
+      expect(result.interactions.some((i) => i.target === 'save-shortcut')).toBe(true);
       expect(mockPage.keyboard.press).toHaveBeenCalledWith('Control');
       expect(mockPage.keyboard.press).toHaveBeenCalledWith('s');
       expect(mockPage.waitForTimeout).toHaveBeenCalled();
@@ -270,8 +270,9 @@ describe('KeyboardTester', () => {
     it('should handle keyboard testing errors gracefully', async () => {
       mockPage.evaluate.mockRejectedValue(new Error('Page evaluation failed'));
 
-      await expect(keyboardTester.run(mockPage, 'error-test'))
-        .rejects.toThrow('Keyboard testing failed: Page evaluation failed');
+      await expect(keyboardTester.run(mockPage, 'error-test')).rejects.toThrow(
+        'Keyboard testing failed: Page evaluation failed',
+      );
     });
   });
 
@@ -282,14 +283,14 @@ describe('KeyboardTester', () => {
         testTrapDetection: false,
         testArrowKeyNavigation: false,
         testEscapeHandling: false,
-        customSequences: []
+        customSequences: [],
       };
       keyboardTester = new KeyboardTester(configWithFocusOnly);
 
       mockPage.evaluate.mockResolvedValue([
         { element: 'BUTTON', tabIndex: 0, focusable: true, visible: true, tagName: 'BUTTON' },
         { element: 'INPUT', tabIndex: 0, focusable: true, visible: true, tagName: 'INPUT' },
-        { element: 'A', tabIndex: 0, focusable: true, visible: true, tagName: 'A' }
+        { element: 'A', tabIndex: 0, focusable: true, visible: true, tagName: 'A' },
       ]);
 
       const result = await keyboardTester.run(mockPage, 'natural-order');
@@ -303,13 +304,13 @@ describe('KeyboardTester', () => {
         testTrapDetection: false,
         testArrowKeyNavigation: false,
         testEscapeHandling: false,
-        customSequences: []
+        customSequences: [],
       };
       keyboardTester = new KeyboardTester(configWithFocusOnly);
 
       mockPage.evaluate.mockResolvedValue([
         { element: 'BUTTON', tabIndex: 0, focusable: true, visible: true, tagName: 'BUTTON' },
-        { element: 'INPUT', tabIndex: -1, focusable: true, visible: true, tagName: 'INPUT' }
+        { element: 'INPUT', tabIndex: -1, focusable: true, visible: true, tagName: 'INPUT' },
       ]);
 
       const result = await keyboardTester.run(mockPage, 'negative-tabindex');
@@ -323,13 +324,13 @@ describe('KeyboardTester', () => {
         testTrapDetection: false,
         testArrowKeyNavigation: false,
         testEscapeHandling: false,
-        customSequences: []
+        customSequences: [],
       };
       keyboardTester = new KeyboardTester(configWithFocusOnly);
 
       mockPage.evaluate.mockResolvedValue([
         { element: 'BUTTON', tabIndex: 1, focusable: true, visible: true, tagName: 'BUTTON' },
-        { element: 'INPUT', tabIndex: 5, focusable: true, visible: true, tagName: 'INPUT' }
+        { element: 'INPUT', tabIndex: 5, focusable: true, visible: true, tagName: 'INPUT' },
       ]);
 
       const result = await keyboardTester.run(mockPage, 'manual-tabindex');
@@ -348,8 +349,8 @@ describe('KeyboardTester', () => {
               trapped: true,
               escapeMethod: 'Escape or Close button',
               firstElement: 'BUTTON.close',
-              lastElement: 'BUTTON.cancel'
-            }
+              lastElement: 'BUTTON.cancel',
+            },
           ]);
         }
         return Promise.resolve([]);
@@ -383,7 +384,7 @@ describe('KeyboardTester', () => {
         testTrapDetection: false,
         testArrowKeyNavigation: true,
         testEscapeHandling: false,
-        customSequences: []
+        customSequences: [],
       };
       keyboardTester = new KeyboardTester(configWithArrowTest);
 
@@ -392,7 +393,7 @@ describe('KeyboardTester', () => {
           return Promise.resolve([
             { selector: 'NAV[role="menu"]', role: 'menu' },
             { selector: 'DIV[role="listbox"]', role: 'listbox' },
-            { selector: 'DIV[role="tablist"]', role: 'tablist' }
+            { selector: 'DIV[role="tablist"]', role: 'tablist' },
           ]);
         }
         if (fn.toString().includes('activeElement')) {
@@ -403,7 +404,7 @@ describe('KeyboardTester', () => {
 
       const result = await keyboardTester.run(mockPage, 'arrow-navigation');
 
-      const arrowInteractions = result.interactions.filter(i => i.key === 'ArrowDown');
+      const arrowInteractions = result.interactions.filter((i) => i.key === 'ArrowDown');
       expect(arrowInteractions).toHaveLength(3); // One for each component
     });
 
@@ -413,18 +414,16 @@ describe('KeyboardTester', () => {
         testTrapDetection: false,
         testArrowKeyNavigation: true,
         testEscapeHandling: false,
-        customSequences: []
+        customSequences: [],
       };
       keyboardTester = new KeyboardTester(configWithArrowTest);
 
-      mockPage.evaluate.mockResolvedValueOnce([
-        { selector: 'DIV.menu', role: 'menu' }
-      ]);
+      mockPage.evaluate.mockResolvedValueOnce([{ selector: 'DIV.menu', role: 'menu' }]);
       mockPage.focus.mockRejectedValue(new Error('Element not found'));
 
       const result = await keyboardTester.run(mockPage, 'arrow-error');
 
-      expect(result.interactions.some(i => i.key === 'ArrowDown' && !i.success)).toBe(true);
+      expect(result.interactions.some((i) => i.key === 'ArrowDown' && !i.success)).toBe(true);
     });
   });
 
@@ -439,9 +438,9 @@ describe('KeyboardTester', () => {
           {
             name: 'undo',
             keys: ['Control', 'z'],
-            expectedBehavior: 'Undo last action'
-          }
-        ]
+            expectedBehavior: 'Undo last action',
+          },
+        ],
       };
       keyboardTester = new KeyboardTester(configWithCustom);
 
@@ -449,7 +448,7 @@ describe('KeyboardTester', () => {
 
       expect(mockPage.keyboard.press).toHaveBeenCalledWith('Control');
       expect(mockPage.keyboard.press).toHaveBeenCalledWith('z');
-      expect(result.interactions.some(i => i.key === 'Control+z')).toBe(true);
+      expect(result.interactions.some((i) => i.key === 'Control+z')).toBe(true);
     });
 
     it('should validate custom sequences with validators', async () => {
@@ -463,9 +462,9 @@ describe('KeyboardTester', () => {
             name: 'search',
             keys: ['Control', 'f'],
             expectedBehavior: 'Search dialog opens',
-            validator: '() => document.querySelector(".search-dialog") !== null'
-          }
-        ]
+            validator: '() => document.querySelector(".search-dialog") !== null',
+          },
+        ],
       };
       keyboardTester = new KeyboardTester(configWithCustom);
 
@@ -473,7 +472,7 @@ describe('KeyboardTester', () => {
 
       const result = await keyboardTester.run(mockPage, 'validated-sequence');
 
-      expect(result.interactions.some(i => i.target === 'search' && i.success)).toBe(true);
+      expect(result.interactions.some((i) => i.target === 'search' && i.success)).toBe(true);
     });
 
     it('should mark sequence as failed when validator fails', async () => {
@@ -487,9 +486,9 @@ describe('KeyboardTester', () => {
             name: 'print',
             keys: ['Control', 'p'],
             expectedBehavior: 'Print dialog opens',
-            validator: '() => document.querySelector(".print-dialog") !== null'
-          }
-        ]
+            validator: '() => document.querySelector(".print-dialog") !== null',
+          },
+        ],
       };
       keyboardTester = new KeyboardTester(configWithCustom);
 
@@ -497,7 +496,7 @@ describe('KeyboardTester', () => {
 
       const result = await keyboardTester.run(mockPage, 'failed-validator');
 
-      expect(result.interactions.some(i => i.target === 'print' && !i.success)).toBe(true);
+      expect(result.interactions.some((i) => i.target === 'print' && !i.success)).toBe(true);
       expect(result.passed).toBe(false);
     });
   });

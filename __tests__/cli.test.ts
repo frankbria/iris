@@ -19,7 +19,9 @@ describe('CLI Commands', () => {
   test('run command prints translated actions as JSON', async () => {
     await runCli(['node', 'iris', 'run', 'click #btn', '--dry-run']);
     // Check that the actions are displayed in the expected format
-    expect(consoleOutput.some(log => log.includes('Actions: [{"type":"click","selector":"#btn"}]'))).toBe(true);
+    expect(
+      consoleOutput.some((log) => log.includes('Actions: [{"type":"click","selector":"#btn"}]')),
+    ).toBe(true);
   });
 
   test('watch command prints target or default', async () => {
@@ -32,13 +34,11 @@ describe('CLI Commands', () => {
     // Mock the startServer function to avoid actually starting a server
     const mockStartServer = jest.fn();
     jest.doMock('../src/protocol', () => ({
-      startServer: mockStartServer
+      startServer: mockStartServer,
     }));
 
     await runCli(['node', 'iris', 'connect']);
-    expect(consoleOutput).toContain(
-      'JSON-RPC server listening on ws://localhost:4000'
-    );
+    expect(consoleOutput).toContain('JSON-RPC server listening on ws://localhost:4000');
     expect(mockStartServer).toHaveBeenCalledWith(4000);
   });
 
@@ -80,11 +80,13 @@ describe('CLI Commands', () => {
     await runCli(['node', 'iris', 'run', 'click #submit', '--dry-run']);
 
     // Should show translation results
-    expect(consoleOutput.some(log => log.includes('Translation result'))).toBe(true);
-    expect(consoleOutput.some(log => log.includes('Dry run mode - actions not executed'))).toBe(true);
+    expect(consoleOutput.some((log) => log.includes('Translation result'))).toBe(true);
+    expect(consoleOutput.some((log) => log.includes('Dry run mode - actions not executed'))).toBe(
+      true,
+    );
 
     // Should NOT show execution results
-    expect(consoleOutput.some(log => log.includes('🚀 Executing actions'))).toBe(false);
+    expect(consoleOutput.some((log) => log.includes('🚀 Executing actions'))).toBe(false);
   });
 
   test('run command shows help with --help flag', async () => {
@@ -100,7 +102,9 @@ describe('CLI Commands', () => {
 
     await runCli(['node', 'iris', 'run', '--help']);
 
-    expect(consoleOutput.some(log => log.includes('Run a natural language instruction'))).toBe(true);
+    expect(consoleOutput.some((log) => log.includes('Run a natural language instruction'))).toBe(
+      true,
+    );
 
     mockExit.mockRestore();
     mockWrite.mockRestore();

@@ -120,9 +120,10 @@ export class VisualTestRunner {
     if (config.diff.semanticAnalysis) {
       this.aiClassifier = new AIVisualClassifier({
         provider: config.diff.aiProvider,
-        model: config.diff.aiProvider === 'openai' ? 'gpt-4-vision-preview' : 'claude-3-opus-20240229',
+        model:
+          config.diff.aiProvider === 'openai' ? 'gpt-4-vision-preview' : 'claude-3-opus-20240229',
         maxTokens: 1024,
-        temperature: 0.1
+        temperature: 0.1,
       });
     }
   }
@@ -142,14 +143,14 @@ export class VisualTestRunner {
       severityCounts: {
         breaking: 0,
         moderate: 0,
-        minor: 0
-      }
+        minor: 0,
+      },
     };
 
     try {
       // Launch browser
       this.browser = await chromium.launch({
-        headless: true
+        headless: true,
       });
 
       const devices = this.config.devices || ['desktop'];
@@ -207,9 +208,8 @@ export class VisualTestRunner {
         results,
         reportPath,
         duration,
-        costSummary: this.aiClassifier?.getCostStats()
+        costSummary: this.aiClassifier?.getCostStats(),
       };
-
     } finally {
       // Cleanup browser
       if (this.browser) {
@@ -226,7 +226,7 @@ export class VisualTestRunner {
    */
   private async runTestsInParallel(
     tasks: Array<{ page: string; device: string }>,
-    concurrency: number
+    concurrency: number,
   ): Promise<VisualTestResult['results']> {
     // ponytail: fixed-size worker pool instead of p-limit — p-limit@5 is
     // ESM-only and breaks ts-jest's CommonJS transform when its dynamic import
@@ -241,23 +241,24 @@ export class VisualTestRunner {
       while (next < tasks.length) {
         const i = next++;
         const task = tasks[i];
-        results[i] = await this.testPage(task.page, task.device).catch(error => ({
-          page: task.page,
-          device: task.device,
-          passed: false,
-          similarity: 0,
-          pixelDifference: 1,
-          threshold: this.config.diff.threshold,
-          severity: 'breaking',
-          screenshotPath: '',
-          error: error.message
-        } as any));
+        results[i] = await this.testPage(task.page, task.device).catch(
+          (error) =>
+            ({
+              page: task.page,
+              device: task.device,
+              passed: false,
+              similarity: 0,
+              pixelDifference: 1,
+              threshold: this.config.diff.threshold,
+              severity: 'breaking',
+              screenshotPath: '',
+              error: error.message,
+            }) as any,
+        );
       }
     };
 
-    await Promise.all(
-      Array.from({ length: Math.min(limit, tasks.length) }, () => worker())
-    );
+    await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, () => worker()));
 
     return results;
   }
@@ -265,7 +266,10 @@ export class VisualTestRunner {
   /**
    * Test a single page on a specific device
    */
-  private async testPage(pagePattern: string, device: string): Promise<VisualTestResult['results'][0]> {
+  private async testPage(
+    pagePattern: string,
+    device: string,
+  ): Promise<VisualTestResult['results'][0]> {
     if (!this.browser) {
       throw new Error('Browser not initialized');
     }
@@ -281,7 +285,9 @@ export class VisualTestRunner {
 
     try {
       // Navigate to page (assuming pagePattern is a URL for now)
-      const url = pagePattern.startsWith('http') ? pagePattern : `http://localhost:3000${pagePattern}`;
+      const url = pagePattern.startsWith('http')
+        ? pagePattern
+        : `http://localhost:3000${pagePattern}`;
       await page.goto(url, { waitUntil: 'networkidle' });
 
       // Wait for stabilization
@@ -298,7 +304,7 @@ export class VisualTestRunner {
               transition-duration: 0s !important;
               transition-delay: 0s !important;
             }
-          `
+          `,
         });
       }
 
@@ -308,7 +314,7 @@ export class VisualTestRunner {
 
       if (this.config.capture.stabilization.waitForNetworkIdle) {
         await page.waitForLoadState('networkidle', {
-          timeout: this.config.capture.stabilization.networkIdleTimeout
+          timeout: this.config.capture.stabilization.networkIdleTimeout,
         });
       }
 
@@ -321,7 +327,7 @@ export class VisualTestRunner {
         stabilizeMs: 0, // Already stabilized above
         disableAnimations: false, // Already disabled above
         quality: this.config.capture.quality,
-        type: this.config.capture.format
+        type: this.config.capture.format,
       });
 
       if (!screenshotBuffer.success || !screenshotBuffer.buffer) {
@@ -342,7 +348,7 @@ export class VisualTestRunner {
         await this.baselineManager.saveBaseline(
           testName,
           screenshotBuffer.buffer,
-          screenshotBuffer.metadata
+          screenshotBuffer.metadata,
         );
 
         return {
@@ -353,7 +359,7 @@ export class VisualTestRunner {
           pixelDifference: 0,
           threshold: this.config.diff.threshold,
           screenshotPath,
-          baselinePath: undefined
+          baselinePath: undefined,
         };
       }
 
@@ -366,8 +372,8 @@ export class VisualTestRunner {
           includeAA: this.config.diff.antiAliasing,
           alpha: 0.1,
           diffMask: true,
-          diffColor: [255, 0, 0]
-        }
+          diffColor: [255, 0, 0],
+        },
       );
 
       // Save diff image if there are differences
@@ -395,15 +401,15 @@ export class VisualTestRunner {
           context: {
             testName,
             url,
-            viewport
-          }
+            viewport,
+          },
         });
 
         aiAnalysis = {
           classification: analysis.classification,
           confidence: analysis.confidence,
           description: analysis.description,
-          severity: analysis.severity
+          severity: analysis.severity,
         };
 
         // Map AI severity to test severity
@@ -424,9 +430,8 @@ export class VisualTestRunner {
         aiAnalysis,
         screenshotPath,
         baselinePath,
-        diffPath
+        diffPath,
       };
-
     } finally {
       await context.close();
     }
@@ -440,7 +445,7 @@ export class VisualTestRunner {
       desktop: { width: 1920, height: 1080 },
       laptop: { width: 1366, height: 768 },
       tablet: { width: 768, height: 1024 },
-      mobile: { width: 375, height: 667 }
+      mobile: { width: 375, height: 667 },
     };
 
     return viewports[device] || this.config.capture.viewport;
@@ -465,7 +470,10 @@ export class VisualTestRunner {
   /**
    * Estimate severity without AI based on metrics
    */
-  private estimateSeverity(pixelDifference: number, similarity: number): 'minor' | 'moderate' | 'breaking' {
+  private estimateSeverity(
+    pixelDifference: number,
+    similarity: number,
+  ): 'minor' | 'moderate' | 'breaking' {
     // If similarity is very low or pixel difference is very high, it's breaking
     if (similarity < 0.85 || pixelDifference > 0.15) {
       return 'breaking';
@@ -485,7 +493,7 @@ export class VisualTestRunner {
    */
   private async generateReport(
     results: VisualTestResult['results'],
-    summary: VisualTestResult['summary']
+    summary: VisualTestResult['summary'],
   ): Promise<string> {
     const format = this.config.output?.format || 'json';
     const outputPath = this.config.output?.path;
@@ -495,7 +503,7 @@ export class VisualTestRunner {
       summary,
       results,
       duration: 0, // Will be set by caller
-      reportPath: outputPath
+      reportPath: outputPath,
     };
 
     // Use VisualReporter for all formats
@@ -505,7 +513,7 @@ export class VisualTestRunner {
       title: 'IRIS Visual Regression Test Report',
       includeScreenshots: true,
       includePassedTests: true,
-      relativePaths: true
+      relativePaths: true,
     });
 
     const artifacts = await reporter.generateReport(fullResult);

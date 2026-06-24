@@ -12,7 +12,7 @@ import {
   TimeoutError,
   generateCorrelationId,
   isRetryableError,
-  createLogger
+  createLogger,
 } from '../../src/utils/types';
 
 describe('Utility Types', () => {
@@ -33,7 +33,7 @@ describe('Utility Types', () => {
         author: 'test@example.com',
         timestamp: new Date(),
         message: 'Test commit',
-        isDirty: false
+        isDirty: false,
       };
 
       const result = GitInfoSchema.safeParse(validGitInfo);
@@ -50,7 +50,7 @@ describe('Utility Types', () => {
         value: 1250.5,
         unit: 'ms',
         timestamp: new Date(),
-        category: 'timing' as const
+        category: 'timing' as const,
       };
 
       const result = PerformanceMetricSchema.safeParse(validMetric);
@@ -69,7 +69,7 @@ describe('Utility Types', () => {
         size: 1024000,
         colorSpace: 'srgb',
         hasAlpha: true,
-        checksum: 'sha256:abc123...'
+        checksum: 'sha256:abc123...',
       };
 
       const result = ImageMetadataSchema.safeParse(validMetadata);
@@ -88,7 +88,7 @@ describe('Utility Types', () => {
           format: 'png',
           size: 1024000,
           hasAlpha: false,
-          checksum: 'baseline-hash'
+          checksum: 'baseline-hash',
         },
         current: {
           width: 1920,
@@ -96,14 +96,12 @@ describe('Utility Types', () => {
           format: 'png',
           size: 1025000,
           hasAlpha: false,
-          checksum: 'current-hash'
+          checksum: 'current-hash',
         },
         similarity: 0.95,
         pixelDifference: 1500,
         dimensions: { width: 1920, height: 1080 },
-        regions: [
-          { x: 100, y: 200, width: 50, height: 30, difference: 0.1 }
-        ]
+        regions: [{ x: 100, y: 200, width: 50, height: 30, difference: 0.1 }],
       };
 
       const result = ImageComparisonSchema.safeParse(validComparison);
@@ -120,7 +118,7 @@ describe('Utility Types', () => {
         delayMs: 1000,
         backoffMultiplier: 2,
         maxDelayMs: 30000,
-        retryableErrors: ['ECONNRESET', 'TIMEOUT']
+        retryableErrors: ['ECONNRESET', 'TIMEOUT'],
       };
 
       const result = RetryConfigSchema.safeParse(validConfig);
@@ -134,7 +132,7 @@ describe('Utility Types', () => {
     it('should apply defaults in RetryConfigSchema', () => {
       const minimalConfig = {
         maxAttempts: 5,
-        delayMs: 500
+        delayMs: 500,
       };
 
       const result = RetryConfigSchema.safeParse(minimalConfig);
@@ -154,7 +152,7 @@ describe('Utility Types', () => {
         timestamp: new Date(),
         correlationId: 'test-123',
         severity: 'medium' as const,
-        category: 'system' as const
+        category: 'system' as const,
       };
 
       const error = new UtilityError('Test failed', 'TEST_ERROR', context);
@@ -171,7 +169,7 @@ describe('Utility Types', () => {
       expect(error.code).toBe('VALIDATION_ERROR');
       expect(error.context?.details).toEqual({
         field: 'email',
-        value: 'invalid-email'
+        value: 'invalid-email',
       });
     });
 
@@ -190,7 +188,7 @@ describe('Utility Types', () => {
       expect(error.message).toContain('5000ms');
       expect(error.context?.details).toEqual({
         operation: 'database-query',
-        timeoutMs: 5000
+        timeoutMs: 5000,
       });
     });
   });

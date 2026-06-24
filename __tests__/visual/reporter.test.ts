@@ -18,8 +18,8 @@ describe('VisualReporter', () => {
       severityCounts: {
         breaking: 1,
         moderate: 1,
-        minor: 0
-      }
+        minor: 0,
+      },
     },
     results: [
       {
@@ -30,7 +30,7 @@ describe('VisualReporter', () => {
         pixelDifference: 0,
         threshold: 0.1,
         screenshotPath: '/tmp/home-desktop.png',
-        baselinePath: '/tmp/baseline-home-desktop.png'
+        baselinePath: '/tmp/baseline-home-desktop.png',
       },
       {
         page: '/about',
@@ -47,8 +47,8 @@ describe('VisualReporter', () => {
           classification: 'unintentional',
           confidence: 0.95,
           description: 'Layout shift detected in navigation bar',
-          severity: 'high'
-        }
+          severity: 'high',
+        },
       },
       {
         page: '/contact',
@@ -60,11 +60,11 @@ describe('VisualReporter', () => {
         severity: 'moderate',
         screenshotPath: '/tmp/contact-tablet.png',
         baselinePath: '/tmp/baseline-contact-tablet.png',
-        diffPath: '/tmp/diff-contact-tablet.png'
-      }
+        diffPath: '/tmp/diff-contact-tablet.png',
+      },
     ],
     duration: 5000,
-    reportPath: undefined
+    reportPath: undefined,
   };
 
   const tempDir = path.join(__dirname, '__temp_reports__');
@@ -87,7 +87,7 @@ describe('VisualReporter', () => {
     it('should generate valid JSON report', async () => {
       const reporter = new VisualReporter({
         format: 'json',
-        outputPath: path.join(tempDir, 'report.json')
+        outputPath: path.join(tempDir, 'report.json'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -106,7 +106,7 @@ describe('VisualReporter', () => {
 
     it('should use default path when not specified', async () => {
       const reporter = new VisualReporter({
-        format: 'json'
+        format: 'json',
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -124,7 +124,7 @@ describe('VisualReporter', () => {
     it('should generate valid HTML report', async () => {
       const reporter = new VisualReporter({
         format: 'html',
-        outputPath: path.join(tempDir, 'report.html')
+        outputPath: path.join(tempDir, 'report.html'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -144,7 +144,7 @@ describe('VisualReporter', () => {
     it('should include summary statistics in HTML', async () => {
       const reporter = new VisualReporter({
         format: 'html',
-        outputPath: path.join(tempDir, 'report-summary.html')
+        outputPath: path.join(tempDir, 'report-summary.html'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -161,7 +161,7 @@ describe('VisualReporter', () => {
     it('should include severity breakdown in HTML', async () => {
       const reporter = new VisualReporter({
         format: 'html',
-        outputPath: path.join(tempDir, 'report-severity.html')
+        outputPath: path.join(tempDir, 'report-severity.html'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -175,7 +175,7 @@ describe('VisualReporter', () => {
     it('should include test result cards', async () => {
       const reporter = new VisualReporter({
         format: 'html',
-        outputPath: path.join(tempDir, 'report-results.html')
+        outputPath: path.join(tempDir, 'report-results.html'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -190,7 +190,7 @@ describe('VisualReporter', () => {
     it('should include AI analysis in HTML when available', async () => {
       const reporter = new VisualReporter({
         format: 'html',
-        outputPath: path.join(tempDir, 'report-ai.html')
+        outputPath: path.join(tempDir, 'report-ai.html'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -205,7 +205,7 @@ describe('VisualReporter', () => {
     it('should include interactive diff viewer', async () => {
       const reporter = new VisualReporter({
         format: 'html',
-        outputPath: path.join(tempDir, 'report-diff.html')
+        outputPath: path.join(tempDir, 'report-diff.html'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -220,7 +220,7 @@ describe('VisualReporter', () => {
     it('should include filter buttons', async () => {
       const reporter = new VisualReporter({
         format: 'html',
-        outputPath: path.join(tempDir, 'report-filters.html')
+        outputPath: path.join(tempDir, 'report-filters.html'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -237,7 +237,7 @@ describe('VisualReporter', () => {
     it('should include JavaScript for interactivity', async () => {
       const reporter = new VisualReporter({
         format: 'html',
-        outputPath: path.join(tempDir, 'report-js.html')
+        outputPath: path.join(tempDir, 'report-js.html'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -252,7 +252,7 @@ describe('VisualReporter', () => {
       const reporter = new VisualReporter({
         format: 'html',
         outputPath: path.join(tempDir, 'report-title.html'),
-        title: 'Custom Test Report'
+        title: 'Custom Test Report',
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -266,7 +266,7 @@ describe('VisualReporter', () => {
     it('should generate valid JUnit XML report', async () => {
       const reporter = new VisualReporter({
         format: 'junit',
-        outputPath: path.join(tempDir, 'report.xml')
+        outputPath: path.join(tempDir, 'report.xml'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -286,7 +286,7 @@ describe('VisualReporter', () => {
     it('should include test suite attributes', async () => {
       const reporter = new VisualReporter({
         format: 'junit',
-        outputPath: path.join(tempDir, 'report-suite.xml')
+        outputPath: path.join(tempDir, 'report-suite.xml'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -299,7 +299,7 @@ describe('VisualReporter', () => {
     it('should include failure details', async () => {
       const reporter = new VisualReporter({
         format: 'junit',
-        outputPath: path.join(tempDir, 'report-failures.xml')
+        outputPath: path.join(tempDir, 'report-failures.xml'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -315,7 +315,7 @@ describe('VisualReporter', () => {
     it('should include AI analysis in failure messages', async () => {
       const reporter = new VisualReporter({
         format: 'junit',
-        outputPath: path.join(tempDir, 'report-ai-junit.xml')
+        outputPath: path.join(tempDir, 'report-ai-junit.xml'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -331,7 +331,7 @@ describe('VisualReporter', () => {
     it('should generate valid Markdown report', async () => {
       const reporter = new VisualReporter({
         format: 'markdown',
-        outputPath: path.join(tempDir, 'report.md')
+        outputPath: path.join(tempDir, 'report.md'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -350,7 +350,7 @@ describe('VisualReporter', () => {
     it('should include summary statistics in Markdown', async () => {
       const reporter = new VisualReporter({
         format: 'markdown',
-        outputPath: path.join(tempDir, 'report-summary.md')
+        outputPath: path.join(tempDir, 'report-summary.md'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -364,7 +364,7 @@ describe('VisualReporter', () => {
     it('should include severity breakdown in Markdown', async () => {
       const reporter = new VisualReporter({
         format: 'markdown',
-        outputPath: path.join(tempDir, 'report-severity.md')
+        outputPath: path.join(tempDir, 'report-severity.md'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -378,7 +378,7 @@ describe('VisualReporter', () => {
     it('should include test results with emojis', async () => {
       const reporter = new VisualReporter({
         format: 'markdown',
-        outputPath: path.join(tempDir, 'report-results.md')
+        outputPath: path.join(tempDir, 'report-results.md'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -392,7 +392,7 @@ describe('VisualReporter', () => {
     it('should include AI analysis in Markdown', async () => {
       const reporter = new VisualReporter({
         format: 'markdown',
-        outputPath: path.join(tempDir, 'report-ai.md')
+        outputPath: path.join(tempDir, 'report-ai.md'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -410,7 +410,7 @@ describe('VisualReporter', () => {
       const reporter = new VisualReporter({
         format: 'json',
         outputPath: path.join(tempDir, 'report-no-passed.json'),
-        includePassedTests: false
+        includePassedTests: false,
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -427,7 +427,7 @@ describe('VisualReporter', () => {
       const reporter = new VisualReporter({
         format: 'html',
         outputPath: path.join(tempDir, 'report-timestamp.html'),
-        timestamp: customDate
+        timestamp: customDate,
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -441,17 +441,19 @@ describe('VisualReporter', () => {
     it('should throw error for unsupported format', async () => {
       const reporter = new VisualReporter({
         format: 'pdf' as any,
-        outputPath: path.join(tempDir, 'report.pdf')
+        outputPath: path.join(tempDir, 'report.pdf'),
       });
 
-      await expect(reporter.generateReport(mockResults)).rejects.toThrow('Unsupported report format');
+      await expect(reporter.generateReport(mockResults)).rejects.toThrow(
+        'Unsupported report format',
+      );
     });
 
     it('should create output directory if it does not exist', async () => {
       const nestedDir = path.join(tempDir, 'nested', 'deep', 'path');
       const reporter = new VisualReporter({
         format: 'json',
-        outputPath: path.join(nestedDir, 'report.json')
+        outputPath: path.join(nestedDir, 'report.json'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -465,7 +467,7 @@ describe('VisualReporter', () => {
       const reporter = new VisualReporter({
         format: 'html',
         outputPath: path.join(tempDir, 'report-artifacts.html'),
-        includeScreenshots: true
+        includeScreenshots: true,
       });
 
       const artifacts = await reporter.generateReport(mockResults);
@@ -477,7 +479,7 @@ describe('VisualReporter', () => {
     it('should return screenshot paths', async () => {
       const reporter = new VisualReporter({
         format: 'json',
-        outputPath: path.join(tempDir, 'report-screenshots.json')
+        outputPath: path.join(tempDir, 'report-screenshots.json'),
       });
 
       const artifacts = await reporter.generateReport(mockResults);
