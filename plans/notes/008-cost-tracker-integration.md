@@ -9,7 +9,7 @@ behind `--show-cost`; no enforcement.
 
 The data is one method call away from the runner:
 
-```
+```text
 VisualTestRunner.aiClassifier            (src/visual/visual-runner.ts:103)
   └─ AIVisualClassifier.getCostStats()   (src/visual/ai-classifier.ts:462)
        └─ SmartAIVisionClient.getCostStats()  (src/ai-client/smart-client.ts:287)
