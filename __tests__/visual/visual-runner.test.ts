@@ -396,6 +396,16 @@ describe('VisualTestRunner', () => {
           changeType: 'layout' as const,
           reasoning: 'Detected significant layout shift in header area'
         }),
+        getCostStats: jest.fn().mockReturnValue({
+          totalCost: 0.0042,
+          dailyCost: 0.0042,
+          monthlyCost: 0.0042,
+          operationCount: 2,
+          cacheHitCount: 1,
+          cacheHitRate: 0.5,
+          costByProvider: { openai: 0.0042 },
+          costByModel: {}
+        }),
         close: jest.fn()
       } as any;
 
@@ -488,6 +498,30 @@ describe('VisualTestRunner', () => {
       expect(result.results[0].severity).toBe('breaking');
       expect(result.summary.severityCounts.breaking).toBe(2);
     });
+
+    // Spike 008: read-only cost summary is surfaced when a classifier exists.
+    it('should populate costSummary from the classifier when semantic analysis is on', async () => {
+      const configWithAI = {
+        ...defaultConfig,
+        diff: { ...defaultConfig.diff, semanticAnalysis: true }
+      };
+      visualRunner = new VisualTestRunner(configWithAI);
+
+      const result = await visualRunner.run();
+
+      expect(mockAIClassifier.getCostStats).toHaveBeenCalled();
+      expect(result.costSummary).toBeDefined();
+      expect(result.costSummary?.operationCount).toBe(2);
+      expect(result.costSummary?.totalCost).toBeCloseTo(0.0042);
+      expect(result.costSummary?.cacheHitRate).toBe(0.5);
+    });
+  });
+
+  // Spike 008: no classifier (semantic analysis off) → no cost summary, default behavior.
+  it('should leave costSummary undefined when semantic analysis is off', async () => {
+    const result = await visualRunner.run();
+
+    expect(result.costSummary).toBeUndefined();
   });
 
   describe('severity estimation without AI', () => {

@@ -14,6 +14,7 @@ import { AIVisualClassifier } from './ai-classifier';
 import { StorageManager } from './storage';
 import { VisualReporter } from './reporter';
 import type { AIProvider } from './ai-classifier';
+import type { CostStats } from '../ai-client/cost-tracker';
 
 export interface VisualTestRunnerConfig {
   pages: string[];
@@ -89,6 +90,9 @@ export interface VisualTestResult {
   }>;
   reportPath?: string;
   duration: number;
+  // Optional read-only AI cost/cache summary, populated only when semantic
+  // analysis ran (a classifier exists). Spike 008 — see plans/notes/.
+  costSummary?: CostStats;
 }
 
 /**
@@ -196,11 +200,14 @@ export class VisualTestRunner {
         reportPath = await this.generateReport(results, summary);
       }
 
+      // Read AI cost stats before the finally block closes the cost tracker.
+      // undefined when semantic analysis is off or no cost tracker is configured.
       return {
         summary,
         results,
         reportPath,
-        duration
+        duration,
+        costSummary: this.aiClassifier?.getCostStats()
       };
 
     } finally {
