@@ -234,7 +234,7 @@ export class A11yTestError extends Error {
   constructor(
     message: string,
     public code: string,
-    public details?: Record<string, any>,
+    public details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'A11yTestError';
@@ -242,19 +242,19 @@ export class A11yTestError extends Error {
 }
 
 export class AxeRunnerError extends A11yTestError {
-  constructor(message: string, details?: Record<string, any>) {
+  constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'AXE_RUNNER_ERROR', details);
   }
 }
 
 export class KeyboardNavigationError extends A11yTestError {
-  constructor(message: string, details?: Record<string, any>) {
+  constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'KEYBOARD_NAVIGATION_ERROR', details);
   }
 }
 
 export class ScreenReaderError extends A11yTestError {
-  constructor(message: string, details?: Record<string, any>) {
+  constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'SCREEN_READER_ERROR', details);
   }
 }

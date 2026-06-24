@@ -96,9 +96,9 @@ class AIVisualClassifier {
     // Preprocess images
     const baseline = await this.preprocessor.preprocess(request.baselineImage);
     const current = await this.preprocessor.preprocess(request.currentImage);
-    const diff = request.diffImage
-      ? await this.preprocessor.preprocess(request.diffImage)
-      : undefined;
+    if (request.diffImage) {
+      await this.preprocessor.preprocess(request.diffImage);
+    }
 
     // Call SmartClient
     const visionResponse = await this.smartClient.analyzeVisualDiff({
@@ -126,7 +126,7 @@ class AIVisualClassifier {
 
   async prepareImageForAI(
     imageBuffer: Buffer,
-    maxWidth: number = 1024,
+    _maxWidth: number = 1024,
   ): Promise<PreparedImageForAI> {
     const processed = await this.preprocessor.preprocess(imageBuffer);
     return {

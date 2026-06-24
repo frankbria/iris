@@ -214,7 +214,7 @@ export class AIVisualClassifier {
    */
   async prepareImageForAI(
     imageBuffer: Buffer,
-    maxWidth: number = 1024,
+    _maxWidth: number = 1024,
   ): Promise<PreparedImageForAI> {
     try {
       const processed = await this.preprocessor.preprocess(imageBuffer);
@@ -383,6 +383,7 @@ export class AIVisualClassifier {
     const firstCategory = categories[0];
     if (firstCategory === 'text') return 'typography';
     if (firstCategory === 'spacing') return 'layout';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (firstCategory as any) || 'unknown';
   }
 

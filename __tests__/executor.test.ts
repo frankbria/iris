@@ -48,26 +48,26 @@ describe('ActionExecutor', () => {
     try {
       const module = await import('../src/executor');
       ActionExecutor = module.ActionExecutor;
-    } catch (error) {
+    } catch {
       // If module doesn't exist yet, create a placeholder
       ActionExecutor = class ActionExecutor {
-        constructor(options?: ActionExecutorOptions) {}
+        constructor(_options?: ActionExecutorOptions) {}
         async launchBrowser(): Promise<Browser> {
           throw new Error('Not implemented');
         }
         async createPage(): Promise<Page> {
           throw new Error('Not implemented');
         }
-        async executeAction(action: Action, page: Page): Promise<ExecutionResult> {
+        async executeAction(_action: Action, _page: Page): Promise<ExecutionResult> {
           throw new Error('Not implemented');
         }
-        async executeActions(actions: Action[], page: Page): Promise<ExecutionResult[]> {
+        async executeActions(_actions: Action[], _page: Page): Promise<ExecutionResult[]> {
           throw new Error('Not implemented');
         }
         async cleanup(): Promise<void> {
           throw new Error('Not implemented');
         }
-        async getPageContext(page: Page): Promise<PageContext> {
+        async getPageContext(_page: Page): Promise<PageContext> {
           throw new Error('Not implemented');
         }
       };
@@ -700,7 +700,7 @@ describe('ActionExecutor', () => {
 
     it('should handle timeout configuration', async () => {
       const executor = new ActionExecutor({ timeout: 5000 });
-      const page = await executor.createPage();
+      await executor.createPage();
 
       // Verify timeout is set on page
       expect(mockPage.setDefaultTimeout).toHaveBeenCalledWith(5000);

@@ -173,7 +173,7 @@ export class ActionExecutor {
 
       try {
         title = await page.title();
-      } catch (error) {
+      } catch {
         // Title retrieval failed, but we can still return URL
         title = undefined;
       }
@@ -183,7 +183,7 @@ export class ActionExecutor {
         title,
         timestamp,
       };
-    } catch (error) {
+    } catch {
       // Even URL retrieval failed
       return {
         timestamp,
@@ -198,7 +198,7 @@ export class ActionExecutor {
     if (this.browser) {
       try {
         await closeBrowser(this.browser);
-      } catch (error) {
+      } catch {
         // Ignore cleanup errors
       } finally {
         this.browser = null;
@@ -224,6 +224,7 @@ export class ActionExecutor {
         break;
 
       default:
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         throw new Error(`Unsupported action type: ${(action as any).type}`);
     }
   }

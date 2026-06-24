@@ -125,11 +125,11 @@ export type RetryConfig = z.infer<typeof RetryConfigSchema>;
 
 // Additional utility interfaces
 export interface Logger {
-  debug(message: string, context?: Record<string, any>): void;
-  info(message: string, context?: Record<string, any>): void;
-  warn(message: string, context?: Record<string, any>): void;
-  error(message: string, error?: Error, context?: Record<string, any>): void;
-  fatal(message: string, error?: Error, context?: Record<string, any>): void;
+  debug(message: string, context?: Record<string, unknown>): void;
+  info(message: string, context?: Record<string, unknown>): void;
+  warn(message: string, context?: Record<string, unknown>): void;
+  error(message: string, error?: Error, context?: Record<string, unknown>): void;
+  fatal(message: string, error?: Error, context?: Record<string, unknown>): void;
 }
 
 export interface Retryable<T> {
@@ -150,7 +150,7 @@ export interface AsyncIterableResult<T> {
 export interface CacheOptions {
   ttlMs?: number;
   maxSize?: number;
-  keyGenerator?: (args: any[]) => string;
+  keyGenerator?: (args: unknown[]) => string;
 }
 
 export interface RateLimitConfig {
@@ -167,7 +167,7 @@ export interface HealthCheck {
 export interface HealthStatus {
   healthy: boolean;
   message?: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
   timestamp: Date;
 }
 
@@ -184,7 +184,7 @@ export class UtilityError extends Error {
 }
 
 export class ValidationError extends UtilityError {
-  constructor(message: string, field?: string, value?: any) {
+  constructor(message: string, field?: string, value?: unknown) {
     super(message, 'VALIDATION_ERROR', {
       code: 'VALIDATION_ERROR',
       message,
@@ -247,32 +247,32 @@ export function createLogger(name: string): Logger {
   const correlationId = generateCorrelationId();
 
   return {
-    debug: (message: string, context?: Record<string, any>) => {
+    debug: (message: string, context?: Record<string, unknown>) => {
       console.debug(
         `[${new Date().toISOString()}] [DEBUG] [${name}] [${correlationId}] ${message}`,
         context,
       );
     },
-    info: (message: string, context?: Record<string, any>) => {
+    info: (message: string, context?: Record<string, unknown>) => {
       console.info(
         `[${new Date().toISOString()}] [INFO] [${name}] [${correlationId}] ${message}`,
         context,
       );
     },
-    warn: (message: string, context?: Record<string, any>) => {
+    warn: (message: string, context?: Record<string, unknown>) => {
       console.warn(
         `[${new Date().toISOString()}] [WARN] [${name}] [${correlationId}] ${message}`,
         context,
       );
     },
-    error: (message: string, error?: Error, context?: Record<string, any>) => {
+    error: (message: string, error?: Error, context?: Record<string, unknown>) => {
       console.error(
         `[${new Date().toISOString()}] [ERROR] [${name}] [${correlationId}] ${message}`,
         error,
         context,
       );
     },
-    fatal: (message: string, error?: Error, context?: Record<string, any>) => {
+    fatal: (message: string, error?: Error, context?: Record<string, unknown>) => {
       console.error(
         `[${new Date().toISOString()}] [FATAL] [${name}] [${correlationId}] ${message}`,
         error,

@@ -165,7 +165,7 @@ export class KeyboardTester {
 
       const elements = Array.from(document.querySelectorAll(focusableSelectors));
 
-      return elements.map((el, index) => {
+      return elements.map((el) => {
         const htmlEl = el as HTMLElement;
         const rect = htmlEl.getBoundingClientRect();
         const isVisible =
@@ -208,7 +208,13 @@ export class KeyboardTester {
    */
   private async testFocusTraps(page: Page): Promise<FocusTrap[]> {
     return await page.evaluate(() => {
-      const traps: any[] = [];
+      const traps: Array<{
+        container: string;
+        trapped: boolean;
+        escapeMethod: string | undefined;
+        firstElement: string;
+        lastElement: string;
+      }> = [];
 
       // Look for common focus trap containers
       const containers = document.querySelectorAll(
@@ -279,7 +285,7 @@ export class KeyboardTester {
           success: true, // Simplified - would need more sophisticated validation
           timestamp: new Date(),
         });
-      } catch (error) {
+      } catch {
         interactions.push({
           key: 'ArrowDown',
           target: element.selector,
@@ -332,7 +338,7 @@ export class KeyboardTester {
           success: !stillVisible,
           timestamp: new Date(),
         });
-      } catch (error) {
+      } catch {
         interactions.push({
           key: 'Escape',
           target: element.selector,
@@ -379,7 +385,7 @@ export class KeyboardTester {
           success,
           timestamp: new Date(),
         });
-      } catch (error) {
+      } catch {
         interactions.push({
           key: sequence.keys.join('+'),
           target: sequence.name,

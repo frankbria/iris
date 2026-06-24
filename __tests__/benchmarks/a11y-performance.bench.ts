@@ -11,10 +11,9 @@ import {
   insertTestRun,
   A11yTestResult,
 } from '../../src/db';
-import { benchmark, benchmarkSuite, formatResults, saveBenchmarkResults } from './bench-utils';
+import { benchmarkSuite, formatResults, saveBenchmarkResults } from './bench-utils';
 import * as path from 'path';
 import * as fs from 'fs';
-import Database from 'better-sqlite3';
 
 const RESULTS_DIR = '.iris-bench-results';
 const TEST_DB = '.iris-bench-a11y.db';

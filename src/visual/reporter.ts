@@ -241,7 +241,7 @@ export class VisualReporter {
   private generateTestResultCards(results: VisualTestResult['results']): string {
     return results
       .filter((result) => this.config.includePassedTests || !result.passed)
-      .map((result, index) => {
+      .map((result, _index) => {
         const statusClass = result.passed ? 'passed' : 'failed';
         const severityClass = result.severity || '';
 
@@ -370,26 +370,29 @@ export class VisualReporter {
   private generateJUnitReport(results: VisualTestResult): string {
     const { summary, results: testResults, duration } = results;
 
-    const testsuites = testResults.reduce((acc: any, result) => {
-      const suiteName = result.page;
-      if (!acc[suiteName]) {
-        acc[suiteName] = [];
-      }
-      acc[suiteName].push(result);
-      return acc;
-    }, {});
+    const testsuites = testResults.reduce(
+      (acc: Record<string, VisualTestResult['results']>, result) => {
+        const suiteName = result.page;
+        if (!acc[suiteName]) {
+          acc[suiteName] = [];
+        }
+        acc[suiteName].push(result);
+        return acc;
+      },
+      {},
+    );
 
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="${this.escapeXml(this.config.title!)}" tests="${summary.totalComparisons}" failures="${summary.failed}" time="${(duration / 1000).toFixed(3)}">
 ${Object.entries(testsuites)
-  .map(([suiteName, tests]: [string, any]) => {
-    const suiteTests = tests as VisualTestResult['results'];
+  .map(([suiteName, tests]: [string, VisualTestResult['results']]) => {
+    const suiteTests = tests;
     const suiteFailed = suiteTests.filter((t) => !t.passed).length;
     const suiteTime = duration / summary.totalComparisons / 1000;
 
     return `  <testsuite name="${this.escapeXml(suiteName)}" tests="${suiteTests.length}" failures="${suiteFailed}" time="${suiteTime.toFixed(3)}">
 ${suiteTests
-  .map((test, index) => {
+  .map((test, _index) => {
     const testName = `${test.page} [${test.device}]`;
     const testTime = (duration / summary.totalComparisons / 1000).toFixed(3);
 
@@ -459,7 +462,7 @@ AI Description: ${test.aiAnalysis.description}`
 
     // Test Results
     markdown += `## Test Results\n\n`;
-    testResults.forEach((result, index) => {
+    testResults.forEach((result, _index) => {
       const statusEmoji = result.passed ? '✅' : '❌';
       markdown += `### ${statusEmoji} ${result.page} [${result.device}]\n\n`;
       markdown += `- **Status:** ${result.passed ? 'PASSED' : 'FAILED'}\n`;

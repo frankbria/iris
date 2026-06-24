@@ -4,7 +4,6 @@ import {
   A11yResultSchema,
   KeyboardTestResultSchema,
   ScreenReaderTestResultSchema,
-  A11yReportSchema,
   A11yTestError,
   AxeRunnerError,
   KeyboardNavigationError,

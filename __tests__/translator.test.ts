@@ -1,4 +1,4 @@
-import { translate, translateSync, TranslationResult } from '../src/translator';
+import { translate, translateSync } from '../src/translator';
 
 // Mock config and AI client
 jest.mock('../src/config', () => ({

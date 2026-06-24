@@ -1,6 +1,7 @@
 import pixelmatch from 'pixelmatch';
 import sharp from 'sharp';
 import * as crypto from 'crypto';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- image-ssim ships no usable types; dynamic require keeps it working under ts-jest
 const imageSsim = require('image-ssim');
 import { DiffOptions, DiffResult, DiffAnalysis, PreparedImage, SSIMResult } from './types';
 
@@ -110,6 +111,7 @@ export class VisualDiffEngine {
             threshold: options.threshold,
             diffBuffer: Buffer.alloc(0), // Don't generate diff for obviously different images
             earlyExit: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
           } as any;
         }
       }

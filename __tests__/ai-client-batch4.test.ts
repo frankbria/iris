@@ -1,7 +1,6 @@
 import {
   AIVisionCache,
   CostTracker,
-  SmartAIVisionClient,
   createCache,
   createCostTracker,
   createSmartClient,
@@ -202,7 +201,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
           tracker.trackOperation('openai', 'gpt-4o', false);
           operations++;
         }
-      } catch (error) {
+      } catch {
         circuitBreakerHit = true;
       }
 

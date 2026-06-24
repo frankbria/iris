@@ -8,6 +8,7 @@ export interface JsonRpcRequest {
   jsonrpc: '2.0';
   id: number | string;
   method: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   params?: any;
 }
 
@@ -28,7 +29,9 @@ const ExecuteBrowserActionParams = z.object({
 export interface JsonRpcResponse {
   jsonrpc: '2.0';
   id: number | string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   result?: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   error?: { code: number; message: string; data?: any };
 }
 
@@ -168,6 +171,7 @@ export function startServer(
           default:
             throw { code: -32601, message: 'Method not found' };
         }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (err: any) {
         res.error = {
           code: err.code || -32000,
@@ -228,6 +232,7 @@ async function executeBrowserActions(
 ): Promise<{
   success: boolean;
   results: ExecutionResult[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   translationResult?: any;
   error?: string;
 }> {
@@ -309,7 +314,7 @@ async function getBrowserSessionStatus(session?: BrowserSession): Promise<Browse
         url: context.url,
         title: context.title,
       };
-    } catch (error) {
+    } catch {
       // Context retrieval failed, but status is still valid
     }
   }
@@ -328,7 +333,7 @@ async function cleanupSession(
   if (session) {
     try {
       await session.executor.cleanup();
-    } catch (error) {
+    } catch {
       // Ignore cleanup errors
     }
     sessions.delete(ws);
@@ -338,6 +343,6 @@ async function cleanupSession(
 /**
  * Generate a session ID for a WebSocket connection
  */
-function getSessionId(ws: WebSocket): string {
+function getSessionId(_ws: WebSocket): string {
   return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }

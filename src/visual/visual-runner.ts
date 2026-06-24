@@ -6,7 +6,7 @@
  */
 
 import * as path from 'path';
-import { chromium, Browser, Page } from 'playwright';
+import { chromium, Browser } from 'playwright';
 import { VisualCaptureEngine } from './capture';
 import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
@@ -253,6 +253,7 @@ export class VisualTestRunner {
               severity: 'breaking',
               screenshotPath: '',
               error: error.message,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
             }) as any,
         );
       }

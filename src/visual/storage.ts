@@ -60,7 +60,7 @@ export class StorageManager {
   async saveMetadata(
     branch: string,
     testName: string,
-    metadata: Record<string, any>,
+    metadata: Record<string, unknown>,
   ): Promise<string> {
     const testDir = await this.ensureTestDirectory(branch, testName);
     const metadataPath = path.join(testDir, this.metadataFileName);
@@ -82,6 +82,7 @@ export class StorageManager {
   /**
    * Load metadata.json file for a test baseline
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async loadMetadata(branch: string, testName: string): Promise<Record<string, any> | null> {
     const testDir = this.getTestDirectory(branch, testName);
     const metadataPath = path.join(testDir, this.metadataFileName);
@@ -120,7 +121,7 @@ export class StorageManager {
     let quality = options.quality || 90;
 
     if (options.autoOptimize && !format) {
-      const metadata = await sharp(imageBuffer).metadata();
+      const _metadata = await sharp(imageBuffer).metadata();
       const originalSize = imageBuffer.length;
 
       // Use JPEG for photos (larger images), WebP for graphics

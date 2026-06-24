@@ -401,7 +401,7 @@ describe('Performance Optimizations', () => {
         devices: ['desktop', 'mobile'],
       };
 
-      const runner = new VisualTestRunner(config);
+      new VisualTestRunner(config);
 
       // Verify concurrency is set
       expect(config.diff.maxConcurrency).toBe(3);

@@ -336,7 +336,7 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         timestamp: new Date(),
       };
 
-      const id = insertA11yTestResult(db, a11yResult);
+      insertA11yTestResult(db, a11yResult);
       const results = getA11yTestResults(db, { testRunId });
 
       expect(results[0].keyboardPassed).toBe(false);

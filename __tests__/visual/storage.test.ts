@@ -472,7 +472,6 @@ describe('StorageManager', () => {
 
     it('should reject path traversal attempts', async () => {
       const maliciousPath = path.join(tempDir, '../../../etc/passwd');
-      const imageBuffer = Buffer.from('fake');
 
       // loadImage should reject paths outside base directory
       await expect(storage.loadImage(maliciousPath)).resolves.toBeNull();

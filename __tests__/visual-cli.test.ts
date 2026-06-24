@@ -2,8 +2,6 @@
  * Integration tests for visual-diff CLI command
  */
 
-import { runCli } from '../src/cli';
-
 describe('visual-diff CLI command', () => {
   // Mock console methods to capture output
   let consoleLogSpy: jest.SpyInstance;
@@ -272,7 +270,7 @@ describe('visual-diff CLI command', () => {
 
       try {
         await freshRunCli(['node', 'iris', 'visual-diff', '--fail-on', 'breaking']);
-      } catch (error) {
+      } catch {
         // Expected to throw due to process.exit mock
       }
 
@@ -291,7 +289,7 @@ describe('visual-diff CLI command', () => {
 
       try {
         await freshRunCli(['node', 'iris', 'visual-diff']);
-      } catch (error) {
+      } catch {
         // Expected to throw
       }
 
@@ -328,7 +326,7 @@ describe('visual-diff CLI command', () => {
 
       try {
         await freshRunCli(['node', 'iris', 'visual-diff', '--format', 'html']);
-      } catch (error) {
+      } catch {
         // May throw due to exit
       }
 
@@ -366,7 +364,7 @@ describe('visual-diff CLI command', () => {
 
       try {
         await freshRunCli(['node', 'iris', 'visual-diff', '--format', 'html']);
-      } catch (error) {
+      } catch {
         // May throw
       }
 

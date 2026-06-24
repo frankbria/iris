@@ -1,6 +1,6 @@
 import { Page } from 'playwright';
 import { createHash } from 'crypto';
-import { CaptureConfig, CaptureResult, CaptureMetadata, Viewport } from './types';
+import { CaptureConfig, CaptureResult, CaptureMetadata } from './types';
 
 /**
  * VisualCaptureEngine handles screenshot capture with stabilization and masking

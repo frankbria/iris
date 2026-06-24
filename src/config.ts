@@ -94,7 +94,7 @@ function loadFromEnvironment(): IrisConfig {
   return config;
 }
 
-function mergeConfig(defaultConfig: IrisConfig, userConfig: any): IrisConfig {
+function mergeConfig(defaultConfig: IrisConfig, userConfig: Partial<IrisConfig>): IrisConfig {
   return {
     ai: { ...defaultConfig.ai, ...userConfig.ai },
     watch: { ...defaultConfig.watch, ...userConfig.watch },

@@ -6,7 +6,7 @@
 import { VisualDiffEngine } from '../../src/visual/diff';
 import { StorageManager } from '../../src/visual/storage';
 import sharp from 'sharp';
-import { benchmark, benchmarkSuite, formatResults, saveBenchmarkResults } from './bench-utils';
+import { benchmarkSuite, formatResults, saveBenchmarkResults } from './bench-utils';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -264,7 +264,7 @@ async function benchmarkImageStorage() {
 /**
  * Benchmark: Different image sizes
  */
-async function benchmarkImageSize(width: number, height: number, label: string) {
+async function benchmarkImageSize(width: number, height: number, _label: string) {
   const diffEngine = new VisualDiffEngine();
 
   const baseline = await generateTestImage(width, height, 'complex');
