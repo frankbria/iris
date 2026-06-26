@@ -3,6 +3,12 @@
  *
  * This module provides high-level orchestration for running accessibility tests,
  * coordinating between axe-core, keyboard navigation, and screen reader simulation.
+ *
+ * NOTE: The page.evaluate() callbacks below are serialized and executed in the
+ * browser's V8 context, not Node. Jest/Istanbul coverage instrumentation injects
+ * cov_* counters that are undefined in the browser, so this module is excluded
+ * from coverage instrumentation (see jest.config.ts). It is covered by the a11y
+ * e2e suite, not Istanbul.
  */
 
 import { chromium, Browser, Page } from 'playwright';
