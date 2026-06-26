@@ -38,7 +38,7 @@ export interface A11yTestResult {
   timestamp: Date;
 }
 
-const _SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 1;
 
 /**
  * Initialize SQLite database and create all tables if they don't exist.
@@ -64,7 +64,7 @@ export function initializeDatabase(dbPath: string): Database.Database {
   const currentVersion = versionRow?.version || 0;
 
   // Apply migrations
-  if (currentVersion < 1) {
+  if (currentVersion < SCHEMA_VERSION) {
     applyMigrationV1(db);
   }
 

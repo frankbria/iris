@@ -56,9 +56,6 @@ export { generateCorrelationId, isRetryableError, createLogger } from './types';
 import type { RetryConfig } from './types';
 import { isRetryableError } from './types';
 
-// Migration utilities
-export { Migration, MigrationRunner, applyPhase2Migration, Phase2Migration } from './migration';
-
 /**
  * Retry a function with exponential backoff.
  *
