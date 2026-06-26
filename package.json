@@ -21,8 +21,15 @@
   "bin": {
     "iris": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "test": "jest",
     "start": "ts-node src/cli.ts",
     "typecheck": "tsc --noEmit",

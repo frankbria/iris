@@ -714,7 +714,7 @@ Building in public. Star the repo to follow along! ⭐
 
 **Installation:**
 ```bash
-npm install -g @frankbria/iris  # Coming soon to npm
+npm install -g iris-suite  # Coming soon to npm
 # Or install from source:
 git clone https://github.com/frankbria/iris.git && cd iris && npm install && npm run build && npm link
 ```
