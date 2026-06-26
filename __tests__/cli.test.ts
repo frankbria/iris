@@ -88,12 +88,16 @@ describe('CLI Commands', () => {
     jest.spyOn(console, 'error').mockImplementation((...args) => errorOutput.push(args.join(' ')));
 
     // Should not throw despite the persistence failure
-    await expect(runCli(['node', 'iris', 'run', 'click #submit', '--dry-run'])).resolves.toBeUndefined();
+    await expect(
+      runCli(['node', 'iris', 'run', 'click #submit', '--dry-run']),
+    ).resolves.toBeUndefined();
 
     // Handle closed even though insertTestRun threw
     expect(close).toHaveBeenCalled();
     // Clear warning logged with the error detail
-    expect(errorOutput.some((line) => line.includes('Failed to persist') && line.includes('disk full'))).toBe(true);
+    expect(
+      errorOutput.some((line) => line.includes('Failed to persist') && line.includes('disk full')),
+    ).toBe(true);
   });
 
   test('run command with dry-run shows execution preview', async () => {
