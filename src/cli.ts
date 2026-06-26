@@ -242,6 +242,15 @@ program
         client.close(1001, 'Server shutting down');
       }
       wss?.close();
+      // Force-terminate if a wedged/unresponsive client stalls the graceful
+      // close handshake; otherwise wss never emits 'close' and the process hangs.
+      // unref() so this timer never keeps the process alive on its own.
+      setTimeout(() => {
+        for (const client of wss?.clients ?? []) {
+          client.terminate();
+        }
+        process.exit(0);
+      }, 5000).unref();
     };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);

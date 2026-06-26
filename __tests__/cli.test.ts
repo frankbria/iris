@@ -39,16 +39,30 @@ describe('CLI Commands', () => {
       .spyOn(protocolModule, 'startServer')
       .mockReturnValue({ close: jest.fn() } as never);
 
+    const sigintBefore = process.listeners('SIGINT').length;
+    const sigtermBefore = process.listeners('SIGTERM').length;
+
     await runCli(['node', 'iris', 'connect']);
     expect(consoleOutput).toContain('JSON-RPC server listening on ws://localhost:4000');
     expect(startServerSpy).toHaveBeenCalledWith(4000);
+
+    // Clean up the signal listeners the action registered so they don't leak.
+    for (const l of process.listeners('SIGINT').slice(sigintBefore)) {
+      process.removeListener('SIGINT', l);
+    }
+    for (const l of process.listeners('SIGTERM').slice(sigtermBefore)) {
+      process.removeListener('SIGTERM', l);
+    }
   });
 
   test('connect command registers graceful shutdown that closes the server (issue #37)', async () => {
+    jest.useFakeTimers();
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const mockClose = jest.fn();
     const clientClose = jest.fn();
+    const clientTerminate = jest.fn();
     // One connected client so we exercise the "close existing sockets" path.
-    const clients = new Set([{ close: clientClose }]);
+    const clients = new Set([{ close: clientClose, terminate: clientTerminate }]);
     jest
       .spyOn(protocolModule, 'startServer')
       .mockReturnValue({ close: mockClose, clients } as never);
@@ -69,9 +83,16 @@ describe('CLI Commands', () => {
     expect(clientClose).toHaveBeenCalledWith(1001, 'Server shutting down');
     expect(mockClose).toHaveBeenCalledTimes(1);
 
+    // Fallback: a wedged client that never completes its close handshake is
+    // force-terminated and the process exits after the timeout.
+    jest.advanceTimersByTime(5000);
+    expect(clientTerminate).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+
     // Clean up the listeners we added so they don't leak across tests.
     process.removeListener('SIGINT', newSigint[0]);
     process.removeListener('SIGTERM', newSigterm[0]);
+    jest.useRealTimers();
   });
 
   test('run command persists test execution to database', async () => {
