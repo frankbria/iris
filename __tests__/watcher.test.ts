@@ -1,4 +1,7 @@
-import { FileWatcher, createWatcher } from '../src/watcher';
+import { FileWatcher, createWatcher, watchFiles } from '../src/watcher';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 // Mock chokidar
 jest.mock('chokidar', () => ({
@@ -401,5 +404,198 @@ describe('FileWatcher', () => {
       expect(status.options.headless).toBe(false);
       expect(status.options.browserTimeout).toBe(45000);
     });
+  });
+});
+
+describe('FileWatcher execute-mode runtime', () => {
+  let mockWatcher: any;
+  let changeCallback: ((p: string) => void) | undefined;
+  let logSpy: jest.SpyInstance;
+  let errorSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    changeCallback = undefined;
+
+    mockWatcher = {
+      on: jest.fn().mockImplementation((event: string, cb: any) => {
+        if (event === 'change') changeCallback = cb;
+        else if (event === 'ready') setTimeout(() => cb(), 0);
+        return mockWatcher;
+      }),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+    (chokidar.watch as jest.Mock).mockReturnValue(mockWatcher);
+
+    logSpy = jest.spyOn(console, 'log').mockImplementation();
+    errorSpy = jest.spyOn(console, 'error').mockImplementation();
+  });
+
+  afterEach(() => {
+    jest.runOnlyPendingTimers();
+    jest.useRealTimers();
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('runs the action loop and persists execution counts on success', async () => {
+    const { insertTestRun } = await import('../src/db');
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+
+    await watcher.start();
+    expect(mockExecutorInstance.launchBrowser).toHaveBeenCalled();
+
+    changeCallback!('src/test.ts');
+    await jest.advanceTimersByTimeAsync(60);
+
+    // The single default action from the translator mock is executed.
+    expect(mockExecutorInstance.executeAction).toHaveBeenCalledTimes(1);
+    expect(insertTestRun).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        status: 'success',
+        instruction: expect.stringContaining('Executed: 1/1 actions'),
+      }),
+    );
+  });
+
+  it('reports partial failure when one action fails but continues the loop', async () => {
+    const { translate } = await import('../src/translator');
+    const { insertTestRun } = await import('../src/db');
+
+    (translate as jest.Mock).mockResolvedValueOnce({
+      actions: [
+        { type: 'click', selector: '#a' },
+        { type: 'click', selector: '#b' },
+      ],
+      method: 'pattern',
+      confidence: 0.9,
+    });
+    mockExecutorInstance.executeAction
+      .mockResolvedValueOnce({ success: true, duration: 10, context: {} })
+      .mockResolvedValueOnce({ success: false, error: 'not found', duration: 10 });
+
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start();
+
+    changeCallback!('src/test.ts');
+    await jest.advanceTimersByTimeAsync(60);
+
+    // Both actions run even though the first-reported failure does not abort.
+    expect(mockExecutorInstance.executeAction).toHaveBeenCalledTimes(2);
+    const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(output).toContain('1/2 actions completed successfully');
+    expect(insertTestRun).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        status: 'error',
+        instruction: expect.stringContaining('Executed: 1/2 actions'),
+      }),
+    );
+  });
+
+  it('recovers the browser session when an action throws', async () => {
+    mockExecutorInstance.executeAction.mockRejectedValueOnce(new Error('page crashed'));
+
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start();
+
+    changeCallback!('src/test.ts');
+    // Debounce fires -> executeInstruction catch -> recoverBrowserSession,
+    // which waits 2000ms before re-initializing.
+    await jest.advanceTimersByTimeAsync(60);
+    await jest.advanceTimersByTimeAsync(2000);
+
+    const errorOutput = errorSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(errorOutput).toContain('Browser execution failed');
+    // Recovery tears down the old session and stands up a new one.
+    expect(mockExecutorInstance.cleanup).toHaveBeenCalled();
+    const logOutput = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logOutput).toContain('Browser session recovered');
+  });
+});
+
+describe('watchFiles entry point', () => {
+  let processOnSpy: jest.SpyInstance;
+  let logSpy: jest.SpyInstance;
+  const tmpFiles: string[] = [];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useRealTimers(); // watchFiles awaits real fs.stat; no debounce needed here
+
+    (chokidar.watch as jest.Mock).mockReturnValue({
+      on: jest.fn().mockReturnThis(),
+      close: jest.fn().mockResolvedValue(undefined),
+    });
+
+    // Record signal handler registration without leaking real handlers.
+    processOnSpy = jest.spyOn(process, 'on').mockImplementation(() => process);
+    logSpy = jest.spyOn(console, 'log').mockImplementation();
+  });
+
+  afterEach(() => {
+    processOnSpy.mockRestore();
+    logSpy.mockRestore();
+    for (const f of tmpFiles.splice(0)) {
+      fs.rmSync(f, { recursive: true, force: true });
+    }
+  });
+
+  // watchFiles never resolves (keep-alive promise); start it and let the
+  // observable setup work (fs.stat, createWatcher, start) flush.
+  const startWatchFiles = async (target?: string): Promise<void> => {
+    void watchFiles(target, 'click submit');
+    await new Promise((r) => setTimeout(r, 20));
+  };
+
+  it('rejects remote URL targets', async () => {
+    await expect(watchFiles('https://example.com', 'click submit')).rejects.toThrow(
+      'Cannot watch remote URLs',
+    );
+  });
+
+  it('treats a glob target as a watch pattern', async () => {
+    await startWatchFiles('src/**/*.ts');
+
+    expect(chokidar.watch).toHaveBeenCalledWith(
+      ['src/**/*.ts'],
+      expect.objectContaining({ ignoreInitial: true }),
+    );
+  });
+
+  it('uses a directory target as the working directory', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-watch-'));
+    tmpFiles.push(dir);
+
+    await startWatchFiles(dir);
+
+    expect(chokidar.watch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ cwd: dir }),
+    );
+  });
+
+  it('treats a non-glob file target as a watch pattern', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-watch-'));
+    const file = path.join(dir, 'page.html');
+    fs.writeFileSync(file, '<html></html>');
+    tmpFiles.push(dir);
+
+    await startWatchFiles(file);
+
+    expect(chokidar.watch).toHaveBeenCalledWith(
+      [file],
+      expect.objectContaining({ ignoreInitial: true }),
+    );
+  });
+
+  it('registers SIGINT and SIGTERM shutdown handlers', async () => {
+    await startWatchFiles('src/**/*.ts');
+
+    const signals = processOnSpy.mock.calls.map((c) => c[0]);
+    expect(signals).toContain('SIGINT');
+    expect(signals).toContain('SIGTERM');
   });
 });
