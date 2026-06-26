@@ -231,9 +231,16 @@ program
     console.log(`JSON-RPC server listening on ws://localhost:${port}`);
 
     // Close the server on Ctrl+C / termination so wss.on('close') drains
-    // in-flight sessions (executor.cleanup) instead of being skipped.
+    // in-flight sessions (executor.cleanup) instead of being skipped. Existing
+    // client sockets must be closed first — wss.close() only stops accepting new
+    // connections and won't fire 'close' (or let the process exit) while a
+    // client stays connected. Installing this handler also suppresses Node's
+    // default SIGINT/SIGTERM termination, so without this the process would hang.
     const shutdown = () => {
       console.log('\nShutting down JSON-RPC server...');
+      for (const client of wss?.clients ?? []) {
+        client.close(1001, 'Server shutting down');
+      }
       wss?.close();
     };
     process.on('SIGINT', shutdown);

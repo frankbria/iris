@@ -46,7 +46,12 @@ describe('CLI Commands', () => {
 
   test('connect command registers graceful shutdown that closes the server (issue #37)', async () => {
     const mockClose = jest.fn();
-    jest.spyOn(protocolModule, 'startServer').mockReturnValue({ close: mockClose } as never);
+    const clientClose = jest.fn();
+    // One connected client so we exercise the "close existing sockets" path.
+    const clients = new Set([{ close: clientClose }]);
+    jest
+      .spyOn(protocolModule, 'startServer')
+      .mockReturnValue({ close: mockClose, clients } as never);
 
     const sigintBefore = process.listeners('SIGINT').length;
     const sigtermBefore = process.listeners('SIGTERM').length;
@@ -58,8 +63,10 @@ describe('CLI Commands', () => {
     expect(newSigint).toHaveLength(1);
     expect(newSigterm).toHaveLength(1);
 
-    // Invoking the handler should close the WebSocket server (drains sessions).
+    // Invoking the handler should close connected clients AND the server, so the
+    // 'close' drain can run and the process can exit (no hang on Ctrl+C).
     (newSigint[0] as () => void)();
+    expect(clientClose).toHaveBeenCalledWith(1001, 'Server shutting down');
     expect(mockClose).toHaveBeenCalledTimes(1);
 
     // Clean up the listeners we added so they don't leak across tests.
