@@ -133,7 +133,7 @@ describe('VisualTestRunner', () => {
         buffer: Buffer.from('test-baseline'),
         metadata: {},
       }),
-      saveBaseline: jest.fn().mockResolvedValue(undefined),
+      saveBaseline: jest.fn().mockResolvedValue({ success: true, path: '/test/baseline.png' }),
     } as any;
 
     (BaselineManager as jest.MockedClass<typeof BaselineManager>).mockImplementation(
@@ -228,6 +228,27 @@ describe('VisualTestRunner', () => {
       expect(mockBaselineManager.saveBaseline).toHaveBeenCalledTimes(2);
       expect(result.summary.newBaselines).toBe(2);
       expect(result.summary.passed).toBe(2);
+    });
+
+    it('should report a failure (not passed) when saving a new baseline fails', async () => {
+      mockBaselineManager.loadBaseline.mockResolvedValue({
+        success: false,
+        error: 'Baseline not found',
+      });
+      mockBaselineManager.saveBaseline.mockResolvedValue({
+        success: false,
+        error: 'EACCES: permission denied',
+      });
+
+      const result = await visualRunner.run();
+
+      expect(result.summary.passed).toBe(0);
+      expect(result.summary.failed).toBe(2);
+      expect(result.summary.newBaselines).toBe(0);
+      expect(result.summary.overallStatus).toBe('failed');
+      expect(result.results[0].passed).toBe(false);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((result.results[0] as any).error).toContain('EACCES: permission denied');
     });
 
     it('should create new baseline when baseline does not exist', async () => {
