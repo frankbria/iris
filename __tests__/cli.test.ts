@@ -1,6 +1,7 @@
 import { runCli } from '../src/cli';
 import { initializeDatabase, getTestRuns } from '../src/db';
 import * as dbModule from '../src/db';
+import * as protocolModule from '../src/protocol';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -32,15 +33,38 @@ describe('CLI Commands', () => {
   }, 15000);
 
   test('connect command prints server start message', async () => {
-    // Mock the startServer function to avoid actually starting a server
-    const mockStartServer = jest.fn();
-    jest.doMock('../src/protocol', () => ({
-      startServer: mockStartServer,
-    }));
+    // Spy on startServer to avoid actually binding a port. The dynamic
+    // `await import('./protocol')` in cli.ts resolves to this same module instance.
+    const startServerSpy = jest
+      .spyOn(protocolModule, 'startServer')
+      .mockReturnValue({ close: jest.fn() } as never);
 
     await runCli(['node', 'iris', 'connect']);
     expect(consoleOutput).toContain('JSON-RPC server listening on ws://localhost:4000');
-    expect(mockStartServer).toHaveBeenCalledWith(4000);
+    expect(startServerSpy).toHaveBeenCalledWith(4000);
+  });
+
+  test('connect command registers graceful shutdown that closes the server (issue #37)', async () => {
+    const mockClose = jest.fn();
+    jest.spyOn(protocolModule, 'startServer').mockReturnValue({ close: mockClose } as never);
+
+    const sigintBefore = process.listeners('SIGINT').length;
+    const sigtermBefore = process.listeners('SIGTERM').length;
+
+    await runCli(['node', 'iris', 'connect']);
+
+    const newSigint = process.listeners('SIGINT').slice(sigintBefore);
+    const newSigterm = process.listeners('SIGTERM').slice(sigtermBefore);
+    expect(newSigint).toHaveLength(1);
+    expect(newSigterm).toHaveLength(1);
+
+    // Invoking the handler should close the WebSocket server (drains sessions).
+    (newSigint[0] as () => void)();
+    expect(mockClose).toHaveBeenCalledTimes(1);
+
+    // Clean up the listeners we added so they don't leak across tests.
+    process.removeListener('SIGINT', newSigint[0]);
+    process.removeListener('SIGTERM', newSigterm[0]);
   });
 
   test('run command persists test execution to database', async () => {

@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface TestRun {
   id?: number;
@@ -44,6 +46,13 @@ const SCHEMA_VERSION = 1;
  * Initialize SQLite database and create all tables if they don't exist.
  */
 export function initializeDatabase(dbPath: string): Database.Database {
+  // Ensure the parent directory exists with owner-only perms (matches config.ts).
+  // ':memory:' and other special paths have no real dir, so guard on existence.
+  const dbDir = path.dirname(dbPath);
+  if (dbPath !== ':memory:' && !fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });
+  }
+
   const db = new Database(dbPath);
 
   // Enable foreign keys

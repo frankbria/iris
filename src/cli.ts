@@ -141,13 +141,7 @@ program
           const { initializeDatabase, insertTestRun } = await import('./db');
           const dbPath = process.env.IRIS_DB_PATH || path.join(os.homedir(), '.iris', 'iris.db');
 
-          // Ensure directory exists
-          const dbDir = path.dirname(dbPath);
-          const fs = await import('fs');
-          if (!fs.existsSync(dbDir)) {
-            fs.mkdirSync(dbDir, { recursive: true });
-          }
-
+          // initializeDatabase creates the parent dir (mode 0o700) if needed.
           const db = initializeDatabase(dbPath);
           try {
             insertTestRun(db, {
@@ -233,8 +227,17 @@ program
   )
   .action(async (port: number) => {
     const { startServer } = await import('./protocol');
-    startServer(port);
+    const wss = startServer(port);
     console.log(`JSON-RPC server listening on ws://localhost:${port}`);
+
+    // Close the server on Ctrl+C / termination so wss.on('close') drains
+    // in-flight sessions (executor.cleanup) instead of being skipped.
+    const shutdown = () => {
+      console.log('\nShutting down JSON-RPC server...');
+      wss?.close();
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
   });
 
 program

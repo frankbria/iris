@@ -2,6 +2,25 @@ import { IrisConfig } from '../config';
 import { Action } from '../translator';
 
 /**
+ * Format an unknown error for logging without dumping the full object.
+ *
+ * SDK errors (e.g. APIError) can carry response headers, request ids, and other
+ * sensitive context. Log only the message plus status/code when present.
+ */
+export function formatError(error: unknown): string {
+  if (error instanceof Error) {
+    const status = (error as { status?: unknown }).status;
+    const code = (error as { code?: unknown }).code;
+    const extra = [
+      status !== undefined ? `status=${String(status)}` : '',
+      code !== undefined ? `code=${String(code)}` : '',
+    ].filter(Boolean);
+    return extra.length ? `${error.message} (${extra.join(', ')})` : error.message;
+  }
+  return String(error);
+}
+
+/**
  * Request for translating natural language instructions to browser actions
  */
 export interface AITranslationRequest {
@@ -109,7 +128,7 @@ export abstract class BaseAIClient implements AIClient {
    */
   protected handleError(error: unknown, operation: string): AITranslationResponse {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`${operation} error:`, error);
+    console.error(`${operation} error:`, formatError(error));
     return {
       actions: [],
       confidence: 0,
@@ -157,7 +176,7 @@ export abstract class BaseAIVisionClient extends BaseAIClient implements AIVisio
    * `return this.handleVisionError(...)` while the value never materializes.
    */
   protected handleVisionError(error: unknown, operation: string): never {
-    console.error(`${operation} error:`, error);
+    console.error(`${operation} error:`, formatError(error));
     throw error instanceof Error ? error : new Error(`Failed to ${operation}: ${String(error)}`);
   }
 }
