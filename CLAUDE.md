@@ -88,13 +88,12 @@ docs/                               # Detailed project documentation
 ├── tech_specs.md                  # Technical specifications
 ├── dev_plan.md                    # Development roadmap
 ├── user_stories.md                # User stories and acceptance criteria
-├── PHASE2_README.md               # Phase 2 documentation guide
-├── phase2_revised_plan.md         # Phase 2 strategy
 ├── phase2_technical_architecture.md # Phase 2 technical details
-└── phase2_architecture_gaps.md    # Phase 2 gap analysis
+├── phase2c_roadmap.md             # Phase 2C roadmap (ROADMAP — not started)
+└── archive/                       # Superseded planning docs (historical)
 
-plan/
-└── phase2_todo.md                 # Active Phase 2 task tracker
+plans/
+└── README.md                      # Single source of truth: current status / what's next
 ```
 
 ## Development Guidelines
@@ -182,11 +181,11 @@ You will occasionally be asked to assess the current state of the development pr
 1. **Codebase Review**: Thoroughly examine all source code in `src/` and related files to understand current implementation state
 2. **Test Analysis**: Run `npm run test` and analyze coverage, pass rates, and test quality
 3. **Specification Comparison**: Review documentation in `/docs` directory and compare against actual implementation
-4. **Development Plan Review**: Examine to-do lists and status files in `/plan` directory to understand what's marked as complete vs. actual state
+4. **Development Plan Review**: Examine `plans/README.md` (the single source-of-truth status tracker) to understand what's marked as complete vs. actual state
 
 ### Assessment Output
 
-Create a status report in `/plan/status_YYYYMMDDHHMM.md` with the following format:
+Create a status report in `plans/status_YYYYMMDDHHMM.md` with the following format:
 
 #### Status
 **Red/Yellow/Green assessment** based on:
@@ -216,7 +215,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~75% statements / ~57% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 561/562 passing, 1 skipped, 0 failing)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 575/576 passing, 1 skipped, 0 failing)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation
