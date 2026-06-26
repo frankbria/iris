@@ -489,6 +489,73 @@ describe('AccessibilityRunner', () => {
 
       expect(result.results[0].screenReaderResult?.passed).toBe(true);
     });
+
+    it('should report a violation for an image missing alt text', async () => {
+      mockPage.evaluate.mockImplementation((fn: any) => {
+        if (fn.toString().includes('imageElements')) {
+          return Promise.resolve([
+            {
+              element: 'IMG#hero',
+              alt: undefined,
+              hasAlt: false,
+              isDecorative: false,
+              success: false,
+            },
+            { element: 'IMG#decor', alt: '', hasAlt: true, isDecorative: true, success: true },
+            {
+              element: 'IMG#logo',
+              alt: 'Company logo',
+              hasAlt: true,
+              isDecorative: false,
+              success: true,
+            },
+          ]);
+        }
+        if (fn.toString().includes('landmarkElements')) {
+          return Promise.resolve([
+            { type: 'main', label: 'Main', element: 'MAIN', level: undefined },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const result = await accessibilityRunner.run();
+      const sr = result.results[0].screenReaderResult;
+
+      expect(sr?.imageAltResults).toHaveLength(3);
+      expect(sr?.imageAltResults?.find((i) => i.element === 'IMG#hero')?.success).toBe(false);
+      expect(sr?.passed).toBe(false);
+    });
+
+    it('should pass when all images have valid alt text or are decorative', async () => {
+      mockPage.evaluate.mockImplementation((fn: any) => {
+        if (fn.toString().includes('imageElements')) {
+          return Promise.resolve([
+            { element: 'IMG#decor', alt: '', hasAlt: true, isDecorative: true, success: true },
+            {
+              element: 'IMG#logo',
+              alt: 'Company logo',
+              hasAlt: true,
+              isDecorative: false,
+              success: true,
+            },
+          ]);
+        }
+        if (fn.toString().includes('landmarkElements')) {
+          return Promise.resolve([
+            { type: 'main', label: 'Main', element: 'MAIN', level: undefined },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const result = await accessibilityRunner.run();
+      const sr = result.results[0].screenReaderResult;
+
+      expect(sr?.imageAltResults).toHaveLength(2);
+      expect(sr?.imageAltResults?.every((i) => i.success)).toBe(true);
+      expect(sr?.passed).toBe(true);
+    });
   });
 
   describe('report generation', () => {

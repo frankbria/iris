@@ -242,6 +242,13 @@ interface ScreenReaderTestResult {
     text: string;
     element: string;
   }>;
+  imageAltResults?: Array<{           // populated when testImageAltText is enabled
+    element: string;                  // e.g. 'IMG#hero'
+    alt?: string;                     // alt attribute value (undefined when absent)
+    hasAlt: boolean;
+    isDecorative: boolean;            // alt="" | role="presentation" | aria-hidden="true"
+    success: boolean;                 // false for a meaningful image missing alt
+  }>;
 }
 ```
 
