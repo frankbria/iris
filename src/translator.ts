@@ -13,6 +13,17 @@ export interface TranslationResult {
   reasoning?: string;
 }
 
+/** Defense-in-depth cap on instruction size before any pattern/AI processing. */
+export const MAX_INSTRUCTION_LENGTH = 10000;
+
+function assertInstructionLength(instruction: string): void {
+  if (instruction.length > MAX_INSTRUCTION_LENGTH) {
+    throw new Error(
+      `Instruction too long: ${instruction.length} characters (max ${MAX_INSTRUCTION_LENGTH}).`,
+    );
+  }
+}
+
 /**
  * Translate a natural language instruction into Playwright actions.
  * First tries pattern matching, then falls back to AI if configured.
@@ -21,6 +32,8 @@ export async function translate(
   instruction: string,
   context?: { url?: string },
 ): Promise<TranslationResult> {
+  assertInstructionLength(instruction);
+
   // Try pattern matching first
   const patternResult = translateWithPatterns(instruction);
   if (patternResult.actions.length > 0) {
@@ -36,6 +49,7 @@ export async function translate(
  * Only uses pattern matching.
  */
 export function translateSync(instruction: string): Action[] {
+  assertInstructionLength(instruction);
   return translateWithPatterns(instruction).actions;
 }
 
