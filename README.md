@@ -24,7 +24,7 @@ IRIS gives AI coding assistants "eyes and hands" to see and interact with user i
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 561/562 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 575/576 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -56,10 +56,12 @@ IRIS gives AI coding assistants "eyes and hands" to see and interact with user i
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 561/562 tests passing (99.8% pass rate), 1 skipped, 0 failing
+**Test Results:** 575/576 tests passing (99.8% pass rate), 1 skipped, 0 failing
 
-**Coverage:** 75.26% statements overall (below the 85% target)
-- Branch coverage: 56.9% (primary improvement area)
+**Coverage:** 75.7% statements overall (below the 85% target)
+- Branch coverage: 57.34% (primary improvement area)
+
+_Metrics last verified: 2026-06-26_
 
 **Status:** Usable for visual regression today; accessibility integration and the `src/a11y/index.ts` wrappers are still in progress (see open issues).
 
@@ -409,7 +411,7 @@ Includes configurations for:
 
 ```bash
 npm test
-# Result: 561/562 passing (99.8% pass rate)
+# Result: 575/576 passing (99.8% pass rate)
 # 0 failing
 # 1 skipped
 ```
@@ -424,8 +426,8 @@ npm run build
 
 ```bash
 npm test -- --coverage
-# Overall: 75.26% statements (below 85% target)
-# Branch coverage: 56.9% (primary improvement area)
+# Overall: 75.7% statements (below 85% target)
+# Branch coverage: 57.34% (primary improvement area)
 ```
 
 ### Run Benchmarks
@@ -577,7 +579,7 @@ See **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** for compl
 - ✅ Comprehensive documentation and examples
 - ✅ CI/CD ready
 - ✅ Test suite stabilized (99.8% pass rate, 0 failing)
-- ⚠️ Coverage at 75.26% (below 85% target - branch coverage improvement needed)
+- ⚠️ Coverage at 75.7% (below 85% target - branch coverage improvement needed)
 - ⚠️ Some `src/a11y/index.ts` convenience wrappers still stubbed
 
 ### Phase 3 📋 (Planned - Q1 2026)
@@ -593,11 +595,13 @@ See **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** for compl
 ## Testing
 
 **Test Coverage:**
-- Total: 562 tests (561 passing, 99.8% pass rate)
+- Total: 576 tests (575 passing, 99.8% pass rate)
 - Failing: 0
 - Skipped: 1
-- Overall coverage: 75.26% statements (target: 85%)
-  - Branch coverage: 56.9% (primary improvement opportunity)
+- Overall coverage: 75.7% statements (target: 85%)
+  - Branch coverage: 57.34% (primary improvement opportunity)
+
+_Metrics last verified: 2026-06-26_
 
 **Test Suites:**
 - Unit tests for all core modules
@@ -744,5 +748,5 @@ iris a11y --help
 **Status:**
 - Phase 1: ✅ Complete
 - Phase 2: 🚧 In Progress (visual regression complete; a11y integration ongoing)
-- Tests: 561/562 passing (99.8%), 1 skipped, 0 failing
-- Coverage: 75.26% statements (below 85% target)
+- Tests: 575/576 passing (99.8%), 1 skipped, 0 failing
+- Coverage: 75.7% statements (below 85% target)
