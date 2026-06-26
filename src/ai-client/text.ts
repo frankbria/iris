@@ -1,5 +1,6 @@
 import { IrisConfig } from '../config';
 import { BaseAIClient, AITranslationRequest, AITranslationResponse } from './base';
+import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
 
 /**
  * OpenAI client for text-based instruction translation
@@ -15,7 +16,11 @@ export class OpenAITextClient extends BaseAIClient {
     }
 
     const { OpenAI } = await import('openai');
-    const openai = new OpenAI({ apiKey: this.config.apiKey });
+    const openai = new OpenAI({
+      apiKey: this.config.apiKey,
+      timeout: this.config.timeout ?? DEFAULT_TIMEOUT_MS,
+      maxRetries: 0, // retries are driven by our withRetry below
+    });
 
     const systemPrompt = `You are an expert at translating natural language instructions into structured browser automation actions.
 
@@ -49,15 +54,19 @@ ${
 }`;
 
     try {
-      const response = await openai.chat.completions.create({
-        model: this.config.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: 0.1,
-        max_tokens: 1000,
-      });
+      const response = await withRetry(
+        () =>
+          openai.chat.completions.create({
+            model: this.config.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+            temperature: 0.1,
+            max_tokens: 1000,
+          }),
+        this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
+      );
 
       const content = response.choices[0]?.message?.content;
       if (!content) {
@@ -123,24 +132,34 @@ export class OllamaTextClient extends BaseAIClient {
     }
 
     try {
-      const response = await fetch(`${this.config.endpoint}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.config.model,
-          prompt: `Translate this natural language instruction into browser automation actions: "${request.instruction}"
+      const data = await withRetry(async () => {
+        const response = await fetchWithTimeout(
+          `${this.config.endpoint}/api/generate`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: this.config.model,
+              prompt: `Translate this natural language instruction into browser automation actions: "${request.instruction}"
 
 Available actions: click, fill, navigate
 Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
-          stream: false,
-        }),
-      });
+              stream: false,
+            }),
+          },
+          this.config.timeout ?? DEFAULT_TIMEOUT_MS,
+        );
 
-      if (!response.ok) {
-        throw new Error(`Ollama request failed: ${response.status}`);
-      }
+        if (!response.ok) {
+          // Attach status so withRetry can distinguish transient 5xx/429 from 4xx.
+          throw Object.assign(new Error(`Ollama request failed: ${response.status}`), {
+            status: response.status,
+          });
+        }
 
-      const data = await response.json();
+        return response.json();
+      }, this.config.retryConfig ?? DEFAULT_RETRY_CONFIG);
+
       const parsed = JSON.parse(data.response);
 
       return {

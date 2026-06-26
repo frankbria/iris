@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import type { RetryConfig } from './ai-client/retry';
 
 export interface IrisConfig {
   ai: {
@@ -8,6 +9,8 @@ export interface IrisConfig {
     apiKey?: string;
     model: string;
     endpoint?: string; // For local models like Ollama
+    timeout?: number; // Per-call timeout in ms (default 30000)
+    retryConfig?: RetryConfig; // Transient-failure retry/backoff (default 2/500ms/2x)
   };
   watch: {
     patterns: string[];

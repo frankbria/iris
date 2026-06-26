@@ -148,16 +148,16 @@ export abstract class BaseAIVisionClient extends BaseAIClient implements AIVisio
   }
 
   /**
-   * Helper method to handle vision-specific errors
+   * Handle a vision analysis failure.
+   *
+   * Always throws — a failed analysis must NOT masquerade as a clean
+   * `severity: 'none'` result (issue #29). Re-throwing lets the
+   * SmartAIVisionClient fallback chain engage and surfaces a genuine error
+   * when every provider fails. The `never` return type lets call sites keep
+   * `return this.handleVisionError(...)` while the value never materializes.
    */
-  protected handleVisionError(error: unknown, operation: string): AIVisionResponse {
-    const message = error instanceof Error ? error.message : 'Unknown error';
+  protected handleVisionError(error: unknown, operation: string): never {
     console.error(`${operation} error:`, error);
-    return {
-      severity: 'none',
-      confidence: 0,
-      reasoning: `Failed to ${operation}: ${message}`,
-      categories: [],
-    };
+    throw error instanceof Error ? error : new Error(`Failed to ${operation}: ${String(error)}`);
   }
 }
