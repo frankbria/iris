@@ -130,25 +130,36 @@ program
       } finally {
         const endTime = new Date();
 
-        // Persist to database
-        const { initializeDatabase, insertTestRun } = await import('./db');
-        const dbPath = process.env.IRIS_DB_PATH || path.join(os.homedir(), '.iris', 'iris.db');
+        // Persist to database (graceful degradation: never crash the run on a DB hiccup)
+        try {
+          const { initializeDatabase, insertTestRun } = await import('./db');
+          const dbPath = process.env.IRIS_DB_PATH || path.join(os.homedir(), '.iris', 'iris.db');
 
-        // Ensure directory exists
-        const dbDir = path.dirname(dbPath);
-        const fs = await import('fs');
-        if (!fs.existsSync(dbDir)) {
-          fs.mkdirSync(dbDir, { recursive: true });
+          // Ensure directory exists
+          const dbDir = path.dirname(dbPath);
+          const fs = await import('fs');
+          if (!fs.existsSync(dbDir)) {
+            fs.mkdirSync(dbDir, { recursive: true });
+          }
+
+          const db = initializeDatabase(dbPath);
+          try {
+            insertTestRun(db, {
+              instruction,
+              status,
+              startTime,
+              endTime,
+            });
+          } finally {
+            // Always close, even if insertTestRun throws, so the handle never leaks.
+            db.close();
+          }
+        } catch (dbErr) {
+          console.error(
+            '⚠️  Failed to persist run to database:',
+            dbErr instanceof Error ? dbErr.message : dbErr,
+          );
         }
-
-        const db = initializeDatabase(dbPath);
-        insertTestRun(db, {
-          instruction,
-          status,
-          startTime,
-          endTime,
-        });
-        db.close();
       }
     },
   );
