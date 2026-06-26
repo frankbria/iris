@@ -405,14 +405,144 @@ export class AccessibilityRunner {
     const format = this.config.output?.format || 'json';
     const outputPath = this.config.output?.path || `./a11y-report-${Date.now()}.${format}`;
 
+    let report: string;
     if (format === 'json') {
-      const report = JSON.stringify({ summary, results }, null, 2);
-      const fs = await import('fs');
-      fs.writeFileSync(outputPath, report);
-      return outputPath;
+      report = JSON.stringify({ summary, results }, null, 2);
+    } else if (format === 'html') {
+      report = this.generateHtmlReport(results, summary);
+    } else if (format === 'junit') {
+      report = this.generateJUnitReport(results, summary);
+    } else {
+      throw new Error(`Report format '${format}' not yet implemented`);
     }
 
-    // HTML and JUnit formats to be implemented
-    throw new Error(`Report format '${format}' not yet implemented`);
+    const fs = await import('fs');
+    fs.writeFileSync(outputPath, report);
+    return outputPath;
+  }
+
+  /**
+   * Escape a string for safe inclusion in HTML/XML text and attributes.
+   */
+  private escape(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  /**
+   * Generate a self-contained HTML accessibility report.
+   */
+  private generateHtmlReport(
+    results: AccessibilityTestResult['results'],
+    summary: AccessibilityTestResult['summary'],
+  ): string {
+    const esc = (v: string) => this.escape(v);
+    const pages = results
+      .map((r) => {
+        const violations = r.axeResult.violations
+          .map(
+            (v) => `
+        <div class="violation ${esc(v.impact)}">
+          <h4>${esc(v.id)} <span class="impact">${esc(v.impact)}</span></h4>
+          <p>${esc(v.description)}</p>
+          <p><a href="${esc(v.helpUrl)}">${esc(v.help)}</a></p>
+          <ul>${v.nodes
+            .map((n) => `<li><code>${esc(n.html)}</code> — ${esc(n.target.join(', '))}</li>`)
+            .join('')}</ul>
+        </div>`,
+          )
+          .join('');
+        const body =
+          r.axeResult.violations.length === 0
+            ? '<p class="ok">No violations found.</p>'
+            : violations;
+        return `
+      <section class="page">
+        <h3>${esc(r.page)} <small>${esc(r.axeResult.url)}</small></h3>
+        ${body}
+      </section>`;
+      })
+      .join('');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Accessibility Report</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
+    .summary { display: flex; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 2rem; }
+    .summary div { padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
+    .violation { border-left: 4px solid #999; padding: 0.5rem 1rem; margin: 1rem 0; background: #fafafa; }
+    .violation.critical { border-color: #d73a4a; }
+    .violation.serious { border-color: #e36209; }
+    .violation.moderate { border-color: #dbab09; }
+    .violation.minor { border-color: #0366d6; }
+    .impact { font-size: 0.75rem; text-transform: uppercase; background: #eee; padding: 2px 6px; border-radius: 4px; }
+    .ok { color: #22863a; }
+    code { background: #f0f0f0; padding: 2px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Accessibility Report</h1>
+  <div class="summary">
+    <div><strong>${summary.score}/100</strong><br>Score</div>
+    <div><strong>${summary.passed ? 'PASS' : 'FAIL'}</strong><br>Result</div>
+    <div><strong>${summary.totalViolations}</strong><br>Violations</div>
+    <div><strong>${summary.pagesTested}</strong><br>Pages</div>
+    <div>Critical ${summary.violationsBySeverity.critical} · Serious ${summary.violationsBySeverity.serious} · Moderate ${summary.violationsBySeverity.moderate} · Minor ${summary.violationsBySeverity.minor}</div>
+  </div>
+  ${pages}
+</body>
+</html>`;
+  }
+
+  /**
+   * Generate a JUnit XML report (one testsuite per page, one testcase per axe rule violation).
+   */
+  private generateJUnitReport(
+    results: AccessibilityTestResult['results'],
+    summary: AccessibilityTestResult['summary'],
+  ): string {
+    const esc = (v: string) => this.escape(v);
+    // One testcase per violation, or a single passing testcase when a page is clean.
+    const totalTests = results.reduce(
+      (sum, r) => sum + Math.max(r.axeResult.violations.length, 1),
+      0,
+    );
+    const suites = results
+      .map((r) => {
+        const violations = r.axeResult.violations;
+        const cases =
+          violations.length === 0
+            ? `    <testcase name="${esc(r.page)} accessibility" classname="a11y"/>`
+            : violations
+                .map((v) => {
+                  const detail = `${v.description}\n${v.help}\n${v.helpUrl}\n${v.nodes
+                    .map((n) => `${n.target.join(', ')}: ${n.html}`)
+                    .join('\n')}`;
+                  return `    <testcase name="${esc(v.id)}" classname="${esc(r.page)}">
+      <failure message="${esc(v.help)}" type="${esc(v.impact)}">${esc(detail)}</failure>
+    </testcase>`;
+                })
+                .join('\n');
+        return `  <testsuite name="${esc(r.page)}" tests="${Math.max(
+          violations.length,
+          1,
+        )}" failures="${violations.length}">
+${cases}
+  </testsuite>`;
+      })
+      .join('\n');
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="iris-a11y" tests="${totalTests}" failures="${summary.totalViolations}">
+${suites}
+</testsuites>`;
   }
 }
