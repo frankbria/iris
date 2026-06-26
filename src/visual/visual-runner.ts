@@ -184,8 +184,9 @@ export class VisualTestRunner {
           }
         }
 
-        // Check if this was a new baseline
-        if (!result.baselinePath) {
+        // Check if this was a new baseline. Gate on passed so a failed save
+        // (no baselinePath, passed:false) counts as failed, not a new baseline.
+        if (result.passed && !result.baselinePath) {
           summary.newBaselines++;
         }
       }
@@ -346,11 +347,28 @@ export class VisualTestRunner {
 
       // If updating baselines or no baseline exists
       if (this.config.updateBaseline || !baselineResult.success) {
-        await this.baselineManager.saveBaseline(
+        const saveResult = await this.baselineManager.saveBaseline(
           testName,
           screenshotBuffer.buffer,
           screenshotBuffer.metadata,
         );
+
+        // A failed save must surface as a failure, not a silent passed:true —
+        // otherwise the suite reports false-green and masks regressions.
+        if (!saveResult.success) {
+          return {
+            page: pagePattern,
+            device,
+            passed: false,
+            similarity: 0,
+            pixelDifference: 1,
+            threshold: this.config.diff.threshold,
+            severity: 'breaking',
+            screenshotPath,
+            error: `Failed to save baseline: ${saveResult.error}`,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any;
+        }
 
         return {
           page: pagePattern,
