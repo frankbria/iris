@@ -145,6 +145,17 @@ export const ScreenReaderTestResultSchema = z.object({
       element: z.string(),
     }),
   ),
+  imageAltResults: z
+    .array(
+      z.object({
+        element: z.string(),
+        alt: z.string().optional(),
+        hasAlt: z.boolean(),
+        isDecorative: z.boolean(),
+        success: z.boolean(),
+      }),
+    )
+    .optional(),
 });
 
 export const A11yReportSchema = z.object({

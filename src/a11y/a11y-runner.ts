@@ -257,6 +257,7 @@ export class AccessibilityRunner {
     const announcements: ScreenReaderTestResult['announcements'] = [];
     const landmarkStructure: ScreenReaderTestResult['landmarkStructure'] = [];
     const headingStructure: ScreenReaderTestResult['headingStructure'] = [];
+    const imageAltResults: NonNullable<ScreenReaderTestResult['imageAltResults']> = [];
 
     try {
       // Test ARIA labels
@@ -315,6 +316,32 @@ export class AccessibilityRunner {
         headingStructure.push(...headings);
       }
 
+      // Test image alt text. Missing `alt` is a violation; empty alt,
+      // role="presentation", or aria-hidden marks a valid decorative image;
+      // a non-empty alt is a valid meaningful image.
+      if (this.config.screenReader.testImageAltText) {
+        const images = await page.evaluate(() => {
+          const imageElements = document.querySelectorAll('img, [role="img"]');
+          return Array.from(imageElements).map((el) => {
+            const hasAlt = el.hasAttribute('alt');
+            const alt = el.getAttribute('alt') ?? undefined;
+            const isDecorative =
+              alt === '' ||
+              el.getAttribute('role') === 'presentation' ||
+              el.getAttribute('aria-hidden') === 'true';
+            return {
+              element: el.tagName + (el.id ? `#${el.id}` : ''),
+              alt,
+              hasAlt,
+              isDecorative,
+              // Valid when decorative, or when a meaningful (non-empty) alt is present.
+              success: isDecorative || (hasAlt && (alt ?? '').length > 0),
+            };
+          });
+        });
+        imageAltResults.push(...images);
+      }
+
       // Validate heading hierarchy
       const headingHierarchyValid = this.validateHeadingHierarchy(headingStructure);
 
@@ -323,12 +350,16 @@ export class AccessibilityRunner {
       const landmarkValid =
         !this.config.screenReader.testLandmarkNavigation || landmarkStructure.length > 0;
 
+      // Image alt is valid when the check was disabled or no image failed.
+      const imageAltValid = imageAltResults.every((img) => img.success);
+
       return {
         testName,
-        passed: headingHierarchyValid && landmarkValid,
+        passed: headingHierarchyValid && landmarkValid && imageAltValid,
         announcements,
         landmarkStructure,
         headingStructure,
+        imageAltResults,
       };
     } catch (error) {
       throw new Error(
