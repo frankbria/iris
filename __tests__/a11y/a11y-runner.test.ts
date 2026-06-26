@@ -494,9 +494,21 @@ describe('AccessibilityRunner', () => {
       mockPage.evaluate.mockImplementation((fn: any) => {
         if (fn.toString().includes('imageElements')) {
           return Promise.resolve([
-            { element: 'IMG#hero', alt: undefined, hasAlt: false, isDecorative: false, success: false },
+            {
+              element: 'IMG#hero',
+              alt: undefined,
+              hasAlt: false,
+              isDecorative: false,
+              success: false,
+            },
             { element: 'IMG#decor', alt: '', hasAlt: true, isDecorative: true, success: true },
-            { element: 'IMG#logo', alt: 'Company logo', hasAlt: true, isDecorative: false, success: true },
+            {
+              element: 'IMG#logo',
+              alt: 'Company logo',
+              hasAlt: true,
+              isDecorative: false,
+              success: true,
+            },
           ]);
         }
         if (fn.toString().includes('landmarkElements')) {
@@ -520,7 +532,13 @@ describe('AccessibilityRunner', () => {
         if (fn.toString().includes('imageElements')) {
           return Promise.resolve([
             { element: 'IMG#decor', alt: '', hasAlt: true, isDecorative: true, success: true },
-            { element: 'IMG#logo', alt: 'Company logo', hasAlt: true, isDecorative: false, success: true },
+            {
+              element: 'IMG#logo',
+              alt: 'Company logo',
+              hasAlt: true,
+              isDecorative: false,
+              success: true,
+            },
           ]);
         }
         if (fn.toString().includes('landmarkElements')) {
