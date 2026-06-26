@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
   AIVisionCache,
   CostTracker,
@@ -6,6 +9,8 @@ import {
   createSmartClient,
 } from '../src/ai-client';
 import { IrisConfig } from '../src/config';
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('AI Client Batch 4: Cost Control & Caching', () => {
   describe('AIVisionCache', () => {
@@ -115,6 +120,63 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       expect(stats.persistentSize).toBe(0);
       expect(stats.hits).toBe(0);
       expect(stats.misses).toBe(0);
+    });
+
+    describe('pruning expired entries', () => {
+      const value = {
+        severity: 'none' as const,
+        confidence: 1.0,
+        reasoning: 'Test',
+        categories: [],
+      };
+
+      it('removes expired entries when pruneExpired() is called manually', async () => {
+        const c = createCache({ ttlMs: 30 });
+        c.set(c.generateKey('a', 'a', 'p', 'm'), value, 'p', 'm');
+        expect(c.getStats().persistentSize).toBe(1);
+
+        await sleep(50);
+        const removed = c.pruneExpired();
+
+        expect(removed).toBe(1);
+        expect(c.getStats().persistentSize).toBe(0);
+        c.close();
+      });
+
+      it('auto-prunes expired entries once the write throttle is reached', async () => {
+        // pruneIntervalWrites = 2 => prune fires on every 2nd set()
+        const c = createCache({ ttlMs: 30, pruneIntervalWrites: 2 });
+        c.set(c.generateKey('old', 'old', 'p', 'm'), value, 'p', 'm');
+
+        await sleep(50); // let the first entry expire
+
+        // 2nd write trips the throttle and prunes the now-expired 'old' entry
+        c.set(c.generateKey('fresh', 'fresh', 'p', 'm'), value, 'p', 'm');
+
+        // Persistent SQLite row for the expired entry is reclaimed; only the
+        // fresh entry remains. (The in-memory LRU is separately bounded.)
+        expect(c.getStats().persistentSize).toBe(1);
+        c.close();
+      });
+
+      it('prunes expired entries on construction', async () => {
+        const dbPath = path.join(os.tmpdir(), `iris-cache-prune-${process.pid}-${Date.now()}.db`);
+        try {
+          const first = createCache({ ttlMs: 30, dbPath });
+          first.set(first.generateKey('a', 'a', 'p', 'm'), value, 'p', 'm');
+          expect(first.getStats().persistentSize).toBe(1);
+          first.close();
+
+          await sleep(50); // entry is now expired
+
+          // Reopening the same DB should reclaim the expired row on construction
+          const second = createCache({ ttlMs: 30, dbPath });
+          expect(second.getStats().persistentSize).toBe(0);
+          second.close();
+        } finally {
+          fs.rmSync(dbPath, { force: true });
+        }
+      });
     });
   });
 

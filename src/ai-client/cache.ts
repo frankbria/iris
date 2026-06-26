@@ -21,6 +21,13 @@ export interface CacheConfig {
   dbPath?: string;
 
   /**
+   * Number of set() calls between automatic prunes of expired rows (default: 100).
+   * Keeps the persistent SQLite cache from growing unbounded on long-running
+   * processes. Pruning also runs once on construction.
+   */
+  pruneIntervalWrites?: number;
+
+  /**
    * Enable debug logging (default: false)
    */
   debug?: boolean;
@@ -57,6 +64,7 @@ const DEFAULT_CONFIG: Required<CacheConfig> = {
   maxMemoryEntries: 100,
   ttlMs: 30 * 24 * 60 * 60 * 1000, // 30 days
   dbPath: ':memory:',
+  pruneIntervalWrites: 100,
   debug: false,
 };
 
@@ -90,6 +98,7 @@ export class AIVisionCache {
   private hits = 0;
   private misses = 0;
   private evictions = 0;
+  private writesSincePrune = 0;
 
   constructor(config: CacheConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -98,6 +107,9 @@ export class AIVisionCache {
     // Initialize SQLite database
     this.db = new Database(this.config.dbPath);
     this.initializeDatabase();
+
+    // Reclaim any rows that expired while the process was down.
+    this.pruneExpired();
   }
 
   /**
@@ -248,6 +260,13 @@ export class AIVisionCache {
     if (this.config.debug) {
       console.log(`[Cache] Set: ${key}`);
     }
+
+    // Throttled prune so the persistent cache stays bounded without paying the
+    // DELETE cost on every write.
+    if (++this.writesSincePrune >= this.config.pruneIntervalWrites) {
+      this.writesSincePrune = 0;
+      this.pruneExpired();
+    }
   }
 
   /**
@@ -375,7 +394,11 @@ export class AIVisionCache {
   }
 
   /**
-   * Remove expired entries
+   * Remove expired entries from the persistent cache.
+   *
+   * Runs automatically on construction and every `pruneIntervalWrites` writes,
+   * and is also exposed for manual/scheduled cleanup (e.g. from a long-running
+   * `watch` process).
    *
    * @returns Number of entries removed
    */
