@@ -130,12 +130,17 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         categories: [],
       };
 
+      // Short TTL + a generous sleep (20x margin) keeps these deterministic
+      // even on a loaded CI runner.
+      const TTL = 10;
+      const EXPIRE_WAIT = 200;
+
       it('removes expired entries when pruneExpired() is called manually', async () => {
-        const c = createCache({ ttlMs: 30 });
+        const c = createCache({ ttlMs: TTL });
         c.set(c.generateKey('a', 'a', 'p', 'm'), value, 'p', 'm');
         expect(c.getStats().persistentSize).toBe(1);
 
-        await sleep(50);
+        await sleep(EXPIRE_WAIT);
         const removed = c.pruneExpired();
 
         expect(removed).toBe(1);
@@ -145,10 +150,10 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
       it('auto-prunes expired entries once the write throttle is reached', async () => {
         // pruneIntervalWrites = 2 => prune fires on every 2nd set()
-        const c = createCache({ ttlMs: 30, pruneIntervalWrites: 2 });
+        const c = createCache({ ttlMs: TTL, pruneIntervalWrites: 2 });
         c.set(c.generateKey('old', 'old', 'p', 'm'), value, 'p', 'm');
 
-        await sleep(50); // let the first entry expire
+        await sleep(EXPIRE_WAIT); // let the first entry expire
 
         // 2nd write trips the throttle and prunes the now-expired 'old' entry
         c.set(c.generateKey('fresh', 'fresh', 'p', 'm'), value, 'p', 'm');
@@ -161,20 +166,23 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
       it('prunes expired entries on construction', async () => {
         const dbPath = path.join(os.tmpdir(), `iris-cache-prune-${process.pid}-${Date.now()}.db`);
+        let second: AIVisionCache | undefined;
         try {
-          const first = createCache({ ttlMs: 30, dbPath });
+          const first = createCache({ ttlMs: TTL, dbPath });
           first.set(first.generateKey('a', 'a', 'p', 'm'), value, 'p', 'm');
           expect(first.getStats().persistentSize).toBe(1);
           first.close();
 
-          await sleep(50); // entry is now expired
+          await sleep(EXPIRE_WAIT); // entry is now expired
 
           // Reopening the same DB should reclaim the expired row on construction
-          const second = createCache({ ttlMs: 30, dbPath });
+          second = createCache({ ttlMs: TTL, dbPath });
           expect(second.getStats().persistentSize).toBe(0);
-          second.close();
         } finally {
-          fs.rmSync(dbPath, { force: true });
+          second?.close();
+          for (const suffix of ['', '-wal', '-shm']) {
+            fs.rmSync(`${dbPath}${suffix}`, { force: true });
+          }
         }
       });
     });

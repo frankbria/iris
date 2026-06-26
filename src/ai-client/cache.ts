@@ -262,8 +262,12 @@ export class AIVisionCache {
     }
 
     // Throttled prune so the persistent cache stays bounded without paying the
-    // DELETE cost on every write.
-    if (++this.writesSincePrune >= this.config.pruneIntervalWrites) {
+    // DELETE cost on every write. A non-positive interval disables throttled
+    // pruning (construction-time prune still runs).
+    if (
+      this.config.pruneIntervalWrites > 0 &&
+      ++this.writesSincePrune >= this.config.pruneIntervalWrites
+    ) {
       this.writesSincePrune = 0;
       this.pruneExpired();
     }
