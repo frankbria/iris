@@ -1,6 +1,7 @@
 import { runCli } from '../src/cli';
 import { initializeDatabase, getTestRuns } from '../src/db';
 import * as dbModule from '../src/db';
+import * as protocolModule from '../src/protocol';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -32,15 +33,66 @@ describe('CLI Commands', () => {
   }, 15000);
 
   test('connect command prints server start message', async () => {
-    // Mock the startServer function to avoid actually starting a server
-    const mockStartServer = jest.fn();
-    jest.doMock('../src/protocol', () => ({
-      startServer: mockStartServer,
-    }));
+    // Spy on startServer to avoid actually binding a port. The dynamic
+    // `await import('./protocol')` in cli.ts resolves to this same module instance.
+    const startServerSpy = jest
+      .spyOn(protocolModule, 'startServer')
+      .mockReturnValue({ close: jest.fn() } as never);
+
+    const sigintBefore = process.listeners('SIGINT').length;
+    const sigtermBefore = process.listeners('SIGTERM').length;
 
     await runCli(['node', 'iris', 'connect']);
     expect(consoleOutput).toContain('JSON-RPC server listening on ws://localhost:4000');
-    expect(mockStartServer).toHaveBeenCalledWith(4000);
+    expect(startServerSpy).toHaveBeenCalledWith(4000);
+
+    // Clean up the signal listeners the action registered so they don't leak.
+    for (const l of process.listeners('SIGINT').slice(sigintBefore)) {
+      process.removeListener('SIGINT', l);
+    }
+    for (const l of process.listeners('SIGTERM').slice(sigtermBefore)) {
+      process.removeListener('SIGTERM', l);
+    }
+  });
+
+  test('connect command registers graceful shutdown that closes the server (issue #37)', async () => {
+    jest.useFakeTimers();
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const mockClose = jest.fn();
+    const clientClose = jest.fn();
+    const clientTerminate = jest.fn();
+    // One connected client so we exercise the "close existing sockets" path.
+    const clients = new Set([{ close: clientClose, terminate: clientTerminate }]);
+    jest
+      .spyOn(protocolModule, 'startServer')
+      .mockReturnValue({ close: mockClose, clients } as never);
+
+    const sigintBefore = process.listeners('SIGINT').length;
+    const sigtermBefore = process.listeners('SIGTERM').length;
+
+    await runCli(['node', 'iris', 'connect']);
+
+    const newSigint = process.listeners('SIGINT').slice(sigintBefore);
+    const newSigterm = process.listeners('SIGTERM').slice(sigtermBefore);
+    expect(newSigint).toHaveLength(1);
+    expect(newSigterm).toHaveLength(1);
+
+    // Invoking the handler should close connected clients AND the server, so the
+    // 'close' drain can run and the process can exit (no hang on Ctrl+C).
+    (newSigint[0] as () => void)();
+    expect(clientClose).toHaveBeenCalledWith(1001, 'Server shutting down');
+    expect(mockClose).toHaveBeenCalledTimes(1);
+
+    // Fallback: a wedged client that never completes its close handshake is
+    // force-terminated and the process exits after the timeout.
+    jest.advanceTimersByTime(5000);
+    expect(clientTerminate).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+
+    // Clean up the listeners we added so they don't leak across tests.
+    process.removeListener('SIGINT', newSigint[0]);
+    process.removeListener('SIGTERM', newSigterm[0]);
+    jest.useRealTimers();
   });
 
   test('run command persists test execution to database', async () => {

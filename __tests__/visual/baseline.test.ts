@@ -470,5 +470,26 @@ describe('BaselineManager', () => {
       // Assert
       expect(branch).toBe('main');
     });
+
+    it('should emit a stderr warning when falling back to main (issue #37)', async () => {
+      // Arrange
+      const freshBaselineManager = new BaselineManager(mockBaselineDir);
+      jest.clearAllMocks();
+      mockGit.branch.mockRejectedValue(new Error('Git not available'));
+      const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+      // Act
+      const branch = await freshBaselineManager.getCurrentBranch();
+
+      // Assert
+      expect(branch).toBe('main');
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const warning = stderrSpy.mock.calls[0][0] as string;
+      expect(warning).toContain('Warning');
+      expect(warning).toContain('Git not available');
+      expect(warning).toContain("'main'");
+
+      stderrSpy.mockRestore();
+    });
   });
 });

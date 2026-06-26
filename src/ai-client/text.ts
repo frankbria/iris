@@ -1,5 +1,5 @@
 import { IrisConfig } from '../config';
-import { BaseAIClient, AITranslationRequest, AITranslationResponse } from './base';
+import { BaseAIClient, AITranslationRequest, AITranslationResponse, formatError } from './base';
 import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
 
 /**
@@ -80,7 +80,7 @@ ${
         reasoning: parsed.reasoning,
       };
     } catch (error) {
-      console.error('OpenAI translation error:', error);
+      console.error('OpenAI translation error:', formatError(error));
       return {
         actions: [],
         confidence: 0,
@@ -168,7 +168,7 @@ Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
         reasoning: parsed.reasoning,
       };
     } catch (error) {
-      console.error('Ollama translation error:', error);
+      console.error('Ollama translation error:', formatError(error));
       return {
         actions: [],
         confidence: 0,

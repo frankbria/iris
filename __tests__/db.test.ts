@@ -19,6 +19,23 @@ describe('Database Module', () => {
     }
   });
 
+  test('initializeDatabase creates missing parent dir with mode 0o700 (issue #37)', () => {
+    const nestedDir = path.join(__dirname, 'iris-perms-test');
+    const nestedDbPath = path.join(nestedDir, 'iris.db');
+    fs.rmSync(nestedDir, { recursive: true, force: true });
+
+    try {
+      const db = initializeDatabase(nestedDbPath);
+      expect(fs.existsSync(nestedDir)).toBe(true);
+      // Owner-only perms: no group/other access bits set.
+      const mode = fs.statSync(nestedDir).mode & 0o777;
+      expect(mode).toBe(0o700);
+      db.close();
+    } finally {
+      fs.rmSync(nestedDir, { recursive: true, force: true });
+    }
+  });
+
   test('initializeDatabase creates database and test_results table', () => {
     const db = initializeDatabase(testDbPath);
 

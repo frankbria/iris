@@ -280,7 +280,12 @@ export class BaselineManager {
     try {
       const branchInfo = await this.git.branch();
       return branchInfo.current || 'main';
-    } catch {
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `[iris] Warning: could not determine git branch (${reason}); ` +
+          `falling back to 'main'. Baselines will be stored under 'main'.\n`,
+      );
       return 'main';
     }
   }

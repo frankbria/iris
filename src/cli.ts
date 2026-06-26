@@ -141,13 +141,7 @@ program
           const { initializeDatabase, insertTestRun } = await import('./db');
           const dbPath = process.env.IRIS_DB_PATH || path.join(os.homedir(), '.iris', 'iris.db');
 
-          // Ensure directory exists
-          const dbDir = path.dirname(dbPath);
-          const fs = await import('fs');
-          if (!fs.existsSync(dbDir)) {
-            fs.mkdirSync(dbDir, { recursive: true });
-          }
-
+          // initializeDatabase creates the parent dir (mode 0o700) if needed.
           const db = initializeDatabase(dbPath);
           try {
             insertTestRun(db, {
@@ -233,8 +227,33 @@ program
   )
   .action(async (port: number) => {
     const { startServer } = await import('./protocol');
-    startServer(port);
+    const wss = startServer(port);
     console.log(`JSON-RPC server listening on ws://localhost:${port}`);
+
+    // Close the server on Ctrl+C / termination so wss.on('close') drains
+    // in-flight sessions (executor.cleanup) instead of being skipped. Existing
+    // client sockets must be closed first — wss.close() only stops accepting new
+    // connections and won't fire 'close' (or let the process exit) while a
+    // client stays connected. Installing this handler also suppresses Node's
+    // default SIGINT/SIGTERM termination, so without this the process would hang.
+    const shutdown = () => {
+      console.log('\nShutting down JSON-RPC server...');
+      for (const client of wss?.clients ?? []) {
+        client.close(1001, 'Server shutting down');
+      }
+      wss?.close();
+      // Force-terminate if a wedged/unresponsive client stalls the graceful
+      // close handshake; otherwise wss never emits 'close' and the process hangs.
+      // unref() so this timer never keeps the process alive on its own.
+      setTimeout(() => {
+        for (const client of wss?.clients ?? []) {
+          client.terminate();
+        }
+        process.exit(0);
+      }, 5000).unref();
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
   });
 
 program
