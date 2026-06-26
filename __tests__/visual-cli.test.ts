@@ -231,13 +231,7 @@ describe('visual-diff CLI command', () => {
           }),
         }));
         const { runCli: flagRunCli } = await import('../src/cli');
-        await flagRunCli([
-          'node',
-          'iris',
-          'visual-diff',
-          '--base-url',
-          'https://flag.example.com',
-        ]);
+        await flagRunCli(['node', 'iris', 'visual-diff', '--base-url', 'https://flag.example.com']);
         expect(mockRun).toHaveBeenCalledTimes(2);
       } finally {
         if (originalEnv === undefined) {
