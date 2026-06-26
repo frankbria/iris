@@ -1,5 +1,6 @@
 import { runCli } from '../src/cli';
 import { initializeDatabase, getTestRuns } from '../src/db';
+import * as dbModule from '../src/db';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -74,6 +75,29 @@ describe('CLI Commands', () => {
         fs.unlinkSync(testDbPath);
       }
     }
+  });
+
+  test('run command survives a DB persistence failure and still closes the handle', async () => {
+    const close = jest.fn();
+    // dynamic `await import('./db')` in cli.ts resolves to this same module instance
+    jest.spyOn(dbModule, 'initializeDatabase').mockReturnValue({ close } as never);
+    jest.spyOn(dbModule, 'insertTestRun').mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    const errorOutput: string[] = [];
+    jest.spyOn(console, 'error').mockImplementation((...args) => errorOutput.push(args.join(' ')));
+
+    // Should not throw despite the persistence failure
+    await expect(
+      runCli(['node', 'iris', 'run', 'click #submit', '--dry-run']),
+    ).resolves.toBeUndefined();
+
+    // Handle closed even though insertTestRun threw
+    expect(close).toHaveBeenCalled();
+    // Clear warning logged with the error detail
+    expect(
+      errorOutput.some((line) => line.includes('Failed to persist') && line.includes('disk full')),
+    ).toBe(true);
   });
 
   test('run command with dry-run shows execution preview', async () => {
