@@ -592,6 +592,65 @@ describe('AccessibilityRunner', () => {
 
       fs.writeFileSync.mockRestore();
     });
+
+    it('should set the JUnit root tests count to the number of emitted testcases', async () => {
+      const fs = require('fs');
+      let written = '';
+      jest.spyOn(fs, 'writeFileSync').mockImplementation((...args: unknown[]) => {
+        written = args[1] as string;
+      });
+      // Two violations on a single page => two <testcase> elements.
+      mockAxeRunner.run.mockResolvedValue({
+        testName: 'home',
+        url: 'https://example.com',
+        timestamp: new Date(),
+        passed: false,
+        violations: [
+          {
+            id: 'image-alt',
+            impact: 'critical',
+            tags: [],
+            description: 'd',
+            help: 'h',
+            helpUrl: 'u',
+            nodes: [],
+          },
+          {
+            id: 'button-name',
+            impact: 'critical',
+            tags: [],
+            description: 'd',
+            help: 'h',
+            helpUrl: 'u',
+            nodes: [],
+          },
+        ],
+        passes: [],
+        incomplete: [],
+        inapplicable: [],
+        summary: { total: 2, violations: 2, passes: 0, incomplete: 0, inapplicable: 0 },
+        testRunner: { name: 'axe-core', version: '4.8.0' },
+      } as any);
+
+      mockAxeRunner.getSeverityCounts.mockReturnValue({
+        critical: 2,
+        serious: 0,
+        moderate: 0,
+        minor: 0,
+      });
+
+      accessibilityRunner = new AccessibilityRunner({
+        ...defaultConfig,
+        pages: ['/'],
+        output: { format: 'junit' as const, path: './report.xml' },
+      });
+      await accessibilityRunner.run();
+
+      // Root count must equal emitted testcases (2), never < failures.
+      expect(written).toContain('<testsuites name="iris-a11y" tests="2" failures="2">');
+
+      fs.writeFileSync.mockRestore();
+    });
   });
 
   describe('accessibility score calculation', () => {

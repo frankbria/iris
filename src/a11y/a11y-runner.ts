@@ -510,6 +510,11 @@ export class AccessibilityRunner {
     summary: AccessibilityTestResult['summary'],
   ): string {
     const esc = (v: string) => this.escape(v);
+    // One testcase per violation, or a single passing testcase when a page is clean.
+    const totalTests = results.reduce(
+      (sum, r) => sum + Math.max(r.axeResult.violations.length, 1),
+      0,
+    );
     const suites = results
       .map((r) => {
         const violations = r.axeResult.violations;
@@ -536,7 +541,7 @@ ${cases}
       .join('\n');
 
     return `<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="iris-a11y" tests="${summary.pagesTested}" failures="${summary.totalViolations}">
+<testsuites name="iris-a11y" tests="${totalTests}" failures="${summary.totalViolations}">
 ${suites}
 </testsuites>`;
   }
