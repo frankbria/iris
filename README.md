@@ -297,6 +297,7 @@ Options:
   --update-baseline       Update baseline with current screenshots
   --mask <selectors>      CSS selectors to mask (comma-separated)
   --concurrency <n>       Max concurrent comparisons (default: 3)
+  --show-cost             Print a read-only AI cost/cache summary after the run
 ```
 
 ---
