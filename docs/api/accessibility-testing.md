@@ -746,47 +746,8 @@ type WcagLevel = 'A' | 'AA' | 'AAA';
 type WcagPrinciple = 'perceivable' | 'operable' | 'understandable' | 'robust';
 ```
 
-### checkWcagCompliance()
-
-Check WCAG compliance level for a page.
-
-```typescript
-async function checkWcagCompliance(
-  url: string,
-  level: WcagLevel = 'AA'
-): Promise<ComplianceStatus>;
-```
-
-**ComplianceStatus:**
-
-```typescript
-interface ComplianceStatus {
-  level: WcagLevel;
-  passed: boolean;
-  violations: A11yViolation[];
-  coverage: number;                   // 0-1 percentage of rules checked
-  lastTested: Date;
-}
-```
-
-**Example:**
-
-```typescript
-import { checkWcagCompliance } from '@iris/a11y';
-
-const compliance = await checkWcagCompliance('https://example.com', 'AA');
-
-console.log(`WCAG ${compliance.level} Compliance: ${compliance.passed ? 'PASS' : 'FAIL'}`);
-console.log(`Coverage: ${(compliance.coverage * 100).toFixed(1)}%`);
-console.log(`Violations: ${compliance.violations.length}`);
-
-if (!compliance.passed) {
-  console.log('\nViolations:');
-  compliance.violations.forEach(v => {
-    console.log(`  - [${v.impact}] ${v.id}: ${v.help}`);
-  });
-}
-```
+> WCAG compliance is evaluated via the `AccessibilityRunner` / `AxeRunner` classes documented above
+> (configure `rules.wcag2aa` etc.). There is no standalone `checkWcagCompliance()` export.
 
 ---
 
