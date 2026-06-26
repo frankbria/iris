@@ -477,7 +477,13 @@ describe('AccessibilityRunner', () => {
       fs.writeFileSync.mockRestore();
     });
 
-    it('should throw error for unsupported report formats', async () => {
+    it('should generate an HTML report on the default path without throwing', async () => {
+      const fs = require('fs');
+      let written = '';
+      jest.spyOn(fs, 'writeFileSync').mockImplementation((...args: unknown[]) => {
+        written = args[1] as string;
+      });
+
       const configWithHtmlReport = {
         ...defaultConfig,
         output: {
@@ -487,9 +493,104 @@ describe('AccessibilityRunner', () => {
       };
       accessibilityRunner = new AccessibilityRunner(configWithHtmlReport);
 
-      await expect(accessibilityRunner.run()).rejects.toThrow(
-        "Report format 'html' not yet implemented",
-      );
+      const result = await accessibilityRunner.run();
+
+      expect(result.reportPath).toBe('./report.html');
+      expect(fs.writeFileSync).toHaveBeenCalledWith('./report.html', expect.any(String));
+      expect(written).toContain('<!DOCTYPE html>');
+      expect(written).toContain('Accessibility Report');
+
+      fs.writeFileSync.mockRestore();
+    });
+
+    it('should render violations and escape HTML in the HTML report', async () => {
+      const fs = require('fs');
+      let written = '';
+      jest.spyOn(fs, 'writeFileSync').mockImplementation((...args: unknown[]) => {
+        written = args[1] as string;
+      });
+      mockAxeRunner.run.mockResolvedValue({
+        testName: 'home',
+        url: 'https://example.com',
+        timestamp: new Date(),
+        passed: false,
+        violations: [
+          {
+            id: 'image-alt',
+            impact: 'critical',
+            tags: ['wcag2a'],
+            description: 'Images must have alternate text',
+            help: 'Image needs alt',
+            helpUrl: 'https://example.com/rules/image-alt',
+            nodes: [{ target: ['img'], html: '<img src="x">', failureSummary: 'Fix it' }],
+          },
+        ],
+        passes: [],
+        incomplete: [],
+        inapplicable: [],
+        summary: { total: 1, violations: 1, passes: 0, incomplete: 0, inapplicable: 0 },
+        testRunner: { name: 'axe-core', version: '4.8.0' },
+      } as any);
+
+      accessibilityRunner = new AccessibilityRunner({
+        ...defaultConfig,
+        pages: ['/'],
+        output: { format: 'html' as const, path: './report.html' },
+      });
+      await accessibilityRunner.run();
+
+      expect(written).toContain('image-alt');
+      // Raw HTML snippet from the violation node must be escaped, not injected.
+      expect(written).toContain('&lt;img src=&quot;x&quot;&gt;');
+      expect(written).not.toContain('<img src="x">');
+
+      fs.writeFileSync.mockRestore();
+    });
+
+    it('should generate a JUnit XML report', async () => {
+      const fs = require('fs');
+      let written = '';
+      jest.spyOn(fs, 'writeFileSync').mockImplementation((...args: unknown[]) => {
+        written = args[1] as string;
+      });
+      mockAxeRunner.run.mockResolvedValue({
+        testName: 'home',
+        url: 'https://example.com',
+        timestamp: new Date(),
+        passed: false,
+        violations: [
+          {
+            id: 'color-contrast',
+            impact: 'serious',
+            tags: ['wcag2aa'],
+            description: 'Elements must have sufficient color contrast',
+            help: 'Fix contrast',
+            helpUrl: 'https://example.com/rules/color-contrast',
+            nodes: [{ target: ['.btn'], html: '<button>Go</button>' }],
+          },
+        ],
+        passes: [],
+        incomplete: [],
+        inapplicable: [],
+        summary: { total: 1, violations: 1, passes: 0, incomplete: 0, inapplicable: 0 },
+        testRunner: { name: 'axe-core', version: '4.8.0' },
+      } as any);
+
+      accessibilityRunner = new AccessibilityRunner({
+        ...defaultConfig,
+        pages: ['/'],
+        output: { format: 'junit' as const, path: './report.xml' },
+      });
+      const result = await accessibilityRunner.run();
+
+      expect(result.reportPath).toBe('./report.xml');
+      expect(written).toContain('<?xml version="1.0" encoding="UTF-8"?>');
+      expect(written).toContain('<testsuites');
+      expect(written).toContain('<testcase');
+      expect(written).toContain('<failure');
+      expect(written).toContain('color-contrast');
+
+      fs.writeFileSync.mockRestore();
     });
   });
 
