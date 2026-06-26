@@ -6,6 +6,7 @@ import {
   AIVisionRequest,
   AIVisionResponse,
 } from './base';
+import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
 
 /**
  * OpenAI GPT-4V/GPT-4o vision client for visual diff analysis
@@ -28,7 +29,11 @@ export class OpenAIVisionClient extends BaseAIVisionClient {
 
     try {
       const { OpenAI } = await import('openai');
-      const openai = new OpenAI({ apiKey: this.config.apiKey });
+      const openai = new OpenAI({
+        apiKey: this.config.apiKey,
+        timeout: this.config.timeout ?? DEFAULT_TIMEOUT_MS,
+        maxRetries: 0, // retries are driven by our withRetry below
+      });
 
       // Convert buffers to base64
       const baselineBase64 = request.baseline.toString('base64');
@@ -79,34 +84,38 @@ ${
 
 Compare the baseline (first image) with the current (second image) and identify any visual regressions.`;
 
-      const response = await openai.chat.completions.create({
-        model: this.config.model || 'gpt-4o',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: userPrompt },
+      const response = await withRetry(
+        () =>
+          openai.chat.completions.create({
+            model: this.config.model || 'gpt-4o',
+            messages: [
+              { role: 'system', content: systemPrompt },
               {
-                type: 'image_url',
-                image_url: {
-                  url: `data:image/png;base64,${baselineBase64}`,
-                  detail: 'high',
-                },
-              },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: `data:image/png;base64,${currentBase64}`,
-                  detail: 'high',
-                },
+                role: 'user',
+                content: [
+                  { type: 'text', text: userPrompt },
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: `data:image/png;base64,${baselineBase64}`,
+                      detail: 'high',
+                    },
+                  },
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: `data:image/png;base64,${currentBase64}`,
+                      detail: 'high',
+                    },
+                  },
+                ],
               },
             ],
-          },
-        ],
-        temperature: 0.1,
-        max_tokens: 1000,
-      });
+            temperature: 0.1,
+            max_tokens: 1000,
+          }),
+        this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
+      );
 
       const content = response.choices[0]?.message?.content;
       if (!content) {
@@ -157,7 +166,11 @@ export class AnthropicVisionClient extends BaseAIVisionClient {
 
     try {
       const { Anthropic } = await import('@anthropic-ai/sdk');
-      const anthropic = new Anthropic({ apiKey: this.config.apiKey });
+      const anthropic = new Anthropic({
+        apiKey: this.config.apiKey,
+        timeout: this.config.timeout ?? DEFAULT_TIMEOUT_MS,
+        maxRetries: 0, // retries are driven by our withRetry below
+      });
 
       // Convert buffers to base64
       const baselineBase64 = request.baseline.toString('base64');
@@ -196,35 +209,39 @@ Respond with JSON:
   "suggestions": string[]
 }`;
 
-      const response = await anthropic.messages.create({
-        model: this.config.model || 'claude-3-5-sonnet-20241022',
-        max_tokens: 1000,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: systemPrompt },
-              { type: 'text', text: userMessage },
+      const response = await withRetry(
+        () =>
+          anthropic.messages.create({
+            model: this.config.model || 'claude-3-5-sonnet-20241022',
+            max_tokens: 1000,
+            messages: [
               {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: 'image/png',
-                  data: baselineBase64,
-                },
-              },
-              {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: 'image/png',
-                  data: currentBase64,
-                },
+                role: 'user',
+                content: [
+                  { type: 'text', text: systemPrompt },
+                  { type: 'text', text: userMessage },
+                  {
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: 'image/png',
+                      data: baselineBase64,
+                    },
+                  },
+                  {
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: 'image/png',
+                      data: currentBase64,
+                    },
+                  },
+                ],
               },
             ],
-          },
-        ],
-      });
+          }),
+        this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
+      );
 
       const content = response.content[0];
       if (content.type !== 'text') {
@@ -307,25 +324,35 @@ Respond with JSON only:
   "suggestions": ["optional recommendations"]
 }`;
 
-      const response = await fetch(`${this.config.endpoint}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.config.model || 'llava',
-          prompt,
-          images: [baselineBase64, currentBase64],
-          stream: false,
-          options: {
-            temperature: 0.1,
+      const data = await withRetry(async () => {
+        const response = await fetchWithTimeout(
+          `${this.config.endpoint}/api/generate`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: this.config.model || 'llava',
+              prompt,
+              images: [baselineBase64, currentBase64],
+              stream: false,
+              options: {
+                temperature: 0.1,
+              },
+            }),
           },
-        }),
-      });
+          this.config.timeout ?? DEFAULT_TIMEOUT_MS,
+        );
 
-      if (!response.ok) {
-        throw new Error(`Ollama request failed: ${response.status}`);
-      }
+        if (!response.ok) {
+          // Attach status so withRetry can distinguish transient 5xx/429 from 4xx.
+          throw Object.assign(new Error(`Ollama request failed: ${response.status}`), {
+            status: response.status,
+          });
+        }
 
-      const data = await response.json();
+        return response.json();
+      }, this.config.retryConfig ?? DEFAULT_RETRY_CONFIG);
+
       const parsed = JSON.parse(data.response);
 
       return {
