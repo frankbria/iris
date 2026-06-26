@@ -302,6 +302,54 @@ describe('AccessibilityRunner', () => {
       });
     });
 
+    it('should resolve relative pages against a configured baseURL', async () => {
+      const customConfig = {
+        ...defaultConfig,
+        baseURL: 'https://staging.example.com',
+        pages: ['/', '/about'],
+      };
+      accessibilityRunner = new AccessibilityRunner(customConfig);
+
+      await accessibilityRunner.run();
+
+      expect(mockPage.goto).toHaveBeenCalledWith('https://staging.example.com/', {
+        waitUntil: 'networkidle',
+      });
+      expect(mockPage.goto).toHaveBeenCalledWith('https://staging.example.com/about', {
+        waitUntil: 'networkidle',
+      });
+    });
+
+    it('should pass absolute URLs through unchanged even when baseURL is set', async () => {
+      const customConfig = {
+        ...defaultConfig,
+        baseURL: 'https://staging.example.com',
+        pages: ['https://example.com/page1'],
+      };
+      accessibilityRunner = new AccessibilityRunner(customConfig);
+
+      await accessibilityRunner.run();
+
+      expect(mockPage.goto).toHaveBeenCalledWith('https://example.com/page1', {
+        waitUntil: 'networkidle',
+      });
+    });
+
+    it('should not double up slashes when baseURL has a trailing slash', async () => {
+      const customConfig = {
+        ...defaultConfig,
+        baseURL: 'https://staging.example.com/',
+        pages: ['/about'],
+      };
+      accessibilityRunner = new AccessibilityRunner(customConfig);
+
+      await accessibilityRunner.run();
+
+      expect(mockPage.goto).toHaveBeenCalledWith('https://staging.example.com/about', {
+        waitUntil: 'networkidle',
+      });
+    });
+
     it('should include duration in results', async () => {
       const result = await accessibilityRunner.run();
 

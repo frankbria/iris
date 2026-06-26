@@ -51,6 +51,8 @@ export interface VisualTestRunnerConfig {
   devices?: string[];
   updateBaseline?: boolean;
   failOn?: 'minor' | 'moderate' | 'breaking';
+  /** Origin for relative `pages` patterns. Defaults to `http://localhost:3000` when unset. */
+  baseURL?: string;
   output?: {
     format: 'html' | 'json' | 'junit';
     path?: string;
@@ -287,9 +289,9 @@ export class VisualTestRunner {
 
     try {
       // Navigate to page (assuming pagePattern is a URL for now)
-      const url = pagePattern.startsWith('http')
-        ? pagePattern
-        : `http://localhost:3000${pagePattern}`;
+      // Trim a trailing slash off the base so `https://host/` + `/about` doesn't double up.
+      const base = (this.config.baseURL ?? 'http://localhost:3000').replace(/\/$/, '');
+      const url = pagePattern.startsWith('http') ? pagePattern : `${base}${pagePattern}`;
       await page.goto(url, { waitUntil: 'networkidle' });
 
       // Wait for stabilization

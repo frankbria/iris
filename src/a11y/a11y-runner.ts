@@ -49,6 +49,8 @@ export interface AccessibilityRunnerConfig {
     format: 'html' | 'json' | 'junit';
     path?: string;
   };
+  /** Origin for relative `pages` patterns. Defaults to `http://localhost:3000` when unset. */
+  baseURL?: string;
 }
 
 export interface AccessibilityTestResult {
@@ -185,7 +187,9 @@ export class AccessibilityRunner {
       // Navigate to page. Treat any scheme-prefixed value (http:, https:, about:,
       // data:, file:) as a complete URL; only bare paths get the dev-server base.
       const isFullUrl = /^[a-z]+:/i.test(pagePattern);
-      const url = isFullUrl ? pagePattern : `http://localhost:3000${pagePattern}`;
+      // Trim a trailing slash off the base so `https://host/` + `/about` doesn't double up.
+      const base = (this.config.baseURL ?? 'http://localhost:3000').replace(/\/$/, '');
+      const url = isFullUrl ? pagePattern : `${base}${pagePattern}`;
       await page.goto(url, { waitUntil: 'networkidle' });
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';

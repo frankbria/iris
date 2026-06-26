@@ -299,8 +299,16 @@ Options:
   --update-baseline       Update baseline with current screenshots
   --mask <selectors>      CSS selectors to mask (comma-separated)
   --concurrency <n>       Max concurrent comparisons (default: 3)
+  --base-url <url>        Origin for relative --pages (default: http://localhost:3000)
   --show-cost             Print a read-only AI cost/cache summary after the run
 ```
+
+**Base URL:** Relative `--pages` patterns (e.g. `/about`) resolve against
+`--base-url`, or the `IRIS_BASE_URL` environment variable when the flag is
+absent (flag takes precedence). When neither is set, the default origin is
+`http://localhost:3000`. Absolute URLs in `--pages` always pass through
+unchanged. The same `--base-url` flag and `IRIS_BASE_URL` env var apply to
+`iris a11y`.
 
 ---
 
@@ -348,6 +356,7 @@ Options:
   --output <path>           Output file path
   --include-keyboard        Include keyboard navigation tests (default: true)
   --include-screenreader    Include screen reader simulation
+  --base-url <url>          Origin for relative --pages (default: http://localhost:3000)
 ```
 
 ---

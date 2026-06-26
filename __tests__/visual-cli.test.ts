@@ -156,6 +156,98 @@ describe('visual-diff CLI command', () => {
       expect(mockRun).toHaveBeenCalled();
     });
 
+    it('should pass --base-url through to the runner config', async () => {
+      const mockRun = jest.fn().mockResolvedValue({
+        summary: {
+          totalComparisons: 1,
+          passed: 1,
+          failed: 0,
+          newBaselines: 0,
+          overallStatus: 'passed',
+          severityCounts: {},
+        },
+        results: [],
+        duration: 1000,
+      });
+
+      jest.doMock('../src/visual/visual-runner', () => ({
+        VisualTestRunner: jest.fn().mockImplementation((config) => {
+          expect(config.baseURL).toBe('https://staging.example.com');
+          return { run: mockRun };
+        }),
+      }));
+
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+
+      await freshRunCli([
+        'node',
+        'iris',
+        'visual-diff',
+        '--base-url',
+        'https://staging.example.com',
+      ]);
+
+      expect(mockRun).toHaveBeenCalled();
+    });
+
+    it('should use IRIS_BASE_URL when --base-url is absent, with the flag taking precedence', async () => {
+      const originalEnv = process.env.IRIS_BASE_URL;
+      process.env.IRIS_BASE_URL = 'https://env.example.com';
+
+      try {
+        const mockRun = jest.fn().mockResolvedValue({
+          summary: {
+            totalComparisons: 1,
+            passed: 1,
+            failed: 0,
+            newBaselines: 0,
+            overallStatus: 'passed',
+            severityCounts: {},
+          },
+          results: [],
+          duration: 1000,
+        });
+
+        // Env var alone populates baseURL.
+        jest.doMock('../src/visual/visual-runner', () => ({
+          VisualTestRunner: jest.fn().mockImplementation((config) => {
+            expect(config.baseURL).toBe('https://env.example.com');
+            return { run: mockRun };
+          }),
+        }));
+
+        jest.resetModules();
+        const { runCli: envRunCli } = await import('../src/cli');
+        await envRunCli(['node', 'iris', 'visual-diff']);
+        expect(mockRun).toHaveBeenCalled();
+
+        // Flag overrides env var.
+        jest.resetModules();
+        jest.doMock('../src/visual/visual-runner', () => ({
+          VisualTestRunner: jest.fn().mockImplementation((config) => {
+            expect(config.baseURL).toBe('https://flag.example.com');
+            return { run: mockRun };
+          }),
+        }));
+        const { runCli: flagRunCli } = await import('../src/cli');
+        await flagRunCli([
+          'node',
+          'iris',
+          'visual-diff',
+          '--base-url',
+          'https://flag.example.com',
+        ]);
+        expect(mockRun).toHaveBeenCalledTimes(2);
+      } finally {
+        if (originalEnv === undefined) {
+          delete process.env.IRIS_BASE_URL;
+        } else {
+          process.env.IRIS_BASE_URL = originalEnv;
+        }
+      }
+    });
+
     it('should enable semantic analysis when flag is set', async () => {
       const mockRun = jest.fn().mockResolvedValue({
         summary: {
