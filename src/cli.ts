@@ -215,6 +215,10 @@ program
   .option('--mask <selectors>', 'CSS selectors to mask (comma-separated)')
   .option('--exclude <selectors>', 'CSS selectors to exclude (comma-separated)')
   .option('--concurrency <number>', 'Max concurrent comparisons', '3')
+  .option(
+    '--base-url <url>',
+    'Origin for relative --pages patterns (or set IRIS_BASE_URL). Defaults to http://localhost:3000',
+  )
   .option('--show-cost', 'Print a read-only AI cost/cache summary after the run', false)
   .action(async (options) => {
     const startTime = Date.now();
@@ -255,6 +259,7 @@ program
         devices: options.devices.split(',').map((d: string) => d.trim()),
         updateBaseline: options.updateBaseline,
         failOn: options.failOn,
+        baseURL: options.baseUrl || process.env.IRIS_BASE_URL,
         output: {
           format: options.format,
           path: options.output,
@@ -327,6 +332,10 @@ program
   .option('--output <path>', 'Output file path')
   .option('--include-keyboard', 'Include keyboard navigation testing', true)
   .option('--include-screenreader', 'Include screen reader simulation', false)
+  .option(
+    '--base-url <url>',
+    'Origin for relative --pages patterns (or set IRIS_BASE_URL). Defaults to http://localhost:3000',
+  )
   .action(async (options) => {
     const startTime = Date.now();
 
@@ -374,6 +383,7 @@ program
           format: options.format,
           path: options.output,
         },
+        baseURL: options.baseUrl || process.env.IRIS_BASE_URL,
       });
 
       const result = await runner.run();
