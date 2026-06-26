@@ -51,6 +51,16 @@ describe('Translator', () => {
   });
 
   describe('translate (async with AI)', () => {
+    it('should reject oversized instructions with a clear error', async () => {
+      const oversized = 'click '.repeat(2000); // ~12k chars, over the 10k cap
+      await expect(translate(oversized)).rejects.toThrow(/too long/i);
+    });
+
+    it('translateSync also rejects oversized instructions', () => {
+      const oversized = 'click '.repeat(2000);
+      expect(() => translateSync(oversized)).toThrow(/too long/i);
+    });
+
     it('should use pattern matching for simple click commands', async () => {
       const result = await translate('click submit');
 

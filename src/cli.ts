@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import * as path from 'path';
 import * as os from 'os';
 import { loadDotenv } from './config';
+import { parseIntOption, parseFloatOption } from './utils/cli-options';
 
 const program = new Command();
 program.name('iris').description('Interface Recognition & Interaction Suite').version('0.0.1');
@@ -12,11 +13,16 @@ program
   .description('Run a natural language instruction')
   .option('--dry-run', 'Only translate without executing actions')
   .option('--headless', 'Run browser in headless mode (default: true)')
-  .option('--timeout <ms>', 'Timeout for actions in milliseconds', '30000')
+  .option(
+    '--timeout <ms>',
+    'Timeout for actions in milliseconds',
+    (v) => parseIntOption(v, { min: 1000, max: 3600000, name: 'timeout' }),
+    30000,
+  )
   .action(
     async (
       instruction: string,
-      options: { dryRun?: boolean; headless?: boolean; timeout?: string },
+      options: { dryRun?: boolean; headless?: boolean; timeout?: number },
     ) => {
       const startTime = new Date();
       let status: 'success' | 'error' = 'success';
@@ -46,7 +52,7 @@ program
 
           const { ActionExecutor } = await import('./executor');
           const executor = new ActionExecutor({
-            timeout: parseInt(options.timeout || '30000'),
+            timeout: options.timeout ?? 30000,
             trackContext: true,
             retryAttempts: 2,
             retryDelay: 1000,
@@ -170,9 +176,24 @@ program
   .option('-i, --instruction <instruction>', 'Instruction to run when files change', 'click submit')
   .option('--execute', 'Enable browser execution (default: translation only)')
   .option('--headless', 'Run browser in headless mode (default: true when executing)')
-  .option('--browser-timeout <ms>', 'Browser operation timeout in milliseconds', '30000')
-  .option('--retry-attempts <n>', 'Number of retry attempts for failed actions', '2')
-  .option('--retry-delay <ms>', 'Delay between retry attempts in milliseconds', '1000')
+  .option(
+    '--browser-timeout <ms>',
+    'Browser operation timeout in milliseconds',
+    (v) => parseIntOption(v, { min: 1000, max: 3600000, name: 'browserTimeout' }),
+    30000,
+  )
+  .option(
+    '--retry-attempts <n>',
+    'Number of retry attempts for failed actions',
+    (v) => parseIntOption(v, { min: 0, max: 10, name: 'retryAttempts' }),
+    2,
+  )
+  .option(
+    '--retry-delay <ms>',
+    'Delay between retry attempts in milliseconds',
+    (v) => parseIntOption(v, { min: 0, max: 60000, name: 'retryDelay' }),
+    1000,
+  )
   .action(
     async (
       target: string | undefined,
@@ -180,9 +201,9 @@ program
         instruction: string;
         execute?: boolean;
         headless?: boolean;
-        browserTimeout?: string;
-        retryAttempts?: string;
-        retryDelay?: string;
+        browserTimeout?: number;
+        retryAttempts?: number;
+        retryDelay?: number;
       },
     ) => {
       try {
@@ -190,9 +211,9 @@ program
         await watchFiles(target, options.instruction, {
           execute: options.execute,
           headless: options.headless,
-          browserTimeout: options.browserTimeout ? parseInt(options.browserTimeout) : undefined,
-          retryAttempts: options.retryAttempts ? parseInt(options.retryAttempts) : undefined,
-          retryDelay: options.retryDelay ? parseInt(options.retryDelay) : undefined,
+          browserTimeout: options.browserTimeout,
+          retryAttempts: options.retryAttempts,
+          retryDelay: options.retryDelay,
         });
       } catch (error) {
         console.error('Watch error:', error);
@@ -202,13 +223,18 @@ program
   );
 
 program
-  .command('connect [port]')
+  .command('connect')
   .description('Start JSON-RPC/WebSocket server on the given port')
-  .action(async (port: string | undefined) => {
+  .argument(
+    '[port]',
+    'Port to listen on (1-65535)',
+    (v) => parseIntOption(v, { min: 1, max: 65535, name: 'port' }),
+    4000,
+  )
+  .action(async (port: number) => {
     const { startServer } = await import('./protocol');
-    const p = port ? Number(port) : 4000;
-    startServer(p);
-    console.log(`JSON-RPC server listening on ws://localhost:${p}`);
+    startServer(port);
+    console.log(`JSON-RPC server listening on ws://localhost:${port}`);
   });
 
 program
@@ -217,7 +243,12 @@ program
   .option('--pages <patterns>', 'Page patterns to test (comma-separated)', '/')
   .option('--baseline <reference>', 'Baseline branch or commit', 'main')
   .option('--semantic', 'Enable AI-powered semantic analysis', false)
-  .option('--threshold <value>', 'Pixel difference threshold (0-1)', '0.1')
+  .option(
+    '--threshold <value>',
+    'Pixel difference threshold (0-1)',
+    (v) => parseFloatOption(v, { min: 0, max: 1, name: 'threshold' }),
+    0.1,
+  )
   .option('--devices <list>', 'Device types (desktop,mobile,tablet)', 'desktop')
   .option('--format <type>', 'Output format (html|json|junit)', 'html')
   .option('--output <path>', 'Output file path')
@@ -225,7 +256,12 @@ program
   .option('--update-baseline', 'Update baseline with current screenshots', false)
   .option('--mask <selectors>', 'CSS selectors to mask (comma-separated)')
   .option('--exclude <selectors>', 'CSS selectors to exclude (comma-separated)')
-  .option('--concurrency <number>', 'Max concurrent comparisons', '3')
+  .option(
+    '--concurrency <number>',
+    'Max concurrent comparisons',
+    (v) => parseIntOption(v, { min: 1, max: 32, name: 'concurrency' }),
+    3,
+  )
   .option(
     '--base-url <url>',
     'Origin for relative --pages patterns (or set IRIS_BASE_URL). Defaults to http://localhost:3000',
@@ -260,12 +296,12 @@ program
           },
         },
         diff: {
-          threshold: parseFloat(options.threshold),
+          threshold: options.threshold,
           semanticAnalysis: options.semantic,
           aiProvider: 'openai' as const,
           antiAliasing: true,
           regions: [],
-          maxConcurrency: parseInt(options.concurrency),
+          maxConcurrency: options.concurrency,
         },
         devices: options.devices.split(',').map((d: string) => d.trim()),
         updateBaseline: options.updateBaseline,
