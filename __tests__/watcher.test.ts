@@ -2,6 +2,7 @@ import { FileWatcher, createWatcher, watchFiles } from '../src/watcher';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 
 // Mock chokidar
 jest.mock('chokidar', () => ({
@@ -39,9 +40,12 @@ jest.mock('../src/db', () => ({
 }));
 
 // Mock executor
+// Shared mock Page: execute mode now navigates the page before running actions,
+// so the page must expose a goto() that the real browser.navigate() helper calls.
+const mockPage = { goto: jest.fn().mockResolvedValue(undefined) };
 const mockExecutorInstance = {
   launchBrowser: jest.fn().mockResolvedValue({}),
-  createPage: jest.fn().mockResolvedValue({}),
+  createPage: jest.fn().mockResolvedValue(mockPage),
   executeAction: jest.fn().mockResolvedValue({
     success: true,
     action: { type: 'click', selector: '#test' },
@@ -410,6 +414,7 @@ describe('FileWatcher', () => {
 describe('FileWatcher execute-mode runtime', () => {
   let mockWatcher: any;
   let changeCallback: ((p: string) => void) | undefined;
+  let unlinkCallback: ((p: string) => void) | undefined;
   let logSpy: jest.SpyInstance;
   let errorSpy: jest.SpyInstance;
 
@@ -417,10 +422,12 @@ describe('FileWatcher execute-mode runtime', () => {
     jest.clearAllMocks();
     jest.useFakeTimers();
     changeCallback = undefined;
+    unlinkCallback = undefined;
 
     mockWatcher = {
       on: jest.fn().mockImplementation((event: string, cb: any) => {
         if (event === 'change') changeCallback = cb;
+        else if (event === 'unlink') unlinkCallback = cb;
         else if (event === 'ready') setTimeout(() => cb(), 0);
         return mockWatcher;
       }),
@@ -449,6 +456,12 @@ describe('FileWatcher execute-mode runtime', () => {
     changeCallback!('src/test.ts');
     await jest.advanceTimersByTimeAsync(60);
 
+    // The page is navigated to the changed file before any action runs, so
+    // DOM-targeting actions operate on the real page instead of about:blank.
+    expect(mockPage.goto).toHaveBeenCalledWith(
+      pathToFileURL(path.resolve(process.cwd(), 'src/test.ts')).href,
+    );
+
     // The single default action from the translator mock is executed.
     expect(mockExecutorInstance.executeAction).toHaveBeenCalledTimes(1);
     expect(insertTestRun).toHaveBeenCalledWith(
@@ -458,6 +471,20 @@ describe('FileWatcher execute-mode runtime', () => {
         instruction: expect.stringContaining('Executed: 1/1 actions'),
       }),
     );
+  });
+
+  it('skips browser execution entirely on unlink events (the file is gone)', async () => {
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+
+    await watcher.start();
+
+    unlinkCallback!('src/test.ts');
+    await jest.advanceTimersByTimeAsync(60);
+
+    // Neither navigation nor translated actions run for a deleted file: goto would
+    // only 404, and actions would otherwise hit the stale previously-opened page.
+    expect(mockPage.goto).not.toHaveBeenCalled();
+    expect(mockExecutorInstance.executeAction).not.toHaveBeenCalled();
   });
 
   it('reports partial failure when one action fails but continues the loop', async () => {
