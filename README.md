@@ -174,6 +174,10 @@ iris connect
 iris connect 8080  # Custom port
 ```
 
+The server binds to `127.0.0.1` and prints a per-session auth token on startup.
+Clients must send it on the WebSocket handshake as an `Authorization: Bearer <token>`
+header; connections without the token are rejected (close code `1008`).
+
 ---
 
 ## Configuration
