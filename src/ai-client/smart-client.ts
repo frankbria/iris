@@ -124,37 +124,41 @@ export class SmartAIVisionClient {
     const baselineProcessed = await this.preprocessor.preprocess(request.baseline);
     const currentProcessed = await this.preprocessor.preprocess(request.current);
 
-    // Check cache
-    if (this.cache) {
-      const cacheKey = this.cache.generateKey(
-        baselineProcessed.hash,
-        currentProcessed.hash,
-        this.irisConfig.ai.provider,
-        this.irisConfig.ai.model || '',
-      );
-
-      const cached = this.cache.get(cacheKey);
-      if (cached) {
-        // Track cached operation (no cost)
-        if (this.costTracker) {
-          this.costTracker.trackOperation(
-            this.irisConfig.ai.provider,
-            this.irisConfig.ai.model || '',
-            true,
-          );
-        }
-        return cached;
-      }
-    }
-
     // Try provider chain with fallback
     const providers = this.config.enableFallback
       ? this.config.fallbackChain
       : [this.irisConfig.ai.provider];
 
+    // Context influences the analysis, so it is part of the cache identity.
+    const contextKey = request.context ? JSON.stringify(request.context) : '';
+
     let lastError: Error | null = null;
 
     for (const providerName of providers) {
+      // Resolve the provider+model pair once per attempt so cache read, cache
+      // write, and cost tracking all key on the exact same value.
+      const model = this.resolveModel(providerName);
+
+      // Check cache for this provider+model (cache hits are free, so this runs
+      // before availability/budget checks)
+      if (this.cache) {
+        const cacheKey = this.cache.generateKey(
+          baselineProcessed.hash,
+          currentProcessed.hash,
+          providerName,
+          model,
+          contextKey,
+        );
+
+        const cached = this.cache.get(cacheKey);
+        if (cached) {
+          if (this.costTracker) {
+            this.costTracker.trackOperation(providerName, model, true);
+          }
+          return cached;
+        }
+      }
+
       try {
         // Get or create client for this provider
         const client = this.getClient(providerName);
@@ -182,11 +186,7 @@ export class SmartAIVisionClient {
 
         // Track cost
         if (this.costTracker) {
-          this.costTracker.trackOperation(
-            providerName,
-            this.getModelForProvider(providerName),
-            false,
-          );
+          this.costTracker.trackOperation(providerName, model, false);
         }
 
         // Cache result
@@ -195,9 +195,10 @@ export class SmartAIVisionClient {
             baselineProcessed.hash,
             currentProcessed.hash,
             providerName,
-            this.getModelForProvider(providerName),
+            model,
+            contextKey,
           );
-          this.cache.set(cacheKey, result, providerName, this.getModelForProvider(providerName));
+          this.cache.set(cacheKey, result, providerName, model);
         }
 
         return result;
@@ -225,7 +226,7 @@ export class SmartAIVisionClient {
         ai: {
           ...this.irisConfig.ai,
           provider: providerName as 'openai' | 'anthropic' | 'ollama',
-          model: this.getModelForProvider(providerName),
+          model: this.resolveModel(providerName),
         },
       };
 
@@ -234,6 +235,18 @@ export class SmartAIVisionClient {
     }
 
     return client;
+  }
+
+  /**
+   * Resolve the model to use for a provider. Honors the configured
+   * `irisConfig.ai.model` when the provider matches the configured provider;
+   * otherwise falls back to the provider's default model.
+   */
+  private resolveModel(providerName: string): string {
+    if (providerName === this.irisConfig.ai.provider && this.irisConfig.ai.model) {
+      return this.irisConfig.ai.model;
+    }
+    return this.getModelForProvider(providerName);
   }
 
   /**

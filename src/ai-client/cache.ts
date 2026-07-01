@@ -138,10 +138,20 @@ export class AIVisionCache {
    * @param currentHash - Current image hash
    * @param provider - AI provider name
    * @param model - Model identifier
+   * @param context - Serialized request context (url/selector/etc). Included in
+   *   the key only when non-empty, since context influences the analysis result
+   *   and identical images with different context must not share a cache entry.
    * @returns Cache key string
    */
-  generateKey(baselineHash: string, currentHash: string, provider: string, model: string): string {
-    return `${provider}:${model}:${baselineHash}:${currentHash}`;
+  generateKey(
+    baselineHash: string,
+    currentHash: string,
+    provider: string,
+    model: string,
+    context = '',
+  ): string {
+    const base = `${provider}:${model}:${baselineHash}:${currentHash}`;
+    return context ? `${base}:${context}` : base;
   }
 
   /**
