@@ -154,6 +154,7 @@ export interface BaselineCleanupResult {
 
 // Diff Engine Types
 export interface DiffOptions {
+  /** Maximum allowed fraction of differing pixels (0-1); default 0.1 = 10% may differ before failing */
   threshold: number;
   includeAA: boolean;
   alpha: number;

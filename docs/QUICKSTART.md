@@ -103,7 +103,7 @@ npm start visual-diff --pages / --format html --output ./reports/visual.html
 --pages <patterns>        # Pages to test (comma-separated)
 --baseline <reference>    # Git branch/commit for baselines (default: main)
 --semantic               # Enable AI analysis
---threshold <value>      # Similarity threshold 0-1 (default: 0.1)
+--threshold <value>      # Max fraction of pixels allowed to differ, 0-1 (default: 0.1 = 10%)
 --devices <list>         # Device types (default: desktop)
 --format <type>          # Report format: html, json, junit
 --output <path>          # Output file path
