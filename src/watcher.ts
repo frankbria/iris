@@ -7,6 +7,7 @@ import { navigate } from './browser';
 import { Page } from 'playwright';
 import * as path from 'path';
 import * as os from 'os';
+import { pathToFileURL } from 'url';
 
 export interface WatchOptions {
   patterns?: string[];
@@ -150,7 +151,9 @@ export class FileWatcher {
       console.log(`🔄 File ${event.type}: ${event.path}`);
       console.log(`📝 Processing: "${this.options.instruction}"`);
 
-      const fileUrl = `file://${path.resolve(this.options.cwd, event.path)}`;
+      // pathToFileURL escapes URL-reserved characters (#, %, ?) that plain string
+      // concatenation would mis-parse when handed to page.goto().
+      const fileUrl = pathToFileURL(path.resolve(this.options.cwd, event.path)).href;
 
       const result = await translate(this.options.instruction, {
         url: fileUrl,
@@ -185,9 +188,12 @@ export class FileWatcher {
 
           // Navigate to the changed file first so DOM-targeting actions run against
           // its real DOM rather than the blank page. This is execution setup, not a
-          // translated action, so it is not counted in executionResults.
-          console.log(`   🌐 Navigating to ${fileUrl}`);
-          await navigate(this.page, fileUrl);
+          // translated action, so it is not counted in executionResults. Skip on
+          // unlink events — the file is gone, so there is nothing to navigate to.
+          if (event.type !== 'unlink') {
+            console.log(`   🌐 Navigating to ${fileUrl}`);
+            await navigate(this.page, fileUrl);
+          }
 
           // Execute each action and report progress
           for (let i = 0; i < result.actions.length; i++) {
