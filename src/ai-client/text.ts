@@ -102,19 +102,88 @@ export class AnthropicTextClient extends BaseAIClient {
     super(config);
   }
 
-  async translateInstruction(_request: AITranslationRequest): Promise<AITranslationResponse> {
-    // Note: This is a placeholder for Anthropic integration
-    // In a real implementation, you would use the Anthropic SDK
-    console.warn('Anthropic client not yet implemented, falling back to pattern matching');
-    return {
-      actions: [],
-      confidence: 0,
-      reasoning: 'Anthropic client not yet implemented',
-    };
+  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
+    if (!this.config.apiKey) {
+      throw new Error('Anthropic API key not configured');
+    }
+
+    const { Anthropic } = await import('@anthropic-ai/sdk');
+    const anthropic = new Anthropic({
+      apiKey: this.config.apiKey,
+      timeout: this.config.timeout ?? DEFAULT_TIMEOUT_MS,
+      maxRetries: 0, // retries are driven by our withRetry below
+    });
+
+    // Claude uses a top-level `system` field rather than a system-role message.
+    const systemPrompt = `You are an expert at translating natural language instructions into structured browser automation actions.
+
+Available action types:
+- click: { type: 'click', selector: string }
+- fill: { type: 'fill', selector: string, text: string }
+- navigate: { type: 'navigate', url: string }
+
+Guidelines:
+- Use CSS selectors for targeting elements (prefer data-testid, id, or semantic selectors)
+- Be specific with selectors to avoid ambiguity
+- Break complex instructions into multiple actions
+- If an instruction is unclear, ask for clarification in the reasoning
+
+Respond with valid JSON matching this schema:
+{
+  "actions": Action[],
+  "confidence": number (0-1),
+  "reasoning": string
+}`;
+
+    const userPrompt = `Translate this instruction into browser actions: "${request.instruction}"
+
+${
+  request.context
+    ? `Context:
+- URL: ${request.context.url || 'unknown'}
+- Current page: ${request.context.currentPage || 'unknown'}
+- Previous actions: ${JSON.stringify(request.context.previousActions || [])}`
+    : ''
+}`;
+
+    try {
+      const response = await withRetry(
+        () =>
+          anthropic.messages.create({
+            model: this.config.model,
+            max_tokens: 1000,
+            temperature: 0.1,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+          }),
+        this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
+      );
+
+      const content = response.content[0];
+      if (!content || content.type !== 'text') {
+        throw new Error('Unexpected response type from Anthropic');
+      }
+
+      const parsed = JSON.parse(content.text);
+      return {
+        // Guard against malformed LLM output at this trust boundary: keep a
+        // legitimate confidence of 0 (|| would corrupt it to 0.5).
+        actions: Array.isArray(parsed.actions) ? parsed.actions : [],
+        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+        reasoning: parsed.reasoning,
+      };
+    } catch (error) {
+      console.error('Anthropic translation error:', formatError(error));
+      return {
+        actions: [],
+        confidence: 0,
+        reasoning: `Failed to translate: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      };
+    }
   }
 
   async isAvailable(): Promise<boolean> {
-    return false; // Not implemented yet
+    return !!this.config.apiKey;
   }
 }
 
