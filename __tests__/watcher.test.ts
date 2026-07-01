@@ -473,7 +473,7 @@ describe('FileWatcher execute-mode runtime', () => {
     );
   });
 
-  it('skips pre-navigation on unlink events (the file is gone)', async () => {
+  it('skips browser execution entirely on unlink events (the file is gone)', async () => {
     const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
 
     await watcher.start();
@@ -481,8 +481,10 @@ describe('FileWatcher execute-mode runtime', () => {
     unlinkCallback!('src/test.ts');
     await jest.advanceTimersByTimeAsync(60);
 
-    // No navigation attempt for a deleted file — goto would only 404.
+    // Neither navigation nor translated actions run for a deleted file: goto would
+    // only 404, and actions would otherwise hit the stale previously-opened page.
     expect(mockPage.goto).not.toHaveBeenCalled();
+    expect(mockExecutorInstance.executeAction).not.toHaveBeenCalled();
   });
 
   it('reports partial failure when one action fails but continues the loop', async () => {

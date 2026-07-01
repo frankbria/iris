@@ -12,6 +12,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { FileWatcher } from '../../src/watcher';
 
 const HTML = `<!doctype html>
@@ -70,7 +71,7 @@ describe('watch --execute real-browser E2E (issue #58)', () => {
     );
 
     const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(output).toContain(`Navigating to file://${htmlFile}`);
+    expect(output).toContain(`Navigating to ${pathToFileURL(htmlFile).href}`);
     expect(output).toContain('🎉 All 1 actions completed successfully!');
 
     logSpy.mockRestore();

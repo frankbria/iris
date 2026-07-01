@@ -172,8 +172,10 @@ export class FileWatcher {
         return;
       }
 
-      // Execute actions if enabled
-      if (this.options.execute) {
+      // Execute actions if enabled. Skip execution entirely on unlink: the file is
+      // gone, so there is nothing to navigate to, and running translated DOM actions
+      // against the stale reused page would act on the previous file's content.
+      if (this.options.execute && event.type !== 'unlink') {
         console.log('\n🚀 Executing actions in browser...');
 
         try {
@@ -188,12 +190,9 @@ export class FileWatcher {
 
           // Navigate to the changed file first so DOM-targeting actions run against
           // its real DOM rather than the blank page. This is execution setup, not a
-          // translated action, so it is not counted in executionResults. Skip on
-          // unlink events — the file is gone, so there is nothing to navigate to.
-          if (event.type !== 'unlink') {
-            console.log(`   🌐 Navigating to ${fileUrl}`);
-            await navigate(this.page, fileUrl);
-          }
+          // translated action, so it is not counted in executionResults.
+          console.log(`   🌐 Navigating to ${fileUrl}`);
+          await navigate(this.page, fileUrl);
 
           // Execute each action and report progress
           for (let i = 0; i < result.actions.length; i++) {
