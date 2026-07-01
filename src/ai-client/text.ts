@@ -166,8 +166,10 @@ ${
 
       const parsed = JSON.parse(content.text);
       return {
-        actions: parsed.actions || [],
-        confidence: parsed.confidence || 0.5,
+        // Guard against malformed LLM output at this trust boundary: keep a
+        // legitimate confidence of 0 (|| would corrupt it to 0.5).
+        actions: Array.isArray(parsed.actions) ? parsed.actions : [],
+        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
         reasoning: parsed.reasoning,
       };
     } catch (error) {

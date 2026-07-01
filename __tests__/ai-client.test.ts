@@ -172,6 +172,22 @@ describe('AI Client', () => {
       expect(result.confidence).toBe(0);
       expect(result.reasoning).toContain('Failed to translate: API Error');
     });
+
+    it('should preserve a legitimate confidence of 0', async () => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ actions: [], confidence: 0, reasoning: 'Unclear' }),
+          },
+        ],
+      });
+
+      const client = createAIClient(config);
+      const result = await client.translateInstruction({ instruction: 'do something' });
+
+      expect(result.confidence).toBe(0);
+    });
   });
 
   describe('Ollama Client', () => {
