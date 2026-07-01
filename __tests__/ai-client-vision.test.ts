@@ -100,8 +100,12 @@ describe('vision clients', () => {
     it('reports availability and vision support from model + key', async () => {
       expect(await new OpenAIVisionClient(config).isAvailable()).toBe(true);
       expect(new OpenAIVisionClient(config).supportsVision()).toBe(true);
-      expect(new OpenAIVisionClient({ provider: 'openai', apiKey: 'k', model: 'o1' }).supportsVision()).toBe(false);
-      expect(await new OpenAIVisionClient({ provider: 'openai', model: 'gpt-4o' }).isAvailable()).toBe(false);
+      expect(
+        new OpenAIVisionClient({ provider: 'openai', apiKey: 'k', model: 'o1' }).supportsVision(),
+      ).toBe(false);
+      expect(
+        await new OpenAIVisionClient({ provider: 'openai', model: 'gpt-4o' }).isAvailable(),
+      ).toBe(false);
     });
   });
 
@@ -147,7 +151,11 @@ describe('vision clients', () => {
     it('reports vision support only for claude-3 models', () => {
       expect(new AnthropicVisionClient(config).supportsVision()).toBe(true);
       expect(
-        new AnthropicVisionClient({ provider: 'anthropic', apiKey: 'k', model: 'claude-2' }).supportsVision(),
+        new AnthropicVisionClient({
+          provider: 'anthropic',
+          apiKey: 'k',
+          model: 'claude-2',
+        }).supportsVision(),
       ).toBe(false);
     });
   });

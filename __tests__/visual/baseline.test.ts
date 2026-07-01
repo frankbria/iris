@@ -202,12 +202,8 @@ describe('BaselineManager', () => {
       expect(result.buffer).toEqual(mockImageBuffer);
       expect(result.metadata).toEqual(mockMetadata);
       // The feature-branch image was probed (and missed) before main was read.
-      expect(mockFs.existsSync).toHaveBeenCalledWith(
-        expect.stringContaining('/feature-branch/'),
-      );
-      expect(mockFs.readFileSync).toHaveBeenCalledWith(
-        expect.stringContaining('/main/'),
-      );
+      expect(mockFs.existsSync).toHaveBeenCalledWith(expect.stringContaining('/feature-branch/'));
+      expect(mockFs.readFileSync).toHaveBeenCalledWith(expect.stringContaining('/main/'));
     });
   });
 

@@ -116,9 +116,9 @@ describe('AIVisualClassifier (real, backed by Phase 2A infrastructure)', () => {
     });
 
     it('throws on an unsupported provider', () => {
-      expect(
-        () => new AIVisualClassifier({ provider: 'bogus' as unknown as 'openai' }),
-      ).toThrow(/Unsupported AI provider/i);
+      expect(() => new AIVisualClassifier({ provider: 'bogus' as unknown as 'openai' })).toThrow(
+        /Unsupported AI provider/i,
+      );
     });
   });
 

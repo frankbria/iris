@@ -453,8 +453,9 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       };
       const factorySpy = jest
         .spyOn(AIClientFactory, 'create')
-        .mockImplementation((cfg: IrisConfig) =>
-          (cfg.ai.provider === 'ollama' ? ollamaClient : openaiClient) as never,
+        .mockImplementation(
+          (cfg: IrisConfig) =>
+            (cfg.ai.provider === 'ollama' ? ollamaClient : openaiClient) as never,
         );
 
       const client = createSmartClient(mockConfig, {
@@ -484,9 +485,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         analyzeVisualDiff: jest.fn(),
         isAvailable: jest.fn().mockResolvedValue(true),
       };
-      const factorySpy = jest
-        .spyOn(AIClientFactory, 'create')
-        .mockReturnValue(fakeClient as never);
+      const factorySpy = jest.spyOn(AIClientFactory, 'create').mockReturnValue(fakeClient as never);
       const budgetSpy = jest
         .spyOn(CostTracker.prototype, 'getBudgetStatus')
         .mockReturnValue({ circuitBreakerTriggered: true } as never);

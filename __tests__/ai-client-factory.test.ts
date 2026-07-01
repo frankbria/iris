@@ -34,7 +34,9 @@ describe('AIClientFactory', () => {
     });
 
     it('throws on an unsupported text provider', () => {
-      expect(() => AIClientFactory.create(cfg('bogus'), 'text')).toThrow(/Unsupported AI provider/i);
+      expect(() => AIClientFactory.create(cfg('bogus'), 'text')).toThrow(
+        /Unsupported AI provider/i,
+      );
     });
   });
 
