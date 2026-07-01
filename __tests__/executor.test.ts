@@ -340,7 +340,11 @@ describe('ActionExecutor', () => {
 
       const result = await executor.executeAction(action, page);
 
-      expect(result.duration).toBeGreaterThanOrEqual(100);
+      // setTimeout(100) + Date.now() deltas can under-measure by a millisecond
+      // or two (timer coalescing / sub-ms rounding), so allow a small tolerance
+      // below the nominal delay — the point is that duration reflects the ~100ms
+      // wait, not that it lands on exactly 100. See CI flake: measured 99.
+      expect(result.duration).toBeGreaterThanOrEqual(90);
       expect(result.duration).toBeLessThan(200); // Should complete quickly
     });
   });

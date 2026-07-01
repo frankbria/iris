@@ -1,5 +1,5 @@
 import { InvalidArgumentError } from 'commander';
-import { parseIntOption, parseFloatOption } from '../../src/utils/cli-options';
+import { parseIntOption, parseFloatOption, parseEnumOption } from '../../src/utils/cli-options';
 
 describe('cli-options numeric validation', () => {
   // One invalid value per CLI option (issue #33 acceptance criteria), plus a
@@ -55,5 +55,23 @@ describe('cli-options numeric validation', () => {
     expect(() => parseFloatOption('   ', { min: 0, max: 1, name: 'threshold' })).toThrow(
       InvalidArgumentError,
     );
+  });
+});
+
+describe('parseEnumOption (issue #56)', () => {
+  const allowed = ['breaking', 'moderate', 'minor'];
+
+  test('normalizes trim + case to the canonical value', () => {
+    expect(parseEnumOption(' Breaking ', allowed, 'fail-on')).toBe('breaking');
+    expect(parseEnumOption('MINOR', allowed, 'fail-on')).toBe('minor');
+  });
+
+  test('accepts an exact valid value', () => {
+    expect(parseEnumOption('moderate', allowed, 'fail-on')).toBe('moderate');
+  });
+
+  test('rejects a value outside the allowed set with a friendly error', () => {
+    expect(() => parseEnumOption('catastrophic', allowed, 'fail-on')).toThrow(InvalidArgumentError);
+    expect(() => parseEnumOption('catastrophic', allowed, 'fail-on')).toThrow('fail-on');
   });
 });
