@@ -15,10 +15,43 @@ export interface JsonRpcRequest {
 // RPC param schemas — validated at the dispatch boundary so handlers never
 // receive unvalidated input from the wire.
 const ExecuteCommandParams = z.object({ instruction: z.string().min(1) });
+
+// Discriminated-union Action schema — mirrors the `Action` type in translator.ts.
+// Replaces the former `z.array(z.any())` so navigate URLs (and every other action
+// field) are structurally validated at the dispatch boundary. Scheme/host policy
+// (SSRF, file://) is enforced downstream at the performAction navigate boundary.
+const ActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('click'), selector: z.string().min(1) }),
+  z.object({ type: z.literal('fill'), selector: z.string().min(1), text: z.string() }),
+  z.object({ type: z.literal('navigate'), url: z.string().url() }),
+]);
+
+// launchBrowser options are wire-controlled, so whitelist them. zod strips
+// unknown keys by default — critically dropping any client-supplied `urlPolicy`
+// (e.g. `allowFile: true`), so the RPC path can never opt out of the secure
+// default navigation policy on this unauthenticated surface.
+const LaunchBrowserOptions = z.object({
+  // Bounds are enforced because these come from the unauthenticated RPC wire: an
+  // unbounded retry/delay is a DoS, and timeout:0 would disable the page timeout
+  // entirely (hang the executor), so timeout is required to be positive.
+  retryAttempts: z.number().int().min(0).max(10).optional(),
+  retryDelay: z.number().int().min(0).max(60_000).optional(),
+  timeout: z.number().int().positive().max(600_000).optional(),
+  trackContext: z.boolean().optional(),
+  browserOptions: z
+    .object({
+      headless: z.boolean().optional(),
+      devtools: z.boolean().optional(),
+      slowMo: z.number().int().min(0).max(60_000).optional(),
+    })
+    .optional(),
+});
+
 const ExecuteBrowserActionParams = z.object({
   instruction: z.string().optional(),
-  actions: z.array(z.any()).optional(),
-  // only http(s) is navigable — file:/data: schemes are rejected here
+  actions: z.array(ActionSchema).optional(),
+  // Structural check on the optional context url; full scheme/host policy is
+  // applied where navigation actually happens (performAction / url-policy).
   url: z
     .string()
     .url()
@@ -110,8 +143,12 @@ export function startServer(
           }
 
           case 'launchBrowser': {
-            const { options: browserOptions } = req.params || {};
-            const session = await createBrowserSession(browserOptions);
+            const parsedOptions = LaunchBrowserOptions.safeParse(req.params?.options ?? {});
+            if (!parsedOptions.success) {
+              res.error = { code: -32602, message: 'Invalid params' };
+              break;
+            }
+            const session = await createBrowserSession(parsedOptions.data);
             sessions.set(ws, session);
             res.result = {
               success: true,

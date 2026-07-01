@@ -89,6 +89,7 @@ describe('ActionExecutor', () => {
       click: jest.fn().mockResolvedValue(undefined),
       fill: jest.fn().mockResolvedValue(undefined),
       setDefaultTimeout: jest.fn(),
+      route: jest.fn().mockResolvedValue(undefined),
       close: jest.fn().mockResolvedValue(undefined),
     } as any;
 
@@ -150,6 +151,35 @@ describe('ActionExecutor', () => {
       expect(launchBrowser).toHaveBeenCalledTimes(1);
       expect(newPage).toHaveBeenCalledWith(mockBrowser);
       expect(page).toBe(mockPage);
+    });
+
+    it('installs a per-request route guard that aborts blocked hosts and continues allowed ones', async () => {
+      // Capture the route handler registered on the page so we can drive it with
+      // synthetic requests — this deterministically covers the redirect-SSRF guard
+      // (a redirect hop to a metadata host arrives as a fresh request and is aborted).
+      let handler: (route: any) => void = () => {};
+      (mockPage.route as jest.Mock).mockImplementation(async (_pattern: string, h: any) => {
+        handler = h;
+      });
+
+      await executor.createPage();
+      expect(mockPage.route).toHaveBeenCalledWith('**/*', expect.any(Function));
+
+      const makeRoute = (url: string) => ({
+        request: () => ({ url: () => url }),
+        continue: jest.fn(),
+        abort: jest.fn(),
+      });
+
+      const allowed = makeRoute('https://example.com/');
+      handler(allowed);
+      expect(allowed.continue).toHaveBeenCalledTimes(1);
+      expect(allowed.abort).not.toHaveBeenCalled();
+
+      const blocked = makeRoute('http://169.254.169.254/latest/meta-data/');
+      handler(blocked);
+      expect(blocked.abort).toHaveBeenCalledTimes(1);
+      expect(blocked.continue).not.toHaveBeenCalled();
     });
 
     it('should cleanup browser resources', async () => {
@@ -314,6 +344,41 @@ describe('ActionExecutor', () => {
 
         expect(result.success).toBe(false);
         expect(result.error).toBe('net::ERR_NETWORK_TIMEOUT');
+      });
+
+      describe('URL policy enforcement (SSRF / local-file gate)', () => {
+        it('rejects file:// navigation without calling page.goto', async () => {
+          const action: Action = { type: 'navigate', url: 'file:///etc/passwd' };
+
+          const result = await executor.executeAction(action, page);
+
+          expect(result.success).toBe(false);
+          expect(result.error).toMatch(/blocked/i);
+          expect(navigate).not.toHaveBeenCalled();
+        });
+
+        it('rejects the cloud-metadata IP without retrying', async () => {
+          const action: Action = {
+            type: 'navigate',
+            url: 'http://169.254.169.254/latest/meta-data/',
+          };
+
+          const result = await executor.executeAction(action, page);
+
+          expect(result.success).toBe(false);
+          expect(result.error).toMatch(/blocked/i);
+          expect(navigate).not.toHaveBeenCalled();
+        });
+
+        it('allows file:// when the executor opts in', async () => {
+          const fileExecutor = new ActionExecutor({ urlPolicy: { allowFile: true } });
+          const action: Action = { type: 'navigate', url: 'file:///tmp/page.html' };
+
+          const result = await fileExecutor.executeAction(action, page);
+
+          expect(result.success).toBe(true);
+          expect(navigate).toHaveBeenCalledWith(page, 'file:///tmp/page.html');
+        });
       });
     });
 
@@ -517,7 +582,9 @@ describe('ActionExecutor', () => {
         retryDelay: 100,
       });
       const pageNoRetry = await executorNoRetry.createPage();
-      const action: Action = { type: 'navigate', url: 'invalid://url' };
+      // Policy-valid URL so this exercises the non-retryable *navigation error*
+      // path (below), not the URL-policy gate which rejects before goto.
+      const action: Action = { type: 'navigate', url: 'https://example.com' };
 
       // Simulate a non-retryable error (e.g., invalid URL)
       const invalidUrlError = new Error('Invalid URL');

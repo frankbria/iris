@@ -1,16 +1,30 @@
 import WebSocket from 'ws';
+import http from 'http';
 import { startServer, JsonRpcResponse } from '../src/protocol';
 
 describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
   let wss: ReturnType<typeof startServer>;
   const port = 5000;
 
-  beforeAll(() => {
+  // Ephemeral localhost page server. data:/file: navigation is now blocked by the
+  // URL policy, so integration tests navigate to a real http://127.0.0.1 page
+  // (loopback is allowed by default) instead of a data: URL.
+  let pageServer: http.Server;
+  let pageUrl: string;
+
+  beforeAll(async () => {
     wss = startServer(port);
+    pageServer = http.createServer((_req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end('<html><body><h1>Test Page</h1><button id="button">Click me</button></body></html>');
+    });
+    await new Promise<void>((resolve) => pageServer.listen(0, '127.0.0.1', () => resolve()));
+    const addr = pageServer.address();
+    pageUrl = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}/`;
   });
 
   afterAll((done) => {
-    wss.close(() => done());
+    pageServer.close(() => wss.close(() => done()));
   });
 
   function sendRequest(req: object): Promise<JsonRpcResponse> {
@@ -159,7 +173,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           id: 22,
           method: 'executeBrowserAction',
           params: {
-            instruction: 'navigate to data:text/html,<html><body><h1>Test Page</h1></body></html>',
+            instruction: `navigate to ${pageUrl}`,
           },
         };
         const actionRes = await sendRequestViaConnection(ws, actionReq);
@@ -219,10 +233,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           method: 'executeBrowserAction',
           params: {
             actions: [
-              {
-                type: 'navigate',
-                url: 'data:text/html,<html><body><button id="button">Click me</button></body></html>',
-              },
+              { type: 'navigate', url: pageUrl },
               { type: 'click', selector: '#button' },
             ],
           },
@@ -233,7 +244,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           success: expect.any(Boolean),
           results: expect.arrayContaining([
             expect.objectContaining({
-              action: { type: 'navigate', url: expect.stringContaining('data:text/html') },
+              action: { type: 'navigate', url: expect.stringContaining('127.0.0.1') },
               success: expect.any(Boolean),
             }),
             expect.objectContaining({
@@ -247,6 +258,42 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         // Close browser
         const closeReq = { jsonrpc: '2.0', id: 32, method: 'closeBrowser' };
         await sendRequestViaConnection(ws, closeReq);
+      } finally {
+        ws.close();
+      }
+    }, 30000);
+
+    // Note: the redirect-SSRF guard (a 30x to a metadata host is aborted by the
+    // per-request route) is covered deterministically in executor.test.ts — whether
+    // page.goto rejects after an aborted redirect is browser/env-dependent, so it is
+    // not asserted here.
+
+    test('launchBrowser ignores a client-supplied urlPolicy (cannot re-enable file://)', async () => {
+      const ws = await createPersistentConnection();
+
+      try {
+        // Malicious client tries to opt out of the local-file block.
+        await sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 55,
+          method: 'launchBrowser',
+          params: { options: { timeout: 4000, retryAttempts: 0, urlPolicy: { allowFile: true } } },
+        });
+
+        const actionRes = await sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 56,
+          method: 'executeBrowserAction',
+          params: { actions: [{ type: 'navigate', url: 'file:///etc/passwd' }] },
+        });
+
+        expect(actionRes.id).toBe(56);
+        // urlPolicy is stripped from wire options, so the default block still applies.
+        expect(actionRes.result.success).toBe(false);
+        expect(actionRes.result.results[0].success).toBe(false);
+        expect(actionRes.result.results[0].error).toMatch(/blocked/i);
+
+        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 57, method: 'closeBrowser' });
       } finally {
         ws.close();
       }
@@ -357,6 +404,80 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       expect(res.id).toBe(64);
       expect(res.error).toBeDefined();
       expect(res.error!.code).toBe(-32000); // got past validation, failed only on missing session
+    });
+
+    // The discriminated-union Action schema replaces the former z.array(z.any()),
+    // so malformed actions are rejected at the dispatch boundary (-32602) rather
+    // than reaching the executor.
+    test('executeBrowserAction rejects an unknown action type (-32602)', async () => {
+      const res = await sendRequest({
+        jsonrpc: '2.0',
+        id: 66,
+        method: 'executeBrowserAction',
+        params: { actions: [{ type: 'evil', payload: 'rm -rf' }] },
+      });
+      expect(res.id).toBe(66);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(-32602);
+    });
+
+    test('executeBrowserAction rejects a navigate action with a non-URL (-32602)', async () => {
+      const res = await sendRequest({
+        jsonrpc: '2.0',
+        id: 67,
+        method: 'executeBrowserAction',
+        params: { actions: [{ type: 'navigate', url: 'not a url' }] },
+      });
+      expect(res.id).toBe(67);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(-32602);
+    });
+
+    test('executeBrowserAction rejects a click action missing its selector (-32602)', async () => {
+      const res = await sendRequest({
+        jsonrpc: '2.0',
+        id: 68,
+        method: 'executeBrowserAction',
+        params: { actions: [{ type: 'click' }] },
+      });
+      expect(res.id).toBe(68);
+      expect(res.result).toBeUndefined();
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(-32602);
+    });
+
+    test('launchBrowser rejects out-of-range wire timings (timeout:0 / huge retries) (-32602)', async () => {
+      const zeroTimeout = await sendRequest({
+        jsonrpc: '2.0',
+        id: 90,
+        method: 'launchBrowser',
+        params: { options: { timeout: 0 } }, // 0 would disable the page timeout
+      });
+      expect(zeroTimeout.id).toBe(90);
+      expect(zeroTimeout.error?.code).toBe(-32602);
+
+      const hugeRetries = await sendRequest({
+        jsonrpc: '2.0',
+        id: 91,
+        method: 'launchBrowser',
+        params: { options: { retryAttempts: 100000 } },
+      });
+      expect(hugeRetries.error?.code).toBe(-32602);
+    });
+
+    // A well-formed action array passes the schema and reaches the session check.
+    test('executeBrowserAction with a well-formed navigate action passes validation', async () => {
+      const res = await sendRequest({
+        jsonrpc: '2.0',
+        id: 69,
+        method: 'executeBrowserAction',
+        params: { actions: [{ type: 'navigate', url: 'https://example.com' }] },
+      });
+      expect(res.id).toBe(69);
+      expect(res.error).toBeDefined();
+      expect(res.error!.code).toBe(-32000); // past validation, failed only on missing session
     });
   });
 
