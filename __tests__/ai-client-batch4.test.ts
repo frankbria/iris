@@ -365,9 +365,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         analyzeVisualDiff: analyzeSpy,
         isAvailable: jest.fn().mockResolvedValue(true),
       };
-      const factorySpy = jest
-        .spyOn(AIClientFactory, 'create')
-        .mockReturnValue(fakeClient as never);
+      const factorySpy = jest.spyOn(AIClientFactory, 'create').mockReturnValue(fakeClient as never);
       const preprocessSpy = jest
         .spyOn(ImagePreprocessor.prototype, 'preprocess')
         .mockImplementation(async (input) =>
