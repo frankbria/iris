@@ -235,7 +235,10 @@ program
     // origin-less local processes are locked out. Clients read the token below.
     const authToken = randomBytes(32).toString('hex');
     const wss = startServer(port, { authToken });
-    console.log(`JSON-RPC server listening on ws://localhost:${port}`);
+    // Print the real bind address: startServer binds 127.0.0.1 (IPv4 only), so
+    // advertising `localhost` would send dual-stack clients to ::1 and miss the
+    // listener — making the new auth handshake look broken.
+    console.log(`JSON-RPC server listening on ws://127.0.0.1:${port}`);
     console.log(`Auth token (send as "Authorization: Bearer <token>"):\n  ${authToken}`);
 
     // Close the server on Ctrl+C / termination so wss.on('close') drains
