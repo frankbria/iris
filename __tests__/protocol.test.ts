@@ -14,14 +14,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
 
   beforeAll(async () => {
     wss = startServer(port);
-    pageServer = http.createServer((req, res) => {
-      // A public URL that 30x-redirects to the cloud-metadata IP — used to prove
-      // the URL policy also guards redirect targets, not just the initial URL.
-      if (req.url === '/redirect-to-metadata') {
-        res.writeHead(302, { Location: 'http://169.254.169.254/latest/meta-data/' });
-        res.end();
-        return;
-      }
+    pageServer = http.createServer((_req, res) => {
       res.setHeader('Content-Type', 'text/html');
       res.end('<html><body><h1>Test Page</h1><button id="button">Click me</button></body></html>');
     });
@@ -270,38 +263,10 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       }
     }, 30000);
 
-    test('executeBrowserAction blocks a redirect to the metadata IP (SSRF)', async () => {
-      const ws = await createPersistentConnection();
-
-      try {
-        // Short nav timeout: a blocked redirect fails closed via navigation
-        // timeout, so keep it well under the RPC request wait.
-        await sendRequestViaConnection(ws, {
-          jsonrpc: '2.0',
-          id: 50,
-          method: 'launchBrowser',
-          params: { options: { timeout: 4000, retryAttempts: 0 } },
-        });
-
-        const actionRes = await sendRequestViaConnection(ws, {
-          jsonrpc: '2.0',
-          id: 51,
-          method: 'executeBrowserAction',
-          params: { actions: [{ type: 'navigate', url: `${pageUrl}redirect-to-metadata` }] },
-        });
-
-        expect(actionRes.id).toBe(51);
-        // The initial URL is public (passes the pre-goto check), but the 302 to
-        // 169.254.169.254 must be blocked by the per-request route guard — so the
-        // navigation fails and the metadata host is never reached.
-        expect(actionRes.result.success).toBe(false);
-        expect(actionRes.result.results[0].success).toBe(false);
-
-        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 52, method: 'closeBrowser' });
-      } finally {
-        ws.close();
-      }
-    }, 30000);
+    // Note: the redirect-SSRF guard (a 30x to a metadata host is aborted by the
+    // per-request route) is covered deterministically in executor.test.ts — whether
+    // page.goto rejects after an aborted redirect is browser/env-dependent, so it is
+    // not asserted here.
 
     test('launchBrowser ignores a client-supplied urlPolicy (cannot re-enable file://)', async () => {
       const ws = await createPersistentConnection();

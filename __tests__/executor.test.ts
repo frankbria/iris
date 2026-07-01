@@ -153,6 +153,35 @@ describe('ActionExecutor', () => {
       expect(page).toBe(mockPage);
     });
 
+    it('installs a per-request route guard that aborts blocked hosts and continues allowed ones', async () => {
+      // Capture the route handler registered on the page so we can drive it with
+      // synthetic requests — this deterministically covers the redirect-SSRF guard
+      // (a redirect hop to a metadata host arrives as a fresh request and is aborted).
+      let handler: (route: any) => void = () => {};
+      (mockPage.route as jest.Mock).mockImplementation(async (_pattern: string, h: any) => {
+        handler = h;
+      });
+
+      await executor.createPage();
+      expect(mockPage.route).toHaveBeenCalledWith('**/*', expect.any(Function));
+
+      const makeRoute = (url: string) => ({
+        request: () => ({ url: () => url }),
+        continue: jest.fn(),
+        abort: jest.fn(),
+      });
+
+      const allowed = makeRoute('https://example.com/');
+      handler(allowed);
+      expect(allowed.continue).toHaveBeenCalledTimes(1);
+      expect(allowed.abort).not.toHaveBeenCalled();
+
+      const blocked = makeRoute('http://169.254.169.254/latest/meta-data/');
+      handler(blocked);
+      expect(blocked.abort).toHaveBeenCalledTimes(1);
+      expect(blocked.continue).not.toHaveBeenCalled();
+    });
+
     it('should cleanup browser resources', async () => {
       await executor.launchBrowser();
       await executor.cleanup();
