@@ -187,34 +187,23 @@ describe('BaselineManager', () => {
       const mockImageBuffer = Buffer.from('main-baseline-data');
       const mockMetadata = { url: 'https://example.com', timestamp: 1234567890 };
 
-      // Directly specify the branch to avoid getCurrentBranch complexity
-      await baselineManager.loadBaseline(mockTestName, 'feature-branch');
-
-      // Mock for the specific paths this test will use
-      mockFs.existsSync
-        .mockImplementationOnce((path: any) => {
-          return path.includes('feature-branch') ? false : false; // feature-branch doesn't exist
-        })
-        .mockImplementationOnce((path: any) => {
-          return path.includes('feature-branch') ? false : false; // feature-branch metadata doesn't exist
-        })
-        .mockImplementationOnce((path: any) => {
-          return path.includes('main') ? true : false; // main image exists
-        })
-        .mockImplementationOnce((path: any) => {
-          return path.includes('main') ? true : false; // main metadata exists
-        });
-
+      // feature-branch has no baseline; only the main-branch paths exist. The
+      // loader iterates [feature-branch, main] and must fall through to main.
+      mockFs.existsSync.mockImplementation((p: any) => String(p).includes('/main/'));
       mockFs.readFileSync
         .mockReturnValueOnce(mockImageBuffer)
         .mockReturnValueOnce(JSON.stringify(mockMetadata));
 
       // Act
-      await baselineManager.loadBaseline(mockTestName, 'feature-branch');
+      const result = await baselineManager.loadBaseline(mockTestName, 'feature-branch');
 
-      // This test is complex due to mocking issues. Let's skip it for now
-      // and focus on completing the other tests
-      expect(true).toBe(true); // Placeholder to make test pass
+      // Assert — the main-branch baseline is returned via fallback.
+      expect(result.success).toBe(true);
+      expect(result.buffer).toEqual(mockImageBuffer);
+      expect(result.metadata).toEqual(mockMetadata);
+      // The feature-branch image was probed (and missed) before main was read.
+      expect(mockFs.existsSync).toHaveBeenCalledWith(expect.stringContaining('/feature-branch/'));
+      expect(mockFs.readFileSync).toHaveBeenCalledWith(expect.stringContaining('/main/'));
     });
   });
 
@@ -244,12 +233,12 @@ describe('BaselineManager', () => {
       // Act
       const info = await baselineManager.getBaselineInfo(mockTestName, 'main');
 
-      // Due to complex mocking issues with fs module, let's create a simplified test
-      // Focus on testing the logic without deep fs mocking
-      expect(typeof info).toBe('object');
-      expect('exists' in info).toBe(true);
-      // The actual behavior depends on fs.existsSync working, which has mocking issues
-      // Skip detailed assertions for now
+      // Assert — info reflects the existing baseline's stats + git metadata.
+      expect(info.exists).toBe(true);
+      expect(info.path).toContain('/main/');
+      expect(info.lastModified).toEqual(mockStats.mtime);
+      expect(info.gitBranch).toBe('main');
+      expect(info.gitCommit).toBe('abc123');
     });
 
     it('should return baseline not found when it does not exist', async () => {
