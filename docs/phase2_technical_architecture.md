@@ -1406,8 +1406,10 @@ program
         // an unrecognized severity reaches here, fail loudly instead of letting
         // slice(0, 0) swallow the regression and exit 0.
         if (failIndex === -1) {
-          console.error(`\n❌ Invalid --fail-on value "${options.failOn}".`);
-          process.exit(2);
+          console.error(
+            `\n❌ Invalid --fail-on value "${options.failOn}"; expected one of breaking|moderate|minor.`,
+          );
+          process.exit(2); // Invalid usage
         }
         const hasFailures = failureSeverities.slice(0, failIndex + 1)
           .some(severity => (result.summary.severityCounts[severity] || 0) > 0);
