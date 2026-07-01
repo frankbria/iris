@@ -368,6 +368,65 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       }
     });
 
+    describe('Authentication token', () => {
+      // A token-protected server: browsers can never set an Authorization header
+      // on a WebSocket, so only local tooling that supplies the bearer token
+      // (regardless of Origin) is allowed to drive the browser.
+      const authPort = 5002;
+      const authToken = 'test-secret-token';
+      let authWss: ReturnType<typeof startServer>;
+
+      beforeAll(async () => {
+        authWss = startServer(authPort, { authToken });
+        await new Promise<void>((resolve) => authWss.once('listening', resolve));
+      });
+
+      afterAll(async () => {
+        await new Promise<void>((resolve) => authWss.close(() => resolve()));
+      });
+
+      function closeCodeFor(headers?: Record<string, string>): Promise<number> {
+        return new Promise((resolve, reject) => {
+          const ws = new WebSocket(`ws://127.0.0.1:${authPort}`, { headers });
+          ws.on('close', (code) => resolve(code));
+          ws.on('error', reject);
+        });
+      }
+
+      test('rejects a connection with no auth token (1008)', async () => {
+        expect(await closeCodeFor()).toBe(1008);
+      });
+
+      test('rejects a connection with a wrong auth token (1008)', async () => {
+        expect(await closeCodeFor({ authorization: 'Bearer wrong-token' })).toBe(1008);
+      });
+
+      // "Do not treat absent Origin as trusted": an origin-less client with no
+      // token is still rejected, closing the pre-auth hole in the origin-only guard.
+      test('rejects an origin-less connection lacking a token (1008)', async () => {
+        // ws sends no Origin header by default (non-browser client).
+        expect(await closeCodeFor()).toBe(1008);
+      });
+
+      test('accepts a connection presenting the correct bearer token', async () => {
+        const res = await new Promise<JsonRpcResponse>((resolve, reject) => {
+          const ws = new WebSocket(`ws://127.0.0.1:${authPort}`, {
+            headers: { authorization: `Bearer ${authToken}` },
+          });
+          ws.on('open', () =>
+            ws.send(JSON.stringify({ jsonrpc: '2.0', id: 80, method: 'getStatus' })),
+          );
+          ws.on('message', (d) => {
+            resolve(JSON.parse(d.toString()));
+            ws.close();
+          });
+          ws.on('error', reject);
+        });
+        expect(res.result).toEqual({ status: 'ready' });
+        expect(res.error).toBeUndefined();
+      });
+    });
+
     test('executeCommand with missing instruction returns invalid params (-32602)', async () => {
       const req = { jsonrpc: '2.0', id: 60, method: 'executeCommand', params: {} };
       const res = await sendRequest(req);

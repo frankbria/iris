@@ -43,8 +43,15 @@ describe('CLI Commands', () => {
     const sigtermBefore = process.listeners('SIGTERM').length;
 
     await runCli(['node', 'iris', 'connect']);
-    expect(consoleOutput).toContain('JSON-RPC server listening on ws://localhost:4000');
-    expect(startServerSpy).toHaveBeenCalledWith(4000);
+    expect(consoleOutput).toContain('JSON-RPC server listening on ws://127.0.0.1:4000');
+    // connect now generates a per-session auth token and passes it to the server,
+    // and prints it so local tooling can send it as an Authorization: Bearer header.
+    expect(startServerSpy).toHaveBeenCalledWith(4000, {
+      authToken: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(consoleOutput).toEqual(
+      expect.arrayContaining([expect.stringContaining('Authorization: Bearer <token>')]),
+    );
 
     // Clean up the signal listeners the action registered so they don't leak.
     for (const l of process.listeners('SIGINT').slice(sigintBefore)) {

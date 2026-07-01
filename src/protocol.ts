@@ -1,4 +1,5 @@
 import WebSocket, { WebSocketServer } from 'ws';
+import { timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { translateSync, translate, Action } from './translator';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
@@ -90,7 +91,12 @@ export interface BrowserStatus {
  */
 export function startServer(
   port: number,
-  options?: { sessionTimeout?: number; host?: string; allowedOrigins?: string[] },
+  options?: {
+    sessionTimeout?: number;
+    host?: string;
+    allowedOrigins?: string[];
+    authToken?: string;
+  },
 ): WebSocketServer {
   const host = options?.host ?? '127.0.0.1';
   const wss = new WebSocketServer({ port, host });
@@ -117,6 +123,16 @@ export function startServer(
     const allowedOrigins = options?.allowedOrigins ?? [];
     if (origin && !allowedOrigins.includes(origin)) {
       ws.close(1008, 'Origin not allowed');
+      return;
+    }
+
+    // Require a per-connection bearer token when the server is token-protected.
+    // The token travels in the Authorization header, which a browser page cannot
+    // set on a WebSocket — so this closes the pre-auth hole where an origin-less
+    // (or same-origin) local process could drive the browser unauthenticated.
+    // Absent Origin is NOT treated as trusted: no token means rejected.
+    if (options?.authToken && !hasValidToken(request.headers.authorization, options.authToken)) {
+      ws.close(1008, 'Unauthorized');
       return;
     }
 
@@ -375,6 +391,20 @@ async function cleanupSession(
     }
     sessions.delete(ws);
   }
+}
+
+/**
+ * Constant-time check of an `Authorization: Bearer <token>` header against the
+ * expected token. Length is compared first (timingSafeEqual throws on unequal
+ * lengths); the token length is not secret, so this leaks nothing useful.
+ */
+function hasValidToken(authHeader: string | undefined, expected: string): boolean {
+  if (!authHeader?.startsWith('Bearer ')) {
+    return false;
+  }
+  const provided = Buffer.from(authHeader.slice('Bearer '.length));
+  const want = Buffer.from(expected);
+  return provided.length === want.length && timingSafeEqual(provided, want);
 }
 
 /**
