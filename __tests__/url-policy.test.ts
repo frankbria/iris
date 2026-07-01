@@ -25,7 +25,9 @@ describe('assertNavigationAllowed', () => {
     });
 
     it('allows file:// when opted in', () => {
-      expect(() => assertNavigationAllowed('file:///tmp/page.html', { allowFile: true })).not.toThrow();
+      expect(() =>
+        assertNavigationAllowed('file:///tmp/page.html', { allowFile: true }),
+      ).not.toThrow();
     });
   });
 
@@ -74,22 +76,34 @@ describe('assertNavigationAllowed', () => {
     });
 
     it('blocks loopback when blockPrivateHosts is set', () => {
-      expect(() => assertNavigationAllowed('http://localhost:3000', { blockPrivateHosts: true })).toThrow();
-      expect(() => assertNavigationAllowed('http://127.0.0.1/', { blockPrivateHosts: true })).toThrow();
+      expect(() =>
+        assertNavigationAllowed('http://localhost:3000', { blockPrivateHosts: true }),
+      ).toThrow();
+      expect(() =>
+        assertNavigationAllowed('http://127.0.0.1/', { blockPrivateHosts: true }),
+      ).toThrow();
       expect(() => assertNavigationAllowed('http://[::1]/', { blockPrivateHosts: true })).toThrow();
     });
 
     it('blocks RFC1918 ranges when blockPrivateHosts is set', () => {
-      expect(() => assertNavigationAllowed('http://10.0.0.5/', { blockPrivateHosts: true })).toThrow();
-      expect(() => assertNavigationAllowed('http://172.16.5.4/', { blockPrivateHosts: true })).toThrow();
-      expect(() => assertNavigationAllowed('http://192.168.0.1/', { blockPrivateHosts: true })).toThrow();
+      expect(() =>
+        assertNavigationAllowed('http://10.0.0.5/', { blockPrivateHosts: true }),
+      ).toThrow();
+      expect(() =>
+        assertNavigationAllowed('http://172.16.5.4/', { blockPrivateHosts: true }),
+      ).toThrow();
+      expect(() =>
+        assertNavigationAllowed('http://192.168.0.1/', { blockPrivateHosts: true }),
+      ).toThrow();
     });
 
     it('still allows public hosts when blockPrivateHosts is set', () => {
       expect(() =>
         assertNavigationAllowed('https://example.com', { blockPrivateHosts: true }),
       ).not.toThrow();
-      expect(() => assertNavigationAllowed('http://8.8.8.8/', { blockPrivateHosts: true })).not.toThrow();
+      expect(() =>
+        assertNavigationAllowed('http://8.8.8.8/', { blockPrivateHosts: true }),
+      ).not.toThrow();
     });
   });
 });

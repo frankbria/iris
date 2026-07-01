@@ -192,10 +192,7 @@ export class ActionExecutor {
       try {
         // Bound title retrieval: after a blocked/aborted navigation the frame can
         // leave page.title() pending indefinitely, so race it against a short timer.
-        title = await Promise.race([
-          page.title(),
-          this.delay(2000).then(() => undefined),
-        ]);
+        title = await Promise.race([page.title(), this.delay(2000).then(() => undefined)]);
       } catch {
         // Title retrieval failed, but we can still return URL
         title = undefined;
