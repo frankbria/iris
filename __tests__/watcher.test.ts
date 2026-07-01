@@ -39,9 +39,12 @@ jest.mock('../src/db', () => ({
 }));
 
 // Mock executor
+// Shared mock Page: execute mode now navigates the page before running actions,
+// so the page must expose a goto() that the real browser.navigate() helper calls.
+const mockPage = { goto: jest.fn().mockResolvedValue(undefined) };
 const mockExecutorInstance = {
   launchBrowser: jest.fn().mockResolvedValue({}),
-  createPage: jest.fn().mockResolvedValue({}),
+  createPage: jest.fn().mockResolvedValue(mockPage),
   executeAction: jest.fn().mockResolvedValue({
     success: true,
     action: { type: 'click', selector: '#test' },
@@ -448,6 +451,12 @@ describe('FileWatcher execute-mode runtime', () => {
 
     changeCallback!('src/test.ts');
     await jest.advanceTimersByTimeAsync(60);
+
+    // The page is navigated to the changed file before any action runs, so
+    // DOM-targeting actions operate on the real page instead of about:blank.
+    expect(mockPage.goto).toHaveBeenCalledWith(
+      `file://${path.resolve(process.cwd(), 'src/test.ts')}`,
+    );
 
     // The single default action from the translator mock is executed.
     expect(mockExecutorInstance.executeAction).toHaveBeenCalledTimes(1);
