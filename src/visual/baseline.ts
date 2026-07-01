@@ -27,10 +27,11 @@ export class BaselineManager {
     testName: string,
     imageBuffer: Buffer,
     metadata: BaselineMetadata,
+    reference?: string,
   ): Promise<BaselineSaveResult> {
     try {
-      // Get current git information
-      const branch = metadata.gitBranch || (await this.getCurrentBranch());
+      // Directory reference precedence: explicit override → metadata.gitBranch → current branch.
+      const branch = reference || metadata.gitBranch || (await this.getCurrentBranch());
       const commit = metadata.gitCommit || (await this.getCurrentCommit());
 
       // Generate paths
@@ -245,6 +246,46 @@ export class BaselineManager {
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  }
+
+  /**
+   * Resolve a configured baseline {strategy, reference} into the path-safe
+   * directory key used to store/look up baselines. `branch`/`commit` use the
+   * reference verbatim; `tag` is resolved to its commit hash via git (falling
+   * back to the tag name with a warning if resolution fails).
+   */
+  async resolveReference(
+    strategy: 'branch' | 'commit' | 'tag',
+    reference: string,
+  ): Promise<string> {
+    let resolved = reference;
+
+    if (strategy === 'tag') {
+      try {
+        resolved = (await this.git.revparse([reference])).trim() || reference;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        process.stderr.write(
+          `[iris] Warning: could not resolve tag '${reference}' to a commit (${reason}); ` +
+            `using the tag name as the baseline key.\n`,
+        );
+        resolved = reference;
+      }
+    }
+
+    return this.sanitizeReference(resolved);
+  }
+
+  /**
+   * Sanitize a reference for safe file system usage. Mirrors StorageManager's
+   * sanitizeBranchName so slashy refs (e.g. `feature/foo`) are path-safe while
+   * plain names (`main`) and commit SHAs pass through unchanged.
+   */
+  private sanitizeReference(reference: string): string {
+    return reference
+      .replace(/[^a-zA-Z0-9-_]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
   }
 
   /**

@@ -290,6 +290,7 @@ iris visual-diff [options]
 Options:
   --pages <patterns>       Page patterns (comma-separated, default: /)
   --baseline <reference>   Baseline branch/commit (default: main)
+  --baseline-strategy <s>  Interpret --baseline as branch|commit|tag (default: branch)
   --semantic              Enable AI semantic analysis
   --threshold <value>     Pixel threshold 0-1 (default: 0.1)
   --devices <list>        Devices: desktop,tablet,mobile (default: desktop)

@@ -344,8 +344,18 @@ export class VisualTestRunner {
       const fs = await import('fs');
       fs.writeFileSync(screenshotPath, screenshotBuffer.buffer);
 
+      // Resolve the configured baseline reference (honors --baseline / strategy).
+      // Falls back to undefined so BaselineManager uses the current git branch
+      // when no baseline config is present.
+      const resolvedRef = this.config.baseline
+        ? await this.baselineManager.resolveReference(
+            this.config.baseline.strategy,
+            this.config.baseline.reference,
+          )
+        : undefined;
+
       // Load baseline
-      const baselineResult = await this.baselineManager.loadBaseline(testName);
+      const baselineResult = await this.baselineManager.loadBaseline(testName, resolvedRef);
 
       // If updating baselines or no baseline exists
       if (this.config.updateBaseline || !baselineResult.success) {
@@ -353,6 +363,7 @@ export class VisualTestRunner {
           testName,
           screenshotBuffer.buffer,
           screenshotBuffer.metadata,
+          resolvedRef,
         );
 
         // A failed save must surface as a failure, not a silent passed:true —
