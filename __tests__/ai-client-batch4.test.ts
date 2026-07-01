@@ -419,6 +419,97 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       factorySpy.mockRestore();
       preprocessSpy.mockRestore();
     });
+
+    // Bypass sharp: give every preprocess a deterministic hash/buffer.
+    const stubPreprocess = () =>
+      jest.spyOn(ImagePreprocessor.prototype, 'preprocess').mockImplementation(async (input) =>
+        Promise.resolve({
+          buffer: Buffer.isBuffer(input) ? input : Buffer.from(String(input)),
+          hash: Buffer.isBuffer(input) ? input.toString('hex') : String(input),
+          base64: '',
+          format: 'jpeg',
+          width: 1,
+          height: 1,
+          originalSize: 1,
+          processedSize: 1,
+        } as never),
+      );
+
+    it('advances past a failing provider to the next in the fallback chain', async () => {
+      const preprocessSpy = stubPreprocess();
+      const ollamaClient = {
+        analyzeVisualDiff: jest.fn().mockRejectedValue(new Error('ollama down')),
+        isAvailable: jest.fn().mockResolvedValue(true),
+      };
+      const openaiResult = {
+        severity: 'minor' as const,
+        confidence: 0.8,
+        reasoning: 'from openai',
+        categories: ['color' as const],
+      };
+      const openaiClient = {
+        analyzeVisualDiff: jest.fn().mockResolvedValue(openaiResult),
+        isAvailable: jest.fn().mockResolvedValue(true),
+      };
+      const factorySpy = jest
+        .spyOn(AIClientFactory, 'create')
+        .mockImplementation((cfg: IrisConfig) =>
+          (cfg.ai.provider === 'ollama' ? ollamaClient : openaiClient) as never,
+        );
+
+      const client = createSmartClient(mockConfig, {
+        enableFallback: true,
+        fallbackChain: ['ollama', 'openai', 'anthropic'],
+        cacheConfig: { dbPath: ':memory:' },
+        costConfig: { dbPath: ':memory:' },
+      });
+
+      const result = await client.analyzeVisualDiff({
+        baseline: Buffer.from('b'),
+        current: Buffer.from('c'),
+      });
+
+      expect(result).toEqual(openaiResult);
+      expect(ollamaClient.analyzeVisualDiff).toHaveBeenCalledTimes(1); // tried and failed
+      expect(openaiClient.analyzeVisualDiff).toHaveBeenCalledTimes(1); // succeeded
+
+      client.close();
+      factorySpy.mockRestore();
+      preprocessSpy.mockRestore();
+    });
+
+    it('throws when the budget circuit breaker is tripped (no API call made)', async () => {
+      const preprocessSpy = stubPreprocess();
+      const fakeClient = {
+        analyzeVisualDiff: jest.fn(),
+        isAvailable: jest.fn().mockResolvedValue(true),
+      };
+      const factorySpy = jest
+        .spyOn(AIClientFactory, 'create')
+        .mockReturnValue(fakeClient as never);
+      const budgetSpy = jest
+        .spyOn(CostTracker.prototype, 'getBudgetStatus')
+        .mockReturnValue({ circuitBreakerTriggered: true } as never);
+
+      const client = createSmartClient(
+        { ...mockConfig, ai: { ...mockConfig.ai, provider: 'openai' } },
+        {
+          enableFallback: false,
+          cacheConfig: { dbPath: ':memory:' },
+          costConfig: { dbPath: ':memory:' },
+        },
+      );
+
+      await expect(
+        client.analyzeVisualDiff({ baseline: Buffer.from('b'), current: Buffer.from('c') }),
+      ).rejects.toThrow(/circuit breaker activated/i);
+      expect(fakeClient.analyzeVisualDiff).not.toHaveBeenCalled();
+
+      client.close();
+      factorySpy.mockRestore();
+      budgetSpy.mockRestore();
+      preprocessSpy.mockRestore();
+    });
   });
 
   describe('Integration: Cache + Cost Tracker + Smart Client', () => {
