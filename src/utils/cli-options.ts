@@ -48,9 +48,7 @@ export function parseFloatOption(raw: string, range: NumericRange): number {
 export function parseEnumOption(raw: string, allowed: string[], name: string): string {
   const value = raw.trim().toLowerCase();
   if (!allowed.includes(value)) {
-    throw new InvalidArgumentError(
-      `${name} must be one of ${allowed.join('|')} (got "${raw}").`,
-    );
+    throw new InvalidArgumentError(`${name} must be one of ${allowed.join('|')} (got "${raw}").`);
   }
   return value;
 }
