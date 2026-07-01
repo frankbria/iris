@@ -28,19 +28,22 @@ export class VisualCaptureEngine {
 
       let buffer: Buffer;
 
+      // Playwright rejects `quality` for png screenshots — only forward it for jpeg.
+      const quality = config.type === 'jpeg' ? config.quality : undefined;
+
       // Capture screenshot based on selector
       if (config.selector) {
         const locator = page.locator(config.selector);
         await locator.waitFor({ state: 'visible' });
         buffer = await locator.screenshot({
-          quality: config.quality,
+          quality,
           type: config.type,
         });
       } else {
         buffer = await page.screenshot({
           fullPage: config.fullPage,
           animations: config.disableAnimations ? 'disabled' : 'allow',
-          quality: config.quality,
+          quality,
           type: config.type,
           clip: config.clip,
         });
