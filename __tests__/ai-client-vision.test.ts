@@ -195,8 +195,14 @@ describe('vision clients', () => {
 
     it('surfaces a non-ok HTTP response as an error', async () => {
       global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
-      const client = new OllamaVisionClient(config);
+      // maxRetries:0 — 500 is transient, so the default config would retry ~3x
+      // with backoff and slow the test; we only need one deterministic attempt.
+      const client = new OllamaVisionClient({
+        ...config,
+        retryConfig: { maxRetries: 0, initialDelayMs: 0, backoffMultiplier: 1 },
+      });
       await expect(client.analyzeVisualDiff(request)).rejects.toThrow(/Ollama request failed: 500/);
+      expect((global.fetch as jest.Mock).mock.calls).toHaveLength(1);
     });
 
     it('isAvailable() true only when a llava-family model is present', async () => {
