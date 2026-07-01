@@ -129,6 +129,9 @@ export class SmartAIVisionClient {
       ? this.config.fallbackChain
       : [this.irisConfig.ai.provider];
 
+    // Context influences the analysis, so it is part of the cache identity.
+    const contextKey = request.context ? JSON.stringify(request.context) : '';
+
     let lastError: Error | null = null;
 
     for (const providerName of providers) {
@@ -144,6 +147,7 @@ export class SmartAIVisionClient {
           currentProcessed.hash,
           providerName,
           model,
+          contextKey,
         );
 
         const cached = this.cache.get(cacheKey);
@@ -192,6 +196,7 @@ export class SmartAIVisionClient {
             currentProcessed.hash,
             providerName,
             model,
+            contextKey,
           );
           this.cache.set(cacheKey, result, providerName, model);
         }

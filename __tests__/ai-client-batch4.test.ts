@@ -40,6 +40,19 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       expect(key1).toBe('openai:gpt-4o:hash1:hash2');
     });
 
+    it('should fold context into the cache key so identical images differ by context', () => {
+      const noContext = cache.generateKey('hash1', 'hash2', 'openai', 'gpt-4o');
+      const withCtx = cache.generateKey('hash1', 'hash2', 'openai', 'gpt-4o', '{"url":"/a"}');
+      const otherCtx = cache.generateKey('hash1', 'hash2', 'openai', 'gpt-4o', '{"url":"/b"}');
+
+      // Empty context keeps the legacy key format (backward compatible)
+      expect(noContext).toBe('openai:gpt-4o:hash1:hash2');
+      // Non-empty context produces a distinct key per context value
+      expect(withCtx).toBe('openai:gpt-4o:hash1:hash2:{"url":"/a"}');
+      expect(withCtx).not.toBe(noContext);
+      expect(withCtx).not.toBe(otherCtx);
+    });
+
     it('should store and retrieve cached results', () => {
       const key = cache.generateKey('baseline', 'current', 'openai', 'gpt-4o');
       const value = {
