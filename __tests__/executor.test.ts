@@ -89,6 +89,7 @@ describe('ActionExecutor', () => {
       click: jest.fn().mockResolvedValue(undefined),
       fill: jest.fn().mockResolvedValue(undefined),
       setDefaultTimeout: jest.fn(),
+      route: jest.fn().mockResolvedValue(undefined),
       close: jest.fn().mockResolvedValue(undefined),
     } as any;
 
@@ -315,6 +316,41 @@ describe('ActionExecutor', () => {
         expect(result.success).toBe(false);
         expect(result.error).toBe('net::ERR_NETWORK_TIMEOUT');
       });
+
+      describe('URL policy enforcement (SSRF / local-file gate)', () => {
+        it('rejects file:// navigation without calling page.goto', async () => {
+          const action: Action = { type: 'navigate', url: 'file:///etc/passwd' };
+
+          const result = await executor.executeAction(action, page);
+
+          expect(result.success).toBe(false);
+          expect(result.error).toMatch(/blocked/i);
+          expect(navigate).not.toHaveBeenCalled();
+        });
+
+        it('rejects the cloud-metadata IP without retrying', async () => {
+          const action: Action = {
+            type: 'navigate',
+            url: 'http://169.254.169.254/latest/meta-data/',
+          };
+
+          const result = await executor.executeAction(action, page);
+
+          expect(result.success).toBe(false);
+          expect(result.error).toMatch(/blocked/i);
+          expect(navigate).not.toHaveBeenCalled();
+        });
+
+        it('allows file:// when the executor opts in', async () => {
+          const fileExecutor = new ActionExecutor({ urlPolicy: { allowFile: true } });
+          const action: Action = { type: 'navigate', url: 'file:///tmp/page.html' };
+
+          const result = await fileExecutor.executeAction(action, page);
+
+          expect(result.success).toBe(true);
+          expect(navigate).toHaveBeenCalledWith(page, 'file:///tmp/page.html');
+        });
+      });
     });
 
     it('should not track context when trackContext is false', async () => {
@@ -517,7 +553,9 @@ describe('ActionExecutor', () => {
         retryDelay: 100,
       });
       const pageNoRetry = await executorNoRetry.createPage();
-      const action: Action = { type: 'navigate', url: 'invalid://url' };
+      // Policy-valid URL so this exercises the non-retryable *navigation error*
+      // path (below), not the URL-policy gate which rejects before goto.
+      const action: Action = { type: 'navigate', url: 'https://example.com' };
 
       // Simulate a non-retryable error (e.g., invalid URL)
       const invalidUrlError = new Error('Invalid URL');

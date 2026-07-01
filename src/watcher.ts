@@ -294,6 +294,9 @@ export class FileWatcher {
           headless: this.options.headless,
           devtools: !this.options.headless, // Enable devtools in non-headless mode
         },
+        // The watcher renders the changed local file, so file:// navigation is
+        // expected and opted in here (blocked by default everywhere else).
+        urlPolicy: { allowFile: true },
       };
 
       this.executor = new ActionExecutor(executorOptions);

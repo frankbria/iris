@@ -9,6 +9,7 @@ import {
   typeText,
   BrowserLaunchOptions,
 } from './browser';
+import { assertNavigationAllowed, isNavigationAllowed, UrlPolicyOptions } from './url-policy';
 
 export interface ExecutionResult {
   success: boolean;
@@ -28,6 +29,8 @@ export interface ActionExecutorOptions {
   timeout?: number;
   trackContext?: boolean;
   browserOptions?: BrowserLaunchOptions;
+  /** Navigation URL policy applied at the performAction boundary (defaults: http(s)-only, file:// off, metadata/link-local blocked). */
+  urlPolicy?: UrlPolicyOptions;
 }
 
 export interface PageContext {
@@ -41,8 +44,11 @@ export interface PageContext {
  * error handling, and browser lifecycle management.
  */
 export class ActionExecutor {
-  private readonly options: Required<Omit<ActionExecutorOptions, 'browserOptions'>> & {
+  private readonly options: Required<
+    Omit<ActionExecutorOptions, 'browserOptions' | 'urlPolicy'>
+  > & {
     browserOptions: BrowserLaunchOptions;
+    urlPolicy: UrlPolicyOptions;
   };
   private browser: Browser | null = null;
 
@@ -53,6 +59,7 @@ export class ActionExecutor {
       timeout: options.timeout ?? 30000,
       trackContext: options.trackContext ?? true,
       browserOptions: options.browserOptions ?? { headless: true },
+      urlPolicy: options.urlPolicy ?? {},
     };
   }
 
@@ -80,6 +87,17 @@ export class ActionExecutor {
       }
 
       const page = await newPage(this.browser!);
+
+      // Enforce the URL policy on EVERY request the page makes, not just the
+      // initial navigate action URL — this closes the redirect-based SSRF bypass
+      // where a public URL 30x-redirects to a metadata/link-local host.
+      await page.route('**/*', (route) => {
+        if (isNavigationAllowed(route.request().url(), this.options.urlPolicy)) {
+          route.continue();
+        } else {
+          route.abort('blockedbyclient');
+        }
+      });
 
       // Set timeout if configured
       if (this.options.timeout) {
@@ -172,7 +190,12 @@ export class ActionExecutor {
       let title: string | undefined;
 
       try {
-        title = await page.title();
+        // Bound title retrieval: after a blocked/aborted navigation the frame can
+        // leave page.title() pending indefinitely, so race it against a short timer.
+        title = await Promise.race([
+          page.title(),
+          this.delay(2000).then(() => undefined),
+        ]);
       } catch {
         // Title retrieval failed, but we can still return URL
         title = undefined;
@@ -220,6 +243,9 @@ export class ActionExecutor {
         break;
 
       case 'navigate':
+        // Single security boundary: reject non-web schemes and SSRF/local-file
+        // targets before any page.goto. All RPC/AI/pattern navs funnel through here.
+        assertNavigationAllowed(action.url, this.options.urlPolicy);
         await navigate(page, action.url);
         break;
 
@@ -238,6 +264,7 @@ export class ActionExecutor {
     // Don't retry on certain types of errors
     const nonRetryablePatterns = [
       'invalid url',
+      'navigation blocked',
       'browser has been closed',
       'page has been closed',
       'element is read-only',
