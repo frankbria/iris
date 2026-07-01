@@ -62,6 +62,11 @@ describe('assertNavigationAllowed', () => {
     it('rejects the trailing-dot FQDN metadata variant', () => {
       expect(() => assertNavigationAllowed('http://metadata.google.internal./')).toThrow();
     });
+
+    it('rejects IPv4-mapped IPv6 forms of the metadata IP', () => {
+      expect(() => assertNavigationAllowed('http://[::ffff:169.254.169.254]/')).toThrow();
+      expect(() => assertNavigationAllowed('http://[::ffff:a9fe:a9fe]/')).toThrow(); // hex 0xa9fe=169.254
+    });
   });
 
   describe('loopback / RFC1918 (opt-in blocking)', () => {
@@ -83,6 +88,15 @@ describe('assertNavigationAllowed', () => {
         assertNavigationAllowed('http://127.0.0.1/', { blockPrivateHosts: true }),
       ).toThrow();
       expect(() => assertNavigationAllowed('http://[::1]/', { blockPrivateHosts: true })).toThrow();
+    });
+
+    it('blocks IPv4-mapped IPv6 loopback/RFC1918 when blockPrivateHosts is set', () => {
+      expect(() =>
+        assertNavigationAllowed('http://[::ffff:127.0.0.1]/', { blockPrivateHosts: true }),
+      ).toThrow();
+      expect(() =>
+        assertNavigationAllowed('http://[::ffff:10.0.0.5]/', { blockPrivateHosts: true }),
+      ).toThrow();
     });
 
     it('blocks RFC1918 ranges when blockPrivateHosts is set', () => {

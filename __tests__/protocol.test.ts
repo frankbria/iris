@@ -448,6 +448,25 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       expect(res.error!.code).toBe(-32602);
     });
 
+    test('launchBrowser rejects out-of-range wire timings (timeout:0 / huge retries) (-32602)', async () => {
+      const zeroTimeout = await sendRequest({
+        jsonrpc: '2.0',
+        id: 90,
+        method: 'launchBrowser',
+        params: { options: { timeout: 0 } }, // 0 would disable the page timeout
+      });
+      expect(zeroTimeout.id).toBe(90);
+      expect(zeroTimeout.error?.code).toBe(-32602);
+
+      const hugeRetries = await sendRequest({
+        jsonrpc: '2.0',
+        id: 91,
+        method: 'launchBrowser',
+        params: { options: { retryAttempts: 100000 } },
+      });
+      expect(hugeRetries.error?.code).toBe(-32602);
+    });
+
     // A well-formed action array passes the schema and reaches the session check.
     test('executeBrowserAction with a well-formed navigate action passes validation', async () => {
       const res = await sendRequest({

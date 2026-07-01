@@ -31,15 +31,18 @@ const ActionSchema = z.discriminatedUnion('type', [
 // (e.g. `allowFile: true`), so the RPC path can never opt out of the secure
 // default navigation policy on this unauthenticated surface.
 const LaunchBrowserOptions = z.object({
-  retryAttempts: z.number().int().nonnegative().optional(),
-  retryDelay: z.number().int().nonnegative().optional(),
-  timeout: z.number().int().nonnegative().optional(),
+  // Bounds are enforced because these come from the unauthenticated RPC wire: an
+  // unbounded retry/delay is a DoS, and timeout:0 would disable the page timeout
+  // entirely (hang the executor), so timeout is required to be positive.
+  retryAttempts: z.number().int().min(0).max(10).optional(),
+  retryDelay: z.number().int().min(0).max(60_000).optional(),
+  timeout: z.number().int().positive().max(600_000).optional(),
   trackContext: z.boolean().optional(),
   browserOptions: z
     .object({
       headless: z.boolean().optional(),
       devtools: z.boolean().optional(),
-      slowMo: z.number().int().nonnegative().optional(),
+      slowMo: z.number().int().min(0).max(60_000).optional(),
     })
     .optional(),
 });
