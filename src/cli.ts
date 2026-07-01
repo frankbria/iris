@@ -227,8 +227,16 @@ program
   )
   .action(async (port: number) => {
     const { startServer } = await import('./protocol');
-    const wss = startServer(port);
+    const { randomBytes } = await import('crypto');
+
+    // Per-session token. The server binds to 127.0.0.1 (loopback only) and now
+    // also requires this token in an `Authorization: Bearer` header — a browser
+    // page cannot set that header, so cross-site WebSocket hijacking and other
+    // origin-less local processes are locked out. Clients read the token below.
+    const authToken = randomBytes(32).toString('hex');
+    const wss = startServer(port, { authToken });
     console.log(`JSON-RPC server listening on ws://localhost:${port}`);
+    console.log(`Auth token (send as "Authorization: Bearer <token>"):\n  ${authToken}`);
 
     // Close the server on Ctrl+C / termination so wss.on('close') drains
     // in-flight sessions (executor.cleanup) instead of being skipped. Existing
