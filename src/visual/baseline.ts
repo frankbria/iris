@@ -262,7 +262,9 @@ export class BaselineManager {
 
     if (strategy === 'tag') {
       try {
-        resolved = (await this.git.revparse([reference])).trim() || reference;
+        // Peel annotated tags to the underlying commit so two tags on the same
+        // commit share a baseline key (revparse alone returns the tag object SHA).
+        resolved = (await this.git.revparse([`${reference}^{commit}`])).trim() || reference;
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         process.stderr.write(

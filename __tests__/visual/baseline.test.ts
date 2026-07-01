@@ -464,7 +464,7 @@ describe('BaselineManager', () => {
 
       const resolved = await freshManager.resolveReference('tag', 'v1.0.0');
 
-      expect(mockGit.revparse).toHaveBeenCalledWith(['v1.0.0']);
+      expect(mockGit.revparse).toHaveBeenCalledWith(['v1.0.0^{commit}']);
       expect(resolved).toBe('deadbeefcafe');
     });
 
