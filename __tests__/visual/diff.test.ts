@@ -63,17 +63,17 @@ describe('VisualDiffEngine', () => {
       expect(result.pixelDifference).toBe(1500);
       expect(result.similarity).toBeCloseTo(0.9992, 3); // (1920*1080 - 1500) / (1920*1080)
       expect(result.threshold).toBe(0.1);
-      expect(result.passed).toBe(true); // similarity > threshold
+      expect(result.passed).toBe(true); // 1500/2073600 ≈ 0.07% differ, well under the 10% max
       expect(result.diffBuffer).toBeDefined();
       expect(mockPixelmatch).toHaveBeenCalled();
     });
 
-    it('should fail comparison when similarity below threshold', async () => {
-      // Arrange
-      mockPixelmatch.mockReturnValue(300000); // Many different pixels
+    it('should fail comparison when pixel difference exceeds threshold', async () => {
+      // Arrange: 300000/2073600 ≈ 14.5% of pixels differ — a modest regression
+      mockPixelmatch.mockReturnValue(300000);
 
       const options: DiffOptions = {
-        threshold: 0.9, // Higher than the expected similarity
+        threshold: 0.1, // default: max 10% of pixels may differ
         includeAA: false,
         alpha: 0.1,
         diffMask: true,
@@ -83,7 +83,7 @@ describe('VisualDiffEngine', () => {
       // Act
       const result = await diffEngine.compare(mockBaselineBuffer, mockCurrentBuffer, options);
 
-      // Assert
+      // Assert: 14.5% differing exceeds the 10% allowance, so it must fail
       expect(result.success).toBe(true);
       expect(result.pixelDifference).toBe(300000);
       expect(result.similarity).toBeLessThan(0.9);

@@ -264,7 +264,7 @@ program
   .option('--semantic', 'Enable AI-powered semantic analysis', false)
   .option(
     '--threshold <value>',
-    'Pixel difference threshold (0-1)',
+    'Max fraction of pixels allowed to differ, 0-1 (default 0.1 = 10%)',
     (v) => parseFloatOption(v, { min: 0, max: 1, name: 'threshold' }),
     0.1,
   )

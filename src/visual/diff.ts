@@ -135,7 +135,9 @@ export class VisualDiffEngine {
 
       // Calculate similarity
       const similarity = (totalPixels - pixelDifference) / totalPixels;
-      const passed = similarity >= options.threshold;
+      // threshold is the maximum allowed fraction of differing pixels
+      // (default 0.1 = up to 10% of pixels may differ before failing)
+      const passed = pixelDifference / totalPixels <= options.threshold;
 
       // Generate diff image
       const diffImageBuffer = await this.generateDiffImage(

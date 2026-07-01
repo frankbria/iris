@@ -61,7 +61,7 @@ interface VisualTestConfig {
   url: string;                         // URL to test
   viewport?: Viewport;                 // Optional viewport dimensions
   selector?: string;                   // Optional element selector
-  threshold?: number;                  // Similarity threshold (0-1), default: 0.1
+  threshold?: number;                  // Max fraction of pixels allowed to differ (0-1), default: 0.1
   ignoreRegions?: IgnoreRegion[];     // Areas to exclude from comparison
   waitForSelector?: string;            // Wait for element before capture
   waitForTimeout?: number;             // Max wait time in ms, default: 5000
@@ -177,7 +177,7 @@ interface VisualTestRunnerConfig {
     };
   };
   diff: {
-    threshold: number;                // Similarity threshold (0-1)
+    threshold: number;                // Max fraction of pixels allowed to differ (0-1)
     semanticAnalysis: boolean;        // Enable AI analysis
     aiProvider?: 'openai' | 'claude' | 'ollama';
     antiAliasing: boolean;
@@ -289,7 +289,7 @@ async compare(
 
 ```typescript
 interface DiffOptions {
-  threshold: number;              // Similarity threshold (0-1)
+  threshold: number;              // Max fraction of pixels allowed to differ (0-1)
   includeAA: boolean;            // Include anti-aliasing detection
   alpha: number;                 // Alpha threshold (0-1)
   diffMask: boolean;             // Generate diff mask
