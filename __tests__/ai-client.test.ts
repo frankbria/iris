@@ -13,6 +13,16 @@ jest.mock('openai', () => ({
   })),
 }));
 
+// Mock Anthropic
+const mockMessagesCreate = jest.fn();
+jest.mock('@anthropic-ai/sdk', () => ({
+  Anthropic: jest.fn().mockImplementation(() => ({
+    messages: {
+      create: mockMessagesCreate,
+    },
+  })),
+}));
+
 // Mock fetch for Ollama
 global.fetch = jest.fn();
 
@@ -109,13 +119,50 @@ describe('AI Client', () => {
       expect(client).toBeDefined();
     });
 
-    it('should not be available (not implemented)', async () => {
+    it('should be available when API key is provided', async () => {
       const client = createAIClient(config);
+      const isAvailable = await client.isAvailable();
+      expect(isAvailable).toBe(true);
+    });
+
+    it('should not be available without API key', async () => {
+      const configWithoutKey = {
+        ...config,
+        ai: { ...config.ai, apiKey: undefined },
+      };
+      const client = createAIClient(configWithoutKey);
       const isAvailable = await client.isAvailable();
       expect(isAvailable).toBe(false);
     });
 
-    it('should return placeholder response', async () => {
+    it('should translate instruction successfully', async () => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              actions: [{ type: 'click', selector: '#submit' }],
+              confidence: 0.9,
+              reasoning: 'Clear click instruction',
+            }),
+          },
+        ],
+      });
+
+      const client = createAIClient(config);
+      const result = await client.translateInstruction({
+        instruction: 'click the submit button',
+      });
+
+      expect(result.actions).toHaveLength(1);
+      expect(result.actions[0]).toEqual({ type: 'click', selector: '#submit' });
+      expect(result.confidence).toBe(0.9);
+      expect(result.reasoning).toBe('Clear click instruction');
+    });
+
+    it('should handle API errors gracefully', async () => {
+      mockMessagesCreate.mockRejectedValue(new Error('API Error'));
+
       const client = createAIClient(config);
       const result = await client.translateInstruction({
         instruction: 'click submit',
@@ -123,7 +170,7 @@ describe('AI Client', () => {
 
       expect(result.actions).toHaveLength(0);
       expect(result.confidence).toBe(0);
-      expect(result.reasoning).toBe('Anthropic client not yet implemented');
+      expect(result.reasoning).toContain('Failed to translate: API Error');
     });
   });
 
