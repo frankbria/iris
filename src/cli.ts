@@ -261,6 +261,12 @@ program
   .description('Run visual regression testing')
   .option('--pages <patterns>', 'Page patterns to test (comma-separated)', '/')
   .option('--baseline <reference>', 'Baseline branch or commit', 'main')
+  .option(
+    '--baseline-strategy <strategy>',
+    'How to interpret --baseline (branch|commit|tag)',
+    (v) => parseEnumOption(v, ['branch', 'commit', 'tag'], 'baseline-strategy'),
+    'branch',
+  )
   .option('--semantic', 'Enable AI-powered semantic analysis', false)
   .option(
     '--threshold <value>',
@@ -302,7 +308,7 @@ program
       const runner = new VisualTestRunner({
         pages: options.pages.split(',').map((p: string) => p.trim()),
         baseline: {
-          strategy: 'branch' as const,
+          strategy: options.baselineStrategy,
           reference: options.baseline,
         },
         capture: {

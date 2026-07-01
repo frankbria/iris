@@ -28,6 +28,7 @@ describe('BaselineManager', () => {
       branch: jest.fn(),
       log: jest.fn(),
       checkIsRepo: jest.fn(),
+      revparse: jest.fn(),
     } as any;
     mockSimpleGit.mockReturnValue(mockGit);
 
@@ -440,6 +441,49 @@ describe('BaselineManager', () => {
       expect(path).toContain('test-with-special-chars'); // Sanitized filename
       expect(path).not.toMatch(/test\/with:special\*chars/); // Original special chars should be gone
       expect(path.endsWith('.png')).toBe(true);
+    });
+  });
+
+  describe('resolveReference()', () => {
+    it('returns the reference unchanged for branch strategy', async () => {
+      const resolved = await baselineManager.resolveReference('branch', 'main');
+      expect(resolved).toBe('main');
+      expect(mockGit.revparse).not.toHaveBeenCalled();
+    });
+
+    it('returns the reference unchanged for commit strategy', async () => {
+      const resolved = await baselineManager.resolveReference('commit', 'abc123def');
+      expect(resolved).toBe('abc123def');
+      expect(mockGit.revparse).not.toHaveBeenCalled();
+    });
+
+    it('resolves a tag to its commit hash via git', async () => {
+      mockGit.revparse.mockResolvedValue('deadbeefcafe\n' as any);
+      // Construct after wiring the mock so this.git binds to the current mockGit.
+      const freshManager = new BaselineManager(mockBaselineDir);
+
+      const resolved = await freshManager.resolveReference('tag', 'v1.0.0');
+
+      expect(mockGit.revparse).toHaveBeenCalledWith(['v1.0.0^{commit}']);
+      expect(resolved).toBe('deadbeefcafe');
+    });
+
+    it('falls back to the tag name and warns when tag resolution fails', async () => {
+      mockGit.revparse.mockRejectedValue(new Error('unknown revision'));
+      const stderrSpy = jest.spyOn(process.stderr, 'write').mockReturnValue(true);
+      const freshManager = new BaselineManager(mockBaselineDir);
+
+      const resolved = await freshManager.resolveReference('tag', 'missing-tag');
+
+      expect(resolved).toBe('missing-tag');
+      expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('missing-tag'));
+      stderrSpy.mockRestore();
+    });
+
+    it('sanitizes references containing slashes to path-safe keys', async () => {
+      const resolved = await baselineManager.resolveReference('branch', 'feature/foo');
+      expect(resolved).toBe('feature-foo');
+      expect(resolved).not.toContain('/');
     });
   });
 

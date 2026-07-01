@@ -134,6 +134,11 @@ describe('VisualTestRunner', () => {
         metadata: {},
       }),
       saveBaseline: jest.fn().mockResolvedValue({ success: true, path: '/test/baseline.png' }),
+      // Pass-through resolver: returns the configured reference verbatim so tests
+      // can assert the runner forwards it (mirrors the real branch-strategy path).
+      resolveReference: jest
+        .fn()
+        .mockImplementation((_strategy: string, reference: string) => Promise.resolve(reference)),
     } as any;
 
     (BaselineManager as jest.MockedClass<typeof BaselineManager>).mockImplementation(
@@ -841,6 +846,37 @@ describe('VisualTestRunner', () => {
       const result = await visualRunner.run();
 
       expect(result.summary.failed).toBe(2);
+    });
+  });
+
+  describe('baseline reference threading (issue #57)', () => {
+    it('forwards the configured reference to loadBaseline, not the current branch', async () => {
+      const runner = new VisualTestRunner({
+        ...defaultConfig,
+        baseline: { strategy: 'branch' as const, reference: 'develop' },
+      });
+
+      await runner.run();
+
+      expect(mockBaselineManager.resolveReference).toHaveBeenCalledWith('branch', 'develop');
+      expect(mockBaselineManager.loadBaseline).toHaveBeenCalledWith(expect.any(String), 'develop');
+    });
+
+    it('forwards the configured reference to saveBaseline when updating baselines', async () => {
+      const runner = new VisualTestRunner({
+        ...defaultConfig,
+        updateBaseline: true,
+        baseline: { strategy: 'branch' as const, reference: 'develop' },
+      });
+
+      await runner.run();
+
+      expect(mockBaselineManager.saveBaseline).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.anything(),
+        expect.anything(),
+        'develop',
+      );
     });
   });
 });
