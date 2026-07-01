@@ -8,6 +8,8 @@ import {
   createCostTracker,
   createSmartClient,
 } from '../src/ai-client';
+import { AIClientFactory } from '../src/ai-client/factory';
+import { ImagePreprocessor } from '../src/ai-client/preprocessor';
 import { IrisConfig } from '../src/config';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -346,6 +348,65 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
       expect(client).toBeDefined();
       client.close();
+    });
+
+    // Regression test for issue #60 (P0.7): cache read/write keys must stay in
+    // sync so a repeated identical request hits cache and issues no second API
+    // call. Uses the configured provider/model (gpt-4o-mini) — not the hardcoded
+    // per-provider default (gpt-4o) — to prove irisConfig.ai.model is honored.
+    it('should serve a repeated request from cache without a second API call', async () => {
+      const analyzeSpy = jest.fn().mockResolvedValue({
+        severity: 'minor',
+        confidence: 0.9,
+        reasoning: 'Cached-path change',
+        categories: ['color'],
+      });
+      const fakeClient = {
+        analyzeVisualDiff: analyzeSpy,
+        isAvailable: jest.fn().mockResolvedValue(true),
+      };
+      const factorySpy = jest
+        .spyOn(AIClientFactory, 'create')
+        .mockReturnValue(fakeClient as never);
+      const preprocessSpy = jest
+        .spyOn(ImagePreprocessor.prototype, 'preprocess')
+        .mockImplementation(async (input) =>
+          Promise.resolve({
+            buffer: Buffer.isBuffer(input) ? input : Buffer.from(String(input)),
+            hash: Buffer.isBuffer(input) ? input.toString('hex') : String(input),
+            base64: '',
+            format: 'jpeg',
+            width: 1,
+            height: 1,
+            originalSize: 1,
+            processedSize: 1,
+          } as never),
+        );
+
+      const client = createSmartClient(
+        { ...mockConfig, ai: { ...mockConfig.ai, provider: 'openai', model: 'gpt-4o-mini' } },
+        {
+          enableFallback: false,
+          cacheConfig: { dbPath: ':memory:' },
+          costConfig: { dbPath: ':memory:' },
+        },
+      );
+
+      const request = { baseline: Buffer.from('base'), current: Buffer.from('curr') };
+
+      const first = await client.analyzeVisualDiff(request);
+      const second = await client.analyzeVisualDiff(request);
+
+      expect(first).toEqual(second);
+      expect(analyzeSpy).toHaveBeenCalledTimes(1); // second call served from cache
+
+      const cacheStats = client.getCacheStats();
+      expect(cacheStats?.hits).toBe(1);
+      expect(cacheStats?.misses).toBe(1);
+
+      client.close();
+      factorySpy.mockRestore();
+      preprocessSpy.mockRestore();
     });
   });
 
