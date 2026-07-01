@@ -363,6 +363,72 @@ describe('visual-diff CLI command', () => {
       expect(processExitSpy).toHaveBeenCalledWith(5);
     });
 
+    it('should still exit 5 for a mis-cased/whitespace --fail-on value with a breaking regression', async () => {
+      // Regression for #56: " Breaking " must normalize (trim + lowercase) and
+      // still trigger the failure exit code, not silently pass via indexOf(-1).
+      jest.doMock('../src/visual/visual-runner', () => ({
+        VisualTestRunner: jest.fn().mockImplementation(() => ({
+          run: jest.fn().mockResolvedValue({
+            summary: {
+              totalComparisons: 1,
+              passed: 0,
+              failed: 1,
+              newBaselines: 0,
+              overallStatus: 'failed',
+              severityCounts: { breaking: 1, moderate: 0, minor: 0 },
+            },
+            results: [],
+            duration: 1000,
+          }),
+        })),
+      }));
+
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+
+      try {
+        await freshRunCli(['node', 'iris', 'visual-diff', '--fail-on', ' Breaking ']);
+      } catch {
+        // Expected to throw due to process.exit mock
+      }
+
+      expect(processExitSpy).toHaveBeenCalledWith(5);
+    });
+
+    it('should reject an invalid --fail-on value with a non-zero exit instead of passing', async () => {
+      // Regression for #56: a genuinely invalid value must fail validation, not
+      // slip through and exit 0 while regressions exist.
+      jest.doMock('../src/visual/visual-runner', () => ({
+        VisualTestRunner: jest.fn().mockImplementation(() => ({
+          run: jest.fn().mockResolvedValue({
+            summary: {
+              totalComparisons: 1,
+              passed: 0,
+              failed: 1,
+              newBaselines: 0,
+              overallStatus: 'failed',
+              severityCounts: { breaking: 1, moderate: 0, minor: 0 },
+            },
+            results: [],
+            duration: 1000,
+          }),
+        })),
+      }));
+
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+
+      try {
+        await freshRunCli(['node', 'iris', 'visual-diff', '--fail-on', 'catastrophic']);
+      } catch {
+        // Expected to throw: commander exits non-zero on InvalidArgumentError
+      }
+
+      // Never exit 0; commander rejects the bad value before the runner runs.
+      expect(processExitSpy).not.toHaveBeenCalledWith(0);
+      expect(processExitSpy).toHaveBeenCalled();
+    });
+
     it('should exit with 3 when command execution fails', async () => {
       jest.doMock('../src/visual/visual-runner', () => ({
         VisualTestRunner: jest.fn().mockImplementation(() => ({

@@ -36,3 +36,21 @@ export function parseIntOption(raw: string, range: NumericRange): number {
 export function parseFloatOption(raw: string, range: NumericRange): number {
   return parse(raw, range, false);
 }
+
+/**
+ * Parse and validate an enum CLI option against an allowed set.
+ *
+ * Trims and lowercases the input before checking membership, so templated YAML
+ * whitespace or mis-cased values (e.g. " Breaking ") normalize instead of
+ * silently failing validation. Throws commander's `InvalidArgumentError` on a
+ * value outside `allowed` so commander prints a friendly message and exits 1.
+ */
+export function parseEnumOption(raw: string, allowed: string[], name: string): string {
+  const value = raw.trim().toLowerCase();
+  if (!allowed.includes(value)) {
+    throw new InvalidArgumentError(
+      `${name} must be one of ${allowed.join('|')} (got "${raw}").`,
+    );
+  }
+  return value;
+}
