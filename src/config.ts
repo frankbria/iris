@@ -126,7 +126,13 @@ export function saveConfig(config: IrisConfig): void {
 }
 
 function loadFromEnvironment(): IrisConfig {
-  const config = { ...DEFAULT_CONFIG };
+  // Clone nested objects too — a shallow copy would let the mutations below
+  // write through to the shared DEFAULT_CONFIG (issue #63).
+  const config: IrisConfig = {
+    ai: { ...DEFAULT_CONFIG.ai },
+    watch: { ...DEFAULT_CONFIG.watch },
+    browser: { ...DEFAULT_CONFIG.browser },
+  };
 
   // Load AI configuration from environment
   if (process.env.OPENAI_API_KEY) {
