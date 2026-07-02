@@ -110,6 +110,24 @@ describe('Config System', () => {
       delete process.env.OLLAMA_ENDPOINT;
       delete process.env.OLLAMA_MODEL;
     });
+
+    it('should not leak env-driven state into subsequent loads (issue #63)', () => {
+      mockOs.homedir.mockReturnValue('/home/test');
+      mockFs.existsSync.mockReturnValue(false);
+
+      process.env.ANTHROPIC_API_KEY = 'ant-test-key';
+      const first = loadConfig();
+      expect(first.ai.provider).toBe('anthropic');
+      expect(first.ai.model).toBe('claude-3-haiku-20240307');
+
+      delete process.env.ANTHROPIC_API_KEY;
+      const second = loadConfig();
+
+      expect(second.ai.provider).toBe('openai');
+      expect(second.ai.model).toBe('gpt-4o-mini');
+      expect(second.ai.apiKey).toBeUndefined();
+      expect(second.ai).not.toBe(first.ai);
+    });
   });
 
   describe('validateConfig', () => {
