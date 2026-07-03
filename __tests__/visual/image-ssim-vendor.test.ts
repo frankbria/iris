@@ -48,9 +48,24 @@ describe('vendored image-ssim', () => {
       for (let i = 0; i < data.length; i++) data[i] = fill(i);
       return { data, width: 16, height: 16, channels: Channels.RGB };
     };
-    expect(compare(grey((i) => (i * 3) % 256), grey((i) => (i * 3) % 256)).ssim).toBeCloseTo(1, 5);
-    expect(compare(rgb((i) => (i * 5) % 256), rgb((i) => (i * 5) % 256)).ssim).toBeCloseTo(1, 5);
-    expect(compare(rgb(() => 40), rgb((i) => (i * 11) % 256)).ssim).toBeLessThan(0.9);
+    expect(
+      compare(
+        grey((i) => (i * 3) % 256),
+        grey((i) => (i * 3) % 256),
+      ).ssim,
+    ).toBeCloseTo(1, 5);
+    expect(
+      compare(
+        rgb((i) => (i * 5) % 256),
+        rgb((i) => (i * 5) % 256),
+      ).ssim,
+    ).toBeCloseTo(1, 5);
+    expect(
+      compare(
+        rgb(() => 40),
+        rgb((i) => (i * 11) % 256),
+      ).ssim,
+    ).toBeLessThan(0.9);
   });
 
   it('throws when image sizes differ', () => {
