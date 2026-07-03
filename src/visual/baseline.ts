@@ -185,7 +185,7 @@ export class BaselineManager {
   async listBaselines(branch?: string): Promise<string[]> {
     try {
       const targetBranch = branch || (await this.getCurrentBranch());
-      const branchDir = path.join(this.baselineDir, targetBranch);
+      const branchDir = this.getBranchDir(targetBranch);
 
       if (!fs.existsSync(branchDir)) {
         return [];
@@ -207,7 +207,7 @@ export class BaselineManager {
   async cleanupOldBaselines(maxAgeDays: number, branch?: string): Promise<BaselineCleanupResult> {
     try {
       const targetBranch = branch || (await this.getCurrentBranch());
-      const branchDir = path.join(this.baselineDir, targetBranch);
+      const branchDir = this.getBranchDir(targetBranch);
 
       if (!fs.existsSync(branchDir)) {
         return { success: true, deletedCount: 0 };
@@ -291,11 +291,26 @@ export class BaselineManager {
   }
 
   /**
+   * Resolve the storage directory for a branch, sanitizing the branch name and
+   * verifying the result stays inside baselineDir so caller-supplied branch
+   * names cannot traverse out of the baseline directory.
+   */
+  private getBranchDir(branch: string): string {
+    const safeBranch = this.sanitizeReference(branch);
+    const base = path.resolve(this.baselineDir);
+    const dir = path.resolve(base, safeBranch);
+    if (dir !== base && !dir.startsWith(base + path.sep)) {
+      throw new Error(`Branch '${branch}' resolves outside the baseline directory`);
+    }
+    return dir;
+  }
+
+  /**
    * Generate baseline image path for a test name and branch
    */
   generateBaselinePath(testName: string, branch: string): string {
     const sanitizedTestName = this.sanitizeTestName(testName);
-    return path.join(this.baselineDir, branch, `${sanitizedTestName}.png`);
+    return path.join(this.getBranchDir(branch), `${sanitizedTestName}.png`);
   }
 
   /**
@@ -303,7 +318,7 @@ export class BaselineManager {
    */
   private generateMetadataPath(testName: string, branch: string): string {
     const sanitizedTestName = this.sanitizeTestName(testName);
-    return path.join(this.baselineDir, branch, `${sanitizedTestName}.json`);
+    return path.join(this.getBranchDir(branch), `${sanitizedTestName}.json`);
   }
 
   /**

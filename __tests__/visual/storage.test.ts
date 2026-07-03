@@ -470,11 +470,35 @@ describe('StorageManager', () => {
       expect(fs.existsSync(testDir)).toBe(true);
     });
 
-    it('should reject path traversal attempts', async () => {
-      const maliciousPath = path.join(tempDir, '../../../etc/passwd');
+    it('should reject path traversal to an existing file outside the base directory', async () => {
+      // The file must exist so loadImage gets past the existence check and
+      // actually reaches the traversal guard (previously it returned null
+      // before the guard ran, giving the test zero coverage of it).
+      const outsideDir = path.join(__dirname, '../../.outside-of-test-storage');
+      fs.mkdirSync(outsideDir, { recursive: true });
+      const outsideFile = path.join(outsideDir, 'secret.png');
+      fs.writeFileSync(outsideFile, 'sentinel');
 
-      // loadImage should reject paths outside base directory
-      await expect(storage.loadImage(maliciousPath)).resolves.toBeNull();
+      try {
+        const traversal = path.join(tempDir, '..', '.outside-of-test-storage', 'secret.png');
+        await expect(storage.loadImage(traversal)).rejects.toThrow('Invalid image path');
+      } finally {
+        fs.rmSync(outsideDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should reject sibling directories sharing the base directory prefix', async () => {
+      // `${baseDir}-evil` passes a separator-less startsWith(baseDir) check
+      const evilDir = `${tempDir}-evil`;
+      fs.mkdirSync(evilDir, { recursive: true });
+      const evilFile = path.join(evilDir, 'image.png');
+      fs.writeFileSync(evilFile, 'sentinel');
+
+      try {
+        await expect(storage.loadImage(evilFile)).rejects.toThrow('Invalid image path');
+      } finally {
+        fs.rmSync(evilDir, { recursive: true, force: true });
+      }
     });
   });
 });

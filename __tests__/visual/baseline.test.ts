@@ -34,6 +34,7 @@ describe('BaselineManager', () => {
 
     // Setup path mock
     mockPath.join.mockImplementation((...args) => args.join('/'));
+    mockPath.resolve.mockImplementation((...args) => args.join('/'));
     mockPath.dirname.mockImplementation((p) => p.split('/').slice(0, -1).join('/'));
     mockPath.extname.mockImplementation((file) =>
       file.endsWith('.png') ? '.png' : file.endsWith('.json') ? '.json' : '.txt',
