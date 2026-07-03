@@ -2,6 +2,8 @@ import { Browser, chromium, Page } from 'playwright';
 
 export interface BrowserLaunchOptions {
   headless?: boolean;
+  /** Accepted for API compatibility but ignored: Playwright >=1.61 removed the
+   * deprecated `devtools` launch option. Removal of this path is tracked in #78. */
   devtools?: boolean;
   slowMo?: number;
 }
@@ -12,7 +14,6 @@ export interface BrowserLaunchOptions {
 export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise<Browser> {
   return await chromium.launch({
     headless: options.headless ?? true,
-    devtools: options.devtools ?? false,
     slowMo: options.slowMo ?? 0,
   });
 }
