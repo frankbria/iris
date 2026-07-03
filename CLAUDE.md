@@ -156,7 +156,7 @@ plans/
 - TypeScript compilation from `src/` to `dist/`
 - CommonJS modules targeting ES2020
 - Strict TypeScript configuration
-- Node.js >=20.0.0 required
+- Node.js >=20.9.0 required
 
 ## Key Dependencies
 

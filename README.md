@@ -629,7 +629,7 @@ _Metrics last verified: 2026-06-26_
 ## Dependencies
 
 **Core:**
-- Node.js >=20.0.0
+- Node.js >=20.9.0
 - TypeScript 5.1.6
 - Playwright 1.35.0
 - Commander 11.0.0
