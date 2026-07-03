@@ -12,8 +12,10 @@ export interface BrowserLaunchOptions {
 export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise<Browser> {
   return await chromium.launch({
     headless: options.headless ?? true,
-    devtools: options.devtools ?? false,
     slowMo: options.slowMo ?? 0,
+    // Playwright >=1.61 removed the deprecated `devtools` launch option; this
+    // Chromium arg is its documented equivalent.
+    args: options.devtools ? ['--auto-open-devtools-for-tabs'] : [],
   });
 }
 

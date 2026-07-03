@@ -6,7 +6,7 @@ import sharp from 'sharp';
 // Mock dependencies
 jest.mock('pixelmatch');
 jest.mock('sharp');
-jest.mock('image-ssim');
+jest.mock('../../src/vendor/image-ssim');
 
 const mockPixelmatch = pixelmatch as jest.MockedFunction<typeof pixelmatch>;
 
@@ -33,9 +33,9 @@ describe('VisualDiffEngine', () => {
     // Mock the sharp function to return our instance
     (sharp as jest.MockedFunction<any>).mockReturnValue(mockSharpInstance);
 
-    // image-ssim exports { Channels, compare }; compare() is auto-mocked and
-    // synchronous. Default it to a successful comparison; individual tests override.
-    const mockImageSsim = require('image-ssim');
+    // The vendored image-ssim exports { Channels, compare }; compare() is auto-mocked
+    // and synchronous. Default it to a successful comparison; individual tests override.
+    const mockImageSsim = require('../../src/vendor/image-ssim');
     mockImageSsim.compare.mockReturnValue({ ssim: 0.95, mcs: 0.97 });
   });
 
@@ -145,7 +145,7 @@ describe('VisualDiffEngine', () => {
   describe('ssimCompare()', () => {
     it('should perform SSIM comparison', async () => {
       // Arrange
-      const mockImageSsim = require('image-ssim');
+      const mockImageSsim = require('../../src/vendor/image-ssim');
       mockImageSsim.compare.mockReturnValue({ ssim: 0.95, mcs: 0.97 });
 
       // Act
@@ -162,7 +162,7 @@ describe('VisualDiffEngine', () => {
 
     it('should handle SSIM errors gracefully', async () => {
       // Arrange
-      const mockImageSsim = require('image-ssim');
+      const mockImageSsim = require('../../src/vendor/image-ssim');
       mockImageSsim.compare.mockImplementation(() => {
         throw new Error('SSIM failed');
       });

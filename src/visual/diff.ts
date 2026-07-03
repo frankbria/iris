@@ -1,8 +1,7 @@
 import pixelmatch from 'pixelmatch';
 import sharp from 'sharp';
 import * as crypto from 'crypto';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- image-ssim ships no usable types; dynamic require keeps it working under ts-jest
-const imageSsim = require('image-ssim');
+import * as imageSsim from '../vendor/image-ssim';
 import { DiffOptions, DiffResult, DiffAnalysis, PreparedImage, SSIMResult } from './types';
 
 /**

@@ -186,7 +186,7 @@ Phase 2 Status: ~40% Complete - Core Infrastructure Implemented
 📦 Dependencies Added:
 - sharp: High-performance image processing
 - pixelmatch: Pixel-level diff detection
-- image-ssim: Structural similarity comparison
+- image-ssim: Structural similarity comparison (vendored in src/vendor/)
 - simple-git: Git baseline integration
 - @axe-core/playwright: Accessibility testing
 - zod: Runtime type validation
