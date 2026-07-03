@@ -443,9 +443,10 @@ export class StorageManager {
     const resolved = path.resolve(imagePath);
     const normalized = path.normalize(resolved);
 
-    // Must be within base directory or test directory
+    // Must be within base directory or test directory (separator-suffixed so
+    // sibling dirs sharing the prefix, e.g. `${baseDir}-evil`, are rejected)
     return (
-      normalized.startsWith(this.baseDir) &&
+      normalized.startsWith(this.baseDir + path.sep) &&
       (normalized.endsWith('.png') ||
         normalized.endsWith('.jpeg') ||
         normalized.endsWith('.jpg') ||
