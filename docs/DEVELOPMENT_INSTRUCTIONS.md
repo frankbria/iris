@@ -104,7 +104,7 @@ iris/
 **Phase 2 Dependencies:**
 - sharp: High-performance image processing
 - pixelmatch: Pixel-level diff detection
-- image-ssim: Structural similarity comparison
+- image-ssim: Structural similarity comparison (vendored in src/vendor/)
 - simple-git: Git integration for baselines
 - @axe-core/playwright: Accessibility testing
 - zod: Runtime type validation

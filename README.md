@@ -637,7 +637,7 @@ _Metrics last verified: 2026-06-26_
 **Visual Testing:**
 - sharp (image processing)
 - pixelmatch (pixel diff)
-- image-ssim (structural similarity)
+- image-ssim (structural similarity — vendored in src/vendor/)
 - simple-git (baseline management)
 - openai (GPT-4 Vision)
 - @anthropic-ai/sdk (Claude)

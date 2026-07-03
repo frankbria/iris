@@ -66,15 +66,15 @@ jobs:
   visual-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
       - name: Install IRIS
         run: npm install iris-suite
       - name: Run Visual Tests
         run: iris visual-diff --pages "/" --fail-on moderate
       - name: Upload Reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: visual-report
           path: .iris/visual-report.html
@@ -82,11 +82,11 @@ jobs:
   a11y-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Run Accessibility Tests
         run: iris a11y --pages "/" --fail-on critical,serious
       - name: Upload Reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: a11y-report
           path: .iris/a11y-report.html
@@ -161,7 +161,7 @@ git push
 ```yaml
 - name: Upload Visual Report
   if: always()
-  uses: actions/upload-artifact@v3
+  uses: actions/upload-artifact@v4
   with:
     name: visual-regression-report
     path: .iris/visual-report.html
@@ -175,7 +175,7 @@ Access from: Actions → Workflow run → Artifacts
 ```yaml
 - name: Upload Screenshots
   if: failure()
-  uses: actions/upload-artifact@v3
+  uses: actions/upload-artifact@v4
   with:
     name: visual-diffs
     path: |
@@ -190,7 +190,7 @@ Access from: Actions → Workflow run → Artifacts
 ```yaml
 - name: Comment PR
   if: github.event_name == 'pull_request'
-  uses: actions/github-script@v6
+  uses: actions/github-script@v7
   with:
     script: |
       const fs = require('fs');
@@ -233,7 +233,7 @@ steps:
 
 ```yaml
 - name: Cache node modules
-  uses: actions/cache@v3
+  uses: actions/cache@v4
   with:
     path: ~/.npm
     key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
