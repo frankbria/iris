@@ -58,7 +58,7 @@
     "sharp": "^0.35.3",
     "simple-git": "^3.20.0",
     "ws": "^8.13.0",
-    "zod": "^3.22.4"
+    "zod": "^4.4.3"
   },
   "overrides": {
     "@istanbuljs/load-nyc-config": {
