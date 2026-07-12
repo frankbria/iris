@@ -331,6 +331,22 @@ These standards ensure:
 
 IRIS uses **Beads** (`bd`) for dependency-aware issue tracking. This system is designed specifically for AI-supervised workflows, enabling agents to systematically work through tasks with clear dependency chains.
 
+### Issue Prioritization Convention (MANDATORY)
+
+**Every new issue MUST be prioritized before it is considered filed.** No issue is left un-triaged.
+
+1. **Title prefix `[PX.Y]`**: every issue title starts with a priority tag, e.g. `[P3.4] Migrate pixelmatch 5.x -> 7.x`.
+   - `X` = tier (blast radius / launch impact):
+     - **P0** — Launch blocker (`priority-p0`)
+     - **P1** — Pre-launch hardening (`priority-p1`)
+     - **P2** — Post-launch fast-follow (`priority-p2`)
+     - **P3** — Polish / hygiene (`priority-p3`)
+   - `Y` = order **within** the tier by importance **and dependency** — lower `Y` = do first / unblocks others. Assign the next free `Y` in the tier, or renumber neighbors if the new issue must come earlier.
+2. **Matching label**: add the corresponding `priority-p0..p3` label so tier is filterable (`gh issue list --label priority-p2`).
+3. **Placement rule**: slot by both importance and dependency — an issue that blocks others sorts ahead of them within its tier; a working status-quo with no runtime impact sorts to the tail.
+
+To (re)prioritize an existing issue: `gh issue edit <n> --title "[PX.Y] ..." --add-label "priority-pX"`.
+
 ### Why Beads?
 
 - **Dependency Awareness**: Issues explicitly declare what blocks them and what they block
