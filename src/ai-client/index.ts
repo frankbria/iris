@@ -52,3 +52,6 @@ export { SmartAIVisionClient, SmartClientConfig, createSmartClient } from './sma
 
 // Factory
 export { AIClientFactory, ClientType, createAIClient } from './factory';
+
+// Zod schemas
+export { AIVisionResponseSchema, VISION_CATEGORIES } from './types';
