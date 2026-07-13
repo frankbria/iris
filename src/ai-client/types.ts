@@ -34,9 +34,7 @@ export const AIVisionResponseSchema = z.object({
     .array(z.string())
     .default([])
     .transform((arr) =>
-      arr.filter((c): c is VisionCategory =>
-        (VISION_CATEGORIES as readonly string[]).includes(c),
-      ),
+      arr.filter((c): c is VisionCategory => (VISION_CATEGORIES as readonly string[]).includes(c)),
     ),
   suggestions: z.array(z.string()).optional(),
 });
