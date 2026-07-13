@@ -370,10 +370,31 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         // Warning fires on token-based spend, which the flat estimate never
         // would here (425 * 0.002 = 0.85, far below the 80% = $4.0 threshold).
         expect(status.warningTriggered).toBe(true);
-        expect(status.dailyUsed).toBeGreaterThan(5.0 * 0.8);
-        // Bounded above by the exact recorded total (the daily-window filter can
-        // only ever drop same-millisecond rows, never add spend).
-        expect(status.dailyUsed).toBeLessThanOrEqual(calls * perCall + 1e-9);
+        // Inclusive upper bound (getCostForPeriod uses <=) means same-millisecond
+        // rows are no longer dropped, so the full recorded spend is counted.
+        expect(status.dailyUsed).toBeCloseTo(calls * perCall, 6);
+      });
+
+      it('should clear stale token rates when pricing is overridden with flat-only', () => {
+        // Override gpt-4o with a flat-only price; token rates must be dropped so
+        // the new per-image price wins even when usage is supplied.
+        tracker.setPricing('openai', 'gpt-4o', 0.05);
+        const cost = tracker.trackOperation('openai', 'gpt-4o', false, {
+          inputTokens: 765,
+          outputTokens: 234,
+        });
+        expect(cost).toBe(0.05);
+      });
+
+      it('should fall back to per-image price when usage is invalid', () => {
+        // Negative and non-finite counts must not corrupt recorded cost.
+        for (const bad of [
+          { inputTokens: -5, outputTokens: 100 },
+          { inputTokens: 100, outputTokens: NaN },
+          { inputTokens: Infinity, outputTokens: 10 },
+        ]) {
+          expect(tracker.trackOperation('openai', 'gpt-4o', false, bad)).toBe(0.002);
+        }
       });
     });
   });

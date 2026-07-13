@@ -243,6 +243,10 @@ export class CostTracker {
     this.pricing.set(key, costPerImage);
     if (costPerInputToken !== undefined && costPerOutputToken !== undefined) {
       this.tokenPricing.set(key, { input: costPerInputToken, output: costPerOutputToken });
+    } else {
+      // Overriding with flat-only pricing must clear any prior token rates,
+      // otherwise a stale rate would silently win over the new per-image price.
+      this.tokenPricing.delete(key);
     }
   }
 
@@ -320,11 +324,26 @@ export class CostTracker {
     if (cached) return 0;
 
     const tokenRates = this.tokenPricing.get(`${provider}:${model}`);
-    if (usage && tokenRates) {
+    if (usage && tokenRates && this.isValidUsage(usage)) {
       return usage.inputTokens * tokenRates.input + usage.outputTokens * tokenRates.output;
     }
 
     return this.getPricing(provider, model);
+  }
+
+  /**
+   * Guard the cost-integrity boundary: token counts must be finite and
+   * non-negative. A NaN or negative count would corrupt the recorded cost and,
+   * because budget status is derived from an irreversible SUM, poison every
+   * later circuit-breaker check. Invalid usage falls back to per-image pricing.
+   */
+  private isValidUsage(usage: TokenUsage): boolean {
+    return (
+      Number.isFinite(usage.inputTokens) &&
+      Number.isFinite(usage.outputTokens) &&
+      usage.inputTokens >= 0 &&
+      usage.outputTokens >= 0
+    );
   }
 
   /**
@@ -335,8 +354,11 @@ export class CostTracker {
    * @returns Total cost in USD
    */
   getCostForPeriod(startTime: number, endTime: number): number {
+    // Upper bound is inclusive: getDailyCost/getMonthlyCost pass Date.now(), and
+    // an exclusive bound would drop spend recorded in the same millisecond as
+    // the check — undercounting the budget this tracker is meant to enforce.
     const stmt = this.db.prepare(
-      'SELECT SUM(cost) as total FROM cost_tracking WHERE timestamp >= ? AND timestamp < ?',
+      'SELECT SUM(cost) as total FROM cost_tracking WHERE timestamp >= ? AND timestamp <= ?',
     );
     const result = stmt.get(startTime, endTime) as { total: number | null };
     return result.total || 0;
