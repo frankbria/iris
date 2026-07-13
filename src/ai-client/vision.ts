@@ -125,7 +125,19 @@ Compare the baseline (first image) with the current (second image) and identify 
 
       // Validate before use: invalid/empty severity throws (surfacing through
       // handleVisionError) rather than silently degrading to severity:'none'.
-      return AIVisionResponseSchema.parse(JSON.parse(content));
+      const parsed = AIVisionResponseSchema.parse(JSON.parse(content));
+
+      // Attach token usage (defensive: may be absent) so downstream cost
+      // tracking reflects real high-detail token consumption, not a flat rate.
+      const usage = response.usage
+        ? {
+            inputTokens: response.usage.prompt_tokens ?? 0,
+            outputTokens: response.usage.completion_tokens ?? 0,
+            totalTokens: response.usage.total_tokens,
+          }
+        : undefined;
+
+      return usage ? { ...parsed, usage } : parsed;
     } catch (error) {
       return this.handleVisionError(error, 'OpenAI vision analysis');
     }
@@ -245,7 +257,17 @@ Respond with JSON:
       }
 
       // Validate before use (see OpenAI path): invalid severity throws.
-      return AIVisionResponseSchema.parse(JSON.parse(content.text));
+      const parsed = AIVisionResponseSchema.parse(JSON.parse(content.text));
+
+      // Attach token usage (defensive: may be absent) for real cost accounting.
+      const usage = response.usage
+        ? {
+            inputTokens: response.usage.input_tokens ?? 0,
+            outputTokens: response.usage.output_tokens ?? 0,
+          }
+        : undefined;
+
+      return usage ? { ...parsed, usage } : parsed;
     } catch (error) {
       return this.handleVisionError(error, 'Anthropic vision analysis');
     }
@@ -344,7 +366,20 @@ Respond with JSON only:
       }, this.config.retryConfig ?? DEFAULT_RETRY_CONFIG);
 
       // Validate before use (see OpenAI path): invalid severity throws.
-      return AIVisionResponseSchema.parse(JSON.parse(data.response));
+      const parsed = AIVisionResponseSchema.parse(JSON.parse(data.response));
+
+      // Ollama reports token counts via prompt_eval_count/eval_count when
+      // present. If absent, leave usage undefined — the cost tracker falls back
+      // to the flat per-image price (Ollama pricing is zero anyway).
+      const usage =
+        data.prompt_eval_count != null || data.eval_count != null
+          ? {
+              inputTokens: data.prompt_eval_count ?? 0,
+              outputTokens: data.eval_count ?? 0,
+            }
+          : undefined;
+
+      return usage ? { ...parsed, usage } : parsed;
     } catch (error) {
       return this.handleVisionError(error, 'Ollama vision analysis');
     }

@@ -184,9 +184,10 @@ export class SmartAIVisionClient {
           context: request.context,
         });
 
-        // Track cost
+        // Track cost using real token usage when the provider reported it
+        // (falls back to flat per-image pricing inside trackOperation).
         if (this.costTracker) {
-          this.costTracker.trackOperation(providerName, model, false);
+          this.costTracker.trackOperation(providerName, model, false, result.usage);
         }
 
         // Cache result

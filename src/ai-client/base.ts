@@ -65,10 +65,28 @@ export interface VisionClassification {
 }
 
 /**
+ * Normalized token usage reported by a provider, when available.
+ *
+ * Providers that don't return usage (e.g. Ollama, or SDK error paths) leave
+ * this undefined, and the cost tracker falls back to flat per-image pricing.
+ */
+export interface AITokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens?: number;
+}
+
+/**
  * Response from AI vision analysis
  */
 export interface AIVisionResponse extends VisionClassification {
   suggestions?: string[];
+
+  /**
+   * Token usage for this call, when the provider reports it. Used by the cost
+   * tracker to compute real per-token cost instead of a flat per-image estimate.
+   */
+  usage?: AITokenUsage;
 }
 
 /**
