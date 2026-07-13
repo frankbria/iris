@@ -78,15 +78,26 @@ describe('vision clients', () => {
       expect(imageParts[1].image_url.url).toContain(current.toString('base64'));
     });
 
-    it('applies defaults for fields the model omits', async () => {
+    it('throws when the model omits severity instead of defaulting to none (issue #66)', async () => {
+      // severity is a data-integrity signal: an absent/invalid value must fail
+      // validation rather than silently degrade to a clean severity:'none'.
       mockOpenAICreate.mockResolvedValue({
         choices: [{ message: { content: JSON.stringify({ reasoning: 'x' }) } }],
       });
 
       const client = new OpenAIVisionClient(config);
+      await expect(client.analyzeVisualDiff(request)).rejects.toThrow();
+    });
+
+    it('applies defaults for soft fields the model omits (severity present)', async () => {
+      mockOpenAICreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify({ severity: 'minor' }) } }],
+      });
+
+      const client = new OpenAIVisionClient(config);
       const result = await client.analyzeVisualDiff(request);
 
-      expect(result.severity).toBe('none');
+      expect(result.severity).toBe('minor');
       expect(result.confidence).toBe(0.5);
       expect(result.categories).toEqual([]);
     });

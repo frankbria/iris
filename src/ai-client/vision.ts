@@ -7,6 +7,7 @@ import {
   AIVisionResponse,
 } from './base';
 import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
+import { AIVisionResponseSchema } from './types';
 
 /**
  * OpenAI GPT-4V/GPT-4o vision client for visual diff analysis
@@ -122,14 +123,9 @@ Compare the baseline (first image) with the current (second image) and identify 
         throw new Error('No response from OpenAI vision API');
       }
 
-      const parsed = JSON.parse(content);
-      return {
-        severity: parsed.severity || 'none',
-        confidence: parsed.confidence || 0.5,
-        reasoning: parsed.reasoning || 'No reasoning provided',
-        categories: parsed.categories || [],
-        suggestions: parsed.suggestions,
-      };
+      // Validate before use: invalid/empty severity throws (surfacing through
+      // handleVisionError) rather than silently degrading to severity:'none'.
+      return AIVisionResponseSchema.parse(JSON.parse(content));
     } catch (error) {
       return this.handleVisionError(error, 'OpenAI vision analysis');
     }
@@ -248,14 +244,8 @@ Respond with JSON:
         throw new Error('Unexpected response type from Anthropic');
       }
 
-      const parsed = JSON.parse(content.text);
-      return {
-        severity: parsed.severity || 'none',
-        confidence: parsed.confidence || 0.5,
-        reasoning: parsed.reasoning || 'No reasoning provided',
-        categories: parsed.categories || [],
-        suggestions: parsed.suggestions,
-      };
+      // Validate before use (see OpenAI path): invalid severity throws.
+      return AIVisionResponseSchema.parse(JSON.parse(content.text));
     } catch (error) {
       return this.handleVisionError(error, 'Anthropic vision analysis');
     }
@@ -353,15 +343,8 @@ Respond with JSON only:
         return response.json();
       }, this.config.retryConfig ?? DEFAULT_RETRY_CONFIG);
 
-      const parsed = JSON.parse(data.response);
-
-      return {
-        severity: parsed.severity || 'none',
-        confidence: parsed.confidence || 0.5,
-        reasoning: parsed.reasoning || 'No reasoning provided',
-        categories: parsed.categories || [],
-        suggestions: parsed.suggestions,
-      };
+      // Validate before use (see OpenAI path): invalid severity throws.
+      return AIVisionResponseSchema.parse(JSON.parse(data.response));
     } catch (error) {
       return this.handleVisionError(error, 'Ollama vision analysis');
     }

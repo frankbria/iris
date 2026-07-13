@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { AIVisionResponse } from './base';
+import { AIVisionResponseSchema } from './types';
 
 /**
  * Cache configuration
@@ -167,15 +168,22 @@ export class AIVisionCache {
     // Check memory cache first
     const node = this.memoryCache.get(key);
     if (node) {
-      this.moveToHead(node);
-      this.hits++;
-      this.incrementHitCount(key);
+      // Defensive re-validation: a corrupt entry is treated as a miss and
+      // evicted rather than returning a structurally invalid response.
+      const valid = AIVisionResponseSchema.safeParse(node.value.value);
+      if (!valid.success) {
+        this.delete(key);
+      } else {
+        this.moveToHead(node);
+        this.hits++;
+        this.incrementHitCount(key);
 
-      if (this.config.debug) {
-        console.log(`[Cache] Memory hit: ${key}`);
+        if (this.config.debug) {
+          console.log(`[Cache] Memory hit: ${key}`);
+        }
+
+        return valid.data;
       }
-
-      return node.value.value;
     }
 
     // Check persistent cache
@@ -206,8 +214,26 @@ export class AIVisionCache {
         return undefined;
       }
 
-      // Promote to memory cache
-      const value = JSON.parse(row.value) as AIVisionResponse;
+      // Validate the persisted value: a stale/corrupt entry (e.g. written by an
+      // older version, or non-JSON) is treated as a miss instead of
+      // reintroducing an invalid shape into the pipeline.
+      let parsed = AIVisionResponseSchema.safeParse(undefined);
+      try {
+        parsed = AIVisionResponseSchema.safeParse(JSON.parse(row.value));
+      } catch {
+        // Non-JSON row: falls through to the invalid-entry miss path below.
+      }
+      if (!parsed.success) {
+        this.delete(key);
+        this.misses++;
+
+        if (this.config.debug) {
+          console.log(`[Cache] Invalid persisted entry treated as miss: ${key}`);
+        }
+
+        return undefined;
+      }
+      const value = parsed.data;
       this.addToMemory(key, {
         key,
         value,
