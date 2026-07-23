@@ -135,9 +135,10 @@ plans/
 - **SmartAIVisionClient**: Intelligent provider selection, cache-first strategy, automatic fallback on failure
 
 **Pricing (default, configurable):**
-- GPT-4o: $0.002/image
-- Claude 3.5 Sonnet: $0.0015/image
-- Ollama (local): $0.00/image
+- Cost is computed from provider-returned token usage when available; the flat per-image rate below is the fallback (cache hits, Ollama, missing usage)
+- GPT-4o: $2.50/1M input + $10/1M output tokens (fallback $0.002/image)
+- Claude 3.5 Sonnet: $3/1M input + $15/1M output tokens (fallback $0.0015/image)
+- Ollama (local): $0.00
 
 ### Phase 1 - Foundations (Complete)
 1. ✅ CLI command scaffolding with commander.js
