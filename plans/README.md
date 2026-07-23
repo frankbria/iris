@@ -10,6 +10,44 @@ doc disagrees with this file, this file wins.
 
 ---
 
+## Cycle 3 — Vision Alignment (active)
+
+Generated 2026-07-23 by the `improve` skill (deep audit: does the architecture
+actually deliver the PRD's "eyes and hands for AI coding assistants" vision?).
+Verdict: one of five PRD user stories is built end-to-end, and even it was
+CLI-unreachable. Every finding below was vetted against the live code at
+commit `bdf7b7d` before planning. Plans are self-contained executor handoffs.
+
+| Plan | `[PX.Y]` | Title | Issue | Depends on | Status |
+|------|----------|-------|-------|-----------|--------|
+| 009 | `P1.6` | Wire AI provider/key into `visual-diff --semantic` (always crashes today) | [#111](https://github.com/frankbria/iris/issues/111) | — | TODO |
+| 010 | `P1.7` | `iris run --url` starting page (actions hit about:blank today) | [#112](https://github.com/frankbria/iris/issues/112) | — | TODO |
+| 011 | `P1.12` | `iris run --json` + assistant-facing integration doc | [#113](https://github.com/frankbria/iris/issues/113) | — (best after 010) | TODO |
+| 012 | `P1.13` | MCP server spike — one real tool, verified in Claude Code | [#114](https://github.com/frankbria/iris/issues/114) | — | TODO |
+| 017 | `P2.5` | Canonical-surface decision + README/PRD truth pass | [#115](https://github.com/frankbria/iris/issues/115) | — | TODO |
+| 013 | `P2.6` | Assertion vocabulary (`verify/make sure` representable, `goalMet`) | [#116](https://github.com/frankbria/iris/issues/116) | 010 | TODO |
+| 014 | `P2.7` | Agentic observe→act loop (`iris run --agent`) | [#117](https://github.com/frankbria/iris/issues/117) → subs [#121](https://github.com/frankbria/iris/issues/121), [#122](https://github.com/frankbria/iris/issues/122) | 010, 013 | TODO |
+| 015 | `P2.8` | Watch-mode AI feedback (classify changes on save) | [#118](https://github.com/frankbria/iris/issues/118) | 009 | TODO |
+| 016 | `P2.9` | Surface dropped AI intelligence; diff image into vision request | [#119](https://github.com/frankbria/iris/issues/119) → subs [#123](https://github.com/frankbria/iris/issues/123), [#124](https://github.com/frankbria/iris/issues/124) | 009 | TODO |
+
+**Dependency notes:** 009 unblocks 015/016 (and makes #68 user-relevant);
+010 unblocks 013 → 014. 011, 012, 017 are independent. Existing issues #68–71
+were renumbered to P1.8–P1.11 and #77/#78 to P2.10/P2.11 to slot this cycle
+by importance and dependency.
+
+**Findings considered and NOT planned this cycle:**
+- Pattern grammar passes prose verbatim as CSS selectors (`"click submit"` →
+  `page.click('submit')`; shipped watch default fails on every real page) —
+  real, but superseded if 014 lands (agent path) and overlaps selector-retry
+  work in #75; revisit if 014 is deferred.
+- PRD US1 (autonomous exploration) and US4 (design-system compliance) —
+  explicitly deferred as roadmap, handled honestly by plan 017's status
+  annotations rather than built.
+- Per-region AI classification (feeding `analyzeRegions` output to the model) —
+  Phase-2C design work, noted as the natural follow-up to 016.
+
+---
+
 ## Cycle 2 — Production Readiness (active)
 
 Generated 2026-06-25 by a multi-agent production-readiness audit (every finding
