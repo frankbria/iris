@@ -307,6 +307,99 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       expect(stats.costByProvider['anthropic']).toBe(0.0015);
       expect(stats.costByProvider['ollama']).toBe(0);
     });
+
+    describe('token-based cost accounting (issue #67)', () => {
+      it('should compute cost from token usage for a high-detail gpt-4o image', () => {
+        // A 1024x1024 high-detail image ≈ 765 input tokens; add a realistic
+        // completion. gpt-4o rates: $2.50/1M in, $10/1M out.
+        const cost = tracker.trackOperation('openai', 'gpt-4o', false, {
+          inputTokens: 765,
+          outputTokens: 234,
+        });
+        const expected = 765 * 2.5e-6 + 234 * 1e-5;
+        expect(cost).toBeCloseTo(expected, 10);
+        // The token-based cost must differ from the old flat per-image estimate,
+        // otherwise the budget under-counting bug would persist.
+        expect(cost).not.toBeCloseTo(0.002, 6);
+      });
+
+      it('should compute cost from token usage for anthropic', () => {
+        // claude-3-5-sonnet rates: $3/1M in, $15/1M out.
+        const cost = tracker.trackOperation('anthropic', 'claude-3-5-sonnet-20241022', false, {
+          inputTokens: 1000,
+          outputTokens: 200,
+        });
+        expect(cost).toBeCloseTo(1000 * 3e-6 + 200 * 1.5e-5, 10);
+      });
+
+      it('should fall back to per-image price when usage is not provided', () => {
+        const cost = tracker.trackOperation('openai', 'gpt-4o', false);
+        expect(cost).toBe(0.002);
+      });
+
+      it('should fall back to per-image price when the model has no token rates', () => {
+        // gpt-4-vision-preview has only a per-image price configured.
+        const cost = tracker.trackOperation('openai', 'gpt-4-vision-preview', false, {
+          inputTokens: 500,
+          outputTokens: 100,
+        });
+        expect(cost).toBe(0.003);
+      });
+
+      it('should keep cached operations free even when usage is supplied', () => {
+        const cost = tracker.trackOperation('openai', 'gpt-4o', true, {
+          inputTokens: 765,
+          outputTokens: 234,
+        });
+        expect(cost).toBe(0);
+      });
+
+      it('should accumulate token-based cost into budget status', () => {
+        // Enough high-detail calls to exceed 80% of the $5 daily budget. The old
+        // flat estimate (0.002/call) would have counted only ~0.85 here — well
+        // under warning — so this exercises the under-counting the bug caused.
+        const perCall = 2000 * 2.5e-6 + 500 * 1e-5; // = 0.01
+        const calls = Math.ceil((5.0 * 0.85) / perCall);
+        for (let i = 0; i < calls; i++) {
+          tracker.trackOperation('openai', 'gpt-4o', false, {
+            inputTokens: 2000,
+            outputTokens: 500,
+          });
+        }
+        const status = tracker.getBudgetStatus();
+        // Warning fires on token-based spend, which the flat estimate never
+        // would here (425 * 0.002 = 0.85, far below the 80% = $4.0 threshold).
+        expect(status.warningTriggered).toBe(true);
+        // Inclusive upper bound (getCostForPeriod uses <=) means same-millisecond
+        // rows are no longer dropped, so the full recorded spend is counted.
+        expect(status.dailyUsed).toBeCloseTo(calls * perCall, 6);
+      });
+
+      it('should clear stale token rates when pricing is overridden with flat-only', () => {
+        // Override gpt-4o with a flat-only price; token rates must be dropped so
+        // the new per-image price wins even when usage is supplied.
+        tracker.setPricing('openai', 'gpt-4o', 0.05);
+        const cost = tracker.trackOperation('openai', 'gpt-4o', false, {
+          inputTokens: 765,
+          outputTokens: 234,
+        });
+        expect(cost).toBe(0.05);
+      });
+
+      it('should fall back to per-image price when usage is invalid', () => {
+        // Negative and non-finite counts must not corrupt recorded cost.
+        for (const bad of [
+          { inputTokens: -5, outputTokens: 100 },
+          { inputTokens: 100, outputTokens: NaN },
+          { inputTokens: Infinity, outputTokens: 10 },
+          // All-zero usage would record a real API call as free — treat as
+          // "no usage" and fall back rather than under-count (issue #67).
+          { inputTokens: 0, outputTokens: 0 },
+        ]) {
+          expect(tracker.trackOperation('openai', 'gpt-4o', false, bad)).toBe(0.002);
+        }
+      });
+    });
   });
 
   describe('SmartAIVisionClient', () => {

@@ -162,7 +162,7 @@ This document tracks Phase 2 implementation combining two parallel development e
 
 + [x] **Cost tracking and budgets**
   - [x] Create `src/ai-client/cost-tracker.ts` (308 lines)
-  - [x] Real-time cost calculation per provider/model
+  - [x] Token-based cost calculation per provider/model (real usage when reported by the SDK; flat per-image estimate as fallback — issue #67)
   - [x] Daily and monthly budget limits
   - [x] Warning alerts at 80% budget
   - [x] Critical alerts at 95% budget

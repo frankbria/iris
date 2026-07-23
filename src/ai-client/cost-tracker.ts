@@ -7,9 +7,35 @@ export interface ProviderPricing {
   provider: string;
   model: string;
   /**
-   * Cost per image in USD
+   * Cost per image in USD. Used as a fallback when token usage is unavailable
+   * (cache hits, Ollama, providers/paths that don't report usage).
    */
   costPerImage: number;
+  /**
+   * Cost per input (prompt) token in USD. When set together with
+   * `costPerOutputToken`, cost is computed from real token usage.
+   */
+  costPerInputToken?: number;
+  /**
+   * Cost per output (completion) token in USD.
+   */
+  costPerOutputToken?: number;
+}
+
+/**
+ * Per-token pricing pair, in USD per token.
+ */
+interface TokenRates {
+  input: number;
+  output: number;
+}
+
+/**
+ * Token usage for a single operation.
+ */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
 }
 
 /**
@@ -53,6 +79,8 @@ export interface CostEntry {
   operation: 'vision-analysis';
   cost: number;
   cached: boolean;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 /**
@@ -90,19 +118,28 @@ export interface BudgetStatus {
  * Default pricing for common providers (as of 2025)
  */
 const DEFAULT_PRICING: ProviderPricing[] = [
-  // OpenAI GPT-4V pricing
-  { provider: 'openai', model: 'gpt-4o', costPerImage: 0.002 }, // $0.002 per image
+  // OpenAI GPT-4o: $2.50/1M input tokens, $10/1M output tokens (2025 published
+  // rates). costPerImage retained as the fallback when usage is unavailable.
+  {
+    provider: 'openai',
+    model: 'gpt-4o',
+    costPerImage: 0.002,
+    costPerInputToken: 2.5e-6,
+    costPerOutputToken: 1e-5,
+  },
   { provider: 'openai', model: 'gpt-4-vision-preview', costPerImage: 0.003 },
 
-  // Anthropic Claude 3.5 Sonnet pricing
+  // Anthropic Claude 3.5 Sonnet: $3/1M input tokens, $15/1M output tokens.
   {
     provider: 'anthropic',
     model: 'claude-3-5-sonnet-20241022',
     costPerImage: 0.0015,
-  }, // $0.0015 per image
+    costPerInputToken: 3e-6,
+    costPerOutputToken: 1.5e-5,
+  },
   { provider: 'anthropic', model: 'claude-3-opus', costPerImage: 0.004 },
 
-  // Ollama (local) - no cost
+  // Ollama (local) - no cost (no token rates needed; fallback is zero)
   { provider: 'ollama', model: 'llava', costPerImage: 0 },
   { provider: 'ollama', model: 'bakllava', costPerImage: 0 },
 ];
@@ -128,15 +165,23 @@ export class CostTracker {
   private db: Database.Database;
   private budget: Required<BudgetConfig>;
   private pricing: Map<string, number>;
+  private tokenPricing: Map<string, TokenRates>;
 
   constructor(dbPath: string = ':memory:', budget: BudgetConfig = {}) {
     this.db = new Database(dbPath);
     this.budget = { ...DEFAULT_BUDGET, ...budget };
     this.pricing = new Map();
+    this.tokenPricing = new Map();
 
     // Load default pricing
     for (const price of DEFAULT_PRICING) {
-      this.setPricing(price.provider, price.model, price.costPerImage);
+      this.setPricing(
+        price.provider,
+        price.model,
+        price.costPerImage,
+        price.costPerInputToken,
+        price.costPerOutputToken,
+      );
     }
 
     this.initializeDatabase();
@@ -154,12 +199,28 @@ export class CostTracker {
         model TEXT NOT NULL,
         operation TEXT NOT NULL,
         cost REAL NOT NULL,
-        cached INTEGER NOT NULL DEFAULT 0
+        cached INTEGER NOT NULL DEFAULT 0,
+        input_tokens INTEGER,
+        output_tokens INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_timestamp ON cost_tracking(timestamp);
       CREATE INDEX IF NOT EXISTS idx_provider_model ON cost_tracking(provider, model);
     `);
+
+    // Idempotent upgrade: databases created before token columns existed get
+    // them added here. CREATE TABLE IF NOT EXISTS won't alter an existing table,
+    // so check the schema and ALTER only the missing columns.
+    const columns = this.db.prepare('PRAGMA table_info(cost_tracking)').all() as Array<{
+      name: string;
+    }>;
+    const names = new Set(columns.map((c) => c.name));
+    if (!names.has('input_tokens')) {
+      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN input_tokens INTEGER');
+    }
+    if (!names.has('output_tokens')) {
+      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN output_tokens INTEGER');
+    }
   }
 
   /**
@@ -167,11 +228,26 @@ export class CostTracker {
    *
    * @param provider - Provider name
    * @param model - Model identifier
-   * @param costPerImage - Cost per image in USD
+   * @param costPerImage - Cost per image in USD (fallback when usage is absent)
+   * @param costPerInputToken - Optional per-input-token cost in USD
+   * @param costPerOutputToken - Optional per-output-token cost in USD
    */
-  setPricing(provider: string, model: string, costPerImage: number): void {
+  setPricing(
+    provider: string,
+    model: string,
+    costPerImage: number,
+    costPerInputToken?: number,
+    costPerOutputToken?: number,
+  ): void {
     const key = `${provider}:${model}`;
     this.pricing.set(key, costPerImage);
+    if (costPerInputToken !== undefined && costPerOutputToken !== undefined) {
+      this.tokenPricing.set(key, { input: costPerInputToken, output: costPerOutputToken });
+    } else {
+      // Overriding with flat-only pricing must clear any prior token rates,
+      // otherwise a stale rate would silently win over the new per-image price.
+      this.tokenPricing.delete(key);
+    }
   }
 
   /**
@@ -189,14 +265,24 @@ export class CostTracker {
   /**
    * Track a vision analysis operation
    *
+   * Cost is computed from real token usage when both usage and per-token rates
+   * are available; otherwise it falls back to the flat per-image price. Cached
+   * operations are always free.
+   *
    * @param provider - Provider name
    * @param model - Model identifier
    * @param cached - Whether result was cached
+   * @param usage - Optional token usage from the provider
    * @returns Cost of operation
    * @throws Error if circuit breaker is triggered
    */
-  trackOperation(provider: string, model: string, cached: boolean = false): number {
-    // Check circuit breaker
+  trackOperation(
+    provider: string,
+    model: string,
+    cached: boolean = false,
+    usage?: TokenUsage,
+  ): number {
+    // Check circuit breaker (before recording, so enforcement is not bypassed)
     const status = this.getBudgetStatus();
     if (this.budget.enableCircuitBreaker && status.circuitBreakerTriggered) {
       throw new Error(
@@ -204,17 +290,64 @@ export class CostTracker {
       );
     }
 
-    // Calculate cost (no cost for cached results)
-    const cost = cached ? 0 : this.getPricing(provider, model);
+    const cost = this.computeCost(provider, model, cached, usage);
 
-    // Record entry
+    // Record entry (persist token counts when provided)
     const stmt = this.db.prepare(`
-      INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cached)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cached, input_tokens, output_tokens)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    stmt.run(Date.now(), provider, model, 'vision-analysis', cost, cached ? 1 : 0);
+    stmt.run(
+      Date.now(),
+      provider,
+      model,
+      'vision-analysis',
+      cost,
+      cached ? 1 : 0,
+      usage?.inputTokens ?? null,
+      usage?.outputTokens ?? null,
+    );
 
     return cost;
+  }
+
+  /**
+   * Compute the cost of an operation. Token-based when usage and per-token
+   * rates are available, flat per-image otherwise. Cached operations are free.
+   */
+  private computeCost(
+    provider: string,
+    model: string,
+    cached: boolean,
+    usage?: TokenUsage,
+  ): number {
+    if (cached) return 0;
+
+    const tokenRates = this.tokenPricing.get(`${provider}:${model}`);
+    if (usage && tokenRates && this.isValidUsage(usage)) {
+      return usage.inputTokens * tokenRates.input + usage.outputTokens * tokenRates.output;
+    }
+
+    return this.getPricing(provider, model);
+  }
+
+  /**
+   * Guard the cost-integrity boundary: token counts must be finite and
+   * non-negative. A NaN or negative count would corrupt the recorded cost and,
+   * because budget status is derived from an irreversible SUM, poison every
+   * later circuit-breaker check. All-zero usage is treated as "no usage" — a
+   * real, uncached API call always consumes prompt tokens, so a zeroed object
+   * would record the call as free (the under-counting issue #67 fixes).
+   * Invalid usage falls back to per-image pricing.
+   */
+  private isValidUsage(usage: TokenUsage): boolean {
+    return (
+      Number.isFinite(usage.inputTokens) &&
+      Number.isFinite(usage.outputTokens) &&
+      usage.inputTokens >= 0 &&
+      usage.outputTokens >= 0 &&
+      usage.inputTokens + usage.outputTokens > 0
+    );
   }
 
   /**
@@ -225,8 +358,11 @@ export class CostTracker {
    * @returns Total cost in USD
    */
   getCostForPeriod(startTime: number, endTime: number): number {
+    // Upper bound is inclusive: getDailyCost/getMonthlyCost pass Date.now(), and
+    // an exclusive bound would drop spend recorded in the same millisecond as
+    // the check — undercounting the budget this tracker is meant to enforce.
     const stmt = this.db.prepare(
-      'SELECT SUM(cost) as total FROM cost_tracking WHERE timestamp >= ? AND timestamp < ?',
+      'SELECT SUM(cost) as total FROM cost_tracking WHERE timestamp >= ? AND timestamp <= ?',
     );
     const result = stmt.get(startTime, endTime) as { total: number | null };
     return result.total || 0;
