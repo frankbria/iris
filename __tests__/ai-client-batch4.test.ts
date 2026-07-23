@@ -392,6 +392,9 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
           { inputTokens: -5, outputTokens: 100 },
           { inputTokens: 100, outputTokens: NaN },
           { inputTokens: Infinity, outputTokens: 10 },
+          // All-zero usage would record a real API call as free — treat as
+          // "no usage" and fall back rather than under-count (issue #67).
+          { inputTokens: 0, outputTokens: 0 },
         ]) {
           expect(tracker.trackOperation('openai', 'gpt-4o', false, bad)).toBe(0.002);
         }

@@ -102,6 +102,25 @@ describe('vision clients', () => {
       expect(result.categories).toEqual([]);
     });
 
+    it('maps SDK usage into normalized inputTokens/outputTokens (issue #67)', async () => {
+      mockOpenAICreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify(parsed) } }],
+        usage: { prompt_tokens: 765, completion_tokens: 120, total_tokens: 885 },
+      });
+
+      const result = await new OpenAIVisionClient(config).analyzeVisualDiff(request);
+      expect(result.usage).toEqual({ inputTokens: 765, outputTokens: 120, totalTokens: 885 });
+    });
+
+    it('leaves usage undefined when the SDK omits it', async () => {
+      mockOpenAICreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify(parsed) } }],
+      });
+
+      const result = await new OpenAIVisionClient(config).analyzeVisualDiff(request);
+      expect(result.usage).toBeUndefined();
+    });
+
     it('throws when the API returns no content', async () => {
       mockOpenAICreate.mockResolvedValue({ choices: [{ message: { content: '' } }] });
       const client = new OpenAIVisionClient(config);
@@ -153,6 +172,16 @@ describe('vision clients', () => {
       expect(imageBlocks[1].source.data).toBe(current.toString('base64'));
     });
 
+    it('maps SDK usage into normalized inputTokens/outputTokens (issue #67)', async () => {
+      mockAnthropicCreate.mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify(parsed) }],
+        usage: { input_tokens: 1600, output_tokens: 90 },
+      });
+
+      const result = await new AnthropicVisionClient(config).analyzeVisualDiff(request);
+      expect(result.usage).toEqual({ inputTokens: 1600, outputTokens: 90 });
+    });
+
     it('throws when the response block is not text', async () => {
       mockAnthropicCreate.mockResolvedValue({ content: [{ type: 'tool_use' }] });
       const client = new AnthropicVisionClient(config);
@@ -202,6 +231,20 @@ describe('vision clients', () => {
       const body = JSON.parse(init.body);
       expect(body.model).toBe('llava');
       expect(body.images).toEqual([baseline.toString('base64'), current.toString('base64')]);
+    });
+
+    it('maps prompt_eval_count/eval_count into normalized usage (issue #67)', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          response: JSON.stringify(parsed),
+          prompt_eval_count: 500,
+          eval_count: 40,
+        }),
+      });
+
+      const result = await new OllamaVisionClient(config).analyzeVisualDiff(request);
+      expect(result.usage).toEqual({ inputTokens: 500, outputTokens: 40 });
     });
 
     it('surfaces a non-ok HTTP response as an error', async () => {

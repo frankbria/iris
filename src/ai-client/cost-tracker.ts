@@ -335,14 +335,18 @@ export class CostTracker {
    * Guard the cost-integrity boundary: token counts must be finite and
    * non-negative. A NaN or negative count would corrupt the recorded cost and,
    * because budget status is derived from an irreversible SUM, poison every
-   * later circuit-breaker check. Invalid usage falls back to per-image pricing.
+   * later circuit-breaker check. All-zero usage is treated as "no usage" — a
+   * real, uncached API call always consumes prompt tokens, so a zeroed object
+   * would record the call as free (the under-counting issue #67 fixes).
+   * Invalid usage falls back to per-image pricing.
    */
   private isValidUsage(usage: TokenUsage): boolean {
     return (
       Number.isFinite(usage.inputTokens) &&
       Number.isFinite(usage.outputTokens) &&
       usage.inputTokens >= 0 &&
-      usage.outputTokens >= 0
+      usage.outputTokens >= 0 &&
+      usage.inputTokens + usage.outputTokens > 0
     );
   }
 
