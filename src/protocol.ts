@@ -72,6 +72,8 @@ export interface JsonRpcResponse {
 export interface BrowserSession {
   executor: ActionExecutor;
   page: Page | null;
+  /** In-flight lazy page creation, cached so pipelined first actions share one page. */
+  pageCreationPromise: Promise<Page> | null;
   isActive: boolean;
   lastActivity: number;
 }
@@ -164,6 +166,9 @@ export function startServer(
               res.error = { code: -32602, message: 'Invalid params' };
               break;
             }
+            // Tear down any existing session first so its Chromium process
+            // isn't orphaned when the map entry is overwritten (issue #69).
+            await cleanupSession(ws, sessions);
             const session = await createBrowserSession(parsedOptions.data);
             sessions.set(ws, session);
             res.result = {
@@ -267,6 +272,7 @@ async function createBrowserSession(
   const session: BrowserSession = {
     executor,
     page: null,
+    pageCreationPromise: null,
     isActive: true,
     lastActivity: Date.now(),
   };
@@ -292,9 +298,17 @@ async function executeBrowserActions(
   try {
     session.lastActivity = Date.now();
 
-    // Create page if needed
+    // Create page if needed. Concurrent first actions share one in-flight
+    // createPage() via the cached promise instead of each creating a page
+    // (check-then-act race, issue #69). The promise is cleared once settled so
+    // a failed creation can be retried.
     if (!session.page) {
-      session.page = await session.executor.createPage();
+      if (!session.pageCreationPromise) {
+        session.pageCreationPromise = session.executor.createPage().finally(() => {
+          session.pageCreationPromise = null;
+        });
+      }
+      session.page = await session.pageCreationPromise;
     }
 
     let actionsToExecute: Action[] = [];
