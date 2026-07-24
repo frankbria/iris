@@ -171,6 +171,9 @@ export class SmartAIVisionClient {
 
         // Check budget before making API call — paid providers only (issue
         // #68): free providers (Ollama, pricing 0) proceed regardless.
+        // "Paid" means a flat per-image price > 0: custom models must be
+        // registered via setPricing with costPerImage > 0 to be budget-gated
+        // here (token rates alone don't count — usage isn't known pre-call).
         if (this.costTracker && this.costTracker.getPricing(providerName, model) > 0) {
           const budgetStatus = this.costTracker.getBudgetStatus();
           if (budgetStatus.circuitBreakerTriggered) {
