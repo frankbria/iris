@@ -39,6 +39,7 @@ yarn-error.log*
 # Database (development)
 *.sqlite
 *.db
+*.db-journal
 
 # Temporary files
 *.tmp

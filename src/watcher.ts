@@ -38,6 +38,9 @@ export class FileWatcher {
   private executor?: ActionExecutor;
   private page?: Page;
   private browserSessionActive = false;
+  private activeExecution?: Promise<void>;
+  private pendingEvent?: WatchEvent;
+  private initPromise?: Promise<void>;
 
   constructor(options: WatchOptions = {}) {
     const config = loadConfig();
@@ -101,11 +104,24 @@ export class FileWatcher {
   }
 
   async stop(): Promise<void> {
-    if (!this.isRunning) {
+    // isRunning only flips true on chokidar's ready event, but start() may
+    // already have launched a browser and a watcher — a pre-ready stop() must
+    // still tear those down, or the browser leaks.
+    const hasResources =
+      this.watcher !== undefined ||
+      this.browserSessionActive ||
+      this.initPromise !== undefined ||
+      this.activeExecution !== undefined;
+    if (!this.isRunning && !hasResources) {
       return;
     }
 
     console.log('⏹️  Stopping file watcher...');
+
+    // Mark as stopped up front: chokidar can still emit during close(), and a
+    // debounce timer set then would otherwise fire after teardown and relaunch
+    // a browser with no owner left to clean it up.
+    this.isRunning = false;
 
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -117,10 +133,17 @@ export class FileWatcher {
       this.watcher = undefined;
     }
 
+    // Let the in-flight execution finish before tearing down the browser
+    // session it is using; the coalesced follow-up is dropped, and the
+    // isRunning guard in scheduleExecution blocks anything scheduled later.
+    this.pendingEvent = undefined;
+    if (this.activeExecution) {
+      await this.activeExecution.catch(() => {});
+    }
+
     // Clean up browser session
     await this.cleanupBrowserSession();
 
-    this.isRunning = false;
     console.log('✅ File watcher stopped');
   }
 
@@ -138,8 +161,36 @@ export class FileWatcher {
 
     // Set new debounce timer
     this.debounceTimer = setTimeout(() => {
-      this.executeInstruction(event);
+      this.scheduleExecution(event);
     }, this.options.debounceMs);
+  }
+
+  /**
+   * Serialize executions: at most one executeInstruction runs at a time.
+   * Events arriving mid-run coalesce into a single follow-up run using the
+   * latest event (the coalescing mirrors debounce; the follow-up itself
+   * starts immediately, without another debounce delay).
+   */
+  private scheduleExecution(event: WatchEvent): void {
+    if (!this.isRunning) {
+      return;
+    }
+
+    if (this.activeExecution) {
+      this.pendingEvent = event;
+      return;
+    }
+
+    // The settle handler drives the coalesced follow-up run; finally (not then)
+    // so the guard also clears if executeInstruction ever starts rejecting.
+    this.activeExecution = this.executeInstruction(event).finally(() => {
+      this.activeExecution = undefined;
+      const next = this.pendingEvent;
+      this.pendingEvent = undefined;
+      if (next) {
+        this.scheduleExecution(next);
+      }
+    });
   }
 
   private async executeInstruction(event: WatchEvent): Promise<void> {
@@ -282,6 +333,19 @@ export class FileWatcher {
       return;
     }
 
+    // Reentrancy guard: a concurrent caller awaits the in-progress init instead
+    // of launching a second browser and overwriting executor/page mid-flight.
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = this.doInitializeBrowserSession().finally(() => {
+      this.initPromise = undefined;
+    });
+    return this.initPromise;
+  }
+
+  private async doInitializeBrowserSession(): Promise<void> {
     try {
       console.log('🌐 Initializing browser session...');
 
@@ -306,6 +370,13 @@ export class FileWatcher {
 
       console.log('✅ Browser session initialized');
     } catch (error) {
+      // Tear down a partially initialized session (e.g. browser launched but
+      // page creation failed) so the failed init doesn't orphan a Chromium process.
+      if (this.executor) {
+        await this.executor.cleanup().catch(() => {});
+        this.executor = undefined;
+      }
+      this.page = undefined;
       this.browserSessionActive = false;
       throw new Error(
         `Browser session initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -315,8 +386,16 @@ export class FileWatcher {
 
   /**
    * Clean up browser session.
+   *
+   * Callers are already serialized — stop() awaits the active execution, and
+   * recovery runs inside it — so unlike init this needs no reentrancy guard.
    */
   private async cleanupBrowserSession(): Promise<void> {
+    // Never tear down fields an in-progress init is still assigning.
+    if (this.initPromise) {
+      await this.initPromise.catch(() => {});
+    }
+
     if (!this.browserSessionActive) {
       return;
     }
@@ -356,6 +435,12 @@ export class FileWatcher {
 
       // Wait a moment before retrying
       await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // stop() may have been called during the backoff — don't stand up a
+      // fresh browser just for it to be torn straight back down.
+      if (!this.isRunning) {
+        return;
+      }
 
       // Reinitialize
       await this.initializeBrowserSession();
