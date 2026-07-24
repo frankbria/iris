@@ -385,7 +385,7 @@ Demonstrates:
 ### 2. Multi-Device Testing
 ```bash
 cd examples/multi-device-visual
-./test-responsive.sh
+./test-multidevice.sh
 ```
 
 Demonstrates:
@@ -411,11 +411,7 @@ Demonstrates:
 cd examples/ci-cd-integration
 ```
 
-Includes configurations for:
-- GitHub Actions
-- GitLab CI
-- Jenkins
-- CircleCI
+Includes a complete GitHub Actions workflow (`iris-tests.yml`) covering visual regression and accessibility testing in CI.
 
 ---
 
@@ -532,39 +528,18 @@ Performance baselines:
 ### AI Agents
 - **[AGENT_INSTRUCTIONS.md](AGENT_INSTRUCTIONS.md)** - Development guidance
 - **[CLAUDE.md](CLAUDE.md)** - Claude Code instructions
-- **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** - Beads issue tracker guide
 
-### Issue Tracking with Beads
+### Issue Tracking
 
-IRIS uses **Beads** (`bd`) - a dependency-aware issue tracker designed for AI-supervised workflows. Issues are tracked with explicit dependency chains, making it easy for AI agents to find ready work and avoid duplicating effort.
+Active work is tracked as **GitHub issues** with a `[PX.Y]` priority prefix in the title (`X` = tier, 0 = launch blocker through 3 = polish; `Y` = order within the tier). Each issue also carries a matching `priority-pX` label. [plans/README.md](plans/README.md) is the canonical tracker for what's next.
 
-**Quick Start:**
 ```bash
-# Show unblocked issues ready to work on
-bd ready
+# Show open issues by priority tier
+gh issue list --label priority-p1
 
 # View issue details
-bd show iris-7
-
-# Claim work
-bd update iris-7 --status in_progress --assignee your-name
-
-# Close when complete
-bd close iris-7 --reason "commit abc123"
+gh issue view 71
 ```
-
-**Current Status:**
-- **19 issues** tracking Phase 2 Sub-Phases B-E (weeks 5-18)
-- **10 issues** ready with no blockers
-- **Critical path**: iris-6 → iris-7 (P0 validation) → iris-8 → ... → iris-16
-
-**Key Features:**
-- Dependency tracking (`blocks`, `parent-child`, `discovered-from`)
-- Auto-sync with git (JSONL export/import)
-- Priority-based work queues (P0-P3)
-- JSON output for programmatic access
-
-See **[docs/beads-migration-guide.md](docs/beads-migration-guide.md)** for complete workflow documentation.
 
 ---
 
@@ -698,7 +673,7 @@ See [docs/guides/ci-cd-integration.md](docs/guides/ci-cd-integration.md) for com
 
 ## Contributing
 
-Phase 2 is complete. The project is ready for Phase 3 development or community contributions.
+Phase 2 is in progress — see [plans/README.md](plans/README.md) for current status and what's next. Community contributions are welcome.
 
 **Areas for Contribution:**
 - Additional AI provider integrations

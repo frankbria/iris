@@ -14,12 +14,8 @@ This example demonstrates integrating IRIS visual regression and accessibility t
 
 ## Files
 
-- `.github/workflows/iris-tests.yml` - Complete GitHub Actions workflow
-- `.github/workflows/visual-only.yml` - Visual regression only
-- `.github/workflows/a11y-only.yml` - Accessibility testing only
+- `.github/workflows/iris-tests.yml` - Complete GitHub Actions workflow (visual regression + accessibility)
 - `ci-test-page.html` - Sample page for CI testing
-- `scripts/update-baseline.sh` - Baseline update script
-- `scripts/post-pr-comment.sh` - PR comment script
 
 ## GitHub Actions Setup
 
@@ -148,7 +144,7 @@ Catch gradual regressions from dependencies.
 
 ```bash
 # Local workflow
-./scripts/update-baseline.sh
+iris visual-diff --update-baseline
 git add .iris/baselines/
 git commit -m "chore: update baselines after UI redesign"
 git push
@@ -357,5 +353,5 @@ IRIS uses specific exit codes for CI integration:
 ## Learn More
 
 - [GitHub Actions Documentation](https://docs.github.com/actions)
-- [IRIS CI Best Practices](../../docs/ci-cd-guide.md)
+- [IRIS CI/CD Integration Guide](../../docs/guides/ci-cd-integration.md)
 - [Workflow Examples](../../.github/workflows/)
