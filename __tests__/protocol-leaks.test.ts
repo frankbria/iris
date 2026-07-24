@@ -147,4 +147,37 @@ describe('Protocol session/page resource leaks (issue #69)', () => {
       ws.close();
     }
   });
+
+  test('failed page creation is retryable (in-flight promise cleared on rejection)', async () => {
+    const ws = await createPersistentConnection();
+    try {
+      await sendRequestViaConnection(ws, {
+        jsonrpc: '2.0',
+        id: 20,
+        method: 'launchBrowser',
+        params: {},
+      });
+      const executor = mockInstances[0];
+      executor.createPage.mockRejectedValueOnce(new Error('boom'));
+
+      const actionReq = (id: number) => ({
+        jsonrpc: '2.0',
+        id,
+        method: 'executeBrowserAction',
+        params: { actions: [{ type: 'click', selector: '#button' }] },
+      });
+
+      const failed = await sendRequestViaConnection(ws, actionReq(21));
+      expect(failed.result?.success).toBe(false);
+      expect(failed.result?.error).toBe('boom');
+
+      // The rejected promise must not stay cached — the next action retries
+      // createPage and succeeds.
+      const retried = await sendRequestViaConnection(ws, actionReq(22));
+      expect(retried.result?.success).toBe(true);
+      expect(executor.createPage).toHaveBeenCalledTimes(2);
+    } finally {
+      ws.close();
+    }
+  });
 });
