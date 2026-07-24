@@ -131,7 +131,7 @@ plans/
 **Key Components:**
 - **ImagePreprocessor**: Resizes images to API limits (2048x2048), optimizes quality (85% JPEG), calculates SHA-256 hashes
 - **AIVisionCache**: Two-tier caching (LRU memory + SQLite), tracks hit rates, automatic TTL expiration
-- **CostTracker**: Real-time cost calculation, budget enforcement with circuit breaker, alert thresholds (80%/95%/100%)
+- **CostTracker**: Real-time cost calculation, budget enforcement with circuit breaker (blocks paid operations only — cache hits and free providers like Ollama always proceed, issue #68), alert thresholds (80%/95%/100%)
 - **SmartAIVisionClient**: Intelligent provider selection, cache-first strategy, automatic fallback on failure
 
 **Pricing (default, configurable):**
