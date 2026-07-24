@@ -633,6 +633,36 @@ describe('FileWatcher execute-mode runtime', () => {
     expect(mockExecutorInstance.launchBrowser).toHaveBeenCalledTimes(1); // start() only
   });
 
+  it('stop() before the ready event still tears down the eagerly launched browser', async () => {
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start(); // ready callback is queued on a timer and has NOT fired
+
+    await watcher.stop();
+
+    // Pre-ready stop must not leak the browser start() already launched.
+    expect(mockExecutorInstance.cleanup).toHaveBeenCalledTimes(1);
+    expect(watcher.getStatus().browserSessionActive).toBe(false);
+  });
+
+  it('stop() during recovery backoff does not relaunch the browser', async () => {
+    mockExecutorInstance.executeAction.mockRejectedValueOnce(new Error('page crashed'));
+
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start();
+
+    changeCallback!('src/test.ts');
+    await jest.advanceTimersByTimeAsync(60); // run fails; recovery enters its 2000ms backoff
+    expect(mockExecutorInstance.launchBrowser).toHaveBeenCalledTimes(1);
+
+    const stopPromise = watcher.stop(); // awaits the active run, including recovery
+    await jest.advanceTimersByTimeAsync(2000);
+    await stopPromise;
+
+    // Recovery must not stand up a fresh browser just for stop() to destroy it.
+    expect(mockExecutorInstance.launchBrowser).toHaveBeenCalledTimes(1);
+    expect(mockExecutorInstance.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it('concurrent initializeBrowserSession callers share a single launch', async () => {
     let resolveCreatePage!: (v: unknown) => void;
     mockExecutorInstance.createPage.mockImplementationOnce(

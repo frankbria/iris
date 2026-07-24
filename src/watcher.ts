@@ -104,7 +104,15 @@ export class FileWatcher {
   }
 
   async stop(): Promise<void> {
-    if (!this.isRunning) {
+    // isRunning only flips true on chokidar's ready event, but start() may
+    // already have launched a browser and a watcher — a pre-ready stop() must
+    // still tear those down, or the browser leaks.
+    const hasResources =
+      this.watcher !== undefined ||
+      this.browserSessionActive ||
+      this.initPromise !== undefined ||
+      this.activeExecution !== undefined;
+    if (!this.isRunning && !hasResources) {
       return;
     }
 
@@ -160,7 +168,8 @@ export class FileWatcher {
   /**
    * Serialize executions: at most one executeInstruction runs at a time.
    * Events arriving mid-run coalesce into a single follow-up run using the
-   * latest event, mirroring the debounce semantics.
+   * latest event (the coalescing mirrors debounce; the follow-up itself
+   * starts immediately, without another debounce delay).
    */
   private scheduleExecution(event: WatchEvent): void {
     if (!this.isRunning) {
@@ -377,6 +386,9 @@ export class FileWatcher {
 
   /**
    * Clean up browser session.
+   *
+   * Callers are already serialized — stop() awaits the active execution, and
+   * recovery runs inside it — so unlike init this needs no reentrancy guard.
    */
   private async cleanupBrowserSession(): Promise<void> {
     // Never tear down fields an in-progress init is still assigning.
@@ -423,6 +435,12 @@ export class FileWatcher {
 
       // Wait a moment before retrying
       await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // stop() may have been called during the backoff — don't stand up a
+      // fresh browser just for it to be torn straight back down.
+      if (!this.isRunning) {
+        return;
+      }
 
       // Reinitialize
       await this.initializeBrowserSession();
