@@ -522,6 +522,99 @@ describe('FileWatcher execute-mode runtime', () => {
     );
   });
 
+  it('serializes overlapping executions and coalesces them into one follow-up run', async () => {
+    const { translate } = await import('../src/translator');
+    let resolveFirstAction!: (v: unknown) => void;
+    mockExecutorInstance.executeAction.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirstAction = resolve;
+        }),
+    );
+
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start();
+
+    changeCallback!('first.ts');
+    await jest.advanceTimersByTimeAsync(60); // run #1 is mid-flight, awaiting executeAction
+
+    expect(translate).toHaveBeenCalledTimes(1);
+
+    // Two more events while run #1 is still executing: neither may start a
+    // concurrent run, and they must coalesce into a single follow-up.
+    changeCallback!('second.ts');
+    changeCallback!('third.ts');
+    await jest.advanceTimersByTimeAsync(60);
+
+    expect(translate).toHaveBeenCalledTimes(1);
+    expect(mockExecutorInstance.launchBrowser).toHaveBeenCalledTimes(1);
+
+    resolveFirstAction({ success: true, duration: 5, context: {} });
+    await jest.advanceTimersByTimeAsync(0);
+
+    // Exactly one coalesced rerun, reflecting the latest event, on the same session.
+    expect(translate).toHaveBeenCalledTimes(2);
+    expect(translate).toHaveBeenLastCalledWith(
+      'click submit',
+      expect.objectContaining({ url: expect.stringContaining('third.ts') }),
+    );
+    expect(mockExecutorInstance.launchBrowser).toHaveBeenCalledTimes(1);
+    expect(mockExecutorInstance.createPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start a concurrent run while failure recovery is in progress', async () => {
+    const { translate } = await import('../src/translator');
+    mockExecutorInstance.executeAction.mockRejectedValueOnce(new Error('page crashed'));
+
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start();
+
+    changeCallback!('first.ts');
+    await jest.advanceTimersByTimeAsync(60); // run #1 fails; recovery is in its 2000ms backoff
+
+    // An event landing during recovery must not observe the torn-down session
+    // and launch its own browser alongside recovery's re-init.
+    changeCallback!('second.ts');
+    await jest.advanceTimersByTimeAsync(60);
+
+    // Still inside recovery's backoff: the second run must not have started,
+    // and no extra browser may have been launched against the torn-down session.
+    expect(translate).toHaveBeenCalledTimes(1);
+    expect(mockExecutorInstance.launchBrowser).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(2000);
+    await jest.advanceTimersByTimeAsync(0);
+
+    expect(mockExecutorInstance.cleanup).toHaveBeenCalledTimes(1);
+    // start() init + recovery re-init only — no third launch from the second run.
+    expect(mockExecutorInstance.launchBrowser).toHaveBeenCalledTimes(2);
+    expect(translate).toHaveBeenCalledTimes(2);
+  });
+
+  it('stop() waits for the in-flight execution before tearing down the browser', async () => {
+    let resolveAction!: (v: unknown) => void;
+    mockExecutorInstance.executeAction.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveAction = resolve;
+        }),
+    );
+
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start();
+
+    changeCallback!('src/test.ts');
+    await jest.advanceTimersByTimeAsync(60); // run is mid-flight
+
+    const stopPromise = watcher.stop();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(mockExecutorInstance.cleanup).not.toHaveBeenCalled();
+
+    resolveAction({ success: true, duration: 5, context: {} });
+    await stopPromise;
+    expect(mockExecutorInstance.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it('recovers the browser session when an action throws', async () => {
     mockExecutorInstance.executeAction.mockRejectedValueOnce(new Error('page crashed'));
 

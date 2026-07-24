@@ -38,6 +38,9 @@ export class FileWatcher {
   private executor?: ActionExecutor;
   private page?: Page;
   private browserSessionActive = false;
+  private activeExecution?: Promise<void>;
+  private pendingEvent?: WatchEvent;
+  private initPromise?: Promise<void>;
 
   constructor(options: WatchOptions = {}) {
     const config = loadConfig();
@@ -117,6 +120,13 @@ export class FileWatcher {
       this.watcher = undefined;
     }
 
+    // Let any in-flight execution finish (dropping queued reruns) before
+    // tearing down the browser session it is using.
+    this.pendingEvent = undefined;
+    if (this.activeExecution) {
+      await this.activeExecution.catch(() => {});
+    }
+
     // Clean up browser session
     await this.cleanupBrowserSession();
 
@@ -138,8 +148,31 @@ export class FileWatcher {
 
     // Set new debounce timer
     this.debounceTimer = setTimeout(() => {
-      this.executeInstruction(event);
+      this.scheduleExecution(event);
     }, this.options.debounceMs);
+  }
+
+  /**
+   * Serialize executions: at most one executeInstruction runs at a time.
+   * Events arriving mid-run coalesce into a single follow-up run using the
+   * latest event, mirroring the debounce semantics.
+   */
+  private scheduleExecution(event: WatchEvent): void {
+    if (this.activeExecution) {
+      this.pendingEvent = event;
+      return;
+    }
+
+    // executeInstruction catches its own errors, but finally here guarantees the
+    // guard clears even if that ever changes — a stuck guard would halt the watcher.
+    this.activeExecution = this.executeInstruction(event).finally(() => {
+      this.activeExecution = undefined;
+      const next = this.pendingEvent;
+      this.pendingEvent = undefined;
+      if (next) {
+        this.scheduleExecution(next);
+      }
+    });
   }
 
   private async executeInstruction(event: WatchEvent): Promise<void> {
@@ -282,6 +315,19 @@ export class FileWatcher {
       return;
     }
 
+    // Reentrancy guard: a concurrent caller awaits the in-progress init instead
+    // of launching a second browser and overwriting executor/page mid-flight.
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = this.doInitializeBrowserSession().finally(() => {
+      this.initPromise = undefined;
+    });
+    return this.initPromise;
+  }
+
+  private async doInitializeBrowserSession(): Promise<void> {
     try {
       console.log('🌐 Initializing browser session...');
 
@@ -317,6 +363,11 @@ export class FileWatcher {
    * Clean up browser session.
    */
   private async cleanupBrowserSession(): Promise<void> {
+    // Never tear down fields an in-progress init is still assigning.
+    if (this.initPromise) {
+      await this.initPromise.catch(() => {});
+    }
+
     if (!this.browserSessionActive) {
       return;
     }
