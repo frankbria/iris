@@ -169,8 +169,9 @@ export class SmartAIVisionClient {
           continue;
         }
 
-        // Check budget before making API call
-        if (this.costTracker) {
+        // Check budget before making API call — paid providers only (issue
+        // #68): free providers (Ollama, pricing 0) proceed regardless.
+        if (this.costTracker && this.costTracker.getPricing(providerName, model) > 0) {
           const budgetStatus = this.costTracker.getBudgetStatus();
           if (budgetStatus.circuitBreakerTriggered) {
             throw new Error('Budget limit exceeded - circuit breaker activated');

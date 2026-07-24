@@ -274,7 +274,8 @@ export class CostTracker {
    * @param cached - Whether result was cached
    * @param usage - Optional token usage from the provider
    * @returns Cost of operation
-   * @throws Error if circuit breaker is triggered
+   * @throws Error if circuit breaker is triggered and the operation is paid
+   *   (cost > 0); cached and free-provider operations always succeed
    */
   trackOperation(
     provider: string,
@@ -282,15 +283,19 @@ export class CostTracker {
     cached: boolean = false,
     usage?: TokenUsage,
   ): number {
-    // Check circuit breaker (before recording, so enforcement is not bypassed)
-    const status = this.getBudgetStatus();
-    if (this.budget.enableCircuitBreaker && status.circuitBreakerTriggered) {
-      throw new Error(
-        'Budget limit exceeded - circuit breaker activated. No further API calls allowed.',
-      );
-    }
-
     const cost = this.computeCost(provider, model, cached, usage);
+
+    // Circuit breaker blocks only paid operations (issue #68): cache hits and
+    // free providers (Ollama) cost $0 and must always proceed. Checked before
+    // recording, so paid enforcement is not bypassed.
+    if (cost > 0 && this.budget.enableCircuitBreaker) {
+      const status = this.getBudgetStatus();
+      if (status.circuitBreakerTriggered) {
+        throw new Error(
+          'Budget limit exceeded - circuit breaker activated. No further API calls allowed.',
+        );
+      }
+    }
 
     // Record entry (persist token counts when provided)
     const stmt = this.db.prepare(`

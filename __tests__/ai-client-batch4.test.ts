@@ -297,6 +297,36 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       expect(status.circuitBreakerTriggered).toBe(true);
     });
 
+    // Regression tests for issue #68: the breaker must block only paid
+    // operations — $0 cache hits and free providers always proceed.
+    describe('circuit breaker with free operations (issue #68)', () => {
+      const tripBreaker = () => {
+        expect(() => {
+          for (let i = 0; i < 3000; i++) {
+            tracker.trackOperation('openai', 'gpt-4o', false);
+          }
+        }).toThrow(/circuit breaker/i);
+        expect(tracker.getBudgetStatus().circuitBreakerTriggered).toBe(true);
+      };
+
+      it('allows cached operations after the breaker has tripped', () => {
+        tripBreaker();
+        expect(tracker.trackOperation('openai', 'gpt-4o', true)).toBe(0);
+      });
+
+      it('allows free-provider (ollama) operations after the breaker has tripped', () => {
+        tripBreaker();
+        expect(tracker.trackOperation('ollama', 'llava', false)).toBe(0);
+      });
+
+      it('still blocks paid operations after the breaker has tripped', () => {
+        tripBreaker();
+        expect(() => tracker.trackOperation('openai', 'gpt-4o', false)).toThrow(
+          /Budget limit exceeded/,
+        );
+      });
+    });
+
     it('should track cost by provider and model', () => {
       tracker.trackOperation('openai', 'gpt-4o', false);
       tracker.trackOperation('anthropic', 'claude-3-5-sonnet-20241022', false);
@@ -583,8 +613,10 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         .spyOn(CostTracker.prototype, 'getBudgetStatus')
         .mockReturnValue({ circuitBreakerTriggered: true } as never);
 
+      // Paid provider+model: the pre-attempt breaker check only applies when
+      // getPricing(...) > 0 (issue #68), so 'gpt-4o' must be explicit here.
       const client = createSmartClient(
-        { ...mockConfig, ai: { ...mockConfig.ai, provider: 'openai' } },
+        { ...mockConfig, ai: { ...mockConfig.ai, provider: 'openai', model: 'gpt-4o' } },
         {
           enableFallback: false,
           cacheConfig: { dbPath: ':memory:' },
@@ -596,6 +628,82 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         client.analyzeVisualDiff({ baseline: Buffer.from('b'), current: Buffer.from('c') }),
       ).rejects.toThrow(/circuit breaker activated/i);
       expect(fakeClient.analyzeVisualDiff).not.toHaveBeenCalled();
+
+      client.close();
+      factorySpy.mockRestore();
+      budgetSpy.mockRestore();
+      preprocessSpy.mockRestore();
+    });
+
+    // Issue #68: a cache hit is free, so an exhausted budget must not turn a
+    // correct cached answer into a thrown error.
+    it('serves a cache hit even after the budget is exhausted', async () => {
+      const preprocessSpy = stubPreprocess();
+      const result = {
+        severity: 'minor' as const,
+        confidence: 0.9,
+        reasoning: 'cached under exhausted budget',
+        categories: ['color' as const],
+      };
+      const fakeClient = {
+        analyzeVisualDiff: jest.fn().mockResolvedValue(result),
+        isAvailable: jest.fn().mockResolvedValue(true),
+      };
+      const factorySpy = jest.spyOn(AIClientFactory, 'create').mockReturnValue(fakeClient as never);
+
+      // Daily limit below one gpt-4o call: the first (paid) call exhausts the
+      // budget, so the second call runs with the breaker genuinely tripped.
+      const client = createSmartClient(
+        { ...mockConfig, ai: { ...mockConfig.ai, provider: 'openai', model: 'gpt-4o' } },
+        {
+          enableFallback: false,
+          cacheConfig: { dbPath: ':memory:' },
+          costConfig: { dbPath: ':memory:', dailyLimit: 0.001, monthlyLimit: 0.001 },
+        },
+      );
+
+      const request = { baseline: Buffer.from('b'), current: Buffer.from('c') };
+      const first = await client.analyzeVisualDiff(request);
+      expect(client.getBudgetStatus()?.circuitBreakerTriggered).toBe(true);
+
+      const second = await client.analyzeVisualDiff(request);
+      expect(second).toEqual(first);
+      expect(fakeClient.analyzeVisualDiff).toHaveBeenCalledTimes(1); // cache hit, no API call
+
+      client.close();
+      factorySpy.mockRestore();
+      preprocessSpy.mockRestore();
+    });
+
+    // Issue #68: the pre-attempt breaker check only applies to paid providers —
+    // free local Ollama proceeds even when the budget is exhausted.
+    it('lets free Ollama calls through when the budget is exhausted', async () => {
+      const preprocessSpy = stubPreprocess();
+      const result = {
+        severity: 'minor' as const,
+        confidence: 0.8,
+        reasoning: 'ollama under exhausted budget',
+        categories: ['layout' as const],
+      };
+      const fakeClient = {
+        analyzeVisualDiff: jest.fn().mockResolvedValue(result),
+        isAvailable: jest.fn().mockResolvedValue(true),
+      };
+      const factorySpy = jest.spyOn(AIClientFactory, 'create').mockReturnValue(fakeClient as never);
+      const budgetSpy = jest
+        .spyOn(CostTracker.prototype, 'getBudgetStatus')
+        .mockReturnValue({ circuitBreakerTriggered: true } as never);
+
+      const client = createSmartClient(mockConfig, {
+        enableFallback: false,
+        cacheConfig: { dbPath: ':memory:' },
+        costConfig: { dbPath: ':memory:' },
+      });
+
+      await expect(
+        client.analyzeVisualDiff({ baseline: Buffer.from('b'), current: Buffer.from('c') }),
+      ).resolves.toEqual(result);
+      expect(fakeClient.analyzeVisualDiff).toHaveBeenCalledTimes(1);
 
       client.close();
       factorySpy.mockRestore();
