@@ -163,8 +163,8 @@ export class FileWatcher {
       return;
     }
 
-    // executeInstruction catches its own errors, but finally here guarantees the
-    // guard clears even if that ever changes — a stuck guard would halt the watcher.
+    // The settle handler drives the coalesced follow-up run; finally (not then)
+    // so the guard also clears if executeInstruction ever starts rejecting.
     this.activeExecution = this.executeInstruction(event).finally(() => {
       this.activeExecution = undefined;
       const next = this.pendingEvent;
@@ -352,6 +352,13 @@ export class FileWatcher {
 
       console.log('✅ Browser session initialized');
     } catch (error) {
+      // Tear down a partially initialized session (e.g. browser launched but
+      // page creation failed) so the failed init doesn't orphan a Chromium process.
+      if (this.executor) {
+        await this.executor.cleanup().catch(() => {});
+        this.executor = undefined;
+      }
+      this.page = undefined;
       this.browserSessionActive = false;
       throw new Error(
         `Browser session initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`,

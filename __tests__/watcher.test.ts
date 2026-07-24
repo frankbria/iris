@@ -615,6 +615,65 @@ describe('FileWatcher execute-mode runtime', () => {
     expect(mockExecutorInstance.cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it('concurrent initializeBrowserSession callers share a single launch', async () => {
+    let resolveCreatePage!: (v: unknown) => void;
+    mockExecutorInstance.createPage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCreatePage = resolve;
+        }),
+    );
+
+    const watcher = new FileWatcher({ execute: true });
+    const first = watcher['initializeBrowserSession']();
+    const second = watcher['initializeBrowserSession'](); // re-entry mid-init
+
+    await jest.advanceTimersByTimeAsync(0); // let init reach the pending createPage
+    resolveCreatePage(mockPage);
+    await Promise.all([first, second]);
+
+    expect(mockExecutorInstance.launchBrowser).toHaveBeenCalledTimes(1);
+    expect(mockExecutorInstance.createPage).toHaveBeenCalledTimes(1);
+    expect(watcher.getStatus().browserSessionActive).toBe(true);
+  });
+
+  it('cleanupBrowserSession waits for an in-progress init instead of tearing it mid-flight', async () => {
+    let resolveCreatePage!: (v: unknown) => void;
+    mockExecutorInstance.createPage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCreatePage = resolve;
+        }),
+    );
+
+    const watcher = new FileWatcher({ execute: true });
+    const initPromise = watcher['initializeBrowserSession']();
+    const cleanupPromise = watcher['cleanupBrowserSession']();
+
+    await Promise.resolve(); // let cleanup reach its await on the init promise
+    expect(mockExecutorInstance.cleanup).not.toHaveBeenCalled();
+
+    resolveCreatePage(mockPage);
+    await Promise.all([initPromise, cleanupPromise]);
+
+    expect(mockExecutorInstance.cleanup).toHaveBeenCalledTimes(1);
+    expect(watcher.getStatus().browserSessionActive).toBe(false);
+  });
+
+  it('does not leak a launched browser when createPage fails during init', async () => {
+    mockExecutorInstance.createPage.mockRejectedValueOnce(new Error('no page'));
+
+    const watcher = new FileWatcher({ execute: true });
+
+    await expect(watcher['initializeBrowserSession']()).rejects.toThrow(
+      'Browser session initialization failed',
+    );
+
+    // The successfully launched browser must be torn down, not orphaned.
+    expect(mockExecutorInstance.cleanup).toHaveBeenCalledTimes(1);
+    expect(watcher.getStatus().browserSessionActive).toBe(false);
+  });
+
   it('recovers the browser session when an action throws', async () => {
     mockExecutorInstance.executeAction.mockRejectedValueOnce(new Error('page crashed'));
 
