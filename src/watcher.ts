@@ -110,6 +110,11 @@ export class FileWatcher {
 
     console.log('⏹️  Stopping file watcher...');
 
+    // Mark as stopped up front: chokidar can still emit during close(), and a
+    // debounce timer set then would otherwise fire after teardown and relaunch
+    // a browser with no owner left to clean it up.
+    this.isRunning = false;
+
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = undefined;
@@ -120,8 +125,9 @@ export class FileWatcher {
       this.watcher = undefined;
     }
 
-    // Let any in-flight execution finish (dropping queued reruns) before
-    // tearing down the browser session it is using.
+    // Let the in-flight execution finish before tearing down the browser
+    // session it is using; the coalesced follow-up is dropped, and the
+    // isRunning guard in scheduleExecution blocks anything scheduled later.
     this.pendingEvent = undefined;
     if (this.activeExecution) {
       await this.activeExecution.catch(() => {});
@@ -130,7 +136,6 @@ export class FileWatcher {
     // Clean up browser session
     await this.cleanupBrowserSession();
 
-    this.isRunning = false;
     console.log('✅ File watcher stopped');
   }
 
@@ -158,6 +163,10 @@ export class FileWatcher {
    * latest event, mirroring the debounce semantics.
    */
   private scheduleExecution(event: WatchEvent): void {
+    if (!this.isRunning) {
+      return;
+    }
+
     if (this.activeExecution) {
       this.pendingEvent = event;
       return;

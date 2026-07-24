@@ -615,6 +615,24 @@ describe('FileWatcher execute-mode runtime', () => {
     expect(mockExecutorInstance.cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it('discards events that land while the watcher is stopping', async () => {
+    const { translate } = await import('../src/translator');
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start();
+    await jest.advanceTimersByTimeAsync(1); // let the ready callback mark it running
+
+    const stopPromise = watcher.stop();
+    changeCallback!('late.ts'); // chokidar can still emit during watcher.close()
+    await jest.advanceTimersByTimeAsync(60);
+    await stopPromise;
+    await jest.advanceTimersByTimeAsync(60);
+
+    // The late event must not schedule a run after teardown — that would
+    // relaunch a browser with no owner left to clean it up.
+    expect(translate).not.toHaveBeenCalled();
+    expect(mockExecutorInstance.launchBrowser).toHaveBeenCalledTimes(1); // start() only
+  });
+
   it('concurrent initializeBrowserSession callers share a single launch', async () => {
     let resolveCreatePage!: (v: unknown) => void;
     mockExecutorInstance.createPage.mockImplementationOnce(
