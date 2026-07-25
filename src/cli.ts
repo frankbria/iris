@@ -291,11 +291,15 @@ function resolveSemanticAI(providerFlag?: string): {
   const requested = providerFlag ?? detectProvider(config);
   const provider: AIProvider = requested === 'anthropic' ? 'claude' : (requested as AIProvider);
 
-  // Ollama runs locally: no key, but it needs an endpoint or it throws at call time.
+  // Ollama runs locally: no key, but it needs an endpoint or it throws at call
+  // time. Only honor a configured endpoint when it was configured *for* ollama —
+  // otherwise `--provider ollama` on a machine whose config points at, say, an
+  // OpenAI-compatible proxy would aim the ollama client at that proxy.
   if (provider === 'ollama') {
+    const configuredEndpoint = config.ai.provider === 'ollama' ? config.ai.endpoint : undefined;
     return {
       provider,
-      endpoint: config.ai.endpoint || process.env.OLLAMA_ENDPOINT || DEFAULT_OLLAMA_ENDPOINT,
+      endpoint: configuredEndpoint || process.env.OLLAMA_ENDPOINT || DEFAULT_OLLAMA_ENDPOINT,
     };
   }
 
