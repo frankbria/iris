@@ -81,8 +81,11 @@ npm start visual-diff --pages /
 # Multiple pages
 npm start visual-diff --pages "/,/products,/about"
 
-# With AI semantic analysis
+# With AI semantic analysis. The provider is auto-detected from the environment
+# (OPENAI_API_KEY / ANTHROPIC_API_KEY / OLLAMA_ENDPOINT); pick one explicitly
+# with --provider. Ollama runs locally and needs no API key.
 npm start visual-diff --pages / --semantic
+npm start visual-diff --pages / --semantic --provider ollama
 
 # Update baselines
 npm start visual-diff --pages / --update-baseline
@@ -102,7 +105,8 @@ npm start visual-diff --pages / --format html --output ./reports/visual.html
 ```bash
 --pages <patterns>        # Pages to test (comma-separated)
 --baseline <reference>    # Git branch/commit for baselines (default: main)
---semantic               # Enable AI analysis
+--semantic               # Enable AI analysis (needs an API key, or --provider ollama)
+--provider <name>        # AI provider: openai|anthropic|ollama (default: auto-detect)
 --threshold <value>      # Max fraction of pixels allowed to differ, 0-1 (default: 0.1 = 10%)
 --devices <list>         # Device types (default: desktop)
 --format <type>          # Report format: html, json, junit

@@ -879,12 +879,20 @@ EOF
 # Start server
 python3 -m http.server 8080 --directory pages &
 
-# Run with AI semantic analysis
+# Run with AI semantic analysis. --semantic needs credentials: the provider is
+# auto-detected from OPENAI_API_KEY / ANTHROPIC_API_KEY / OLLAMA_ENDPOINT, or
+# choose one with --provider. Without a usable key the command exits 2 and tells
+# you which variable to set.
 iris visual-diff \
   --pages "http://localhost:8080/homepage.html" \
   --baseline main \
   --semantic \
   --format html
+
+# Local analysis with no API key (requires a running Ollama daemon with llava)
+iris visual-diff \
+  --pages "http://localhost:8080/homepage.html" \
+  --semantic --provider ollama
 
 # View AI analysis in report
 open .iris/reports/visual-diff-*.html
