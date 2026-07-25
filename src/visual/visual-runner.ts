@@ -40,6 +40,12 @@ export interface VisualTestRunnerConfig {
     threshold: number;
     semanticAnalysis: boolean;
     aiProvider: AIProvider;
+    /** API key for `aiProvider`. Required when semanticAnalysis is on and the provider is not `ollama`. */
+    apiKey?: string;
+    /** Vision model override. When unset, AIVisualClassifier picks a current default per provider. */
+    aiModel?: string;
+    /** Provider endpoint. Used by `ollama`, which has no hosted default. */
+    aiEndpoint?: string;
     antiAliasing: boolean;
     regions: Array<{
       name: string;
@@ -122,8 +128,13 @@ export class VisualTestRunner {
     if (config.diff.semanticAnalysis) {
       this.aiClassifier = new AIVisualClassifier({
         provider: config.diff.aiProvider,
-        model:
-          config.diff.aiProvider === 'openai' ? 'gpt-4-vision-preview' : 'claude-3-opus-20240229',
+        apiKey: config.diff.apiKey,
+        // Deliberately pass through undefined when no override is configured:
+        // AIVisualClassifier already resolves a current default per provider
+        // (gpt-4o / claude-3-5-sonnet / llava). Pinning models here is what left
+        // the runner requesting retired ones (issue #111).
+        model: config.diff.aiModel,
+        baseURL: config.diff.aiEndpoint,
         maxTokens: 1024,
         temperature: 0.1,
       });

@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { ensureDatabaseDir } from '../db';
 import { AIVisionResponse } from './base';
 import { AIVisionResponseSchema } from './types';
 
@@ -106,6 +107,7 @@ export class AIVisionCache {
     this.memoryCache = new Map();
 
     // Initialize SQLite database
+    ensureDatabaseDir(this.config.dbPath);
     this.db = new Database(this.config.dbPath);
     this.initializeDatabase();
 

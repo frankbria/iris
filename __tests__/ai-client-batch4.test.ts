@@ -756,4 +756,94 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       tracker.close();
     });
   });
+
+  // Security regression guard: the fallback chain steps across vendors, so a
+  // wholesale config spread would attach the configured provider's key to every
+  // other provider's client — an Anthropic user falling back through OpenAI would
+  // transmit `Authorization: Bearer sk-ant-...` to api.openai.com. This path was
+  // dormant until #111 made `visual-diff --semantic` reachable. See #74.
+  describe('cross-provider credential isolation', () => {
+    const irisConfig: IrisConfig = {
+      ai: { provider: 'anthropic', apiKey: 'sk-ant-secret', model: 'claude-3-5-sonnet-20241022' },
+      watch: { patterns: [], debounceMs: 1000, ignore: [] },
+      browser: { headless: true, timeout: 30000 },
+    };
+    // Cache/cost tracking off so the test opens no SQLite files.
+    const smartOpts = { enableCache: false, enableCostTracking: false };
+
+    // getClient is private; exercised directly because the leak happens at client
+    // construction, before any request is issued.
+    const clientFor = (smart: unknown, provider: string) =>
+      (smart as { getClient(p: string): { config: { apiKey?: string; endpoint?: string } } })[
+        'getClient'
+      ](provider);
+
+    it('never forwards the configured key to a different provider', () => {
+      const smart = createSmartClient(irisConfig, smartOpts);
+
+      expect(clientFor(smart, 'openai').config.apiKey).toBeUndefined();
+      expect(clientFor(smart, 'ollama').config.apiKey).toBeUndefined();
+      // ...while the provider it was actually configured for still gets it.
+      expect(clientFor(smart, 'anthropic').config.apiKey).toBe('sk-ant-secret');
+    });
+
+    it('reports a credential-less provider as unavailable so it is skipped, not called', async () => {
+      const smart = createSmartClient(irisConfig, smartOpts);
+      const openai = clientFor(smart, 'openai') as unknown as {
+        isAvailable(): Promise<boolean>;
+      };
+
+      // isAvailable() === false is what keeps the request from ever being sent.
+      await expect(openai.isAvailable()).resolves.toBe(false);
+    });
+
+    it('does not leak a configured endpoint to another provider', () => {
+      const smart = createSmartClient(
+        { ...irisConfig, ai: { ...irisConfig.ai, endpoint: 'https://proxy.internal/v1' } },
+        smartOpts,
+      );
+
+      expect(clientFor(smart, 'ollama').config.endpoint).toBeUndefined();
+    });
+  });
+
+  // Issue #111: better-sqlite3 refuses to create missing directories, so both of
+  // these threw "Cannot open database because the directory does not exist" for
+  // any user whose configured DB directory did not already exist — which made
+  // `visual-diff --semantic` crash 100% of the time even once a key was wired.
+  describe('database directory creation', () => {
+    let tmpRoot: string;
+
+    beforeEach(() => {
+      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-dbdir-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('creates the parent directory for the vision cache', () => {
+      const dbPath = path.join(tmpRoot, 'nested', 'cache', 'vision-cache.db');
+
+      const cache = new AIVisionCache({ dbPath });
+
+      expect(fs.existsSync(path.dirname(dbPath))).toBe(true);
+      cache.close();
+    });
+
+    it('creates the parent directory for the cost tracker', () => {
+      const dbPath = path.join(tmpRoot, 'nested', 'cache', 'cost-tracking.db');
+
+      const tracker = new CostTracker(dbPath);
+
+      expect(fs.existsSync(path.dirname(dbPath))).toBe(true);
+      tracker.close();
+    });
+
+    // No test asserts the `dbPath !== ':memory:'` guard in ensureDatabaseDir:
+    // path.dirname(':memory:') is '.', which always exists, so the !existsSync
+    // check already short-circuits and any such test would pass with the guard
+    // removed. The guard is retained as intent-documentation (mirroring the
+    // original in src/db.ts); ':memory:' behavior is covered throughout this file.
+  });
 });

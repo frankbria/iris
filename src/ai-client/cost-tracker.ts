@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { ensureDatabaseDir } from '../db';
 
 /**
  * AI provider pricing configuration
@@ -168,6 +169,7 @@ export class CostTracker {
   private tokenPricing: Map<string, TokenRates>;
 
   constructor(dbPath: string = ':memory:', budget: BudgetConfig = {}) {
+    ensureDatabaseDir(dbPath);
     this.db = new Database(dbPath);
     this.budget = { ...DEFAULT_BUDGET, ...budget };
     this.pricing = new Map();

@@ -59,13 +59,16 @@ const DEFAULT_CONFIG: Required<Omit<SmartClientConfig, 'cacheConfig' | 'costConf
   enableCostTracking: true,
   enableFallback: true,
   fallbackChain: ['ollama', 'openai', 'anthropic'],
+  // These live under `.iris/` alongside baselines/screenshots/reports: it is
+  // already gitignored, whereas the previous `./data/` default was not — users
+  // would have committed their cache and cost history (issue #111).
   cacheConfig: {
     maxMemoryEntries: 100,
     ttlMs: 30 * 24 * 60 * 60 * 1000,
-    dbPath: './data/vision-cache.db',
+    dbPath: '.iris/cache/vision-cache.db',
   },
   costConfig: {
-    dbPath: './data/cost-tracking.db',
+    dbPath: '.iris/cache/cost-tracking.db',
     dailyLimit: 10.0,
     monthlyLimit: 200.0,
   },
@@ -225,6 +228,15 @@ export class SmartAIVisionClient {
     let client = this.clients.get(providerName);
 
     if (!client) {
+      // Credentials are per-vendor, but the fallback chain steps across vendors.
+      // Spreading `...this.irisConfig.ai` wholesale would attach the configured
+      // provider's key to every other provider's client — e.g. an Anthropic user
+      // falling back through OpenAI would send `Authorization: Bearer sk-ant-...`
+      // to api.openai.com. Scope the credential (and endpoint) to the provider it
+      // was configured for; without a key `isAvailable()` is false, so the
+      // mismatched provider is skipped rather than contacted. See #74.
+      const isConfiguredProvider = providerName === this.irisConfig.ai.provider;
+
       // Create config for this provider
       const providerConfig: IrisConfig = {
         ...this.irisConfig,
@@ -232,6 +244,8 @@ export class SmartAIVisionClient {
           ...this.irisConfig.ai,
           provider: providerName as 'openai' | 'anthropic' | 'ollama',
           model: this.resolveModel(providerName),
+          apiKey: isConfiguredProvider ? this.irisConfig.ai.apiKey : undefined,
+          endpoint: isConfiguredProvider ? this.irisConfig.ai.endpoint : undefined,
         },
       };
 

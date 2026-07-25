@@ -2,6 +2,31 @@
  * Integration tests for visual-diff CLI command
  */
 
+type MockedAiConfig = {
+  provider: 'openai' | 'anthropic' | 'ollama';
+  apiKey?: string;
+  model?: string;
+  endpoint?: string;
+};
+
+/**
+ * Stub `src/config` so provider/key resolution is deterministic.
+ *
+ * The real `loadConfig()` reads `~/.iris/config.json` and `loadDotenv()` reads
+ * the repo's `.env` — either could inject a developer's real API key and flip
+ * the assertions below depending on whose machine runs the suite.
+ */
+function mockIrisConfig(ai: MockedAiConfig): void {
+  jest.doMock('../src/config', () => ({
+    loadDotenv: jest.fn(),
+    loadConfig: jest.fn(() => ({
+      ai: { model: 'gpt-4o-mini', ...ai },
+      watch: { patterns: [], debounceMs: 1000, ignore: [] },
+      browser: { headless: true, timeout: 30000 },
+    })),
+  }));
+}
+
 describe('visual-diff CLI command', () => {
   // Mock console methods to capture output
   let consoleLogSpy: jest.SpyInstance;
@@ -255,6 +280,10 @@ describe('visual-diff CLI command', () => {
         results: [],
         duration: 1000,
       });
+
+      // --semantic now requires resolvable credentials, so stub the config
+      // resolution rather than depending on the developer's environment.
+      mockIrisConfig({ provider: 'openai', apiKey: 'sk-test', model: 'gpt-4o' });
 
       jest.doMock('../src/visual/visual-runner', () => ({
         VisualTestRunner: jest.fn().mockImplementation((config) => {
@@ -611,6 +640,205 @@ describe('visual-diff CLI command', () => {
       await freshRunCli(['node', 'iris', 'visual-diff', '--update-baseline']);
 
       expect(mockRun).toHaveBeenCalled();
+    });
+  });
+
+  // Issue #111: --semantic crashed 100% of the time because the CLI hardcoded
+  // `aiProvider: 'openai'` and never plumbed an API key, so the classifier's
+  // constructor guard threw before any comparison ran.
+  describe('--semantic provider wiring', () => {
+    const CREDENTIAL_VARS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OLLAMA_ENDPOINT'] as const;
+    let savedEnv: Record<string, string | undefined>;
+
+    beforeEach(() => {
+      savedEnv = {};
+      for (const key of CREDENTIAL_VARS) {
+        savedEnv[key] = process.env[key];
+        delete process.env[key];
+      }
+    });
+
+    afterEach(() => {
+      for (const key of CREDENTIAL_VARS) {
+        if (savedEnv[key] === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = savedEnv[key];
+        }
+      }
+    });
+
+    /** Run visual-diff against a mocked runner; returns the runner constructor spy. */
+    async function runVisualDiff(args: string[]): Promise<jest.Mock> {
+      const runnerCtor = jest.fn().mockImplementation(() => ({
+        run: jest.fn().mockResolvedValue({
+          summary: {
+            totalComparisons: 1,
+            passed: 1,
+            failed: 0,
+            newBaselines: 0,
+            overallStatus: 'passed',
+            severityCounts: {},
+          },
+          results: [],
+          duration: 1000,
+        }),
+      }));
+
+      jest.doMock('../src/visual/visual-runner', () => ({ VisualTestRunner: runnerCtor }));
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+
+      try {
+        await freshRunCli(['node', 'iris', 'visual-diff', ...args]);
+      } catch {
+        // The process.exit spy throws; guarded paths land here by design.
+      }
+
+      return runnerCtor;
+    }
+
+    const diffConfigOf = (runnerCtor: jest.Mock) => runnerCtor.mock.calls[0][0].diff;
+    const errorOutput = () => consoleErrorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+
+    it('auto-detects provider and key from the environment', async () => {
+      // The stubbed config carries NO key, so a passing assertion can only mean
+      // the key was sourced from the environment.
+      process.env.OPENAI_API_KEY = 'sk-env-openai';
+      mockIrisConfig({ provider: 'openai' });
+
+      const runnerCtor = await runVisualDiff(['--semantic']);
+
+      expect(runnerCtor).toHaveBeenCalledTimes(1);
+      expect(diffConfigOf(runnerCtor)).toMatchObject({
+        semanticAnalysis: true,
+        aiProvider: 'openai',
+        apiKey: 'sk-env-openai',
+      });
+    });
+
+    it('prefers the config-file key over the environment for the same provider', async () => {
+      process.env.OPENAI_API_KEY = 'sk-env-openai';
+      mockIrisConfig({ provider: 'openai', apiKey: 'sk-config-openai' });
+
+      const runnerCtor = await runVisualDiff(['--semantic']);
+
+      expect(diffConfigOf(runnerCtor).apiKey).toBe('sk-config-openai');
+    });
+
+    // Review finding (Minor-1): loadConfig() only auto-detects from env when no
+    // ~/.iris/config.json exists, and its fallback provider is a keyless
+    // 'openai'. Without detectProvider() this told Anthropic-only users to set
+    // OPENAI_API_KEY.
+    it('falls back to the environment when the configured provider has no key', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-env';
+      mockIrisConfig({ provider: 'openai' }); // config file present, keyless default
+
+      const runnerCtor = await runVisualDiff(['--semantic']);
+
+      expect(processExitSpy).not.toHaveBeenCalled();
+      expect(diffConfigOf(runnerCtor)).toMatchObject({
+        aiProvider: 'claude',
+        apiKey: 'sk-ant-env',
+      });
+    });
+
+    it('maps --provider anthropic onto the classifier\'s "claude" vocabulary', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+      mockIrisConfig({ provider: 'anthropic', apiKey: 'sk-ant-test' });
+
+      const runnerCtor = await runVisualDiff(['--semantic', '--provider', 'anthropic']);
+
+      expect(diffConfigOf(runnerCtor)).toMatchObject({
+        aiProvider: 'claude',
+        apiKey: 'sk-ant-test',
+      });
+    });
+
+    it('never hands an OpenAI key to Anthropic when --provider overrides the environment', async () => {
+      process.env.OPENAI_API_KEY = 'sk-openai-only';
+      mockIrisConfig({ provider: 'openai', apiKey: 'sk-openai-only' });
+
+      const runnerCtor = await runVisualDiff(['--semantic', '--provider', 'anthropic']);
+
+      expect(runnerCtor).not.toHaveBeenCalled();
+      expect(processExitSpy).toHaveBeenCalledWith(2);
+      expect(errorOutput()).toContain('ANTHROPIC_API_KEY');
+    });
+
+    it('allows --provider ollama with no API keys configured', async () => {
+      mockIrisConfig({ provider: 'openai' });
+
+      const runnerCtor = await runVisualDiff(['--semantic', '--provider', 'ollama']);
+
+      expect(processExitSpy).not.toHaveBeenCalled();
+      expect(diffConfigOf(runnerCtor)).toMatchObject({
+        aiProvider: 'ollama',
+        aiEndpoint: 'http://localhost:11434',
+      });
+      expect(diffConfigOf(runnerCtor).apiKey).toBeUndefined();
+    });
+
+    it('uses the configured Ollama endpoint when one is set', async () => {
+      mockIrisConfig({ provider: 'ollama', endpoint: 'http://ollama.internal:11434' });
+
+      const runnerCtor = await runVisualDiff(['--semantic']);
+
+      expect(diffConfigOf(runnerCtor)).toMatchObject({
+        aiProvider: 'ollama',
+        aiEndpoint: 'http://ollama.internal:11434',
+      });
+    });
+
+    it('exits 2 with actionable guidance when no API key can be resolved', async () => {
+      mockIrisConfig({ provider: 'openai' });
+
+      const runnerCtor = await runVisualDiff(['--semantic']);
+
+      // The guard must fire before the runner is built — the constructor throw
+      // is not an acceptable error message for the user.
+      expect(runnerCtor).not.toHaveBeenCalled();
+      expect(processExitSpy).toHaveBeenCalledWith(2);
+      const output = errorOutput();
+      expect(output).toContain('OPENAI_API_KEY');
+      expect(output).toContain('--provider ollama');
+    });
+
+    it('does not require credentials when --semantic is absent', async () => {
+      mockIrisConfig({ provider: 'openai' });
+
+      const runnerCtor = await runVisualDiff([]);
+
+      expect(processExitSpy).not.toHaveBeenCalled();
+      expect(diffConfigOf(runnerCtor)).toMatchObject({ semanticAnalysis: false });
+      expect(diffConfigOf(runnerCtor).apiKey).toBeUndefined();
+    });
+
+    // Review finding (Minor-3): the CLI suite mocks VisualTestRunner and the
+    // runner suite mocks AIVisualClassifier, so nothing proved the CLI's mapped
+    // provider string actually survives the classifier's real validation.
+    it('emits a provider value the real AIVisualClassifier accepts', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+      mockIrisConfig({ provider: 'anthropic', apiKey: 'sk-ant-test' });
+      // Automock the smart client so the real constructor validates config
+      // without opening SQLite or reaching the network.
+      jest.doMock('../src/ai-client/smart-client');
+
+      const runnerCtor = await runVisualDiff(['--semantic', '--provider', 'anthropic']);
+      const { aiProvider, apiKey } = diffConfigOf(runnerCtor);
+
+      const { AIVisualClassifier } = await import('../src/visual/ai-classifier');
+      expect(() => new AIVisualClassifier({ provider: aiProvider, apiKey })).not.toThrow();
+    });
+
+    it('rejects an unknown --provider value', async () => {
+      mockIrisConfig({ provider: 'openai', apiKey: 'sk-test' });
+
+      const runnerCtor = await runVisualDiff(['--semantic', '--provider', 'gemini']);
+
+      expect(runnerCtor).not.toHaveBeenCalled();
+      expect(processExitSpy).toHaveBeenCalled();
+      expect(processExitSpy).not.toHaveBeenCalledWith(0);
     });
   });
 });

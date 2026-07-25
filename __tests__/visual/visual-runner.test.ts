@@ -504,6 +504,47 @@ describe('VisualTestRunner', () => {
       );
     });
 
+    // Issue #111: the runner used to construct the classifier with no apiKey and
+    // hardcoded retired model names, so --semantic threw before any test ran.
+    it('should pass credentials through to the AI classifier', () => {
+      new VisualTestRunner({
+        ...defaultConfig,
+        diff: {
+          ...defaultConfig.diff,
+          semanticAnalysis: true,
+          apiKey: 'sk-test-key',
+          aiEndpoint: 'http://localhost:11434',
+        },
+      });
+
+      expect(AIVisualClassifier).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          provider: 'openai',
+          apiKey: 'sk-test-key',
+          baseURL: 'http://localhost:11434',
+          // Left undefined on purpose: AIVisualClassifier already resolves a
+          // current default per provider, so the runner must not pin a model.
+          model: undefined,
+        }),
+      );
+    });
+
+    it('should honour an explicit aiModel override', () => {
+      new VisualTestRunner({
+        ...defaultConfig,
+        diff: {
+          ...defaultConfig.diff,
+          semanticAnalysis: true,
+          apiKey: 'sk-test-key',
+          aiModel: 'gpt-4o-mini',
+        },
+      });
+
+      expect(AIVisualClassifier).toHaveBeenLastCalledWith(
+        expect.objectContaining({ model: 'gpt-4o-mini' }),
+      );
+    });
+
     it('should run AI analysis when enabled and test fails', async () => {
       const configWithAI = {
         ...defaultConfig,
