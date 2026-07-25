@@ -59,13 +59,16 @@ const DEFAULT_CONFIG: Required<Omit<SmartClientConfig, 'cacheConfig' | 'costConf
   enableCostTracking: true,
   enableFallback: true,
   fallbackChain: ['ollama', 'openai', 'anthropic'],
+  // These live under `.iris/` alongside baselines/screenshots/reports: it is
+  // already gitignored, whereas the previous `./data/` default was not — users
+  // would have committed their cache and cost history (issue #111).
   cacheConfig: {
     maxMemoryEntries: 100,
     ttlMs: 30 * 24 * 60 * 60 * 1000,
-    dbPath: './data/vision-cache.db',
+    dbPath: '.iris/cache/vision-cache.db',
   },
   costConfig: {
-    dbPath: './data/cost-tracking.db',
+    dbPath: '.iris/cache/cost-tracking.db',
     dailyLimit: 10.0,
     monthlyLimit: 200.0,
   },

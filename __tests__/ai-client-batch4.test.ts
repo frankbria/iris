@@ -756,4 +756,50 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       tracker.close();
     });
   });
+
+  // Issue #111: better-sqlite3 refuses to create missing directories, so both of
+  // these threw "Cannot open database because the directory does not exist" for
+  // any user whose configured DB directory did not already exist — which made
+  // `visual-diff --semantic` crash 100% of the time even once a key was wired.
+  describe('database directory creation', () => {
+    let tmpRoot: string;
+
+    beforeEach(() => {
+      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-dbdir-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('creates the parent directory for the vision cache', () => {
+      const dbPath = path.join(tmpRoot, 'nested', 'cache', 'vision-cache.db');
+
+      const cache = new AIVisionCache({ dbPath });
+
+      expect(fs.existsSync(path.dirname(dbPath))).toBe(true);
+      cache.close();
+    });
+
+    it('creates the parent directory for the cost tracker', () => {
+      const dbPath = path.join(tmpRoot, 'nested', 'cache', 'cost-tracking.db');
+
+      const tracker = new CostTracker(dbPath);
+
+      expect(fs.existsSync(path.dirname(dbPath))).toBe(true);
+      tracker.close();
+    });
+
+    it('leaves in-memory databases alone', () => {
+      const cache = new AIVisionCache({ dbPath: ':memory:' });
+      const tracker = new CostTracker(':memory:');
+
+      // ':memory:' has no real parent dir; the guard must not create a literal one.
+      expect(fs.existsSync(path.resolve('.'))).toBe(true);
+      expect(fs.existsSync(':memory:')).toBe(false);
+
+      cache.close();
+      tracker.close();
+    });
+  });
 });

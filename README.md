@@ -137,11 +137,15 @@ iris visual-diff \
   --threshold 0.1 \
   --format html
 
-# Enable AI semantic analysis
+# Enable AI semantic analysis. The provider is auto-detected from the
+# environment (OPENAI_API_KEY / ANTHROPIC_API_KEY / OLLAMA_ENDPOINT).
 iris visual-diff \
   --pages "http://localhost:8080/" \
   --semantic \
   --threshold 0.1
+
+# Or pick the provider explicitly. Ollama runs locally and needs no API key.
+iris visual-diff --pages "http://localhost:8080/" --semantic --provider ollama
 ```
 
 **Accessibility Testing:**
@@ -296,6 +300,8 @@ Options:
   --baseline <reference>   Baseline branch/commit (default: main)
   --baseline-strategy <s>  Interpret --baseline as branch|commit|tag (default: branch)
   --semantic              Enable AI semantic analysis
+  --provider <name>       AI provider for --semantic: openai|anthropic|ollama
+                          (default: auto-detected from environment)
   --threshold <value>     Pixel threshold 0-1 (default: 0.1)
   --devices <list>        Devices: desktop,tablet,mobile (default: desktop)
   --format <type>         Output: html|json|junit|markdown (default: html)

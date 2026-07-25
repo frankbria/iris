@@ -2,8 +2,10 @@
 import { Command } from 'commander';
 import * as path from 'path';
 import * as os from 'os';
-import { loadDotenv } from './config';
+import { loadDotenv, loadConfig } from './config';
+import type { IrisConfig } from './config';
 import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-options';
+import type { AIProvider } from './visual/ai-classifier';
 
 const program = new Command();
 program.name('iris').description('Interface Recognition & Interaction Suite').version('0.0.1');
@@ -267,6 +269,70 @@ program
     process.on('SIGTERM', shutdown);
   });
 
+/** Documented default port for a local Ollama daemon. */
+const DEFAULT_OLLAMA_ENDPOINT = 'http://localhost:11434';
+
+/**
+ * Resolve the AI provider and credentials for `visual-diff --semantic`.
+ *
+ * `--provider` wins; otherwise the provider is auto-detected by `loadConfig()`
+ * (`~/.iris/config.json`, then `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` /
+ * `OLLAMA_ENDPOINT`). The key is always chosen to match the *resolved* provider,
+ * so `--provider anthropic` can never pick up an exported `OPENAI_API_KEY`.
+ *
+ * Note the vocabulary shift: config uses `anthropic`, the classifier uses `claude`.
+ */
+function resolveSemanticAI(providerFlag?: string): {
+  provider: AIProvider;
+  apiKey?: string;
+  endpoint?: string;
+} {
+  const config = loadConfig();
+  const requested = providerFlag ?? detectProvider(config);
+  const provider: AIProvider = requested === 'anthropic' ? 'claude' : (requested as AIProvider);
+
+  // Ollama runs locally: no key, but it needs an endpoint or it throws at call time.
+  if (provider === 'ollama') {
+    return {
+      provider,
+      endpoint: config.ai.endpoint || process.env.OLLAMA_ENDPOINT || DEFAULT_OLLAMA_ENDPOINT,
+    };
+  }
+
+  const configProvider = provider === 'openai' ? 'openai' : 'anthropic';
+  const apiKey =
+    config.ai.provider === configProvider && config.ai.apiKey
+      ? config.ai.apiKey
+      : process.env[semanticKeyEnvVar(provider)];
+
+  return { provider, apiKey };
+}
+
+/** Environment variable that supplies the key for a paid vision provider. */
+function semanticKeyEnvVar(provider: AIProvider): string {
+  return provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY';
+}
+
+/**
+ * Pick the provider to use when `--provider` was not passed.
+ *
+ * `loadConfig()` only consults the environment when `~/.iris/config.json` is
+ * absent, and its fallback provider is `openai` with no key. So a user who has
+ * ever run `iris` with a config file, and exports only `ANTHROPIC_API_KEY`, would
+ * otherwise be told to "set OPENAI_API_KEY". When the configured provider carries
+ * no usable credential, believe the environment instead.
+ */
+function detectProvider(config: IrisConfig): IrisConfig['ai']['provider'] {
+  const configured = config.ai.provider;
+  if (configured === 'ollama' || config.ai.apiKey) {
+    return configured;
+  }
+  if (process.env.OPENAI_API_KEY) return 'openai';
+  if (process.env.ANTHROPIC_API_KEY) return 'anthropic';
+  if (process.env.OLLAMA_ENDPOINT) return 'ollama';
+  return configured;
+}
+
 program
   .command('visual-diff')
   .description('Run visual regression testing')
@@ -278,7 +344,16 @@ program
     (v) => parseEnumOption(v, ['branch', 'commit', 'tag'], 'baseline-strategy'),
     'branch',
   )
-  .option('--semantic', 'Enable AI-powered semantic analysis', false)
+  .option(
+    '--semantic',
+    'Enable AI-powered semantic analysis (provider auto-detected from environment; see --provider)',
+    false,
+  )
+  .option(
+    '--provider <name>',
+    'AI provider for --semantic (openai|anthropic|ollama). Default: auto-detect from environment',
+    (v) => parseEnumOption(v, ['openai', 'anthropic', 'ollama'], 'provider'),
+  )
   .option(
     '--threshold <value>',
     'Max fraction of pixels allowed to differ, 0-1 (default 0.1 = 10%)',
@@ -311,6 +386,17 @@ program
   .action(async (options) => {
     const startTime = Date.now();
 
+    // Resolve AI credentials up front, before any browser work: a missing key is
+    // a usage error the user can act on, not a constructor throw surfacing as an
+    // opaque runtime failure mid-run (issue #111).
+    const ai = options.semantic ? resolveSemanticAI(options.provider) : undefined;
+    if (ai && ai.provider !== 'ollama' && !ai.apiKey) {
+      console.error(
+        `\n❌ --semantic requires an API key: set ${semanticKeyEnvVar(ai.provider)}, or use --provider ollama to analyze locally.`,
+      );
+      process.exit(2); // Invalid usage
+    }
+
     try {
       console.log('🎯 Starting visual regression testing...');
 
@@ -339,7 +425,9 @@ program
         diff: {
           threshold: options.threshold,
           semanticAnalysis: options.semantic,
-          aiProvider: 'openai' as const,
+          aiProvider: ai?.provider ?? 'openai',
+          apiKey: ai?.apiKey,
+          aiEndpoint: ai?.endpoint,
           antiAliasing: true,
           regions: [],
           maxConcurrency: options.concurrency,

@@ -45,13 +45,27 @@ const SCHEMA_VERSION = 1;
 /**
  * Initialize SQLite database and create all tables if they don't exist.
  */
-export function initializeDatabase(dbPath: string): Database.Database {
-  // Ensure the parent directory exists with owner-only perms (matches config.ts).
-  // ':memory:' and other special paths have no real dir, so guard on existence.
+/**
+ * Ensure a SQLite file's parent directory exists before opening it.
+ *
+ * better-sqlite3 will not create missing directories — it throws
+ * `Cannot open database because the directory does not exist`. Every DB opened
+ * from a configurable path must call this first (issue #111: the AI vision cache
+ * and cost tracker skipped it, so `visual-diff --semantic` crashed on any machine
+ * that had never created the directory — i.e. all of them).
+ *
+ * Owner-only perms match config.ts, since these files can hold prompt/response
+ * data and cost history. ':memory:' and other special paths have no real dir.
+ */
+export function ensureDatabaseDir(dbPath: string): void {
   const dbDir = path.dirname(dbPath);
   if (dbPath !== ':memory:' && !fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });
   }
+}
+
+export function initializeDatabase(dbPath: string): Database.Database {
+  ensureDatabaseDir(dbPath);
 
   const db = new Database(dbPath);
 
