@@ -15,6 +15,7 @@ program
   .description('Run a natural language instruction')
   .option('--dry-run', 'Only translate without executing actions')
   .option('--headless', 'Run browser in headless mode (default: true)')
+  .option('--url <url>', 'Starting page URL (or set IRIS_BASE_URL)')
   .option(
     '--timeout <ms>',
     'Timeout for actions in milliseconds',
@@ -24,16 +25,17 @@ program
   .action(
     async (
       instruction: string,
-      options: { dryRun?: boolean; headless?: boolean; timeout?: number },
+      options: { dryRun?: boolean; headless?: boolean; timeout?: number; url?: string },
     ) => {
       const startTime = new Date();
       let status: 'success' | 'error' = 'success';
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const executionResults: any[] = [];
+      const startUrl = options.url || process.env.IRIS_BASE_URL;
 
       try {
         const { translate } = await import('./translator');
-        const result = await translate(instruction);
+        const result = await translate(instruction, startUrl ? { url: startUrl } : undefined);
 
         console.log(`✨ Translation result (${result.method}):`);
         console.log(`   Actions: ${JSON.stringify(result.actions)}`);
@@ -76,8 +78,28 @@ program
               console.log('   Launching visible browser with developer tools...');
             }
 
+            // Open the starting page first, otherwise every non-navigate action
+            // runs against about:blank (issue #112). Routed through executeAction
+            // so the URL policy applies to the user-supplied URL. Skipped when the
+            // instruction already begins with a navigation, to avoid loading twice.
+            let startPageReady = true;
+            if (startUrl && result.actions[0].type !== 'navigate') {
+              console.log(`   Opening starting page: ${startUrl}`);
+              const navResult = await executor.executeAction(
+                { type: 'navigate', url: startUrl },
+                page,
+              );
+              executionResults.push(navResult);
+
+              if (!navResult.success) {
+                console.log(`   ❌ Failed to open starting page: ${navResult.error}`);
+                status = 'error';
+                startPageReady = false;
+              }
+            }
+
             // Execute each action and report progress
-            for (let i = 0; i < result.actions.length; i++) {
+            for (let i = 0; startPageReady && i < result.actions.length; i++) {
               const action = result.actions[i];
               console.log(
                 `   [${i + 1}/${result.actions.length}] Executing: ${action.type} ${action.type === 'navigate' ? action.url : action.selector}${action.type === 'fill' ? ` = "${action.text}"` : ''}`,
@@ -605,6 +627,14 @@ program
 
 export async function runCli(args: string[]): Promise<void> {
   loadDotenv(); // pick up .env before any command reads process.env
+  // `program` is a module-level singleton and commander keeps parsed option values
+  // on it, so a second runCli() in the same process would inherit the previous
+  // run's flags (e.g. a leftover --dry-run). Reset every option to its default.
+  for (const cmd of program.commands) {
+    for (const opt of cmd.options) {
+      cmd.setOptionValueWithSource(opt.attributeName(), opt.defaultValue, 'default');
+    }
+  }
   await program.parseAsync(args, { from: 'node' });
 }
 

@@ -2,6 +2,8 @@ import { runCli } from '../src/cli';
 import { initializeDatabase, getTestRuns } from '../src/db';
 import * as dbModule from '../src/db';
 import * as protocolModule from '../src/protocol';
+import * as translatorModule from '../src/translator';
+import * as executorModule from '../src/executor';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -191,5 +193,124 @@ describe('CLI Commands', () => {
 
     mockExit.mockRestore();
     mockWrite.mockRestore();
+  });
+
+  // Issue #112: `run` used to execute every action against about:blank because it
+  // never navigated. These cover the --url / IRIS_BASE_URL starting page.
+  describe('run command starting page (--url)', () => {
+    /**
+     * Stub the executor's browser lifecycle so the run action exercises its own
+     * navigation logic without launching Playwright. executeAction is the seam we
+     * assert on — the initial navigation must go through it (and therefore through
+     * the URL policy), not through page.goto directly.
+     */
+    const stubExecutor = (
+      executeAction: jest.Mock = jest.fn().mockResolvedValue({ success: true, duration: 1 }),
+    ) => {
+      jest
+        .spyOn(executorModule.ActionExecutor.prototype, 'launchBrowser')
+        .mockResolvedValue({} as never);
+      jest.spyOn(executorModule.ActionExecutor.prototype, 'createPage').mockResolvedValue({
+        page: true,
+      } as never);
+      jest.spyOn(executorModule.ActionExecutor.prototype, 'cleanup').mockResolvedValue();
+      jest
+        .spyOn(executorModule.ActionExecutor.prototype, 'executeAction')
+        .mockImplementation(executeAction);
+      return executeAction;
+    };
+
+    beforeEach(() => {
+      // Keep run persistence off disk; the finally block always writes a test run.
+      jest.spyOn(dbModule, 'initializeDatabase').mockReturnValue({ close: jest.fn() } as never);
+      jest.spyOn(dbModule, 'insertTestRun').mockImplementation(() => undefined as never);
+      jest
+        .spyOn(console, 'error')
+        .mockImplementation((...args) => consoleOutput.push(args.join(' ')));
+      delete process.env.IRIS_BASE_URL;
+    });
+
+    afterEach(() => {
+      delete process.env.IRIS_BASE_URL;
+    });
+
+    test('passes the starting url to translate as context', async () => {
+      const translateSpy = jest.spyOn(translatorModule, 'translate');
+
+      await runCli([
+        'node',
+        'iris',
+        'run',
+        'click #btn',
+        '--dry-run',
+        '--url',
+        'https://example.com',
+      ]);
+
+      expect(translateSpy).toHaveBeenCalledWith('click #btn', { url: 'https://example.com' });
+    });
+
+    test('navigates to the starting url before the translated actions', async () => {
+      const executeAction = stubExecutor();
+
+      await runCli(['node', 'iris', 'run', 'click #btn', '--url', 'https://example.com']);
+
+      expect(executeAction.mock.calls.map((c) => c[0])).toEqual([
+        { type: 'navigate', url: 'https://example.com' },
+        { type: 'click', selector: '#btn' },
+      ]);
+    });
+
+    test('falls back to IRIS_BASE_URL when --url is omitted', async () => {
+      process.env.IRIS_BASE_URL = 'https://env.example.com';
+      const executeAction = stubExecutor();
+
+      await runCli(['node', 'iris', 'run', 'click #btn']);
+
+      expect(executeAction.mock.calls[0][0]).toEqual({
+        type: 'navigate',
+        url: 'https://env.example.com',
+      });
+    });
+
+    test('skips the initial navigation when the instruction already navigates', async () => {
+      const executeAction = stubExecutor();
+
+      await runCli([
+        'node',
+        'iris',
+        'run',
+        'navigate to https://other.example.com',
+        '--url',
+        'https://example.com',
+      ]);
+
+      expect(executeAction.mock.calls.map((c) => c[0])).toEqual([
+        { type: 'navigate', url: 'https://other.example.com' },
+      ]);
+    });
+
+    test('does not run the translated actions when the initial navigation fails', async () => {
+      const executeAction = stubExecutor(
+        jest
+          .fn()
+          .mockResolvedValue({ success: false, error: 'blocked by url policy', duration: 1 }),
+      );
+
+      await runCli(['node', 'iris', 'run', 'click #btn', '--url', 'http://169.254.169.254']);
+
+      expect(executeAction).toHaveBeenCalledTimes(1);
+      expect(consoleOutput.some((log) => log.includes('blocked by url policy'))).toBe(true);
+    });
+
+    test('runs against the blank page as before when no starting url is given', async () => {
+      const executeAction = stubExecutor();
+
+      await runCli(['node', 'iris', 'run', 'click #btn']);
+
+      expect(executeAction.mock.calls.map((c) => c[0])).toEqual([
+        { type: 'click', selector: '#btn' },
+      ]);
+    });
   });
 });

@@ -21,7 +21,7 @@ commit `bdf7b7d` before planning. Plans are self-contained executor handoffs.
 | Plan | `[PX.Y]` | Title | Issue | Depends on | Status |
 |------|----------|-------|-------|-----------|--------|
 | 009 | `P1.6` | Wire AI provider/key into `visual-diff --semantic` (always crashes today) | [#111](https://github.com/frankbria/iris/issues/111) | — | DONE |
-| 010 | `P1.7` | `iris run --url` starting page (actions hit about:blank today) | [#112](https://github.com/frankbria/iris/issues/112) | — | TODO |
+| 010 | `P1.7` | `iris run --url` starting page (actions hit about:blank today) | [#112](https://github.com/frankbria/iris/issues/112) | — | DONE |
 | 011 | `P1.12` | `iris run --json` + assistant-facing integration doc | [#113](https://github.com/frankbria/iris/issues/113) | — (best after 010) | TODO |
 | 012 | `P1.13` | MCP server spike — one real tool, verified in Claude Code | [#114](https://github.com/frankbria/iris/issues/114) | — | TODO |
 | 017 | `P2.5` | Canonical-surface decision + README/PRD truth pass | [#115](https://github.com/frankbria/iris/issues/115) | — | TODO |
