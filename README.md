@@ -117,14 +117,20 @@ This creates a sample project, runs visual and accessibility tests, and generate
 
 **Natural Language Commands:**
 ```bash
-# Execute browser actions with natural language
-iris run "click #submit-button"
-iris run "fill #email with user@example.com"
+# Execute browser actions with natural language.
+# --url sets the starting page; without it (or IRIS_BASE_URL) actions run
+# against a blank page, so pass it for anything that isn't a navigation.
+iris run "click #submit-button" --url https://example.com
+iris run "fill #email with user@example.com" --url https://example.com
 iris run "navigate to https://example.com"
+
+# Or set the starting page once for the session
+export IRIS_BASE_URL=http://localhost:3000
+iris run "click #submit-button"
 
 # AI-powered complex commands (requires API key)
 export OPENAI_API_KEY=sk-your-key
-iris run "find the blue button next to the search box and click it"
+iris run "find the blue button next to the search box and click it" --url https://example.com
 ```
 
 **Visual Regression Testing:**
