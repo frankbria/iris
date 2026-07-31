@@ -254,6 +254,13 @@ export class ActionExecutor {
 
   /**
    * Check if an error should not be retried.
+   *
+   * The distinction that matters is cost, not just determinism: a Playwright
+   * timeout has ALREADY spent the full page timeout auto-waiting for the
+   * element, so retrying spends it again for an almost certainly identical
+   * result. `iris run "click #missing"` took ~92s instead of ~30s purely from
+   * retries (issue #75). Fast-failing faults like a connection reset stay
+   * retryable — they cost little and genuinely can succeed on a second attempt.
    */
   private isNonRetryableError(error: Error): boolean {
     const message = error.message.toLowerCase();
@@ -265,12 +272,28 @@ export class ActionExecutor {
       'browser has been closed',
       'page has been closed',
       'element is read-only',
+      // Note: Playwright never emits "element not found" — a missing selector
+      // surfaces as the timeout matched by the regex below. Kept for any
+      // non-Playwright caller that does raise it.
       'element not found',
       'net::err_blocked_by_client',
       'net::err_network_timeout',
     ];
 
-    return nonRetryablePatterns.some((pattern) => message.includes(pattern));
+    // Patterns needing structure rather than a substring. Tested against the
+    // original message; the `i` flag makes the lowercasing above irrelevant.
+    const nonRetryableExpressions = [
+      // "page.click: Timeout 30000ms exceeded." — the ordinary missing-selector
+      // failure, and equally a navigation that already waited out its timeout.
+      /timeout \d+ms exceeded/i,
+      // An ambiguous selector resolves to N elements every single time.
+      /strict mode violation/i,
+    ];
+
+    return (
+      nonRetryablePatterns.some((pattern) => message.includes(pattern)) ||
+      nonRetryableExpressions.some((expression) => expression.test(error.message))
+    );
   }
 
   /**

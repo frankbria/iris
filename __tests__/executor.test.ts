@@ -598,6 +598,87 @@ describe('ActionExecutor', () => {
 
       await executorNoRetry.cleanup();
     });
+
+    // Issue #75: the non-retryable list said 'element not found', but Playwright
+    // never emits that. A missing selector produces a timeout message, so the
+    // most common failure mode was retried — each attempt burning the full page
+    // timeout (~30s), turning a 30s failure into ~92s and risking CI timeouts.
+    describe('Playwright timeout errors are deterministic, not transient', () => {
+      const missingSelector = () =>
+        // Verbatim shape of a real Playwright failure, including the locator tail.
+        new Error(
+          'page.click: Timeout 30000ms exceeded.\n' +
+            "Call log:\n  - waiting for locator('#missing')\n",
+        );
+
+      it('does not retry a missing selector on click', async () => {
+        const exec = new ActionExecutor({ retryAttempts: 3, retryDelay: 1 });
+        const page = await exec.createPage();
+        (click as jest.Mock).mockRejectedValue(missingSelector());
+
+        const result = await exec.executeAction(
+          { type: 'click', selector: '#missing' } as Action,
+          page,
+        );
+
+        expect(result.success).toBe(false);
+        expect(click).toHaveBeenCalledTimes(1);
+        await exec.cleanup();
+      });
+
+      it('does not retry a missing selector on fill', async () => {
+        const exec = new ActionExecutor({ retryAttempts: 3, retryDelay: 1 });
+        const page = await exec.createPage();
+        (typeText as jest.Mock).mockRejectedValue(
+          new Error("page.fill: Timeout 15000ms exceeded.\n  - waiting for locator('#nope')"),
+        );
+
+        const result = await exec.executeAction(
+          { type: 'fill', selector: '#nope', text: 'x' } as Action,
+          page,
+        );
+
+        expect(result.success).toBe(false);
+        expect(typeText).toHaveBeenCalledTimes(1);
+        await exec.cleanup();
+      });
+
+      it('does not retry an ambiguous selector (strict mode violation)', async () => {
+        const exec = new ActionExecutor({ retryAttempts: 3, retryDelay: 1 });
+        const page = await exec.createPage();
+        (click as jest.Mock).mockRejectedValue(
+          new Error(
+            "locator.click: Error: strict mode violation: locator('button') resolved to 3 elements",
+          ),
+        );
+
+        const result = await exec.executeAction(
+          { type: 'click', selector: 'button' } as Action,
+          page,
+        );
+
+        expect(result.success).toBe(false);
+        expect(click).toHaveBeenCalledTimes(1);
+        await exec.cleanup();
+      });
+
+      // The guard must stay narrow: genuinely transient faults still get retries,
+      // because those fail fast rather than consuming the whole timeout budget.
+      it('still retries a transient network error', async () => {
+        const exec = new ActionExecutor({ retryAttempts: 2, retryDelay: 1 });
+        const page = await exec.createPage();
+        (click as jest.Mock).mockRejectedValue(new Error('net::ERR_CONNECTION_RESET'));
+
+        const result = await exec.executeAction(
+          { type: 'click', selector: '#btn' } as Action,
+          page,
+        );
+
+        expect(result.success).toBe(false);
+        expect(click).toHaveBeenCalledTimes(3); // initial + 2 retries
+        await exec.cleanup();
+      });
+    });
   });
 
   describe('page context tracking', () => {
