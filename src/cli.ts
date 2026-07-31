@@ -7,6 +7,7 @@ import type { IrisConfig, ProviderCredentials } from './config';
 import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-options';
 import type { AIProvider } from './visual/ai-classifier';
 import type { TranslationResult } from './translator';
+import { describeAction } from './actions';
 
 const program = new Command();
 program.name('iris').description('Interface Recognition & Interaction Suite').version('0.0.1');
@@ -52,6 +53,8 @@ program
       // that every exit path (success, no-actions return, throw, dry-run) reports.
       let translation: TranslationResult | null = null;
       let executed = false;
+      // null = the plan contained no assertions, i.e. no goal was stated.
+      let goalMet: boolean | null = null;
 
       try {
         const { translate } = await import('./translator');
@@ -123,9 +126,7 @@ program
             // Execute each action and report progress
             for (let i = 0; startPageReady && i < result.actions.length; i++) {
               const action = result.actions[i];
-              say(
-                `   [${i + 1}/${result.actions.length}] Executing: ${action.type} ${action.type === 'navigate' ? action.url : action.selector}${action.type === 'fill' ? ` = "${action.text}"` : ''}`,
-              );
+              say(`   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`);
 
               const execResult = await executor.executeAction(action, page);
               executionResults.push(execResult);
@@ -139,6 +140,19 @@ program
                 say(`   ❌ Failed: ${execResult.error}`);
                 status = 'error';
                 // Continue with remaining actions instead of stopping
+              }
+            }
+
+            // Goal verdict: did every assertion in the plan hold? Distinct from
+            // per-action success, which only says the Playwright call didn't
+            // throw. Stays null when the plan asserted nothing, so "no goal
+            // stated" is never conflated with "goal met".
+            const assertResults = executionResults.filter((r) => r.action?.type === 'assert');
+            if (assertResults.length > 0) {
+              goalMet = assertResults.every((r) => r.success);
+              say(`\n🎯 Goal check: ${goalMet ? 'passed' : 'failed'}`);
+              for (const failed of assertResults.filter((r) => !r.success)) {
+                say(`   ✗ ${failed.action.description ?? describeAction(failed.action)}`);
               }
             }
 
@@ -222,6 +236,7 @@ program
                 actions: translation.actions,
               },
               executed,
+              goalMet,
               results: executionResults.map((r) => ({
                 success: r.success,
                 action: r.action ?? null,

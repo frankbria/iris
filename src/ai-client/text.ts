@@ -1,3 +1,4 @@
+import { parseActions } from '../actions';
 import { IrisConfig } from '../config';
 import { BaseAIClient, AITranslationRequest, AITranslationResponse, formatError } from './base';
 import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
@@ -28,11 +29,14 @@ Available action types:
 - click: { type: 'click', selector: string }
 - fill: { type: 'fill', selector: string, text: string }
 - navigate: { type: 'navigate', url: string }
+- assert: { type: 'assert', kind: 'text_visible' | 'element_visible' | 'url_matches' | 'element_absent', target: string, description?: string }
 
 Guidelines:
 - Use CSS selectors for targeting elements (prefer data-testid, id, or semantic selectors)
 - Be specific with selectors to avoid ambiguity
 - Break complex instructions into multiple actions
+- An instruction phrased as "make sure / verify / check / confirm X" MUST end with at
+  least one assert action expressing X — that assertion is how the goal is judged
 - If an instruction is unclear, ask for clarification in the reasoning
 
 Respond with valid JSON matching this schema:
@@ -74,8 +78,18 @@ ${
       }
 
       const parsed = JSON.parse(content);
+      // A model can emit a plausible-looking action with a bogus shape; without
+      // this it flowed straight through to the executor unchecked.
+      const validated = parseActions(parsed.actions ?? []);
+      if (!validated.ok) {
+        return {
+          actions: [],
+          confidence: 0,
+          reasoning: `Invalid AI response: ${validated.reason}`,
+        };
+      }
       return {
-        actions: parsed.actions || [],
+        actions: validated.actions,
         confidence: parsed.confidence || 0.5,
         reasoning: parsed.reasoning,
       };
@@ -121,11 +135,14 @@ Available action types:
 - click: { type: 'click', selector: string }
 - fill: { type: 'fill', selector: string, text: string }
 - navigate: { type: 'navigate', url: string }
+- assert: { type: 'assert', kind: 'text_visible' | 'element_visible' | 'url_matches' | 'element_absent', target: string, description?: string }
 
 Guidelines:
 - Use CSS selectors for targeting elements (prefer data-testid, id, or semantic selectors)
 - Be specific with selectors to avoid ambiguity
 - Break complex instructions into multiple actions
+- An instruction phrased as "make sure / verify / check / confirm X" MUST end with at
+  least one assert action expressing X — that assertion is how the goal is judged
 - If an instruction is unclear, ask for clarification in the reasoning
 
 Respond with valid JSON matching this schema:
@@ -165,10 +182,19 @@ ${
       }
 
       const parsed = JSON.parse(content.text);
+      // Array-ness alone was not enough: the members' shapes went unchecked.
+      const validated = parseActions(parsed.actions ?? []);
+      if (!validated.ok) {
+        return {
+          actions: [],
+          confidence: 0,
+          reasoning: `Invalid AI response: ${validated.reason}`,
+        };
+      }
       return {
+        actions: validated.actions,
         // Guard against malformed LLM output at this trust boundary: keep a
         // legitimate confidence of 0 (|| would corrupt it to 0.5).
-        actions: Array.isArray(parsed.actions) ? parsed.actions : [],
         confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
         reasoning: parsed.reasoning,
       };
@@ -211,7 +237,15 @@ export class OllamaTextClient extends BaseAIClient {
               model: this.config.model,
               prompt: `Translate this natural language instruction into browser automation actions: "${request.instruction}"
 
-Available actions: click, fill, navigate
+Available actions:
+- {"type": "click", "selector": "..."}
+- {"type": "fill", "selector": "...", "text": "..."}
+- {"type": "navigate", "url": "..."}
+- {"type": "assert", "kind": "text_visible" | "element_visible" | "url_matches" | "element_absent", "target": "..."}
+
+An instruction phrased as "make sure / verify / check / confirm X" MUST end with at least
+one assert action expressing X — that assertion is how the goal is judged.
+
 Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
               stream: false,
             }),
@@ -231,8 +265,17 @@ Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
 
       const parsed = JSON.parse(data.response);
 
+      const validated = parseActions(parsed.actions ?? []);
+      if (!validated.ok) {
+        return {
+          actions: [],
+          confidence: 0,
+          reasoning: `Invalid AI response: ${validated.reason}`,
+        };
+      }
+
       return {
-        actions: parsed.actions || [],
+        actions: validated.actions,
         confidence: parsed.confidence || 0.5,
         reasoning: parsed.reasoning,
       };

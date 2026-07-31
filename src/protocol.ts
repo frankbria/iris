@@ -1,7 +1,7 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import { timingSafeEqual } from 'crypto';
 import { z } from 'zod';
-import { translateSync, translate, Action } from './translator';
+import { translateSync, translate, Action, ActionSchema } from './translator';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
 import { Page } from 'playwright';
 
@@ -17,15 +17,11 @@ export interface JsonRpcRequest {
 // receive unvalidated input from the wire.
 const ExecuteCommandParams = z.object({ instruction: z.string().min(1) });
 
-// Discriminated-union Action schema — mirrors the `Action` type in translator.ts.
-// Replaces the former `z.array(z.any())` so navigate URLs (and every other action
-// field) are structurally validated at the dispatch boundary. Scheme/host policy
-// (SSRF, file://) is enforced downstream at the performAction navigate boundary.
-const ActionSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('click'), selector: z.string().min(1) }),
-  z.object({ type: z.literal('fill'), selector: z.string().min(1), text: z.string() }),
-  z.object({ type: z.literal('navigate'), url: z.string().url() }),
-]);
+// Structural validation of wire actions uses the SAME schema the Action union is
+// defined with (translator.ts). This file used to keep its own copy, which meant
+// any new action type was silently rejected here until someone remembered to
+// update both. Scheme/host policy (SSRF, file://) is still enforced downstream at
+// the performAction navigate boundary.
 
 // launchBrowser options are wire-controlled, so whitelist them. zod strips
 // unknown keys by default — critically dropping any client-supplied `urlPolicy`

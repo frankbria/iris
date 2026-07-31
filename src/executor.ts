@@ -11,6 +11,18 @@ import {
 } from './browser';
 import { assertNavigationAllowed, isNavigationAllowed, UrlPolicyOptions } from './url-policy';
 
+/**
+ * A page state that did not hold. Distinct from an infrastructure error so the
+ * retry logic can recognise it as deterministic: re-checking an unchanged page
+ * yields the same answer, so retrying only burns the timeout again.
+ */
+export class AssertionFailedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AssertionFailedError';
+  }
+}
+
 export interface ExecutionResult {
   success: boolean;
   action: Action;
@@ -246,9 +258,97 @@ export class ActionExecutor {
         await navigate(page, action.url);
         break;
 
+      case 'assert':
+        await this.performAssert(action, page);
+        break;
+
       default:
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         throw new Error(`Unsupported action type: ${(action as any).type}`);
+    }
+  }
+
+  /**
+   * Evaluate an assertion against the live page.
+   *
+   * A failing assertion throws AssertionFailedError, which `executeAction` turns
+   * into `success: false`. It must reach the caller as a *result*, not a raw
+   * exception — a thrown assertion would be retried (pointlessly, since the page
+   * is unchanged) and miscounted in the summary.
+   */
+  private async performAssert(
+    action: Extract<Action, { type: 'assert' }>,
+    page: Page,
+  ): Promise<void> {
+    const timeout = this.options.timeout ?? 30000;
+    let holds: boolean;
+
+    switch (action.kind) {
+      case 'text_visible':
+        holds = await this.isVisible(page.getByText(action.target).first(), timeout);
+        break;
+
+      case 'element_visible':
+        holds = await this.isVisible(page.locator(action.target).first(), timeout);
+        break;
+
+      case 'element_absent':
+        // Not simply !element_visible: absence should not wait out the full
+        // timeout hoping something appears, so give it a short grace period.
+        holds = !(await this.isVisible(
+          page.locator(action.target).first(),
+          Math.min(timeout, 1000),
+        ));
+        break;
+
+      case 'url_matches':
+        // Auto-waits like the other kinds. A single synchronous read races an
+        // async URL change — an SPA route transition or redirect kicked off by a
+        // preceding click lands after this line, producing a false negative.
+        holds = await this.urlBecomes(page, action.target, timeout);
+        break;
+
+      default: {
+        const exhaustive: never = action.kind;
+        throw new Error(`Unsupported assertion kind: ${String(exhaustive)}`);
+      }
+    }
+
+    if (!holds) {
+      throw new AssertionFailedError(`Assertion failed: ${action.kind} ${action.target}`.trim());
+    }
+  }
+
+  /**
+   * Whether the page URL comes to contain `substring` within `timeout`.
+   *
+   * Uses Playwright's own URL wait so a redirect or SPA route change that is
+   * still in flight is given the same grace the visibility checks get. A timeout
+   * means "it never matched", which is an answer, not an error.
+   */
+  private async urlBecomes(page: Page, substring: string, timeout: number): Promise<boolean> {
+    if (page.url().includes(substring)) {
+      return true; // already there — skip the wait entirely
+    }
+
+    try {
+      await page.waitForURL((url) => url.href.includes(substring), { timeout });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Whether a locator becomes visible within `timeout`. A timeout means "not
+   * visible", which is an answer, not an error.
+   */
+  private async isVisible(locator: ReturnType<Page['locator']>, timeout: number): Promise<boolean> {
+    try {
+      await locator.waitFor({ state: 'visible', timeout });
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -263,6 +363,12 @@ export class ActionExecutor {
    * retryable — they cost little and genuinely can succeed on a second attempt.
    */
   private isNonRetryableError(error: Error): boolean {
+    // A failed assertion describes the page as it is; re-reading it cannot
+    // change the answer, and each retry would wait out the timeout again.
+    if (error instanceof AssertionFailedError) {
+      return true;
+    }
+
     const message = error.message.toLowerCase();
 
     // Don't retry on certain types of errors

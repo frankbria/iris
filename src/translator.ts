@@ -1,10 +1,12 @@
 import { loadConfig, validateConfig } from './config';
 import { createAIClient, AITranslationRequest } from './ai-client';
 
-export type Action =
-  | { type: 'click'; selector: string }
-  | { type: 'fill'; selector: string; text: string }
-  | { type: 'navigate'; url: string };
+// The action vocabulary lives in its own leaf module so the AI client can share
+// the schema without creating an import cycle (translator -> ai-client -> here).
+// Re-exported so existing `from './translator'` imports keep working.
+import type { Action, AssertKind } from './actions';
+export type { Action, AssertKind } from './actions';
+export { ActionSchema, parseActions, describeAction } from './actions';
 
 export interface TranslationResult {
   actions: Action[];
@@ -101,6 +103,36 @@ function translateWithPatterns(instruction: string): TranslationResult {
         method: 'pattern',
         confidence: 0.9,
         reasoning: `Matched fill pattern: ${pattern.source}`,
+      };
+    }
+  }
+
+  // Assertion patterns. Only the unambiguous explicit forms are handled here —
+  // anything richer ("make sure users can complete checkout") needs the AI path,
+  // and a greedy pattern would silently mistranslate it into a single check.
+  // Ordered before navigation so "verify ... is visible" isn't eaten by a
+  // broader verb pattern.
+  const assertPatterns: Array<{ pattern: RegExp; kind: AssertKind }> = [
+    { pattern: /^(?:verify|make sure|check|confirm) (.+) is visible$/i, kind: 'text_visible' },
+    {
+      pattern: /^(?:verify|make sure|check|confirm) (.+) is not visible$/i,
+      kind: 'element_absent',
+    },
+    { pattern: /^(?:verify|make sure|check|confirm) (.+) is hidden$/i, kind: 'element_absent' },
+    {
+      pattern: /^(?:verify|make sure|check|confirm) (?:the )?url contains (.+)$/i,
+      kind: 'url_matches',
+    },
+  ];
+
+  for (const { pattern, kind } of assertPatterns) {
+    const match = pattern.exec(trimmed);
+    if (match) {
+      return {
+        actions: [{ type: 'assert', kind, target: match[1], description: trimmed }],
+        method: 'pattern',
+        confidence: 0.9,
+        reasoning: `Matched assertion pattern: ${pattern.source}`,
       };
     }
   }

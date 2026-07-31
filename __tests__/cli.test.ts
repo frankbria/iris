@@ -446,6 +446,59 @@ describe('CLI Commands', () => {
       expect(payload.results).toEqual([]);
     });
 
+    // Issue #116: per-action success only means "Playwright didn't throw".
+    // goalMet is the separate question of whether what was asked actually holds.
+    test('goalMet is true when every assertion passes', async () => {
+      jest.spyOn(translatorModule, 'translate').mockResolvedValue({
+        actions: [{ type: 'assert', kind: 'text_visible', target: 'Hi' }],
+        method: 'pattern',
+        confidence: 0.9,
+      });
+      // Echo the action back the way the real executeAction does — goalMet keys
+      // off result.action.type, so a stub that drops it cannot exercise this.
+      stubExecutor(
+        jest.fn().mockImplementation((action) => ({ success: true, action, duration: 1 })),
+      );
+
+      await runCli(['node', 'iris', 'run', 'verify Hi is visible', '--json']);
+
+      expect(soleJsonPayload().goalMet).toBe(true);
+    });
+
+    test('goalMet is false and status error when an assertion fails', async () => {
+      jest.spyOn(translatorModule, 'translate').mockResolvedValue({
+        actions: [{ type: 'assert', kind: 'text_visible', target: 'Hi' }],
+        method: 'pattern',
+        confidence: 0.9,
+      });
+      stubExecutor(
+        jest.fn().mockResolvedValue({
+          success: false,
+          action: { type: 'assert', kind: 'text_visible', target: 'Hi' },
+          error: 'Assertion failed: text_visible Hi',
+          duration: 1,
+        }),
+      );
+
+      await runCli(['node', 'iris', 'run', 'verify Hi is visible', '--json']);
+
+      const payload = soleJsonPayload();
+      expect(payload.goalMet).toBe(false);
+      expect(payload.status).toBe('error');
+    });
+
+    // null, not false: a plan that asserted nothing has no goal to meet, and
+    // reporting false would read as "the goal was not met".
+    test('goalMet is null when the plan contains no assertions', async () => {
+      stubExecutor(
+        jest.fn().mockImplementation((action) => ({ success: true, action, duration: 1 })),
+      );
+
+      await runCli(['node', 'iris', 'run', 'click #btn', '--json']);
+
+      expect(soleJsonPayload().goalMet).toBeNull();
+    });
+
     test('human mode is unchanged and emits no JSON envelope', async () => {
       await runCli(['node', 'iris', 'run', 'click #btn', '--dry-run']);
 

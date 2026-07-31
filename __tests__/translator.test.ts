@@ -193,3 +193,94 @@ describe('Translator', () => {
     });
   });
 });
+
+// Issue #116: the PRD's defining command class ("make sure X") could not even be
+// represented — the vocabulary was click|fill|navigate and success meant "the
+// Playwright call didn't throw".
+describe('assertion vocabulary (issue #116)', () => {
+  const { translateSync } = require('../src/translator');
+  const { ActionSchema, parseActions, describeAction } = require('../src/actions');
+
+  describe('explicit pattern forms', () => {
+    it.each([
+      ['verify Welcome is visible', 'text_visible', 'Welcome'],
+      ['make sure Welcome is visible', 'text_visible', 'Welcome'],
+      ['check Welcome is visible', 'text_visible', 'Welcome'],
+      ['confirm Welcome is visible', 'text_visible', 'Welcome'],
+      ['verify #spinner is not visible', 'element_absent', '#spinner'],
+      ['verify #spinner is hidden', 'element_absent', '#spinner'],
+      ['verify the url contains /checkout', 'url_matches', '/checkout'],
+      ['verify url contains /checkout', 'url_matches', '/checkout'],
+    ])('%s -> assert %s', (instruction, kind, target) => {
+      expect(translateSync(instruction)).toEqual([
+        { type: 'assert', kind, target, description: instruction },
+      ]);
+    });
+
+    // Anything richer needs the AI path; a greedy pattern would silently
+    // mistranslate a multi-step goal into one shallow check.
+    it('leaves an open-ended goal to the AI path rather than guessing', () => {
+      expect(translateSync('make sure users can complete checkout')).toEqual([]);
+    });
+  });
+
+  describe('ActionSchema', () => {
+    it('accepts a well-formed assert', () => {
+      expect(
+        ActionSchema.safeParse({ type: 'assert', kind: 'text_visible', target: 'Hi' }).success,
+      ).toBe(true);
+    });
+
+    it('rejects an unknown assert kind', () => {
+      expect(ActionSchema.safeParse({ type: 'assert', kind: 'bogus', target: 'Hi' }).success).toBe(
+        false,
+      );
+    });
+
+    it('rejects an assert with no target', () => {
+      expect(
+        ActionSchema.safeParse({ type: 'assert', kind: 'text_visible', target: '' }).success,
+      ).toBe(false);
+    });
+
+    it('still accepts the pre-existing action types', () => {
+      expect(ActionSchema.safeParse({ type: 'click', selector: '#a' }).success).toBe(true);
+      expect(ActionSchema.safeParse({ type: 'navigate', url: 'https://a.test' }).success).toBe(
+        true,
+      );
+    });
+  });
+
+  describe('parseActions', () => {
+    it('accepts a valid list', () => {
+      const result = parseActions([{ type: 'click', selector: '#a' }]);
+      expect(result).toEqual({ ok: true, actions: [{ type: 'click', selector: '#a' }] });
+    });
+
+    // All-or-nothing: executing the valid subset would present a partial run as
+    // a complete one.
+    it('rejects the whole list when any member is malformed', () => {
+      const result = parseActions([
+        { type: 'click', selector: '#a' },
+        { type: 'assert', kind: 'bogus', target: 'x' },
+      ]);
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/action\[1\]/);
+    });
+
+    it('rejects a non-array', () => {
+      expect(parseActions('nope').ok).toBe(false);
+    });
+  });
+
+  it('describeAction covers every union member', () => {
+    expect(describeAction({ type: 'click', selector: '#a' })).toBe('click #a');
+    expect(describeAction({ type: 'fill', selector: '#a', text: 'b' })).toBe('fill #a = "b"');
+    expect(describeAction({ type: 'navigate', url: 'https://a.test' })).toBe(
+      'navigate https://a.test',
+    );
+    expect(describeAction({ type: 'assert', kind: 'url_matches', target: '/x' })).toBe(
+      'assert url_matches /x',
+    );
+  });
+});
