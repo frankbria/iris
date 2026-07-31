@@ -90,6 +90,40 @@ describe('Config System', () => {
       expect(config.ai.model).toBe('claude-3-haiku-20240307');
     });
 
+    // Issue #74: the else-if chain picks one primary provider, and every other
+    // key used to be discarded — leaving the fallback chain unable to
+    // authenticate as any vendor but that one.
+    it('keeps every credential present in the environment, not just the primary', () => {
+      process.env.OPENAI_API_KEY = 'sk-openai';
+      process.env.ANTHROPIC_API_KEY = 'sk-ant';
+      process.env.OLLAMA_ENDPOINT = 'http://localhost:11434';
+      mockOs.homedir.mockReturnValue('/home/test');
+      mockFs.existsSync.mockReturnValue(false);
+
+      const config = loadConfig();
+
+      // Primary selection is unchanged: first match wins.
+      expect(config.ai.provider).toBe('openai');
+      expect(config.ai.apiKey).toBe('sk-openai');
+
+      // ...but the others survive so the chain can reach them.
+      expect(config.ai.credentials).toEqual({
+        openai: { apiKey: 'sk-openai' },
+        anthropic: { apiKey: 'sk-ant' },
+        ollama: { endpoint: 'http://localhost:11434' },
+      });
+    });
+
+    it('leaves credentials undefined when the environment has none', () => {
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.OLLAMA_ENDPOINT;
+      mockOs.homedir.mockReturnValue('/home/test');
+      mockFs.existsSync.mockReturnValue(false);
+
+      expect(loadConfig().ai.credentials).toBeUndefined();
+    });
+
     it('should load Ollama config from environment', () => {
       // Ensure clean environment first
       delete process.env.OPENAI_API_KEY;

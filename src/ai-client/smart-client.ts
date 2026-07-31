@@ -1,4 +1,4 @@
-import { IrisConfig } from '../config';
+import { IrisConfig, ProviderCredentials } from '../config';
 import { AIVisionClient, AIVisionRequest, AIVisionResponse } from './base';
 import { AIClientFactory } from './factory';
 import { AIVisionCache } from './cache';
@@ -237,6 +237,13 @@ export class SmartAIVisionClient {
       // mismatched provider is skipped rather than contacted. See #74.
       const isConfiguredProvider = providerName === this.irisConfig.ai.provider;
 
+      // A per-provider credential, when supplied, is the authoritative one for
+      // that vendor — it is the only thing that lets the chain reach a provider
+      // other than the configured one. Absent an entry, fall back to the
+      // top-level credential but ONLY for the provider it was configured for.
+      const scoped =
+        this.irisConfig.ai.credentials?.[providerName as keyof ProviderCredentials] ?? {};
+
       // Create config for this provider
       const providerConfig: IrisConfig = {
         ...this.irisConfig,
@@ -244,8 +251,9 @@ export class SmartAIVisionClient {
           ...this.irisConfig.ai,
           provider: providerName as 'openai' | 'anthropic' | 'ollama',
           model: this.resolveModel(providerName),
-          apiKey: isConfiguredProvider ? this.irisConfig.ai.apiKey : undefined,
-          endpoint: isConfiguredProvider ? this.irisConfig.ai.endpoint : undefined,
+          apiKey: scoped.apiKey ?? (isConfiguredProvider ? this.irisConfig.ai.apiKey : undefined),
+          endpoint:
+            scoped.endpoint ?? (isConfiguredProvider ? this.irisConfig.ai.endpoint : undefined),
         },
       };
 

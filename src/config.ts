@@ -3,6 +3,19 @@ import * as os from 'os';
 import * as fs from 'fs';
 import type { RetryConfig } from './ai-client/retry';
 
+/**
+ * Credentials scoped to a single provider.
+ *
+ * `apiKey`/`endpoint` at the top level of `ai` describe only the *configured*
+ * provider, so a fallback chain that steps across vendors has nothing valid to
+ * use for the others. This map supplies a credential per provider, which is what
+ * lets the advertised Ollama -> OpenAI -> Anthropic chain actually cross clouds
+ * instead of stopping at the one provider that happens to be configured (#74).
+ */
+export type ProviderCredentials = Partial<
+  Record<'openai' | 'anthropic' | 'ollama', { apiKey?: string; endpoint?: string }>
+>;
+
 export interface IrisConfig {
   ai: {
     provider: 'openai' | 'anthropic' | 'ollama';
@@ -11,6 +24,7 @@ export interface IrisConfig {
     endpoint?: string; // For local models like Ollama
     timeout?: number; // Per-call timeout in ms (default 30000)
     retryConfig?: RetryConfig; // Transient-failure retry/backoff (default 2/500ms/2x)
+    credentials?: ProviderCredentials; // Per-provider keys for cross-vendor fallback
   };
   watch: {
     patterns: string[];
@@ -134,7 +148,25 @@ function loadFromEnvironment(): IrisConfig {
     browser: { ...DEFAULT_CONFIG.browser },
   };
 
-  // Load AI configuration from environment
+  // Collect EVERY credential present, not just the winning provider's. The
+  // else-if chain below still decides which provider is primary, but discarding
+  // the others left the fallback chain with nothing to authenticate as, so it
+  // could never step from one cloud vendor to another (#74).
+  const credentials: ProviderCredentials = {};
+  if (process.env.OPENAI_API_KEY) {
+    credentials.openai = { apiKey: process.env.OPENAI_API_KEY };
+  }
+  if (process.env.ANTHROPIC_API_KEY) {
+    credentials.anthropic = { apiKey: process.env.ANTHROPIC_API_KEY };
+  }
+  if (process.env.OLLAMA_ENDPOINT) {
+    credentials.ollama = { endpoint: process.env.OLLAMA_ENDPOINT };
+  }
+  if (Object.keys(credentials).length > 0) {
+    config.ai.credentials = credentials;
+  }
+
+  // Primary-provider selection is unchanged: first match wins.
   if (process.env.OPENAI_API_KEY) {
     config.ai.provider = 'openai';
     config.ai.apiKey = process.env.OPENAI_API_KEY;

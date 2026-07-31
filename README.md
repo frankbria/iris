@@ -319,6 +319,44 @@ export OLLAMA_ENDPOINT=http://localhost:11434
 export OLLAMA_MODEL=llava:latest
 ```
 
+#### Automatic fallback across providers
+
+The vision client tries providers in order (`ollama` → `openai` → `anthropic`),
+moving on when one is unavailable or errors. **Set more than one credential and the
+chain can actually cross vendors** — every key you export is retained, not just the
+one that wins primary selection.
+
+> **If `~/.iris/config.json` exists, the environment is not consulted at all.**
+> `loadConfig()` reads environment variables only when no config file is present, so
+> with a config file you must declare the `credentials` map in the file itself (see
+> below) — exporting a second vendor's key will not enable fallback on its own.
+
+```bash
+export OLLAMA_ENDPOINT=http://localhost:11434   # tried first, free
+export OPENAI_API_KEY=sk-your-key               # used if Ollama is down
+export ANTHROPIC_API_KEY=sk-ant-your-key        # used if OpenAI fails
+```
+
+Keys are strictly scoped to their own vendor — a fallback step never sends one
+provider's key to another's API. With only a single cloud key configured, the chain
+still works but effectively reduces to Ollama → that one provider, since the others
+have nothing to authenticate with and are skipped.
+
+The same map can be set explicitly in the config file:
+
+```json
+{
+  "ai": {
+    "provider": "ollama",
+    "credentials": {
+      "openai": { "apiKey": "sk-..." },
+      "anthropic": { "apiKey": "sk-ant-..." },
+      "ollama": { "endpoint": "http://localhost:11434" }
+    }
+  }
+}
+```
+
 ### Config File
 
 Create `~/.iris/config.json`:

@@ -11,7 +11,7 @@
  * and Phase 2A AIVisionRequest/Response types to maintain backward compatibility.
  */
 
-import { IrisConfig } from '../config';
+import { IrisConfig, ProviderCredentials } from '../config';
 import { SmartAIVisionClient, SmartClientConfig } from '../ai-client/smart-client';
 import { ImagePreprocessor } from '../ai-client/preprocessor';
 import { AIVisionRequest, AIVisionResponse } from '../ai-client/base';
@@ -32,6 +32,13 @@ export interface AIProviderConfig {
   baseURL?: string;
   maxTokens?: number;
   temperature?: number;
+  /**
+   * Keys for providers OTHER than the primary one, so the smart client's
+   * fallback chain can actually reach them. `apiKey` above only describes
+   * `provider`; without this the chain has nothing to authenticate as when it
+   * steps to a different vendor and simply skips it (#74).
+   */
+  credentials?: ProviderCredentials;
 }
 
 /**
@@ -190,6 +197,9 @@ export class AIVisualClassifier {
         apiKey: config.apiKey,
         model,
         endpoint: config.baseURL,
+        // Carried through so the fallback chain can authenticate as a vendor
+        // other than the primary one.
+        credentials: config.credentials,
       },
       watch: {
         patterns: ['**/*.{ts,tsx,js,jsx,html,css}'],
