@@ -287,7 +287,10 @@ export class AccessibilityRunner {
             const checkRefs = (attr: string, value: string, requireText: boolean) => {
               const ids = value.split(/\s+/).filter(Boolean);
               if (ids.length === 0) {
-                problems.push(`${attr} is empty`);
+                // Only a missing NAME is a defect. aria-describedby supplements
+                // the accessible name rather than providing it, so an empty one
+                // is untidy, not broken.
+                if (requireText) problems.push(`${attr} is empty`);
                 return;
               }
               for (const id of ids) {

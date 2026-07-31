@@ -191,10 +191,12 @@ describe('KeyboardTester', () => {
       };
       keyboardTester = new KeyboardTester(configWithArrowTest);
 
-      // Sequence: discover arrow-navigable widgets, read the focused element
-      // before ArrowDown, then read it again after.
+      // Sequence: discover arrow-navigable widgets, run the focus fallback that
+      // pulls focus into the widget, read the focused element before ArrowDown,
+      // then read it again after.
       mockPage.evaluate
         .mockResolvedValueOnce([{ selector: 'DIV.menu', role: 'menu' }] as never)
+        .mockResolvedValueOnce(undefined as never) // focus fallback
         .mockResolvedValueOnce('UL:0>LI:0' as never)
         .mockResolvedValueOnce('UL:0>LI:1' as never); // focus moved
 
@@ -218,6 +220,7 @@ describe('KeyboardTester', () => {
 
       mockPage.evaluate
         .mockResolvedValueOnce([{ selector: 'DIV.menu', role: 'menu' }] as never)
+        .mockResolvedValueOnce(undefined as never) // focus fallback
         .mockResolvedValueOnce('UL:0>LI:0' as never)
         .mockResolvedValueOnce('UL:0>LI:0' as never); // unchanged
 

@@ -361,9 +361,27 @@ export class KeyboardTester {
         try {
           await page.focus(element.selector);
         } catch {
-          // The container itself may not be focusable — a roving-tabindex widget
-          // delegates focus to a child. Carry on and observe whatever holds focus.
+          // Focusing the container can legitimately fail; the fallback below
+          // decides whether focus actually landed somewhere useful.
         }
+
+        // page.focus() is a silent no-op on a non-focusable container, which is
+        // the normal shape of a roving-tabindex widget (`<ul role="menu">` with
+        // focus on its items). Without this fallback the key press never reaches
+        // the widget's handler and a perfectly good menu false-fails.
+        await page.evaluate((selector) => {
+          const container = document.querySelector(selector);
+          if (!container) return;
+
+          const active = document.activeElement;
+          if (active && active !== document.body && container.contains(active)) return;
+
+          const candidate = container.querySelector(
+            '[tabindex]:not([tabindex="-1"]), [tabindex="-1"], a[href], button:not([disabled]),' +
+              ' input:not([disabled]), [role="menuitem"], [role="option"], [role="tab"], [role="treeitem"]',
+          );
+          (candidate as HTMLElement | null)?.focus();
+        }, element.selector);
 
         const before = await this.activeElementPath(page);
         await page.keyboard.press('ArrowDown');

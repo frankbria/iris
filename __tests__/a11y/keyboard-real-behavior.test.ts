@@ -103,6 +103,36 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.passed).toBe(true);
     });
 
+    // A roving-tabindex menu whose container is NOT focusable and which does not
+    // pre-focus anything. page.focus() is a silent no-op here, so without the
+    // focus fallback the key press never reaches the handler and this working
+    // menu would false-fail.
+    const WORKING_MENU_NO_PREFOCUS = `<!doctype html><html lang="en"><head><title>t</title></head><body>
+      <ul id="menu" role="menu">
+        <li role="menuitem" tabindex="0" id="i1">One</li>
+        <li role="menuitem" tabindex="-1" id="i2">Two</li>
+      </ul>
+      <script>
+        const items = [...document.querySelectorAll('[role=menuitem]')];
+        document.getElementById('menu').addEventListener('keydown', (e) => {
+          if (e.key !== 'ArrowDown') return;
+          const i = items.indexOf(document.activeElement);
+          items[Math.min(i + 1, items.length - 1)].focus();
+        });
+      </script></body></html>`;
+
+    it('succeeds on a working menu that does not pre-focus an item', async () => {
+      await load(page, WORKING_MENU_NO_PREFOCUS);
+      const result = await new KeyboardTester({
+        ...config,
+        testArrowKeyNavigation: true,
+      }).run(page, 'menu');
+
+      const arrow = result.interactions.filter((i) => i.key === 'ArrowDown');
+      expect(arrow.length).toBeGreaterThan(0);
+      expect(arrow.every((i) => i.success)).toBe(true);
+    });
+
     // The core regression: this previously reported success unconditionally.
     it('fails when the menu ignores ArrowDown', async () => {
       await load(page, INERT_MENU);
@@ -329,6 +359,26 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
          </body></html>`,
       );
       expect(dangling.announcements[0].success).toBe(false);
+    });
+
+    // Consistent with the rule above: describedby does not supply the accessible
+    // name, so a blank one is untidy rather than broken. A blank labelledby DOES
+    // leave the element nameless and must fail.
+    it('tolerates an empty aria-describedby but not an empty aria-labelledby', async () => {
+      const described = await runScreenReader(
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+           <input aria-describedby="  ">
+         </body></html>`,
+      );
+      expect(described.announcements[0].success).toBe(true);
+
+      const labelled = await runScreenReader(
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+           <input aria-labelledby="  ">
+         </body></html>`,
+      );
+      expect(labelled.announcements[0].success).toBe(false);
+      expect(labelled.announcements[0].actualText).toContain('aria-labelledby is empty');
     });
   });
 });
