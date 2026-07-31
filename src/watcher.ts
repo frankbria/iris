@@ -1,6 +1,7 @@
 import chokidar from 'chokidar';
 import { loadConfig } from './config';
 import { translate } from './translator';
+import { describeAction } from './actions';
 import { initializeDatabase, insertTestRun } from './db';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
 import { navigate } from './browser';
@@ -249,7 +250,7 @@ export class FileWatcher {
           for (let i = 0; i < result.actions.length; i++) {
             const action = result.actions[i];
             console.log(
-              `   [${i + 1}/${result.actions.length}] Executing: ${action.type} ${action.type === 'navigate' ? action.url : action.selector}${action.type === 'fill' ? ` = "${action.text}"` : ''}`,
+              `   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`,
             );
 
             const execResult = await this.executor.executeAction(action, this.page);
