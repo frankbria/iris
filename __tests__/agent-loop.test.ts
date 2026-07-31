@@ -228,6 +228,25 @@ describe('agent loop', () => {
       expect(result.results).toHaveLength(3);
     });
 
+    // The consecutive-failures return jumps out from inside the action loop, so
+    // an assertion earlier in that same turn must still be reflected — goalMet
+    // null is reserved for "nothing ever asserted".
+    it('reports the turn verdict even when it exits on consecutive failures', async () => {
+      scriptAI([
+        [
+          { type: 'assert', kind: 'text_visible', target: 'Your cart' }, // passes
+          { type: 'click', selector: '#ghost-a' },
+          { type: 'click', selector: '#ghost-b' },
+          { type: 'click', selector: '#ghost-c' },
+        ],
+      ]);
+
+      const result = await runAgentLoop({ instruction: 'try', executor, page, maxTurns: 2 });
+
+      expect(result.terminationReason).toBe('consecutive_failures');
+      expect(result.goalMet).toBe(true); // not null — an assertion did run
+    });
+
     it('reports goalMet null when nothing was ever asserted', async () => {
       scriptAI([[{ type: 'click', selector: '#pay' }]]);
 

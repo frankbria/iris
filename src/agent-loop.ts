@@ -181,6 +181,13 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
         consecutiveFailures++;
         if (consecutiveFailures >= 3) {
           log(`turn ${turns}: three consecutive failures, stopping`);
+          // Fold in this turn's verdict before bailing. This return jumps out
+          // from inside the action loop, so without it an assertion that ran
+          // earlier in the same turn would go unreported and goalMet could stay
+          // null — which the field's contract reserves for "never asserted".
+          if (turnAsserts.length > 0) {
+            goalMet = turnAsserts.every(Boolean);
+          }
           return { goalMet, turns, results, terminationReason: 'consecutive_failures' };
         }
       }
