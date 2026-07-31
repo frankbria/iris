@@ -13,19 +13,15 @@
 
 import { chromium, Browser, Page } from 'playwright';
 import { AxeRunner } from './axe-integration';
+import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 
 export interface AccessibilityRunnerConfig {
   pages: string[];
-  axe: {
-    rules: Record<string, { enabled: boolean }>;
-    tags: string[];
-    include: string[];
-    exclude: string[];
-    disableRules: string[];
-    timeout: number;
-  };
+  // Reuses AxeConfig rather than restating its shape — the two drifted apart and
+  // silently dropped `runOnlyRules` on the way through (issue #72).
+  axe: AxeConfig;
   keyboard: {
     testFocusOrder: boolean;
     testTrapDetection: boolean;

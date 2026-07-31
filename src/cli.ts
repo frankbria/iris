@@ -609,6 +609,15 @@ program
         axe: {
           rules: {},
           tags: options.tags.split(',').map((t: string) => t.trim()),
+          // --rules means "run only these rules", which is axe's runOnly. Feeding
+          // them to `rules` instead would merely toggle them and still scan
+          // everything — the silent-widening bug this wiring fixes (issue #72).
+          runOnlyRules: options.rules
+            ? options.rules
+                .split(',')
+                .map((r: string) => r.trim())
+                .filter(Boolean)
+            : undefined,
           include: [],
           exclude: [],
           disableRules: [],
