@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import * as path from 'path';
 import * as os from 'os';
 import { loadDotenv, loadConfig } from './config';
-import type { IrisConfig } from './config';
+import type { IrisConfig, ProviderCredentials } from './config';
 import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-options';
 import type { AIProvider } from './visual/ai-classifier';
 import type { TranslationResult } from './translator';
@@ -357,10 +357,16 @@ function resolveSemanticAI(providerFlag?: string): {
   provider: AIProvider;
   apiKey?: string;
   endpoint?: string;
+  credentials?: ProviderCredentials;
 } {
   const config = loadConfig();
   const requested = providerFlag ?? detectProvider(config);
   const provider: AIProvider = requested === 'anthropic' ? 'claude' : (requested as AIProvider);
+
+  // Every credential the environment/config offers, so the smart client's
+  // fallback chain can step to another vendor rather than skipping it (#74).
+  // This is additive to the primary key resolved below and never overrides it.
+  const credentials = config.ai.credentials;
 
   // Ollama runs locally: no key, but it needs an endpoint or it throws at call
   // time. Only honor a configured endpoint when it was configured *for* ollama —
@@ -371,6 +377,7 @@ function resolveSemanticAI(providerFlag?: string): {
     return {
       provider,
       endpoint: configuredEndpoint || process.env.OLLAMA_ENDPOINT || DEFAULT_OLLAMA_ENDPOINT,
+      credentials,
     };
   }
 
@@ -380,7 +387,7 @@ function resolveSemanticAI(providerFlag?: string): {
       ? config.ai.apiKey
       : process.env[semanticKeyEnvVar(provider)];
 
-  return { provider, apiKey };
+  return { provider, apiKey, credentials };
 }
 
 /** Environment variable that supplies the key for a paid vision provider. */
@@ -503,6 +510,7 @@ program
           aiProvider: ai?.provider ?? 'openai',
           apiKey: ai?.apiKey,
           aiEndpoint: ai?.endpoint,
+          aiCredentials: ai?.credentials,
           antiAliasing: true,
           regions: [],
           maxConcurrency: options.concurrency,

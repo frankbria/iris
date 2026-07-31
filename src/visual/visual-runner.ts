@@ -13,6 +13,7 @@ import { BaselineManager } from './baseline';
 import { AIVisualClassifier } from './ai-classifier';
 import { StorageManager } from './storage';
 import { VisualReporter } from './reporter';
+import type { ProviderCredentials } from '../config';
 import type { AIProvider } from './ai-classifier';
 import type { CostStats } from '../ai-client/cost-tracker';
 
@@ -46,6 +47,11 @@ export interface VisualTestRunnerConfig {
     aiModel?: string;
     /** Provider endpoint. Used by `ollama`, which has no hosted default. */
     aiEndpoint?: string;
+    /**
+     * Keys for providers other than `aiProvider`, enabling the classifier's
+     * fallback chain to cross vendors instead of skipping them (#74).
+     */
+    aiCredentials?: ProviderCredentials;
     antiAliasing: boolean;
     regions: Array<{
       name: string;
@@ -135,6 +141,7 @@ export class VisualTestRunner {
         // the runner requesting retired ones (issue #111).
         model: config.diff.aiModel,
         baseURL: config.diff.aiEndpoint,
+        credentials: config.diff.aiCredentials,
         maxTokens: 1024,
         temperature: 0.1,
       });

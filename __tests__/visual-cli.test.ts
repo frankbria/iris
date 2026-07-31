@@ -7,6 +7,9 @@ type MockedAiConfig = {
   apiKey?: string;
   model?: string;
   endpoint?: string;
+  credentials?: Partial<
+    Record<'openai' | 'anthropic' | 'ollama', { apiKey?: string; endpoint?: string }>
+  >;
 };
 
 /**
@@ -715,6 +718,37 @@ describe('visual-diff CLI command', () => {
         aiProvider: 'openai',
         apiKey: 'sk-env-openai',
       });
+    });
+
+    // Issue #74: the credentials map has to survive the whole path
+    // CLI -> VisualTestRunner -> AIVisualClassifier -> SmartAIVisionClient, or
+    // the fallback chain still cannot authenticate as a second vendor.
+    it('forwards the per-provider credentials map to the runner', async () => {
+      process.env.OPENAI_API_KEY = 'sk-env-openai';
+      process.env.ANTHROPIC_API_KEY = 'sk-env-ant';
+      mockIrisConfig({
+        provider: 'openai',
+        credentials: {
+          openai: { apiKey: 'sk-env-openai' },
+          anthropic: { apiKey: 'sk-env-ant' },
+        },
+      });
+
+      const runnerCtor = await runVisualDiff(['--semantic']);
+
+      expect(diffConfigOf(runnerCtor).aiCredentials).toEqual({
+        openai: { apiKey: 'sk-env-openai' },
+        anthropic: { apiKey: 'sk-env-ant' },
+      });
+    });
+
+    it('leaves aiCredentials undefined when the config has none', async () => {
+      process.env.OPENAI_API_KEY = 'sk-env-openai';
+      mockIrisConfig({ provider: 'openai' });
+
+      const runnerCtor = await runVisualDiff(['--semantic']);
+
+      expect(diffConfigOf(runnerCtor).aiCredentials).toBeUndefined();
     });
 
     it('prefers the config-file key over the environment for the same provider', async () => {

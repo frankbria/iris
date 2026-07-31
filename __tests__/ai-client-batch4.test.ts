@@ -805,6 +805,58 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
       expect(clientFor(smart, 'ollama').config.endpoint).toBeUndefined();
     });
+
+    // The other half of #74: isolation alone leaves every non-configured provider
+    // credential-less, so the advertised Ollama -> OpenAI -> Anthropic chain can
+    // never actually cross clouds. A per-provider credentials map is what makes
+    // the fallback real rather than merely safe.
+    describe('per-provider credentials enable real cross-cloud fallback', () => {
+      const withCredentials: IrisConfig = {
+        ...irisConfig,
+        ai: {
+          ...irisConfig.ai,
+          credentials: {
+            openai: { apiKey: 'sk-openai-key' },
+            anthropic: { apiKey: 'sk-ant-secret' },
+            ollama: { endpoint: 'http://localhost:11434' },
+          },
+        },
+      };
+
+      it('gives each provider its own key', () => {
+        const smart = createSmartClient(withCredentials, smartOpts);
+
+        expect(clientFor(smart, 'openai').config.apiKey).toBe('sk-openai-key');
+        expect(clientFor(smart, 'anthropic').config.apiKey).toBe('sk-ant-secret');
+        expect(clientFor(smart, 'ollama').config.endpoint).toBe('http://localhost:11434');
+      });
+
+      it('still keeps keys from crossing vendors', () => {
+        const smart = createSmartClient(withCredentials, smartOpts);
+
+        expect(clientFor(smart, 'openai').config.apiKey).not.toBe('sk-ant-secret');
+        expect(clientFor(smart, 'ollama').config.apiKey).toBeUndefined();
+      });
+
+      it('makes a non-configured provider available so the chain can reach it', async () => {
+        const smart = createSmartClient(withCredentials, smartOpts);
+        const openai = clientFor(smart, 'openai') as unknown as {
+          isAvailable(): Promise<boolean>;
+        };
+
+        // Previously false — which is exactly why fallback stopped at the one
+        // configured cloud provider.
+        await expect(openai.isAvailable()).resolves.toBe(true);
+      });
+
+      it('falls back to the top-level key for the configured provider when unmapped', () => {
+        const smart = createSmartClient(irisConfig, smartOpts);
+
+        // No credentials map at all: prior behaviour is preserved exactly.
+        expect(clientFor(smart, 'anthropic').config.apiKey).toBe('sk-ant-secret');
+        expect(clientFor(smart, 'openai').config.apiKey).toBeUndefined();
+      });
+    });
   });
 
   // Issue #111: better-sqlite3 refuses to create missing directories, so both of
