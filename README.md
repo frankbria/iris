@@ -324,7 +324,12 @@ export OLLAMA_MODEL=llava:latest
 The vision client tries providers in order (`ollama` → `openai` → `anthropic`),
 moving on when one is unavailable or errors. **Set more than one credential and the
 chain can actually cross vendors** — every key you export is retained, not just the
-one that wins primary selection:
+one that wins primary selection.
+
+> **If `~/.iris/config.json` exists, the environment is not consulted at all.**
+> `loadConfig()` reads environment variables only when no config file is present, so
+> with a config file you must declare the `credentials` map in the file itself (see
+> below) — exporting a second vendor's key will not enable fallback on its own.
 
 ```bash
 export OLLAMA_ENDPOINT=http://localhost:11434   # tried first, free
