@@ -210,51 +210,130 @@ export class KeyboardTester {
   }
 
   /**
-   * Test for focus traps (modals, dialogs that trap focus)
+   * Identity of the currently focused element, as a structural path.
+   *
+   * Tag names alone cannot tell two sibling menu items apart, so focus movement
+   * has to be compared on something unique. Returns null when nothing
+   * meaningful holds focus (i.e. focus is on <body>).
+   */
+  private async activeElementPath(page: Page): Promise<string | null> {
+    return page.evaluate(() => {
+      const active = document.activeElement;
+      if (!active || active === document.body) return null;
+
+      const parts: string[] = [];
+      let node: Element | null = active;
+      while (node && node.parentElement) {
+        const index = Array.prototype.indexOf.call(node.parentElement.children, node);
+        parts.unshift(`${node.tagName}:${index}`);
+        node = node.parentElement;
+      }
+      return parts.join('>');
+    });
+  }
+
+  /**
+   * Test for focus traps (modals, dialogs that trap focus).
+   *
+   * This drives the keyboard for real. The previous implementation inferred
+   * `trapped: true` for anything that merely looked like a dialog and guessed
+   * `escapeMethod` from the presence of a close-ish selector, so a dialog that
+   * leaked focus passed and one that closed via a JS Escape handler was missed.
    */
   private async testFocusTraps(page: Page): Promise<FocusTrap[]> {
-    return await page.evaluate(() => {
-      const traps: Array<{
-        container: string;
-        trapped: boolean;
-        escapeMethod: string | undefined;
-        firstElement: string;
-        lastElement: string;
-      }> = [];
+    const CONTAINERS = '[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]';
+    const FOCUSABLE =
+      'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-      // Look for common focus trap containers
-      const containers = document.querySelectorAll(
-        '[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]',
-      );
-
-      containers.forEach((container) => {
-        const focusableInside = container.querySelectorAll(
-          'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        );
-
-        if (focusableInside.length > 0) {
-          const first = focusableInside[0] as HTMLElement;
-          const last = focusableInside[focusableInside.length - 1] as HTMLElement;
-
-          // Check if container has close button or escape handling
-          const hasCloseButton = container.querySelector(
-            '[aria-label*="close" i], [aria-label*="dismiss" i], button.close',
+    // Tag candidates so each can be re-found after the DOM shifts (a dismissed
+    // dialog may be removed outright, which would invalidate positional lookup).
+    const candidates = await page.evaluate(
+      ({ containers, focusable }) => {
+        const isVisible = (el: Element) => {
+          const style = getComputedStyle(el);
+          // Not offsetParent: that is null for position:fixed modals even when shown.
+          return (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            el.getClientRects().length > 0
           );
-          const hasEscapeHandler =
-            container.hasAttribute('data-dismiss') || container.hasAttribute('data-close');
+        };
+        const describe = (el: Element | undefined) =>
+          el ? el.tagName + (el.id ? `#${el.id}` : '') : '';
 
-          traps.push({
-            container: container.tagName + (container.id ? `#${container.id}` : ''),
-            trapped: true,
-            escapeMethod: hasCloseButton || hasEscapeHandler ? 'Escape or Close button' : undefined,
-            firstElement: first.tagName + (first.id ? `#${first.id}` : ''),
-            lastElement: last.tagName + (last.id ? `#${last.id}` : ''),
+        return Array.from(document.querySelectorAll(containers))
+          .filter(isVisible)
+          .map((container, index) => {
+            container.setAttribute('data-iris-trap', String(index));
+            const inside = container.querySelectorAll(focusable);
+            return {
+              index,
+              container: describe(container),
+              focusableCount: inside.length,
+              firstElement: describe(inside[0]),
+              lastElement: describe(inside[inside.length - 1]),
+            };
           });
-        }
-      });
+      },
+      { containers: CONTAINERS, focusable: FOCUSABLE },
+    );
 
-      return traps;
-    });
+    const traps: FocusTrap[] = [];
+    try {
+      for (const candidate of candidates) {
+        if (candidate.focusableCount === 0) continue;
+
+        // Tab off the LAST focusable: a real trap wraps back to the first,
+        // a leaky one lets focus escape to the document.
+        await page.evaluate(
+          ({ index, focusable }) => {
+            const container = document.querySelector(`[data-iris-trap="${index}"]`);
+            const inside = container?.querySelectorAll(focusable);
+            (inside?.[inside.length - 1] as HTMLElement | undefined)?.focus();
+          },
+          { index: candidate.index, focusable: FOCUSABLE },
+        );
+        await page.keyboard.press('Tab');
+
+        const trapped = await page.evaluate((index) => {
+          const container = document.querySelector(`[data-iris-trap="${index}"]`);
+          return (
+            !!container && !!document.activeElement && container.contains(document.activeElement)
+          );
+        }, candidate.index);
+
+        await page.keyboard.press('Escape');
+
+        const escaped = await page.evaluate((index) => {
+          const el = document.querySelector(`[data-iris-trap="${index}"]`);
+          if (!el) return true; // removed from the DOM entirely
+          const style = getComputedStyle(el);
+          return (
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            el.getClientRects().length === 0
+          );
+        }, candidate.index);
+
+        traps.push({
+          container: candidate.container,
+          trapped,
+          // Only claim an escape route that was actually observed to work.
+          escapeMethod: escaped ? 'Escape' : undefined,
+          firstElement: candidate.firstElement,
+          lastElement: candidate.lastElement,
+        });
+      }
+    } finally {
+      // Leave the page as we found it — the markers are ours, not the app's.
+      await page.evaluate(() =>
+        document
+          .querySelectorAll('[data-iris-trap]')
+          .forEach((el) => el.removeAttribute('data-iris-trap')),
+      );
+    }
+
+    return traps;
   }
 
   /**
@@ -276,19 +355,50 @@ export class KeyboardTester {
 
     for (const element of arrowNavigableElements) {
       try {
-        // Focus the element
-        await page.focus(element.selector);
+        // Focus the element. A composite widget usually delegates focus to its
+        // active descendant, so read where focus actually landed rather than
+        // assuming it sits on the container.
+        try {
+          await page.focus(element.selector);
+        } catch {
+          // Focusing the container can legitimately fail; the fallback below
+          // decides whether focus actually landed somewhere useful.
+        }
 
-        // Test ArrowDown
+        // page.focus() is a silent no-op on a non-focusable container, which is
+        // the normal shape of a roving-tabindex widget (`<ul role="menu">` with
+        // focus on its items). Without this fallback the key press never reaches
+        // the widget's handler and a perfectly good menu false-fails.
+        await page.evaluate((selector) => {
+          const container = document.querySelector(selector);
+          if (!container) return;
+
+          const active = document.activeElement;
+          if (active && active !== document.body && container.contains(active)) return;
+
+          const candidate = container.querySelector(
+            '[tabindex]:not([tabindex="-1"]), [tabindex="-1"], a[href], button:not([disabled]),' +
+              ' input:not([disabled]), [role="menuitem"], [role="option"], [role="tab"], [role="treeitem"]',
+          );
+          (candidate as HTMLElement | null)?.focus();
+        }, element.selector);
+
+        const before = await this.activeElementPath(page);
         await page.keyboard.press('ArrowDown');
-        const focusedAfterDown = await page.evaluate(() => document.activeElement?.tagName);
+        const after = await this.activeElementPath(page);
+
+        // The verdict is whether focus MOVED. Previously this was hardcoded true,
+        // so a menu that ignored arrow keys entirely still passed.
+        const moved = after !== null && after !== before;
 
         interactions.push({
           key: 'ArrowDown',
           target: element.selector,
           expectedBehavior: `Focus moves to next item in ${element.role}`,
-          actualBehavior: `Focus on ${focusedAfterDown}`,
-          success: true, // Simplified - would need more sophisticated validation
+          actualBehavior: moved
+            ? `Focus moved to ${after}`
+            : `Focus did not move (${before ?? 'nothing focused'})`,
+          success: moved,
           timestamp: new Date(),
         });
       } catch {
@@ -312,14 +422,25 @@ export class KeyboardTester {
   private async testEscapeHandling(page: Page): Promise<KeyboardInteraction[]> {
     const interactions: KeyboardInteraction[] = [];
 
-    // Find dismissible components
+    // Find dismissible components. Visibility deliberately avoids offsetParent:
+    // it is null for position:fixed elements, which describes most real modals,
+    // so those were skipped here and silently recorded as passing Escape handling.
     const dismissibleElements = await page.evaluate(() => {
+      const isVisible = (el: Element) => {
+        const style = getComputedStyle(el);
+        return (
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          el.getClientRects().length > 0
+        );
+      };
+
       const elements = document.querySelectorAll(
         '[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]',
       );
       return Array.from(elements).map((el) => ({
         selector: el.tagName + (el.id ? `#${el.id}` : `.${el.className.split(' ')[0]}`),
-        visible: (el as HTMLElement).offsetParent !== null,
+        visible: isVisible(el),
       }));
     });
 
@@ -330,10 +451,16 @@ export class KeyboardTester {
         // Press Escape
         await page.keyboard.press('Escape');
 
-        // Check if element is still visible
+        // Check if element is still visible (same fixed-position caveat as above).
         const stillVisible = await page.evaluate((sel) => {
           const el = document.querySelector(sel);
-          return el ? (el as HTMLElement).offsetParent !== null : false;
+          if (!el) return false; // removed from the DOM counts as dismissed
+          const style = getComputedStyle(el);
+          return (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            el.getClientRects().length > 0
+          );
         }, element.selector);
 
         interactions.push({
