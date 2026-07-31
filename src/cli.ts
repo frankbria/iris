@@ -6,6 +6,7 @@ import { loadDotenv, loadConfig } from './config';
 import type { IrisConfig } from './config';
 import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-options';
 import type { AIProvider } from './visual/ai-classifier';
+import type { TranslationResult } from './translator';
 
 const program = new Command();
 program.name('iris').description('Interface Recognition & Interaction Suite').version('0.0.1');
@@ -16,6 +17,7 @@ program
   .option('--dry-run', 'Only translate without executing actions')
   .option('--headless', 'Run browser in headless mode (default: true)')
   .option('--url <url>', 'Starting page URL (or set IRIS_BASE_URL)')
+  .option('--json', 'Emit a single machine-readable JSON result on stdout', false)
   .option(
     '--timeout <ms>',
     'Timeout for actions in milliseconds',
@@ -25,7 +27,13 @@ program
   .action(
     async (
       instruction: string,
-      options: { dryRun?: boolean; headless?: boolean; timeout?: number; url?: string },
+      options: {
+        dryRun?: boolean;
+        headless?: boolean;
+        timeout?: number;
+        url?: string;
+        json?: boolean;
+      },
     ) => {
       const startTime = new Date();
       let status: 'success' | 'error' = 'success';
@@ -33,26 +41,40 @@ program
       const executionResults: any[] = [];
       const startUrl = options.url || process.env.IRIS_BASE_URL;
 
+      // In JSON mode stdout is a machine contract, so narration is suppressed
+      // entirely — an assistant pipes this straight into JSON.parse. Errors keep
+      // going to console.error (stderr), which never pollutes the payload.
+      const say = (message: string) => {
+        if (!options.json) console.log(message);
+      };
+
+      // Captured for the JSON envelope, which is emitted once from `finally` so
+      // that every exit path (success, no-actions return, throw, dry-run) reports.
+      let translation: TranslationResult | null = null;
+      let executed = false;
+
       try {
         const { translate } = await import('./translator');
         const result = await translate(instruction, startUrl ? { url: startUrl } : undefined);
+        translation = result;
 
-        console.log(`✨ Translation result (${result.method}):`);
-        console.log(`   Actions: ${JSON.stringify(result.actions)}`);
-        console.log(`   Confidence: ${result.confidence}`);
+        say(`✨ Translation result (${result.method}):`);
+        say(`   Actions: ${JSON.stringify(result.actions)}`);
+        say(`   Confidence: ${result.confidence}`);
         if (result.reasoning) {
-          console.log(`   Reasoning: ${result.reasoning}`);
+          say(`   Reasoning: ${result.reasoning}`);
         }
 
         if (result.actions.length === 0) {
           status = 'error';
-          console.log('⚠️  No actions generated from instruction');
+          say('⚠️  No actions generated from instruction');
           return;
         }
 
         // Execute actions unless dry-run
         if (!options.dryRun) {
-          console.log('\n🚀 Executing actions...');
+          executed = true;
+          say('\n🚀 Executing actions...');
 
           const { ActionExecutor } = await import('./executor');
           const executor = new ActionExecutor({
@@ -73,9 +95,9 @@ program
 
             // Provide feedback about browser mode
             if (options.headless !== false) {
-              console.log('   Running in headless mode...');
+              say('   Running in headless mode...');
             } else {
-              console.log('   Launching visible browser with developer tools...');
+              say('   Launching visible browser with developer tools...');
             }
 
             // Open the starting page first, otherwise every non-navigate action
@@ -84,7 +106,7 @@ program
             // instruction already begins with a navigation, to avoid loading twice.
             let startPageReady = true;
             if (startUrl && result.actions[0].type !== 'navigate') {
-              console.log(`   Opening starting page: ${startUrl}`);
+              say(`   Opening starting page: ${startUrl}`);
               const navResult = await executor.executeAction(
                 { type: 'navigate', url: startUrl },
                 page,
@@ -92,7 +114,7 @@ program
               executionResults.push(navResult);
 
               if (!navResult.success) {
-                console.log(`   ❌ Failed to open starting page: ${navResult.error}`);
+                say(`   ❌ Failed to open starting page: ${navResult.error}`);
                 status = 'error';
                 startPageReady = false;
               }
@@ -101,7 +123,7 @@ program
             // Execute each action and report progress
             for (let i = 0; startPageReady && i < result.actions.length; i++) {
               const action = result.actions[i];
-              console.log(
+              say(
                 `   [${i + 1}/${result.actions.length}] Executing: ${action.type} ${action.type === 'navigate' ? action.url : action.selector}${action.type === 'fill' ? ` = "${action.text}"` : ''}`,
               );
 
@@ -109,12 +131,12 @@ program
               executionResults.push(execResult);
 
               if (execResult.success) {
-                console.log(`   ✅ Success (${execResult.duration}ms)`);
+                say(`   ✅ Success (${execResult.duration}ms)`);
                 if (execResult.context?.url) {
-                  console.log(`      Current page: ${execResult.context.url}`);
+                  say(`      Current page: ${execResult.context.url}`);
                 }
               } else {
-                console.log(`   ❌ Failed: ${execResult.error}`);
+                say(`   ❌ Failed: ${execResult.error}`);
                 status = 'error';
                 // Continue with remaining actions instead of stopping
               }
@@ -125,9 +147,9 @@ program
             const totalCount = executionResults.length;
 
             if (successCount === totalCount) {
-              console.log(`\n🎉 All ${totalCount} actions completed successfully!`);
+              say(`\n🎉 All ${totalCount} actions completed successfully!`);
             } else {
-              console.log(`\n⚠️  ${successCount}/${totalCount} actions completed successfully`);
+              say(`\n⚠️  ${successCount}/${totalCount} actions completed successfully`);
               status = 'error';
             }
 
@@ -152,7 +174,7 @@ program
             }
           }
         } else {
-          console.log('\n🔍 Dry run mode - actions not executed');
+          say('\n🔍 Dry run mode - actions not executed');
         }
       } catch (error) {
         status = 'error';
@@ -182,6 +204,33 @@ program
           console.error(
             '⚠️  Failed to persist run to database:',
             dbErr instanceof Error ? dbErr.message : dbErr,
+          );
+        }
+
+        // The machine-readable envelope. Emitted last and from `finally` so it
+        // covers every exit path, and built field-by-field rather than spreading
+        // internal objects — this shape is a public contract for assistants, and
+        // future changes to it must be additive.
+        if (options.json) {
+          console.log(
+            JSON.stringify({
+              instruction,
+              translation: translation && {
+                method: translation.method,
+                confidence: translation.confidence,
+                reasoning: translation.reasoning ?? null,
+                actions: translation.actions,
+              },
+              executed,
+              results: executionResults.map((r) => ({
+                success: r.success,
+                action: r.action ?? null,
+                error: r.error ?? null,
+                duration: r.duration ?? null,
+                context: r.context ?? null,
+              })),
+              status,
+            }),
           );
         }
       }

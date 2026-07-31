@@ -313,4 +313,144 @@ describe('CLI Commands', () => {
       ]);
     });
   });
+
+  // Issue #113: `run` emitted only emoji-decorated human text, so no AI assistant
+  // could consume it. --json makes stdout a machine-readable contract. The central
+  // invariant these cover: in JSON mode stdout carries EXACTLY one parseable object
+  // and no narration, because assistants pipe it straight into JSON.parse.
+  describe('run command JSON output (--json)', () => {
+    const stubExecutor = (
+      executeAction: jest.Mock = jest.fn().mockResolvedValue({ success: true, duration: 1 }),
+    ) => {
+      jest
+        .spyOn(executorModule.ActionExecutor.prototype, 'launchBrowser')
+        .mockResolvedValue({} as never);
+      jest.spyOn(executorModule.ActionExecutor.prototype, 'createPage').mockResolvedValue({
+        page: true,
+      } as never);
+      jest.spyOn(executorModule.ActionExecutor.prototype, 'cleanup').mockResolvedValue();
+      jest
+        .spyOn(executorModule.ActionExecutor.prototype, 'executeAction')
+        .mockImplementation(executeAction);
+      return executeAction;
+    };
+
+    /** stdout in JSON mode must be one object and nothing else — parse it or fail loudly. */
+    const soleJsonPayload = () => {
+      expect(consoleOutput).toHaveLength(1);
+      return JSON.parse(consoleOutput[0]);
+    };
+
+    beforeEach(() => {
+      jest.spyOn(dbModule, 'initializeDatabase').mockReturnValue({ close: jest.fn() } as never);
+      jest.spyOn(dbModule, 'insertTestRun').mockImplementation(() => undefined as never);
+      delete process.env.IRIS_BASE_URL;
+    });
+
+    afterEach(() => {
+      delete process.env.IRIS_BASE_URL;
+    });
+
+    test('--dry-run --json emits a single parseable envelope with executed=false', async () => {
+      await runCli(['node', 'iris', 'run', 'click #btn', '--dry-run', '--json']);
+
+      const payload = soleJsonPayload();
+      expect(payload).toMatchObject({
+        instruction: 'click #btn',
+        executed: false,
+        results: [],
+        status: 'success',
+      });
+      expect(payload.translation).toMatchObject({
+        method: 'pattern',
+        actions: [{ type: 'click', selector: '#btn' }],
+      });
+      expect(typeof payload.translation.confidence).toBe('number');
+    });
+
+    test('suppresses all human narration in JSON mode', async () => {
+      await runCli(['node', 'iris', 'run', 'click #btn', '--dry-run', '--json']);
+
+      // A single emoji-free line. Narration would both break JSON.parse for a piping
+      // assistant and show up as extra entries here.
+      expect(consoleOutput).toHaveLength(1);
+      expect(consoleOutput[0]).not.toMatch(/[✨🚀🎉🔍⚠️✅❌]/u);
+    });
+
+    test('reports per-action execution results when actions run', async () => {
+      stubExecutor(
+        jest.fn().mockResolvedValue({
+          success: true,
+          action: { type: 'click', selector: '#btn' },
+          duration: 42,
+          context: { url: 'https://example.com', timestamp: 1 },
+        }),
+      );
+
+      await runCli(['node', 'iris', 'run', 'click #btn', '--json']);
+
+      const payload = soleJsonPayload();
+      expect(payload.executed).toBe(true);
+      expect(payload.status).toBe('success');
+      expect(payload.results).toHaveLength(1);
+      expect(payload.results[0]).toMatchObject({ success: true, duration: 42 });
+    });
+
+    test('status is error and the failure surfaces in results when an action fails', async () => {
+      stubExecutor(
+        jest.fn().mockResolvedValue({
+          success: false,
+          action: { type: 'click', selector: '#btn' },
+          error: 'selector not found',
+          duration: 7,
+        }),
+      );
+
+      await runCli(['node', 'iris', 'run', 'click #btn', '--json']);
+
+      const payload = soleJsonPayload();
+      expect(payload.status).toBe('error');
+      expect(payload.results[0]).toMatchObject({
+        success: false,
+        error: 'selector not found',
+      });
+    });
+
+    // The zero-action path returns early from the try block. The envelope is emitted
+    // from `finally`, so this exit must still produce valid JSON rather than nothing.
+    test('still emits a valid envelope when translation yields no actions', async () => {
+      jest.spyOn(translatorModule, 'translate').mockResolvedValue({
+        actions: [],
+        method: 'pattern',
+        confidence: 0,
+      });
+
+      await runCli(['node', 'iris', 'run', 'do something unparseable', '--json']);
+
+      const payload = soleJsonPayload();
+      expect(payload.status).toBe('error');
+      expect(payload.executed).toBe(false);
+      expect(payload.translation.actions).toEqual([]);
+    });
+
+    // The error path must stay parseable even though translation never resolved.
+    test('emits a parseable envelope with translation=null when translation throws', async () => {
+      jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      jest.spyOn(translatorModule, 'translate').mockRejectedValue(new Error('boom'));
+
+      await runCli(['node', 'iris', 'run', 'click #btn', '--json']);
+
+      const payload = soleJsonPayload();
+      expect(payload.status).toBe('error');
+      expect(payload.translation).toBeNull();
+      expect(payload.results).toEqual([]);
+    });
+
+    test('human mode is unchanged and emits no JSON envelope', async () => {
+      await runCli(['node', 'iris', 'run', 'click #btn', '--dry-run']);
+
+      expect(consoleOutput.some((l) => l.includes('✨ Translation result'))).toBe(true);
+      expect(consoleOutput.some((l) => l.trimStart().startsWith('{"instruction"'))).toBe(false);
+    });
+  });
 });
