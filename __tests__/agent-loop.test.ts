@@ -236,6 +236,53 @@ describe('agent loop', () => {
       expect(result.terminationReason).toBe('max_turns');
     });
 
+    // Review catch: goalMet used to AND across every assertion ever run, so a
+    // failed check could never be redeemed — and the loop could return
+    // terminationReason 'goal_met' while goalMet was false. Recovering after a
+    // failed check is the entire reason the loop exists.
+    it('lets a later turn redeem an earlier failed assertion', async () => {
+      scriptAI([
+        [{ type: 'assert', kind: 'text_visible', target: 'Order complete' }], // fails
+        [{ type: 'click', selector: '#pay' }],
+        [{ type: 'assert', kind: 'text_visible', target: 'Your cart' }], // passes
+      ]);
+
+      const result = await runAgentLoop({
+        instruction: 'complete order',
+        executor,
+        page,
+        maxTurns: 5,
+      });
+
+      expect(result.terminationReason).toBe('goal_met');
+      expect(result.goalMet).toBe(true);
+    });
+
+    it('never reports goal_met while a check in that turn failed', async () => {
+      scriptAI([
+        [
+          { type: 'assert', kind: 'text_visible', target: 'Your cart' }, // passes
+          { type: 'assert', kind: 'text_visible', target: 'Order complete' }, // fails
+        ],
+      ]);
+
+      const result = await runAgentLoop({ instruction: 'check both', executor, page, maxTurns: 1 });
+
+      expect(result.goalMet).toBe(false);
+      expect(result.terminationReason).not.toBe('goal_met');
+    });
+
+    it('returns error instead of rejecting when the AI client cannot be built', async () => {
+      jest.spyOn(aiClient, 'createAIClient').mockImplementation(() => {
+        throw new Error('unsupported provider');
+      });
+
+      const result = await runAgentLoop({ instruction: 'anything', executor, page, maxTurns: 3 });
+
+      expect(result.terminationReason).toBe('error');
+      expect(result.turns).toBe(0);
+    });
+
     it('returns error rather than throwing when translation fails', async () => {
       jest.spyOn(aiClient, 'createAIClient').mockReturnValue({
         translateInstruction: jest.fn().mockRejectedValue(new Error('provider down')),

@@ -114,7 +114,15 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
   let consecutiveFailures = 0;
   let goalMet: boolean | null = null;
 
-  const client = createAIClient(loadConfig());
+  let client;
+  try {
+    client = createAIClient(loadConfig());
+  } catch (error) {
+    // An unsupported provider or unreadable config is a reportable outcome, not
+    // a rejected promise — every other failure mode here returns a result.
+    log(`client setup failed — ${error instanceof Error ? error.message : error}`);
+    return { goalMet: null, turns: 0, results: [], terminationReason: 'error' };
+  }
 
   while (turns < maxTurns) {
     turns++;
@@ -152,7 +160,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     }
     emptyPlans = 0;
 
-    let assertionPassedThisTurn = false;
+    const turnAsserts: boolean[] = [];
 
     for (const action of plan.actions) {
       const result = await executor.executeAction(action, page);
@@ -161,12 +169,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
       log(`turn ${turns}: ${action.type} → ${result.success ? 'ok' : `failed (${result.error})`}`);
 
       if (action.type === 'assert') {
-        // Any assertion having run means a verdict exists; start from true and
-        // let a failure flip it, so goalMet stays null only while nothing asserted.
-        goalMet = (goalMet ?? true) && result.success;
-        if (result.success) {
-          assertionPassedThisTurn = true;
-        }
+        turnAsserts.push(result.success);
       }
 
       if (result.success) {
@@ -180,10 +183,19 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
       }
     }
 
-    // Completion signal: the model spent this turn confirming rather than acting.
-    // An assert alongside further actions means it is still working.
+    // The verdict is the LATEST turn's assertions, not every assertion ever run.
+    // A loop exists precisely so a failed check can be acted on and re-checked;
+    // carrying the first failure forward forever would make recovery impossible
+    // and could report terminationReason 'goal_met' alongside goalMet false.
+    if (turnAsserts.length > 0) {
+      goalMet = turnAsserts.every(Boolean);
+    }
+
+    // Completion signal: the model spent this turn confirming rather than
+    // acting, and everything it confirmed held. An assert alongside further
+    // actions means it is still working.
     const onlyAsserted = plan.actions.every((a) => a.type === 'assert');
-    if (assertionPassedThisTurn && onlyAsserted) {
+    if (goalMet === true && onlyAsserted) {
       log(`turn ${turns}: goal confirmed`);
       return { goalMet, turns, results, terminationReason: 'goal_met' };
     }
