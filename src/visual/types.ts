@@ -51,7 +51,7 @@ export const VisualDiffResultSchema = z.object({
     width: z.number(),
     height: z.number(),
   }),
-  metadata: z.record(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 });
 
 export const VisualReportSchema = z.object({

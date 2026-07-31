@@ -99,7 +99,7 @@ export const ErrorContextSchema = z.object({
   timestamp: z.date(),
   correlationId: z.string(),
   stack: z.string().optional(),
-  details: z.record(z.any()).optional(),
+  details: z.record(z.string(), z.any()).optional(),
   severity: z.enum(['low', 'medium', 'high', 'critical']),
   category: z.enum(['validation', 'network', 'filesystem', 'browser', 'system', 'user']),
 });

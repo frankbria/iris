@@ -126,7 +126,7 @@ export const ScreenReaderTestResultSchema = z.object({
       expectedText: z.string(),
       actualText: z.string(),
       role: z.string().optional(),
-      properties: z.record(z.string()),
+      properties: z.record(z.string(), z.string()),
       success: z.boolean(),
     }),
   ),
