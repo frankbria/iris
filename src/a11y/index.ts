@@ -49,7 +49,7 @@ export { KeyboardTester } from './keyboard-tester';
 export { AccessibilityRunner } from './a11y-runner';
 
 // Export additional types from runners
-export type { AxeConfig, AxeRunOptions } from './axe-integration';
+export type { AxeConfig } from './axe-integration';
 
 export type {
   KeyboardTestConfig,

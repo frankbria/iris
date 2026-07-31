@@ -151,13 +151,166 @@ describe('AxeRunner', () => {
       const mockAxeBuilder = {
         withTags: jest.fn().mockReturnThis(),
         disableRules: jest.fn().mockReturnThis(),
+        options: jest.fn().mockReturnThis(),
+        include: jest.fn().mockReturnThis(),
+        exclude: jest.fn().mockReturnThis(),
         analyze: jest.fn().mockResolvedValue(mockAxeResults),
       };
       AxeBuilder.mockImplementation(() => mockAxeBuilder);
 
       await axeRunner.run(mockPage, 'test', 'https://example.com');
 
-      expect(mockAxeBuilder.disableRules).toHaveBeenCalledWith(['color-contrast', 'link-name']);
+      // disableRules is folded into the single options({rules}) call rather than
+      // going through AxeBuilder.disableRules(): that method assigns
+      // `this.option.rules = {}` before filling, so it would clobber config.rules.
+      expect(mockAxeBuilder.options).toHaveBeenCalledWith({
+        rules: { 'color-contrast': { enabled: false }, 'link-name': { enabled: false } },
+      });
+    });
+
+    // Issue #72: config.rules/include/exclude/timeout and CLI --rules were parsed
+    // and then silently dropped, so a scoped scan quietly ran as a full default scan.
+    describe('configuration wiring (issue #72)', () => {
+      const emptyResults = {
+        violations: [],
+        passes: [],
+        incomplete: [],
+        inapplicable: [],
+        testEngine: { name: 'axe-core', version: '4.8.0' },
+      };
+
+      const mockBuilder = () => {
+        const { default: AxeBuilder } = require('@axe-core/playwright');
+        const b = {
+          withTags: jest.fn().mockReturnThis(),
+          withRules: jest.fn().mockReturnThis(),
+          disableRules: jest.fn().mockReturnThis(),
+          include: jest.fn().mockReturnThis(),
+          exclude: jest.fn().mockReturnThis(),
+          options: jest.fn().mockReturnThis(),
+          analyze: jest.fn().mockResolvedValue(emptyResults),
+        };
+        AxeBuilder.mockImplementation(() => b);
+        return b;
+      };
+
+      it('applies each include selector', async () => {
+        const b = mockBuilder();
+        axeRunner = new AxeRunner({ ...defaultConfig, include: ['#main', '.content'] });
+
+        await axeRunner.run(mockPage, 'test', 'https://example.com');
+
+        expect(b.include).toHaveBeenCalledWith('#main');
+        expect(b.include).toHaveBeenCalledWith('.content');
+      });
+
+      it('applies each exclude selector', async () => {
+        const b = mockBuilder();
+        axeRunner = new AxeRunner({ ...defaultConfig, exclude: ['#ads', 'footer'] });
+
+        await axeRunner.run(mockPage, 'test', 'https://example.com');
+
+        expect(b.exclude).toHaveBeenCalledWith('#ads');
+        expect(b.exclude).toHaveBeenCalledWith('footer');
+      });
+
+      it('passes configured rules through options()', async () => {
+        const b = mockBuilder();
+        axeRunner = new AxeRunner({
+          ...defaultConfig,
+          rules: { 'color-contrast': { enabled: true } },
+        });
+
+        await axeRunner.run(mockPage, 'test', 'https://example.com');
+
+        expect(b.options).toHaveBeenCalledWith({
+          rules: { 'color-contrast': { enabled: true } },
+        });
+      });
+
+      // Regression guard for the clobber described above: both sources of rule
+      // config must survive into one merged map.
+      it('merges rules and disableRules into a single options() call', async () => {
+        const b = mockBuilder();
+        axeRunner = new AxeRunner({
+          ...defaultConfig,
+          rules: { 'image-alt': { enabled: true } },
+          disableRules: ['color-contrast'],
+        });
+
+        await axeRunner.run(mockPage, 'test', 'https://example.com');
+
+        expect(b.options).toHaveBeenCalledTimes(1);
+        expect(b.options).toHaveBeenCalledWith({
+          rules: { 'image-alt': { enabled: true }, 'color-contrast': { enabled: false } },
+        });
+      });
+
+      // options() assigns this.option wholesale, so calling it after withTags would
+      // erase runOnly and silently restore a full scan.
+      it('calls options() before withTags so runOnly survives', async () => {
+        const b = mockBuilder();
+        axeRunner = new AxeRunner({
+          ...defaultConfig,
+          rules: { 'image-alt': { enabled: true } },
+        });
+
+        await axeRunner.run(mockPage, 'test', 'https://example.com');
+
+        expect(b.options.mock.invocationCallOrder[0]).toBeLessThan(
+          b.withTags.mock.invocationCallOrder[0],
+        );
+      });
+
+      it('runOnlyRules uses withRules and takes precedence over tags', async () => {
+        const b = mockBuilder();
+        axeRunner = new AxeRunner({ ...defaultConfig, runOnlyRules: ['color-contrast'] });
+
+        await axeRunner.run(mockPage, 'test', 'https://example.com');
+
+        // axe accepts a single runOnly; an explicit rule list is the narrower request.
+        expect(b.withRules).toHaveBeenCalledWith(['color-contrast']);
+        expect(b.withTags).not.toHaveBeenCalled();
+      });
+
+      it('falls back to tags when no runOnlyRules are configured', async () => {
+        const b = mockBuilder();
+        axeRunner = new AxeRunner(defaultConfig);
+
+        await axeRunner.run(mockPage, 'test', 'https://example.com');
+
+        expect(b.withTags).toHaveBeenCalledWith(['wcag2a', 'wcag2aa']);
+        expect(b.withRules).not.toHaveBeenCalled();
+      });
+
+      it('omits options() entirely when no rule config is set', async () => {
+        const b = mockBuilder();
+        axeRunner = new AxeRunner(defaultConfig);
+
+        await axeRunner.run(mockPage, 'test', 'https://example.com');
+
+        expect(b.options).not.toHaveBeenCalled();
+      });
+
+      it('fails with a timeout error when analyze exceeds the configured timeout', async () => {
+        const b = mockBuilder();
+        b.analyze.mockImplementation(() => new Promise(() => {})); // never settles
+        axeRunner = new AxeRunner({ ...defaultConfig, timeout: 20 });
+
+        await expect(axeRunner.run(mockPage, 'test', 'https://example.com')).rejects.toThrow(
+          /timed out after 20ms/,
+        );
+      });
+
+      it('applies include/exclude on runOnElement too', async () => {
+        const b = mockBuilder();
+        axeRunner = new AxeRunner({ ...defaultConfig, exclude: ['#ads'] });
+
+        await axeRunner.runOnElement(mockPage, '#widget', 'test', 'https://example.com');
+
+        expect(b.include).toHaveBeenCalledWith('#widget');
+        expect(b.exclude).toHaveBeenCalledWith('#ads');
+      });
     });
 
     it('should handle multiple violations with different impacts', async () => {

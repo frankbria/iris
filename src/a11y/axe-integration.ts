@@ -9,26 +9,17 @@ import AxeBuilder from '@axe-core/playwright';
 import type { A11yResult, A11yViolation } from './types';
 
 export interface AxeConfig {
+  /** Per-rule enable/disable, merged with `disableRules` into one axe `rules` map. */
   rules: Record<string, { enabled: boolean }>;
+  /** WCAG tag filter. Ignored when `runOnlyRules` is set — axe allows one runOnly. */
   tags: string[];
+  /** Run ONLY these rules (CLI `--rules`). Takes precedence over `tags`. */
+  runOnlyRules?: string[];
   include: string[];
   exclude: string[];
   disableRules: string[];
+  /** Upper bound in ms on a single axe analysis; a hung scan fails instead of stalling. */
   timeout: number;
-}
-
-export interface AxeRunOptions {
-  runOnly?: {
-    type: 'tag' | 'rule';
-    values: string[];
-  };
-  rules?: Record<string, { enabled: boolean }>;
-  resultTypes?: string[];
-  selectors?: boolean;
-  ancestry?: boolean;
-  xpath?: boolean;
-  absolutePaths?: boolean;
-  iframes?: boolean;
 }
 
 /**
@@ -42,25 +33,85 @@ export class AxeRunner {
   }
 
   /**
+   * Build a configured AxeBuilder from this runner's config.
+   *
+   * Call order is load-bearing. AxeBuilder.options() assigns `this.option`
+   * wholesale, so it must run BEFORE withTags/withRules — those merge into
+   * `this.option.runOnly`, and doing it the other way round silently erases the
+   * runOnly filter and quietly widens the scan back to everything.
+   *
+   * disableRules() is deliberately not used: it assigns `this.option.rules = {}`
+   * before filling, which would discard `config.rules`. The two rule sources are
+   * merged here instead and issued as one options() call.
+   *
+   * @param forcedInclude Restrict to a single selector (used by runOnElement),
+   *                      overriding `config.include`.
+   */
+  private buildAxe(page: Page, forcedInclude?: string): AxeBuilder {
+    let axeBuilder = new AxeBuilder({ page });
+
+    const rules: Record<string, { enabled: boolean }> = { ...this.config.rules };
+    for (const ruleId of this.config.disableRules) {
+      rules[ruleId] = { enabled: false };
+    }
+    if (Object.keys(rules).length > 0) {
+      axeBuilder = axeBuilder.options({ rules });
+    }
+
+    // axe supports a single runOnly. An explicit rule list is the narrower,
+    // more deliberate request, so it wins over tag filtering.
+    if (this.config.runOnlyRules && this.config.runOnlyRules.length > 0) {
+      axeBuilder = axeBuilder.withRules(this.config.runOnlyRules);
+    } else if (this.config.tags.length > 0) {
+      axeBuilder = axeBuilder.withTags(this.config.tags);
+    }
+
+    for (const selector of forcedInclude ? [forcedInclude] : this.config.include) {
+      axeBuilder = axeBuilder.include(selector);
+    }
+    for (const selector of this.config.exclude) {
+      axeBuilder = axeBuilder.exclude(selector);
+    }
+
+    return axeBuilder;
+  }
+
+  /**
+   * Run analysis under the configured timeout. axe exposes no timeout of its own
+   * (RunOptions has only the iframe-specific frameWaitTime/pingWaitTime), so the
+   * bound is applied here — otherwise a hung scan blocks the run indefinitely.
+   */
+  private async analyzeWithTimeout(
+    axeBuilder: AxeBuilder,
+  ): Promise<Awaited<ReturnType<AxeBuilder['analyze']>>> {
+    const { timeout } = this.config;
+    if (!timeout || timeout <= 0) {
+      return axeBuilder.analyze();
+    }
+
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        axeBuilder.analyze(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`Axe analysis timed out after ${timeout}ms`)),
+            timeout,
+          );
+        }),
+      ]);
+    } finally {
+      // Without this the pending timer keeps the event loop alive on the happy path.
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
    * Run axe-core accessibility tests on a page
    */
   async run(page: Page, testName: string, url: string): Promise<A11yResult> {
     try {
-      // Create axe builder
-      let axeBuilder = new AxeBuilder({ page });
-
-      // Configure with tags
-      if (this.config.tags.length > 0) {
-        axeBuilder = axeBuilder.withTags(this.config.tags);
-      }
-
-      // Disable specific rules if configured
-      if (this.config.disableRules.length > 0) {
-        axeBuilder = axeBuilder.disableRules(this.config.disableRules);
-      }
-
-      // Run axe-core analysis
-      const axeResults = await axeBuilder.analyze();
+      const axeResults = await this.analyzeWithTimeout(this.buildAxe(page));
 
       // Transform violations to our format
       const violations: A11yViolation[] = axeResults.violations.map(
@@ -157,13 +208,7 @@ export class AxeRunner {
     url: string,
   ): Promise<A11yResult> {
     try {
-      let axeBuilder = new AxeBuilder({ page }).include(selector);
-
-      if (this.config.tags.length > 0) {
-        axeBuilder = axeBuilder.withTags(this.config.tags);
-      }
-
-      const axeResults = await axeBuilder.analyze();
+      const axeResults = await this.analyzeWithTimeout(this.buildAxe(page, selector));
 
       // Transform results similar to run() method
       const violations: A11yViolation[] = axeResults.violations.map(

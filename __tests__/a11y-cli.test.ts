@@ -93,6 +93,43 @@ describe('a11y CLI command', () => {
       expect(mockRun).toHaveBeenCalled();
     });
 
+    // Issue #72: --rules was declared on the command but never read, so a scoped
+    // scan silently ran as a full default-tag scan.
+    it('parses --rules into runOnlyRules', async () => {
+      const mockRun = jest.fn().mockResolvedValue(passingResult);
+
+      jest.doMock('../src/a11y/a11y-runner', () => ({
+        AccessibilityRunner: jest.fn().mockImplementation((config) => {
+          expect(config.axe.runOnlyRules).toEqual(['color-contrast', 'link-name']);
+          return { run: mockRun };
+        }),
+      }));
+
+      jest.resetModules();
+      const { runCli } = await import('../src/cli');
+      await runCli(['node', 'iris', 'a11y', '--rules', 'color-contrast, link-name']);
+
+      expect(mockRun).toHaveBeenCalled();
+    });
+
+    it('leaves runOnlyRules undefined when --rules is omitted', async () => {
+      const mockRun = jest.fn().mockResolvedValue(passingResult);
+
+      jest.doMock('../src/a11y/a11y-runner', () => ({
+        AccessibilityRunner: jest.fn().mockImplementation((config) => {
+          // undefined, not [] — an empty array would be a runOnly matching nothing.
+          expect(config.axe.runOnlyRules).toBeUndefined();
+          return { run: mockRun };
+        }),
+      }));
+
+      jest.resetModules();
+      const { runCli } = await import('../src/cli');
+      await runCli(['node', 'iris', 'a11y']);
+
+      expect(mockRun).toHaveBeenCalled();
+    });
+
     it('passes --base-url through, falling back to IRIS_BASE_URL', async () => {
       const mockRun = jest.fn().mockResolvedValue(passingResult);
 
