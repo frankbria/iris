@@ -37,6 +37,9 @@ Guidelines:
 - Break complex instructions into multiple actions
 - An instruction phrased as "make sure / verify / check / confirm X" MUST end with at
   least one assert action expressing X — that assertion is how the goal is judged
+- When a page digest is supplied, plan against it: propose only the next 1-3 actions.
+  If the goal is already satisfied on that page, emit exactly ONE assert confirming it
+  and nothing else — that is how completion is signalled
 - If an instruction is unclear, ask for clarification in the reasoning
 
 Respond with valid JSON matching this schema:
@@ -143,6 +146,9 @@ Guidelines:
 - Break complex instructions into multiple actions
 - An instruction phrased as "make sure / verify / check / confirm X" MUST end with at
   least one assert action expressing X — that assertion is how the goal is judged
+- When a page digest is supplied, plan against it: propose only the next 1-3 actions.
+  If the goal is already satisfied on that page, emit exactly ONE assert confirming it
+  and nothing else — that is how completion is signalled
 - If an instruction is unclear, ask for clarification in the reasoning
 
 Respond with valid JSON matching this schema:
@@ -245,6 +251,8 @@ Available actions:
 
 An instruction phrased as "make sure / verify / check / confirm X" MUST end with at least
 one assert action expressing X — that assertion is how the goal is judged.
+When a page digest is supplied, plan against it and propose only the next 1-3 actions.
+If the goal is already satisfied, emit exactly ONE assert confirming it and nothing else.
 
 Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
               stream: false,
