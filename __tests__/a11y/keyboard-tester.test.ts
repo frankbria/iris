@@ -237,20 +237,11 @@ describe('KeyboardTester', () => {
       };
       keyboardTester = new KeyboardTester(configWithEscapeTest);
 
-      mockPage.evaluate.mockImplementation((fn: any, ..._args) => {
-        if (fn.toString().includes('dialog')) {
-          return Promise.resolve([
-            {
-              selector: 'DIV.modal',
-              visible: true,
-            },
-          ]);
-        }
-        if (fn.toString().includes('offsetParent')) {
-          return Promise.resolve(false); // Modal closed after Escape
-        }
-        return Promise.resolve([]);
-      });
+      // Sequence: discover dismissible components, then re-check visibility
+      // after Escape.
+      mockPage.evaluate
+        .mockResolvedValueOnce([{ selector: 'DIV.modal', visible: true }] as never)
+        .mockResolvedValueOnce(false as never); // no longer visible -> dismissed
 
       const result = await keyboardTester.run(mockPage, 'escape-test');
 

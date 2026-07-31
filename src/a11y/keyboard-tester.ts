@@ -404,14 +404,25 @@ export class KeyboardTester {
   private async testEscapeHandling(page: Page): Promise<KeyboardInteraction[]> {
     const interactions: KeyboardInteraction[] = [];
 
-    // Find dismissible components
+    // Find dismissible components. Visibility deliberately avoids offsetParent:
+    // it is null for position:fixed elements, which describes most real modals,
+    // so those were skipped here and silently recorded as passing Escape handling.
     const dismissibleElements = await page.evaluate(() => {
+      const isVisible = (el: Element) => {
+        const style = getComputedStyle(el);
+        return (
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          el.getClientRects().length > 0
+        );
+      };
+
       const elements = document.querySelectorAll(
         '[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]',
       );
       return Array.from(elements).map((el) => ({
         selector: el.tagName + (el.id ? `#${el.id}` : `.${el.className.split(' ')[0]}`),
-        visible: (el as HTMLElement).offsetParent !== null,
+        visible: isVisible(el),
       }));
     });
 
@@ -422,10 +433,16 @@ export class KeyboardTester {
         // Press Escape
         await page.keyboard.press('Escape');
 
-        // Check if element is still visible
+        // Check if element is still visible (same fixed-position caveat as above).
         const stillVisible = await page.evaluate((sel) => {
           const el = document.querySelector(sel);
-          return el ? (el as HTMLElement).offsetParent !== null : false;
+          if (!el) return false; // removed from the DOM counts as dismissed
+          const style = getComputedStyle(el);
+          return (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            el.getClientRects().length > 0
+          );
         }, element.selector);
 
         interactions.push({

@@ -184,6 +184,48 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
     });
   });
 
+  // offsetParent is null for position:fixed elements, so a fixed modal used to be
+  // treated as invisible, skipped, and silently pass Escape handling.
+  describe('escape handling on a position:fixed modal', () => {
+    const FIXED_MODAL = (withEscapeHandler: boolean) =>
+      `<!doctype html><html lang="en"><head><title>t</title>
+       <style>#dlg{position:fixed;top:0;left:0;width:200px;height:100px}</style></head><body>
+        <div role="dialog" id="dlg" aria-modal="true"><button id="b">Ok</button></div>
+        ${
+          withEscapeHandler
+            ? `<script>document.addEventListener('keydown',e=>{
+                 if(e.key==='Escape') document.getElementById('dlg').style.display='none';});</script>`
+            : ''
+        }
+       </body></html>`;
+
+    it('fails a fixed modal that ignores Escape instead of skipping it', async () => {
+      await load(page, FIXED_MODAL(false));
+      const result = await new KeyboardTester({
+        ...config,
+        testEscapeHandling: true,
+      }).run(page, 'dlg');
+
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toHaveLength(1); // previously 0 — the modal was skipped
+      expect(escape[0].success).toBe(false);
+      expect(result.passed).toBe(false);
+    });
+
+    it('passes a fixed modal that does handle Escape', async () => {
+      await load(page, FIXED_MODAL(true));
+      const result = await new KeyboardTester({
+        ...config,
+        testEscapeHandling: true,
+      }).run(page, 'dlg');
+
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toHaveLength(1);
+      expect(escape[0].success).toBe(true);
+      expect(result.passed).toBe(true);
+    });
+  });
+
   // The ARIA announcements were collected, stamped success:true, and then left
   // out of the verdict entirely.
   describe('ARIA announcement validation', () => {
