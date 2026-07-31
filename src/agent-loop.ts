@@ -136,7 +136,10 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
         instruction,
         // The scaffolding that existed but was never filled in.
         context: {
-          url: page.url(),
+          // Capped for the same reason the digest header is: every provider
+          // interpolates this verbatim into the prompt, so an uncapped value
+          // here reintroduces the whole encoded data: URL by another route.
+          url: truncate(page.url(), MAX_URL_CHARS),
           currentPage: digest,
           // Snapshot, not the live array: passing the reference lets later turns
           // mutate a request the client may still be holding, so what a provider

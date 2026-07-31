@@ -133,6 +133,21 @@ describe('agent loop', () => {
       expect(second.context.currentPage).toContain('URL:');
     });
 
+    // Capping the digest is not enough on its own: context.url is interpolated
+    // into every provider prompt verbatim, so an uncapped value there smuggles
+    // the whole encoded data: URL back into the request.
+    it('caps context.url as well as the digest', async () => {
+      const translateInstruction = scriptAI([
+        [{ type: 'assert', kind: 'text_visible', target: 'Your cart' }],
+      ]);
+
+      await runAgentLoop({ instruction: 'check', executor, page, maxTurns: 1 });
+
+      const { url } = translateInstruction.mock.calls[0][0].context;
+      expect(url.length).toBeLessThanOrEqual(MAX_URL_CHARS + 40);
+      expect(url).toContain('…[+');
+    });
+
     it('stops with goal_met when a turn only confirms', async () => {
       scriptAI([[{ type: 'assert', kind: 'text_visible', target: 'Your cart' }]]);
 
