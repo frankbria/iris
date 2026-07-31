@@ -302,7 +302,10 @@ export class ActionExecutor {
         break;
 
       case 'url_matches':
-        holds = page.url().includes(action.target);
+        // Auto-waits like the other kinds. A single synchronous read races an
+        // async URL change — an SPA route transition or redirect kicked off by a
+        // preceding click lands after this line, producing a false negative.
+        holds = await this.urlBecomes(page, action.target, timeout);
         break;
 
       default: {
@@ -313,6 +316,26 @@ export class ActionExecutor {
 
     if (!holds) {
       throw new AssertionFailedError(`Assertion failed: ${action.kind} ${action.target}`.trim());
+    }
+  }
+
+  /**
+   * Whether the page URL comes to contain `substring` within `timeout`.
+   *
+   * Uses Playwright's own URL wait so a redirect or SPA route change that is
+   * still in flight is given the same grace the visibility checks get. A timeout
+   * means "it never matched", which is an answer, not an error.
+   */
+  private async urlBecomes(page: Page, substring: string, timeout: number): Promise<boolean> {
+    if (page.url().includes(substring)) {
+      return true; // already there — skip the wait entirely
+    }
+
+    try {
+      await page.waitForURL((url) => url.href.includes(substring), { timeout });
+      return true;
+    } catch {
+      return false;
     }
   }
 

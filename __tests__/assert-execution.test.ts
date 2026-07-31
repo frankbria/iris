@@ -101,6 +101,21 @@ describe('assert action execution', () => {
         (await run({ type: 'assert', kind: 'url_matches', target: '/checkout' })).success,
       ).toBe(false);
     });
+
+    // Review catch: a single synchronous page.url() read races an SPA route
+    // change or redirect kicked off by a preceding click, giving a false
+    // negative. The check auto-waits like the visibility kinds do.
+    it('waits for a URL that changes after the assertion begins', async () => {
+      await page.goto('data:text/html;charset=utf-8,' + encodeURIComponent(PAGE));
+      // Fires after the assertion is already waiting.
+      void page.evaluate(() =>
+        setTimeout(() => history.pushState({}, '', '#/checkout-complete'), 300),
+      );
+
+      const r = await run({ type: 'assert', kind: 'url_matches', target: 'checkout-complete' });
+
+      expect(r.success).toBe(true);
+    });
   });
 
   // A failed assertion describes the page as it is. Re-reading cannot change the

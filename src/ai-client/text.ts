@@ -237,7 +237,15 @@ export class OllamaTextClient extends BaseAIClient {
               model: this.config.model,
               prompt: `Translate this natural language instruction into browser automation actions: "${request.instruction}"
 
-Available actions: click, fill, navigate
+Available actions:
+- {"type": "click", "selector": "..."}
+- {"type": "fill", "selector": "...", "text": "..."}
+- {"type": "navigate", "url": "..."}
+- {"type": "assert", "kind": "text_visible" | "element_visible" | "url_matches" | "element_absent", "target": "..."}
+
+An instruction phrased as "make sure / verify / check / confirm X" MUST end with at least
+one assert action expressing X — that assertion is how the goal is judged.
+
 Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
               stream: false,
             }),
