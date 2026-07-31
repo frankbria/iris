@@ -1,5 +1,10 @@
 # Technical Specifications
 
+> **This document describes the target architecture, not the current implementation.**
+> For what actually ships today, see [plans/README.md](../plans/README.md) (canonical
+> status) and [docs/integration-surfaces.md](integration-surfaces.md) (which integration
+> surface is canonical and why).
+
 **Project:** AI-Driven UI Development Orchestrator
 
 **Version:** 1.0

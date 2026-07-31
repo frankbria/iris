@@ -12,21 +12,42 @@ IRIS gives AI coding assistants "eyes and hands" to see and interact with user i
 
 ## Current Status
 
+### Roadmap vs. shipped
+
+IRIS's ambition is a bridge that gives AI coding assistants eyes and hands. Some of
+that ships today; some is on the way. This table says which is which so you can tell
+before you invest.
+
+| | |
+|---|---|
+| **Shipped** | Visual regression (capture, diff, baselines, multi-device); accessibility auditing via axe-core plus real keyboard/ARIA checks; natural-language macros (`click` / `fill` / `navigate`); machine-readable CLI output for assistants |
+| **In progress** | Assertion + goal-verification vocabulary; the MCP bridge; richer watch-mode AI feedback; surfacing AI reasoning into reports |
+| **Not started** | Autonomous UI exploration; design-system compliance checking |
+
+**[plans/README.md](plans/README.md) is the source of truth for status** — if any
+other document disagrees with it, that document is stale.
+
+The canonical way to integrate today is the CLI's JSON output; see
+[docs/integration-surfaces.md](docs/integration-surfaces.md) for why, and where the
+JSON-RPC server and MCP stand.
+
 ### ✅ Phase 1 - Complete (Production-Ready)
 
 **Core Features Available:**
-- ✅ Natural language UI commands with AI translation
+- ✅ Natural language UI commands with AI translation — vocabulary is **click, fill,
+  navigate**; assertions and goal verification are in progress (see [plans/](plans/README.md))
 - ✅ Browser automation via Playwright
 - ✅ File watching with automatic re-execution
 - ✅ AI coding assistant integration via JSON-on-stdout CLI output
   ([see below](#using-iris-from-an-ai-assistant))
-- ✅ JSON-RPC protocol server for custom tooling (advanced/experimental)
+- ⚠️ JSON-RPC protocol server — experimental/legacy, frozen
+  (see [docs/integration-surfaces.md](docs/integration-surfaces.md))
 - ✅ SQLite persistence for test runs and results
 - ✅ Multi-provider AI support (OpenAI/Anthropic/Ollama)
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 575/576 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 827/828 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -58,12 +79,12 @@ IRIS gives AI coding assistants "eyes and hands" to see and interact with user i
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 575/576 tests passing (99.8% pass rate), 1 skipped, 0 failing
+**Test Results:** 827/828 tests passing (99.9% pass rate), 1 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
 
-_Metrics last verified: 2026-06-26_
+_Test counts verified 2026-07-30; coverage figures last measured 2026-06-26._
 
 **Status:** Usable for visual regression today; accessibility integration and the `src/a11y/index.ts` wrappers are still in progress (see open issues).
 
@@ -193,8 +214,12 @@ The server binds to `127.0.0.1` and prints a per-session auth token on startup.
 Clients must send it on the WebSocket handshake as an `Authorization: Bearer <token>`
 header; connections without the token are rejected (close code `1008`).
 
-> This is a raw protocol surface for custom tooling. No mainstream AI assistant
-> speaks it today — if you want assistant integration, use the CLI contract below.
+> **Experimental / legacy — frozen.** A bespoke WebSocket protocol that no mainstream
+> AI assistant speaks. It keeps working and keeps its security fixes, but takes no new
+> features pending the MCP direction; two of its methods still return placeholder data
+> ([#80](https://github.com/frankbria/iris/issues/80)). For assistant integration use
+> the CLI contract below. Rationale:
+> [docs/integration-surfaces.md](docs/integration-surfaces.md).
 
 ---
 
@@ -709,7 +734,7 @@ gh issue view 71
 - Browser automation with Playwright
 - File watching and auto-execution
 - AI translation with multi-provider support
-- JSON-RPC protocol server
+- JSON-RPC protocol server (now frozen — see [docs/integration-surfaces.md](docs/integration-surfaces.md))
 - SQLite persistence
 
 ### Phase 2 🚧 (In Progress)
@@ -731,6 +756,8 @@ gh issue view 71
 - ⚠️ Some `src/a11y/index.ts` convenience wrappers still stubbed
 
 ### Phase 3 📋 (Planned - Q1 2026)
+- MCP server so assistants can drive IRIS over a protocol they already speak
+- Assertion / goal-verification vocabulary for natural-language commands
 - Performance monitoring and Core Web Vitals
 - Advanced AI-powered visual analysis
 - Autonomous UI exploration
@@ -743,7 +770,7 @@ gh issue view 71
 ## Testing
 
 **Test Coverage:**
-- Total: 576 tests (575 passing, 99.8% pass rate)
+- Total: 828 tests (827 passing, 99.9% pass rate)
 - Failing: 0
 - Skipped: 1
 - Overall coverage: 75.7% statements (target: 85%)

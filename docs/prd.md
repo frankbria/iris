@@ -57,6 +57,8 @@ The AI-Driven UI Development Orchestrator gives your AI coding assistant **eyes 
 
 ### 1. AI-Driven UI Exploration
 
+> **Status (2026-07-23):** Not started. No autonomous exploration code path exists.
+
 **As a developer**, I want AI to explore my UI and discover potential issues or improvements, **so that** I catch problems before writing explicit tests.
 
 **Acceptance Criteria:**
@@ -67,6 +69,9 @@ The AI-Driven UI Development Orchestrator gives your AI coding assistant **eyes 
 - No explicit test writing required
 
 ### 2. Real-Time Development Feedback
+
+> **Status (2026-07-23):** Not started. `iris watch` re-runs a fixed instruction rather than
+> evaluating what changed; AI feedback is planned in plans/015.
 
 **As a developer**, I want AI to watch my UI changes and provide instant feedback, **so that** I can iterate faster with confidence.
 
@@ -79,6 +84,9 @@ The AI-Driven UI Development Orchestrator gives your AI coding assistant **eyes 
 
 ### 3. Natural Language UI Validation
 
+> **Status (2026-07-23):** In progress. Translation handles click/fill/navigate today;
+> the assertion vocabulary ("make sure", "verify") is plans/013, the observe-act loop plans/014.
+
 **As a developer**, I want to describe desired behavior in plain English, **so that** AI can verify it works without me writing selectors or assertions.
 
 **Example Commands:**
@@ -88,6 +96,8 @@ The AI-Driven UI Development Orchestrator gives your AI coding assistant **eyes 
 - "Check if the form validation makes sense"
 
 ### 4. Design System Compliance
+
+> **Status (2026-07-23):** Not started. No design-token awareness exists.
 
 **As a design lead**, I want AI to verify UI compliance with our design system, **so that** consistency is maintained automatically.
 
@@ -99,6 +109,10 @@ The AI-Driven UI Development Orchestrator gives your AI coding assistant **eyes 
 - Works with popular design systems (Material, Ant, custom)
 
 ### 5. Intelligent Visual Regression
+
+> **Status (2026-07-23):** Shipped, with caveats. Capture/diff/baselines and AI severity
+> classification work; AI reasoning and suggestions are computed but not yet surfaced in
+> reports (plans/016).
 
 **As a QA engineer**, I want AI to understand the *intent* behind visual changes, **so that** I only get alerted about meaningful regressions.
 
@@ -145,6 +159,10 @@ Add: Vision AI <-> UI Screenshot Analysis
 - Basic accessibility checks
 
 ### Phase 3: Integration (Weeks 9-12)
+
+> **Status (2026-07-23):** Not started. The JSON-RPC bridge exists but no assistant
+> consumes it and it is frozen; the MCP server is design-only (plans/012). See
+> docs/integration-surfaces.md for the canonical-surface decision.
 
 ```
 Add: Tool Bridges (JSON-RPC/MCP)
