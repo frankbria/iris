@@ -122,25 +122,29 @@ describe('KeyboardTester', () => {
       };
       keyboardTester = new KeyboardTester(configWithTrapTest);
 
-      mockPage.evaluate.mockImplementation((fn: any) => {
-        if (fn.toString().includes('focus trap')) {
-          return Promise.resolve([
-            {
-              container: 'DIV.modal',
-              trapped: true,
-              escapeMethod: undefined, // No escape mechanism
-              firstElement: 'BUTTON',
-              lastElement: 'BUTTON',
-            },
-          ]);
-        }
-        return Promise.resolve([]);
-      });
+      // Trap detection now drives the keyboard, so the page is consulted in a
+      // fixed sequence: discover candidates, focus the last item, read whether
+      // focus stayed inside, read whether Escape dismissed, then clean up.
+      mockPage.evaluate
+        .mockResolvedValueOnce([
+          {
+            index: 0,
+            container: 'DIV.modal',
+            focusableCount: 2,
+            firstElement: 'BUTTON',
+            lastElement: 'BUTTON',
+          },
+        ] as never)
+        .mockResolvedValueOnce(undefined as never) // focus last focusable
+        .mockResolvedValueOnce(true as never) // Tab kept focus inside -> trapped
+        .mockResolvedValueOnce(false as never) // Escape did NOT dismiss
+        .mockResolvedValueOnce(undefined as never); // marker cleanup
 
       const result = await keyboardTester.run(mockPage, 'trap-test');
 
       expect(result.passed).toBe(false);
       expect(result.trapTests).toHaveLength(1);
+      expect(result.trapTests[0].trapped).toBe(true);
       expect(result.trapTests[0].escapeMethod).toBeUndefined();
     });
 
@@ -154,26 +158,27 @@ describe('KeyboardTester', () => {
       };
       keyboardTester = new KeyboardTester(configWithTrapTest);
 
-      mockPage.evaluate.mockImplementation((fn: any) => {
-        if (fn.toString().includes('focus trap')) {
-          return Promise.resolve([
-            {
-              container: 'DIV.modal',
-              trapped: true,
-              escapeMethod: 'Escape or Close button',
-              firstElement: 'BUTTON',
-              lastElement: 'BUTTON',
-            },
-          ]);
-        }
-        return Promise.resolve([]);
-      });
+      mockPage.evaluate
+        .mockResolvedValueOnce([
+          {
+            index: 0,
+            container: 'DIV.modal',
+            focusableCount: 2,
+            firstElement: 'BUTTON',
+            lastElement: 'BUTTON',
+          },
+        ] as never)
+        .mockResolvedValueOnce(undefined as never)
+        .mockResolvedValueOnce(true as never) // trapped
+        .mockResolvedValueOnce(true as never) // Escape dismissed it
+        .mockResolvedValueOnce(undefined as never);
 
       const result = await keyboardTester.run(mockPage, 'trap-test');
 
       expect(result.passed).toBe(true);
       expect(result.trapTests).toHaveLength(1);
-      expect(result.trapTests[0].escapeMethod).toBeDefined();
+      // Only reported because dismissal was observed, not inferred from markup.
+      expect(result.trapTests[0].escapeMethod).toBe('Escape');
     });
 
     it('should test arrow key navigation in menus', async () => {
@@ -186,26 +191,40 @@ describe('KeyboardTester', () => {
       };
       keyboardTester = new KeyboardTester(configWithArrowTest);
 
-      mockPage.evaluate.mockImplementation((fn: any) => {
-        if (fn.toString().includes('menu')) {
-          return Promise.resolve([
-            {
-              selector: 'DIV.menu',
-              role: 'menu',
-            },
-          ]);
-        }
-        if (fn.toString().includes('activeElement')) {
-          return Promise.resolve('BUTTON');
-        }
-        return Promise.resolve([]);
-      });
+      // Sequence: discover arrow-navigable widgets, read the focused element
+      // before ArrowDown, then read it again after.
+      mockPage.evaluate
+        .mockResolvedValueOnce([{ selector: 'DIV.menu', role: 'menu' }] as never)
+        .mockResolvedValueOnce('UL:0>LI:0' as never)
+        .mockResolvedValueOnce('UL:0>LI:1' as never); // focus moved
 
       const result = await keyboardTester.run(mockPage, 'arrow-test');
 
       expect(result.interactions.some((i) => i.key === 'ArrowDown')).toBe(true);
       expect(mockPage.focus).toHaveBeenCalled();
       expect(mockPage.keyboard.press).toHaveBeenCalledWith('ArrowDown');
+      expect(result.interactions.find((i) => i.key === 'ArrowDown')?.success).toBe(true);
+    });
+
+    it('should fail arrow navigation when focus does not move', async () => {
+      const configWithArrowTest = {
+        testFocusOrder: false,
+        testTrapDetection: false,
+        testArrowKeyNavigation: true,
+        testEscapeHandling: false,
+        customSequences: [],
+      };
+      keyboardTester = new KeyboardTester(configWithArrowTest);
+
+      mockPage.evaluate
+        .mockResolvedValueOnce([{ selector: 'DIV.menu', role: 'menu' }] as never)
+        .mockResolvedValueOnce('UL:0>LI:0' as never)
+        .mockResolvedValueOnce('UL:0>LI:0' as never); // unchanged
+
+      const result = await keyboardTester.run(mockPage, 'arrow-test');
+
+      expect(result.interactions.find((i) => i.key === 'ArrowDown')?.success).toBe(false);
+      expect(result.passed).toBe(false);
     });
 
     it('should test escape key handling for modals', async () => {
@@ -340,20 +359,30 @@ describe('KeyboardTester', () => {
 
   describe('focus trap detection', () => {
     it('should identify modals as focus traps', async () => {
-      mockPage.evaluate.mockImplementation((fn: any) => {
-        if (fn.toString().includes('focus trap')) {
-          return Promise.resolve([
-            {
-              container: 'DIV[role="dialog"]',
-              trapped: true,
-              escapeMethod: 'Escape or Close button',
-              firstElement: 'BUTTON.close',
-              lastElement: 'BUTTON.cancel',
-            },
-          ]);
-        }
-        return Promise.resolve([]);
+      // Scoped to trap detection: the shared default config enables every check,
+      // and the other checks would consume this sequence of evaluate stubs.
+      keyboardTester = new KeyboardTester({
+        testFocusOrder: false,
+        testTrapDetection: true,
+        testArrowKeyNavigation: false,
+        testEscapeHandling: false,
+        customSequences: [],
       });
+
+      mockPage.evaluate
+        .mockResolvedValueOnce([
+          {
+            index: 0,
+            container: 'DIV[role="dialog"]',
+            focusableCount: 2,
+            firstElement: 'BUTTON.close',
+            lastElement: 'BUTTON.cancel',
+          },
+        ] as never)
+        .mockResolvedValueOnce(undefined as never)
+        .mockResolvedValueOnce(true as never)
+        .mockResolvedValueOnce(true as never)
+        .mockResolvedValueOnce(undefined as never);
 
       const result = await keyboardTester.run(mockPage, 'modal-trap');
 

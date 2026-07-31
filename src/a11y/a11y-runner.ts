@@ -262,24 +262,69 @@ export class AccessibilityRunner {
     const imageAltResults: NonNullable<ScreenReaderTestResult['imageAltResults']> = [];
 
     try {
-      // Test ARIA labels
+      // Test ARIA labels. Each announcement is validated rather than assumed
+      // good: an empty aria-label or a labelledby pointing at a missing/blank
+      // element renders the accessible name useless, and previously every one of
+      // these was recorded as success: true and excluded from the verdict.
       if (this.config.screenReader.testAriaLabels) {
         const ariaElements = await page.evaluate(() => {
           const elements = document.querySelectorAll(
             '[aria-label], [aria-labelledby], [aria-describedby]',
           );
-          return Array.from(elements).map((el) => ({
-            element: el.tagName + (el.id ? `#${el.id}` : ''),
-            expectedText: el.getAttribute('aria-label') || '',
-            actualText: el.getAttribute('aria-label') || el.textContent?.trim() || '',
-            role: el.getAttribute('role') || '',
-            properties: {
-              'aria-label': el.getAttribute('aria-label') || '',
-              'aria-labelledby': el.getAttribute('aria-labelledby') || '',
-              'aria-describedby': el.getAttribute('aria-describedby') || '',
-            },
-            success: true,
-          }));
+
+          return Array.from(elements).map((el) => {
+            const label = el.getAttribute('aria-label');
+            const labelledBy = el.getAttribute('aria-labelledby');
+            const describedBy = el.getAttribute('aria-describedby');
+            const problems: string[] = [];
+
+            // Present-but-blank is worse than absent: it suppresses the fallback
+            // accessible name a screen reader would otherwise compute.
+            if (label !== null && label.trim() === '') {
+              problems.push('aria-label is empty');
+            }
+
+            const checkRefs = (attr: string, value: string, requireText: boolean) => {
+              const ids = value.split(/\s+/).filter(Boolean);
+              if (ids.length === 0) {
+                problems.push(`${attr} is empty`);
+                return;
+              }
+              for (const id of ids) {
+                const target = document.getElementById(id);
+                if (!target) {
+                  problems.push(`${attr} references missing id "${id}"`);
+                } else if (requireText && !(target.textContent || '').trim()) {
+                  problems.push(`${attr} target "${id}" has no text`);
+                }
+              }
+            };
+
+            if (labelledBy !== null) checkRefs('aria-labelledby', labelledBy, true);
+            if (describedBy !== null) checkRefs('aria-describedby', describedBy, false);
+
+            const resolvedLabel =
+              label?.trim() ||
+              (labelledBy || '')
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((id) => document.getElementById(id)?.textContent?.trim() || '')
+                .filter(Boolean)
+                .join(' ');
+
+            return {
+              element: el.tagName + (el.id ? `#${el.id}` : ''),
+              expectedText: label || '',
+              actualText: problems.length > 0 ? problems.join('; ') : resolvedLabel,
+              role: el.getAttribute('role') || '',
+              properties: {
+                'aria-label': label || '',
+                'aria-labelledby': labelledBy || '',
+                'aria-describedby': describedBy || '',
+              },
+              success: problems.length === 0,
+            };
+          });
         });
         announcements.push(...ariaElements);
       }
@@ -355,9 +400,14 @@ export class AccessibilityRunner {
       // Image alt is valid when the check was disabled or no image failed.
       const imageAltValid = imageAltResults.every((img) => img.success);
 
+      // Announcements now count toward the verdict. They were collected, always
+      // marked successful, and then ignored — so a broken accessible name could
+      // never fail a run (issue #73).
+      const announcementsValid = announcements.every((a) => a.success);
+
       return {
         testName,
-        passed: headingHierarchyValid && landmarkValid && imageAltValid,
+        passed: headingHierarchyValid && landmarkValid && imageAltValid && announcementsValid,
         announcements,
         landmarkStructure,
         headingStructure,
