@@ -18,7 +18,9 @@ IRIS gives AI coding assistants "eyes and hands" to see and interact with user i
 - ✅ Natural language UI commands with AI translation
 - ✅ Browser automation via Playwright
 - ✅ File watching with automatic re-execution
-- ✅ JSON-RPC protocol for AI coding assistant integration
+- ✅ AI coding assistant integration via JSON-on-stdout CLI output
+  ([see below](#using-iris-from-an-ai-assistant))
+- ✅ JSON-RPC protocol server for custom tooling (advanced/experimental)
 - ✅ SQLite persistence for test runs and results
 - ✅ Multi-provider AI support (OpenAI/Anthropic/Ollama)
 
@@ -131,6 +133,9 @@ iris run "click #submit-button"
 # AI-powered complex commands (requires API key)
 export OPENAI_API_KEY=sk-your-key
 iris run "find the blue button next to the search box and click it" --url https://example.com
+
+# Machine-readable output for scripts and AI assistants
+iris run --json --url https://example.com "click #submit-button"
 ```
 
 **Visual Regression Testing:**
@@ -177,9 +182,9 @@ iris watch src/ --instruction "reload page"
 iris watch "**/*.ts" --execute
 ```
 
-**JSON-RPC Server:**
+**JSON-RPC Server (advanced / experimental):**
 ```bash
-# Start WebSocket server for AI coding assistant integration
+# Start WebSocket server
 iris connect
 iris connect 8080  # Custom port
 ```
@@ -187,6 +192,110 @@ iris connect 8080  # Custom port
 The server binds to `127.0.0.1` and prints a per-session auth token on startup.
 Clients must send it on the WebSocket handshake as an `Authorization: Bearer <token>`
 header; connections without the token are rejected (close code `1008`).
+
+> This is a raw protocol surface for custom tooling. No mainstream AI assistant
+> speaks it today — if you want assistant integration, use the CLI contract below.
+
+---
+
+## Using IRIS from an AI assistant
+
+The supported way to drive IRIS from Claude Code, Cursor, Copilot, or any other
+assistant is to **shell out to the CLI and parse JSON from stdout**. No protocol,
+no server, no bespoke client — it works with every assistant today.
+
+The three commands differ in *where* the JSON lands, so read each one's note below:
+
+| Command | JSON destination |
+|---|---|
+| `iris run --json` | **stdout** — pipe it straight into a parser |
+| `iris visual-diff --format json` | a **report file** (`--output`, else `.iris/reports/visual-report-<ts>.json`) |
+| `iris a11y --format json` | a **report file** (`--output`, else `./a11y-report-<ts>.json`) |
+
+Only `run --json` is a stdout contract. The two reporting commands keep printing
+human narration to stdout and write their machine-readable output to disk, so pass
+`--output` and read that file rather than parsing what they print.
+
+### `iris run --json` — drive the UI with natural language
+
+Human narration is suppressed entirely; warnings and errors go to stderr, so stdout
+is always safe to pipe into a JSON parser.
+
+```bash
+iris run --json --url https://example.com "click the sign in button"
+```
+
+```json
+{
+  "instruction": "click the sign in button",
+  "translation": {
+    "method": "pattern",
+    "confidence": 0.9,
+    "reasoning": "Matched click pattern: ^click (.+)$",
+    "actions": [{ "type": "click", "selector": "the sign in button" }]
+  },
+  "executed": true,
+  "results": [
+    {
+      "success": true,
+      "action": { "type": "click", "selector": "the sign in button" },
+      "error": null,
+      "duration": 42,
+      "context": { "url": "https://example.com", "title": "Example", "timestamp": 1 }
+    }
+  ],
+  "status": "success"
+}
+```
+
+- `translation.method` is `pattern` (deterministic rules) or `ai` (LLM-backed).
+- `executed` is `false` and `results` is `[]` for `--dry-run`, which translates the
+  instruction without touching a browser — useful for previewing what IRIS would do.
+- `translation` is `null` if the run failed before translation completed.
+- Read `status` (`success` | `error`) to decide whether the run worked. **`iris run`
+  always exits 0** — see the exit-code table below.
+
+### `iris visual-diff --format json` — visual regression
+
+Pages are given as `--pages` patterns resolved against `--base-url` (or
+`IRIS_BASE_URL`, default `http://localhost:3000`) — there is no `--url` flag here.
+
+```bash
+iris visual-diff --pages /,/about --base-url https://example.com \
+  --format json --output report.json
+```
+
+The report contains per-comparison results plus a `summary` with `totalComparisons`,
+`passed`, `failed`, and `severityCounts` (`breaking` / `moderate` / `minor`).
+Outcome is signalled by the exit code (`5` = regression detected).
+
+### `iris a11y --format json` — WCAG 2.1 AA audit
+
+Same `--pages` / `--base-url` model as `visual-diff`.
+
+```bash
+iris a11y --pages / --base-url https://example.com \
+  --format json --output a11y.json
+```
+
+The report contains axe-core violations with impact level, WCAG tags, and the
+offending selectors. Outcome is signalled by the exit code (`4` = violations found).
+
+### Exit codes
+
+Unlike `run`, the two reporting commands signal outcome through the exit code:
+
+| Code | Meaning | Commands |
+|------|---------|----------|
+| `0` | Completed (for `run`, check `status` in the JSON — it does not set a failure code) | all |
+| `1` | Unhandled error | `watch`, top-level |
+| `2` | Invalid usage (bad flag or argument combination) | `visual-diff` |
+| `3` | Environment/runtime error (browser launch, filesystem, network) | `visual-diff`, `a11y` |
+| `4` | Accessibility violations found | `a11y` |
+| `5` | Visual regression detected | `visual-diff` |
+
+Because `iris run` never sets a non-zero code, an assistant must branch on the
+`status` field rather than on the process result.
 
 ---
 
