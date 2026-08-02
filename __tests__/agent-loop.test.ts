@@ -449,7 +449,9 @@ describe('agent loop', () => {
         // the loop would only refuse on the NEXT turn, after a same-origin click
         // had already made the cross-origin request.
         scriptAI([[{ type: 'assert', kind: 'text_visible', target: 'Your cart' }]]);
-        const route = jest.spyOn(page, 'route');
+        // The guard vets requests through a CDP Fetch session, so its creation
+        // is the observable sign that the loop installed one.
+        const newCDPSession = jest.spyOn(page.context(), 'newCDPSession');
 
         await runAgentLoop({
           instruction: 'check the cart',
@@ -459,12 +461,12 @@ describe('agent loop', () => {
           startUrl: 'https://trusted.example/start',
         });
 
-        expect(route).toHaveBeenCalledWith('**/*', expect.any(Function));
+        expect(newCDPSession).toHaveBeenCalledWith(page);
       });
 
       it('does not install a pin when the caller opted out', async () => {
         scriptAI([[{ type: 'assert', kind: 'text_visible', target: 'Your cart' }]]);
-        const route = jest.spyOn(page, 'route');
+        const newCDPSession = jest.spyOn(page.context(), 'newCDPSession');
 
         await runAgentLoop({
           instruction: 'check the cart',
@@ -475,7 +477,7 @@ describe('agent loop', () => {
           policy: { pinOrigin: false },
         });
 
-        expect(route).not.toHaveBeenCalled();
+        expect(newCDPSession).not.toHaveBeenCalled();
       });
 
       it('stops after three refusals instead of burning the turn budget', async () => {

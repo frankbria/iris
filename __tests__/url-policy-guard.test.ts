@@ -19,7 +19,7 @@ import { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { installUrlPolicyGuard, guardedGoto, MAX_REDIRECT_HOPS } from '../src/url-policy-guard';
+import { installUrlPolicyGuard, guardedGoto } from '../src/url-policy-guard';
 
 const METADATA = 'http://169.254.169.254/latest/meta-data/';
 
@@ -37,6 +37,7 @@ describe('URL policy guard', () => {
   let offsiteServer: Server;
   let offsiteLog: string[];
   let offsiteSocketConnections = 0;
+  let sameOriginSocketConnections = 0;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -138,6 +139,11 @@ describe('URL policy guard', () => {
     // origin, which is the point.
     OFFSITE = `http://127.0.0.1:${(offsiteServer.address() as AddressInfo).port}`;
 
+    // A WebSocket endpoint on the main fixture too, so "permitted" can be
+    // distinguished from "nothing was listening".
+    new WebSocketServer({ server }).on('connection', () => {
+      sameOriginSocketConnections++;
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     origin = `http://localhost:${(server.address() as AddressInfo).port}`;
     browser = await chromium.launch({ headless: true });
@@ -160,6 +166,7 @@ describe('URL policy guard', () => {
     requestLog = [];
     offsiteLog = [];
     offsiteSocketConnections = 0;
+    sameOriginSocketConnections = 0;
     context = await browser.newContext();
     p = await context.newPage();
   });
@@ -221,11 +228,11 @@ describe('URL policy guard', () => {
     it('gives up on a redirect loop instead of spinning', async () => {
       await installUrlPolicyGuard(p, {});
 
-      await expect(guardedGoto(p, `${origin}/loop`)).rejects.toThrow(/exceeded \d+ redirects/);
-      // Bounded: one request per hop, plus the initial one.
-      expect(requestLog.filter((u) => u === '/loop').length).toBeLessThanOrEqual(
-        MAX_REDIRECT_HOPS + 2,
-      );
+      await expect(guardedGoto(p, `${origin}/loop`)).rejects.toThrow();
+      // Chromium bounds the chain itself now that hops are followed natively —
+      // the guard vets each one rather than re-driving it, so there is no
+      // counter of its own to get wrong. Assert it terminates, generously.
+      expect(requestLog.filter((u) => u === '/loop').length).toBeLessThan(40);
     }, 60_000);
 
     it('honours policy options — blockPrivateHosts refuses localhost', async () => {
@@ -311,21 +318,13 @@ describe('URL policy guard', () => {
       expect(p.url()).not.toContain('169.254.169.254');
     }, 60_000);
 
-    it('caps a self-redirecting iframe instead of spinning forever', async () => {
-      // guardedGoto bounds its own loop, but a redirect it did not initiate is
-      // re-driven from inside the route handler with no caller keeping score.
-      // Before this cap, /loop -> /loop in an iframe span unbounded while a
-      // comment claimed it "still terminates on the hop cap".
+    it('bounds a self-redirecting iframe instead of spinning forever', async () => {
       await installUrlPolicyGuard(p, {});
 
       await guardedGoto(p, `${origin}/frame-loop-host`);
       await p.waitForTimeout(3000);
 
-      // A handful of hops, not hundreds. Generous bound so this asserts
-      // "bounded" rather than an exact count.
-      expect(requestLog.filter((u) => u === '/loop').length).toBeLessThan(
-        (MAX_REDIRECT_HOPS + 2) * 2,
-      );
+      expect(requestLog.filter((u) => u === '/loop').length).toBeLessThan(40);
     }, 60_000);
 
     it('lands an iframe whose src redirects', async () => {
@@ -425,11 +424,11 @@ describe('URL policy guard', () => {
       expect(offsiteSocketConnections).toBe(0);
     }, 60_000);
 
-    it.skip('permits a same-origin WebSocket (blocked by #154)', async () => {
-      // Kept, skipped, as the acceptance test for #154: fulfilling the document
-      // response breaks every WebSocket upgrade on a guarded page, same-origin
-      // included, so the permission half of the pin cannot be exercised yet.
-      // Enable this when #154 is fixed.
+    it('permits a same-origin WebSocket', async () => {
+      // The acceptance test for #154. Under the old route.fulfill() guard this
+      // was impossible: a fulfilled document could never open a socket at all,
+      // so the permission half of the pin was unverifiable and every live-reload
+      // or subscription app was broken by the guard.
       await installUrlPolicyGuard(p, { pinnedOrigin: origin });
       await guardedGoto(p, `${origin}/final`);
 
@@ -446,6 +445,8 @@ describe('URL policy guard', () => {
       );
 
       expect(outcome).toBe('open');
+      // The server genuinely saw it, so this is not "the socket object existed".
+      expect(sameOriginSocketConnections).toBe(1);
     }, 60_000);
 
     it('follows a pin that a later install changed', async () => {
