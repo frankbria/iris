@@ -20,6 +20,17 @@ program
   .option('--url <url>', 'Starting page URL (or set IRIS_BASE_URL)')
   .option('--json', 'Emit a single machine-readable JSON result on stdout', false)
   .option(
+    '--agent',
+    'Experimental: plan against the live page and re-plan each turn, instead of translating once up front. Requires --url.',
+    false,
+  )
+  .option(
+    '--max-turns <n>',
+    'Max observe→act cycles in --agent mode',
+    (v) => parseIntOption(v, { min: 1, max: 50, name: 'max-turns' }),
+    8,
+  )
+  .option(
     '--timeout <ms>',
     'Timeout for actions in milliseconds',
     (v) => parseIntOption(v, { min: 1000, max: 3600000, name: 'timeout' }),
@@ -34,6 +45,8 @@ program
         timeout?: number;
         url?: string;
         json?: boolean;
+        agent?: boolean;
+        maxTurns?: number;
       },
     ) => {
       const startTime = new Date();
@@ -55,8 +68,119 @@ program
       let executed = false;
       // null = the plan contained no assertions, i.e. no goal was stated.
       let goalMet: boolean | null = null;
+      // Populated only in --agent mode; stays null so the one-shot envelope is unchanged.
+      let agent: { turns: number; terminationReason: string } | null = null;
+
+      /**
+       * Executor options shared by the one-shot and agent paths, so the two
+       * cannot drift apart on timeout or retry behaviour.
+       */
+      const executorOptions = {
+        timeout: options.timeout ?? 30000,
+        trackContext: true,
+        retryAttempts: 2,
+        retryDelay: 1000,
+        browserOptions: {
+          headless: options.headless !== false,
+          devtools: options.headless === false, // Enable devtools in non-headless mode
+        },
+      };
 
       try {
+        if (options.agent) {
+          // Both guards run before any browser launch: a usage error should cost
+          // nothing and surface immediately. They go to stderr rather than say()
+          // so they are still visible when --json owns stdout.
+          if (!startUrl) {
+            console.error(
+              '❌ --agent needs a starting page: pass --url <url> or set IRIS_BASE_URL.\n' +
+                '   The loop plans against what is actually on the page, so it cannot start from about:blank.',
+            );
+            status = 'error';
+            return;
+          }
+          if (options.dryRun) {
+            console.error(
+              '❌ --agent cannot be combined with --dry-run.\n' +
+                '   Each turn is planned from the result of the last one, so there is nothing to translate without executing.',
+            );
+            status = 'error';
+            return;
+          }
+
+          executed = true;
+          const { ActionExecutor } = await import('./executor');
+          const executor = new ActionExecutor(executorOptions);
+
+          try {
+            await executor.launchBrowser();
+            const page = await executor.createPage();
+
+            say(`🤖 Agent mode (experimental), up to ${options.maxTurns ?? 8} turns`);
+            say(`   Opening starting page: ${startUrl}`);
+
+            // Routed through executeAction so the URL policy applies, exactly as
+            // the one-shot path does.
+            const navResult = await executor.executeAction(
+              { type: 'navigate', url: startUrl },
+              page,
+            );
+            executionResults.push(navResult);
+
+            if (!navResult.success) {
+              say(`   ❌ Failed to open starting page: ${navResult.error}`);
+              status = 'error';
+            } else {
+              const { runAgentLoop } = await import('./agent-loop');
+              const outcome = await runAgentLoop({
+                instruction,
+                executor,
+                page,
+                maxTurns: options.maxTurns ?? 8,
+                log: (message) => say(`   ${message}`),
+              });
+
+              executionResults.push(...outcome.results);
+              goalMet = outcome.goalMet;
+              agent = { turns: outcome.turns, terminationReason: outcome.terminationReason };
+
+              // A failed action is NOT a failed agent run — recovering from one is
+              // the entire point of re-planning, so the one-shot path's
+              // "every action succeeded" rule would be wrong here. The verdict is
+              // whether the loop actually confirmed the goal.
+              if (outcome.terminationReason !== 'goal_met') {
+                status = 'error';
+              }
+
+              say(
+                `\n🎯 Agent finished after ${outcome.turns} turn(s): ${outcome.terminationReason}`,
+              );
+              if (goalMet === null) {
+                say('   Goal unverified — the model never asserted anything.');
+              } else {
+                say(`   Goal check: ${goalMet ? 'passed' : 'failed'}`);
+              }
+            }
+
+            await executor.cleanup();
+          } catch (agentError) {
+            status = 'error';
+            console.error(
+              '\n❌ Agent run failed:',
+              agentError instanceof Error ? agentError.message : agentError,
+            );
+            try {
+              await executor.cleanup();
+            } catch (cleanupError) {
+              console.error(
+                'Warning: Browser cleanup failed:',
+                cleanupError instanceof Error ? cleanupError.message : cleanupError,
+              );
+            }
+          }
+          return;
+        }
+
         const { translate } = await import('./translator');
         const result = await translate(instruction, startUrl ? { url: startUrl } : undefined);
         translation = result;
@@ -80,16 +204,7 @@ program
           say('\n🚀 Executing actions...');
 
           const { ActionExecutor } = await import('./executor');
-          const executor = new ActionExecutor({
-            timeout: options.timeout ?? 30000,
-            trackContext: true,
-            retryAttempts: 2,
-            retryDelay: 1000,
-            browserOptions: {
-              headless: options.headless !== false,
-              devtools: options.headless === false, // Enable devtools in non-headless mode
-            },
-          });
+          const executor = new ActionExecutor(executorOptions);
 
           try {
             // Launch browser and create page
@@ -237,6 +352,8 @@ program
               },
               executed,
               goalMet,
+              // null outside --agent mode, so the one-shot contract is unchanged.
+              agent,
               results: executionResults.map((r) => ({
                 success: r.success,
                 action: r.action ?? null,

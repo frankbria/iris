@@ -20,8 +20,8 @@ before you invest.
 
 | | |
 |---|---|
-| **Shipped** | Visual regression (capture, diff, baselines, multi-device); accessibility auditing via axe-core plus real keyboard/ARIA checks; natural-language macros (`click` / `fill` / `navigate`); machine-readable CLI output for assistants |
-| **In progress** | Assertion + goal-verification vocabulary; the MCP bridge (experimental — an stdio server with one tool, `run_accessibility_test`); richer watch-mode AI feedback; surfacing AI reasoning into reports |
+| **Shipped** | Visual regression (capture, diff, baselines, multi-device); accessibility auditing via axe-core plus real keyboard/ARIA checks; natural-language macros (`click` / `fill` / `navigate`) plus assertion/goal vocabulary; goal-directed `run --agent` loop (experimental); an MCP server (experimental — one tool); machine-readable CLI output for assistants |
+| **In progress** | Richer watch-mode AI feedback; surfacing AI reasoning into reports |
 | **Not started** | Autonomous UI exploration; design-system compliance checking |
 
 **[plans/README.md](plans/README.md) is the source of truth for status** — if any
@@ -35,7 +35,9 @@ JSON-RPC server and MCP stand.
 
 **Core Features Available:**
 - ✅ Natural language UI commands with AI translation — vocabulary is **click, fill,
-  navigate**; assertions and goal verification are in progress (see [plans/](plans/README.md))
+  navigate, assert**, so a goal is representable and `goalMet` is reported
+- ✅ Goal-directed `run --agent` loop (experimental) — re-plans against the live page
+  each turn instead of translating once, blind ([see below](#iris-run---agent--plan-against-the-real-page-experimental))
 - ✅ Browser automation via Playwright
 - ✅ File watching with automatic re-execution
 - ✅ AI coding assistant integration via JSON-on-stdout CLI output
@@ -47,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 827/828 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 918/919 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -79,12 +81,12 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 827/828 tests passing (99.9% pass rate), 1 skipped, 0 failing
+**Test Results:** 918/919 tests passing (99.9% pass rate), 1 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
 
-_Test counts verified 2026-07-30; coverage figures last measured 2026-06-26._
+_Test counts verified 2026-08-01; coverage figures last measured 2026-06-26._
 
 **Status:** Usable for visual regression today; accessibility integration and the `src/a11y/index.ts` wrappers are still in progress (see open issues).
 
@@ -157,6 +159,10 @@ iris run "find the blue button next to the search box and click it" --url https:
 
 # Machine-readable output for scripts and AI assistants
 iris run --json --url https://example.com "click #submit-button"
+
+# Goal-directed: re-plan against the live page each turn instead of guessing once
+iris run --agent --url http://localhost:3000 --max-turns 6 \
+  "make sure a signed-out visitor can reach the pricing page"
 ```
 
 **Visual Regression Testing:**
@@ -260,6 +266,8 @@ iris run --json --url https://example.com "click the sign in button"
     "actions": [{ "type": "click", "selector": "the sign in button" }]
   },
   "executed": true,
+  "goalMet": null,
+  "agent": null,
   "results": [
     {
       "success": true,
@@ -277,8 +285,68 @@ iris run --json --url https://example.com "click the sign in button"
 - `executed` is `false` and `results` is `[]` for `--dry-run`, which translates the
   instruction without touching a browser — useful for previewing what IRIS would do.
 - `translation` is `null` if the run failed before translation completed.
+- `goalMet` is `true` / `false` once assertions ran, and `null` when the plan asserted
+  nothing — "no goal was stated" is never conflated with "the goal was met".
+- `agent` is `null` unless `--agent` was passed (see below).
 - Read `status` (`success` | `error`) to decide whether the run worked. **`iris run`
   always exits 0** — see the exit-code table below.
+
+### `iris run --agent` — plan against the real page (experimental)
+
+Without `--agent`, translation is **one-shot and blind**: the model plans against a
+page it has never seen, and the whole plan executes open-loop. That is fine for an
+imperative one-liner (`click the sign in button`) and hopeless for a goal
+(`make sure a user can complete checkout`), where the next step depends on what the
+last one did.
+
+`--agent` closes the loop: observe the page → plan the next 1–3 actions → execute →
+re-observe, until the model asserts the goal holds or a bound is hit.
+
+```bash
+iris run --agent --url http://localhost:3000 --max-turns 6 \
+  "make sure a signed-out visitor can reach the pricing page"
+```
+
+```json
+{
+  "instruction": "make sure a signed-out visitor can reach the pricing page",
+  "translation": null,
+  "executed": true,
+  "goalMet": true,
+  "agent": { "turns": 3, "terminationReason": "goal_met" },
+  "results": ["…every action from every turn, in order…"],
+  "status": "success"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `agent.turns` | observe→act cycles actually run |
+| `agent.terminationReason` | `goal_met`, `max_turns`, `no_actions`, `consecutive_failures`, `error` |
+| `translation` | always `null` — there is no single up-front translation to report |
+| `status` | `success` **only** when `terminationReason` is `goal_met` |
+
+A failed action does **not** by itself make the run a failure here: recovering from
+one is the entire point of re-planning. The verdict is whether the loop confirmed
+the goal.
+
+**Bounds.** Every exit is bounded, because an agent that cannot tell it is stuck
+will happily burn an API budget forever. The loop stops on: the goal being met, two
+consecutive empty plans, three consecutive action failures, or `--max-turns`
+(default 8, max 50).
+
+**Requirements and limits.**
+
+- Needs a start URL (`--url` or `IRIS_BASE_URL`) — it plans against what is on the
+  page, so it cannot start from `about:blank`. Missing one is an error *before* a
+  browser launches.
+- Cannot be combined with `--dry-run`: each turn is planned from the result of the
+  last, so there is nothing to translate without executing.
+- Needs an AI provider configured — there is no pattern-matching fast path here.
+- Costs one model call per turn. Start with a low `--max-turns`.
+- Observation is the page's accessibility tree, capped at ~4000 characters. Content
+  past the cap is invisible to the model; screenshot-based observation is not
+  implemented.
 
 ### `iris visual-diff --format json` — visual regression
 
