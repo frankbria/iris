@@ -72,11 +72,23 @@ describe('run_accessibility_test tool', () => {
   let fixtureURL: string;
   let cleanURL: string;
   let subresourceURL: string;
+  let redirectBlockedURL: string;
+  let redirectOkURL: string;
   let client: Client;
   let server: McpServer;
 
   beforeAll(async () => {
     fixtureServer = createServer((req, res) => {
+      if (req.url === '/redirect-to-metadata') {
+        res.writeHead(302, { Location: 'http://169.254.169.254/latest/meta-data/' });
+        res.end();
+        return;
+      }
+      if (req.url === '/redirect-ok') {
+        res.writeHead(302, { Location: '/clean' });
+        res.end();
+        return;
+      }
       if (req.url === '/subresource') {
         // Passes the pre-flight check (plain localhost), then asks the browser
         // to fetch from a link-local host the policy is meant to block.
@@ -92,6 +104,8 @@ describe('run_accessibility_test tool', () => {
     fixtureURL = `${origin}/`;
     cleanURL = `${origin}/clean`;
     subresourceURL = `${origin}/subresource`;
+    redirectBlockedURL = `${origin}/redirect-to-metadata`;
+    redirectOkURL = `${origin}/redirect-ok`;
   });
 
   afterAll(async () => {
@@ -175,6 +189,28 @@ describe('run_accessibility_test tool', () => {
       // the tool reports a failure instead. Asserting success is therefore what
       // discriminates guard-on from guard-off here.
       const result = await callTool({ url: subresourceURL });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });
+    }, 120_000);
+
+    it('blocks a redirect from an allowed URL to a metadata host', async () => {
+      // The pre-flight check passes — the origin is plain localhost — and
+      // Chromium never re-routes a 30x target, so only the guard's explicit
+      // chain walk can catch this.
+      const result = await callTool({ url: redirectBlockedURL });
+
+      expect(result.isError).toBe(true);
+      // ERR_BLOCKED_BY_CLIENT, not a timeout. That distinction is the whole
+      // assertion: the metadata address is unreachable from CI anyway, so a
+      // test that merely asserted "the scan failed" would pass even with the
+      // guard removed.
+      expect(result.content?.[0]?.text).toContain('ERR_BLOCKED_BY_CLIENT');
+    }, 120_000);
+
+    it('still follows a redirect chain that stays within policy', async () => {
+      // The guard must vet redirects, not break them.
+      const result = await callTool({ url: redirectOkURL });
 
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });

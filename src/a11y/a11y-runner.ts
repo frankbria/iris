@@ -19,6 +19,9 @@ import { isNavigationAllowed } from '../url-policy';
 import type { UrlPolicyOptions } from '../url-policy';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 
+/** Redirect hops followed while vetting a navigation chain before giving up. */
+const MAX_REDIRECT_HOPS = 10;
+
 export interface AccessibilityRunnerConfig {
   pages: string[];
   // Reuses AxeConfig rather than restating its shape — the two drifted apart and
@@ -60,11 +63,9 @@ export interface AccessibilityRunnerConfig {
    * not just the initial URL — so a scanned page cannot pull a sub-resource from
    * a metadata/link-local host. Same mechanism as `Executor.createPage`.
    *
-   * Scope, measured rather than assumed: Playwright invokes `page.route` for
-   * sub-resource requests (blocked here) but NOT for the target of a 30x
-   * redirect, which Chromium follows internally. So this does not close the
-   * redirect vector — see issue #148. Callers must still validate the initial
-   * URL themselves; this is defence in depth, not the only check.
+   * Covers both sub-resources and redirect chains — Playwright does not re-route
+   * the target of a 30x, so those hops are followed and vetted explicitly here.
+   * See `installUrlPolicyGuard` and issue #148.
    *
    * Left unset by the `iris a11y` CLI, whose URLs are typed by the operator and
    * which legitimately scans `data:` pages. Set by the MCP tool, whose URLs are
@@ -193,6 +194,64 @@ export class AccessibilityRunner {
   }
 
   /**
+   * Enforce the navigation URL policy on every request the page makes.
+   *
+   * Sub-resources are simple: Playwright routes each one, so a single check
+   * decides it. Navigations are not — Chromium follows a 30x internally and
+   * never re-enters the route handler with the new URL, so a `continue()` here
+   * would hand the browser an unchecked target (issue #148). The document case
+   * therefore walks the redirect chain itself, vetting every hop before
+   * fulfilling with the final response.
+   */
+  private async installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions): Promise<void> {
+    await page.route('**/*', async (route) => {
+      const request = route.request();
+
+      if (request.resourceType() !== 'document') {
+        await (isNavigationAllowed(request.url(), policy)
+          ? route.continue()
+          : route.abort('blockedbyclient'));
+        return;
+      }
+
+      let url = request.url();
+      for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+        if (!isNavigationAllowed(url, policy)) {
+          await route.abort('blockedbyclient');
+          return;
+        }
+
+        let response;
+        try {
+          response = await route.fetch({ url, maxRedirects: 0 });
+        } catch {
+          // Unreachable host, TLS failure, etc. Fail the navigation rather than
+          // leaving the request hanging until the goto timeout.
+          await route.abort('failed');
+          return;
+        }
+
+        const status = response.status();
+        const location = response.headers()['location'];
+        if (status < 300 || status >= 400 || !location) {
+          await route.fulfill({ response });
+          return;
+        }
+
+        try {
+          url = new URL(location, url).toString();
+        } catch {
+          await route.abort('blockedbyclient');
+          return;
+        }
+      }
+
+      // Chain too long: a redirect loop, or an attempt to outlast the check.
+      await route.abort('blockedbyclient');
+    });
+  }
+
+  /**
    * Test a single page for accessibility issues
    */
   private async testPage(pagePattern: string): Promise<AccessibilityTestResult['results'][0]> {
@@ -204,15 +263,8 @@ export class AccessibilityRunner {
     const page = await context.newPage();
 
     // Install before the first navigation so no request escapes the guard.
-    const urlPolicy = this.config.urlPolicy;
-    if (urlPolicy) {
-      await page.route('**/*', (route) => {
-        if (isNavigationAllowed(route.request().url(), urlPolicy)) {
-          route.continue();
-        } else {
-          route.abort('blockedbyclient');
-        }
-      });
+    if (this.config.urlPolicy) {
+      await this.installUrlPolicyGuard(page, this.config.urlPolicy);
     }
 
     try {
