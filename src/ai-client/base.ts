@@ -21,6 +21,68 @@ export function formatError(error: unknown): string {
 }
 
 /**
+ * Strip anything that could forge the untrusted-page-data fence.
+ *
+ * The fence is what tells the model where scraped page content starts and stops.
+ * A page that simply prints the closing marker in its own copy would appear to
+ * end the untrusted region early, and everything after it would read as
+ * instructions from us — the standard way these boundaries get walked out of.
+ * Applied to every field interpolated inside the fence, not just the digest.
+ */
+export function redactFenceMarkers(value: string): string {
+  // The phrase is what persuades a model, so redact it however it is decorated:
+  // requiring the dashes let a bare "END UNTRUSTED PAGE DATA" — or an em-dashed
+  // one — through, which is a gap between what this claims to do and what it did.
+  // Over-redacting a page that genuinely contains this wording is the safe
+  // direction, and it costs that page nothing but four characters of digest.
+  return value.replace(/[-–—]*\s*(?:BEGIN|END)\s+UNTRUSTED\s+PAGE\s+DATA\s*[-–—]*/gi, '[redacted]');
+}
+
+/**
+ * Parse a model's JSON reply, tolerating the wrappers models add anyway.
+ *
+ * Every prompt here asks for bare JSON and models routinely ignore it —
+ * markdown-fencing the object, or prefacing it with a line of commentary. A
+ * bare `JSON.parse` turns that into a hard failure, which in the agent loop
+ * means an empty plan every turn and a run that terminates having done nothing.
+ * Observed with Ollama + gemma3, which fences on essentially every call.
+ *
+ * Candidates are tried strictest-first, so a clean response is never reshaped
+ * by the salvage paths.
+ *
+ * @throws if no candidate parses into an object.
+ */
+export function parseModelJson(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  const candidates = [trimmed];
+
+  // ```json … ``` or a bare ``` … ``` fence.
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+  if (fenced) candidates.push(fenced[1].trim());
+
+  // Last resort: the widest brace-delimited span, which survives leading prose
+  // ("Here is the JSON you asked for:") and a trailing sign-off.
+  const open = trimmed.indexOf('{');
+  const close = trimmed.lastIndexOf('}');
+  if (open !== -1 && close > open) candidates.push(trimmed.slice(open, close + 1));
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      // Arrays and primitives are valid JSON but never a valid response here,
+      // so keep looking rather than handing the caller something unusable.
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  throw new Error(`Model did not return a JSON object (got ${trimmed.slice(0, 80)}…)`);
+}
+
+/**
  * Request for translating natural language instructions to browser actions
  */
 export interface AITranslationRequest {

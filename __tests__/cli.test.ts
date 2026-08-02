@@ -4,6 +4,7 @@ import * as dbModule from '../src/db';
 import * as protocolModule from '../src/protocol';
 import * as translatorModule from '../src/translator';
 import * as executorModule from '../src/executor';
+import * as agentLoopModule from '../src/agent-loop';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -504,6 +505,435 @@ describe('CLI Commands', () => {
 
       expect(consoleOutput.some((l) => l.includes('✨ Translation result'))).toBe(true);
       expect(consoleOutput.some((l) => l.trimStart().startsWith('{"instruction"'))).toBe(false);
+    });
+  });
+
+  describe('run command agent mode (--agent)', () => {
+    /**
+     * Stub the executor's browser lifecycle. Note this suite deliberately does
+     * NOT use jest.doMock + resetModules to fake the loop: resetting the module
+     * registry swaps the ActionExecutor class out from under these prototype
+     * spies, and the CLI then launches a real browser. Spying on the imported
+     * module object works because cli.ts's dynamic `await import(...)` resolves
+     * to the same instance.
+     */
+    const stubExecutor = (
+      executeAction: jest.Mock = jest.fn().mockResolvedValue({ success: true, duration: 1 }),
+    ) => {
+      jest
+        .spyOn(executorModule.ActionExecutor.prototype, 'launchBrowser')
+        .mockResolvedValue({} as never);
+      jest.spyOn(executorModule.ActionExecutor.prototype, 'createPage').mockResolvedValue({
+        page: true,
+      } as never);
+      jest.spyOn(executorModule.ActionExecutor.prototype, 'cleanup').mockResolvedValue();
+      jest
+        .spyOn(executorModule.ActionExecutor.prototype, 'executeAction')
+        .mockImplementation(executeAction);
+      return executeAction;
+    };
+
+    /** Replace the loop itself; this suite is about the CLI wrapped around it. */
+    const stubAgentLoop = (outcome: Record<string, unknown>) =>
+      jest
+        .spyOn(agentLoopModule, 'runAgentLoop')
+        .mockResolvedValue(outcome as never) as unknown as jest.Mock;
+
+    const soleJsonPayload = () => {
+      expect(consoleOutput).toHaveLength(1);
+      return JSON.parse(consoleOutput[0]);
+    };
+
+    beforeEach(() => {
+      jest.spyOn(dbModule, 'initializeDatabase').mockReturnValue({ close: jest.fn() } as never);
+      jest.spyOn(dbModule, 'insertTestRun').mockImplementation(() => undefined as never);
+      jest
+        .spyOn(console, 'error')
+        .mockImplementation((...args) => consoleOutput.push(args.join(' ')));
+      delete process.env.IRIS_BASE_URL;
+    });
+
+    afterEach(() => {
+      delete process.env.IRIS_BASE_URL;
+    });
+
+    describe('usage errors cost nothing', () => {
+      // The point of these is the *absence* of a browser launch. A usage error
+      // that first spends several seconds starting Chromium is a bad enough
+      // experience to deserve its own guard.
+      test('--agent without a URL errors before launching a browser', async () => {
+        const launch = jest
+          .spyOn(executorModule.ActionExecutor.prototype, 'launchBrowser')
+          .mockResolvedValue({} as never);
+
+        await runCli(['node', 'iris', 'run', 'buy a widget', '--agent']);
+
+        expect(launch).not.toHaveBeenCalled();
+        expect(consoleOutput.some((l) => l.includes('--agent needs a starting page'))).toBe(true);
+      });
+
+      test('IRIS_BASE_URL satisfies the start-URL requirement', async () => {
+        process.env.IRIS_BASE_URL = 'https://example.com';
+        stubExecutor();
+        const loop = stubAgentLoop({
+          goalMet: true,
+          turns: 1,
+          results: [],
+          terminationReason: 'goal_met',
+        });
+
+        await runCli(['node', 'iris', 'run', 'buy a widget', '--agent']);
+
+        expect(loop).toHaveBeenCalled();
+      });
+
+      test('--agent with --dry-run errors before launching a browser', async () => {
+        const launch = jest
+          .spyOn(executorModule.ActionExecutor.prototype, 'launchBrowser')
+          .mockResolvedValue({} as never);
+
+        await runCli([
+          'node',
+          'iris',
+          'run',
+          'buy a widget',
+          '--agent',
+          '--dry-run',
+          '--url',
+          'https://example.com',
+        ]);
+
+        expect(launch).not.toHaveBeenCalled();
+        expect(consoleOutput.some((l) => l.includes('cannot be combined with --dry-run'))).toBe(
+          true,
+        );
+      });
+
+      test('a usage error still produces a parseable envelope in --json mode', async () => {
+        // An assistant piping stdout must get JSON even on a usage error, so the
+        // message goes to stderr and the envelope still lands on stdout.
+        const stdout: string[] = [];
+        jest.spyOn(console, 'log').mockImplementation((l: string) => stdout.push(l));
+
+        await runCli(['node', 'iris', 'run', 'buy a widget', '--agent', '--json']);
+
+        expect(stdout).toHaveLength(1);
+        const payload = JSON.parse(stdout[0]);
+        expect(payload.status).toBe('error');
+        expect(payload.executed).toBe(false);
+        expect(payload.agent).toBeNull();
+      });
+
+      test('--max-turns rejects a non-numeric value', async () => {
+        // Commander exits the process on an invalid option value, which would
+        // take the Jest worker with it — stub it into a throw and assert on that.
+        const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {
+          throw new Error('process.exit called');
+        }) as never);
+        jest.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+        await expect(
+          runCli([
+            'node',
+            'iris',
+            'run',
+            'buy a widget',
+            '--agent',
+            '--url',
+            'https://example.com',
+            '--max-turns',
+            'lots',
+          ]),
+        ).rejects.toThrow('process.exit called');
+
+        expect(exitSpy).toHaveBeenCalledWith(1);
+      });
+    });
+
+    describe('loop wiring', () => {
+      test('navigates to the start URL through executeAction, then runs the loop', async () => {
+        const executeAction = stubExecutor();
+        const loop = stubAgentLoop({
+          goalMet: true,
+          turns: 2,
+          results: [{ success: true, action: { type: 'click', selector: '#a' }, duration: 1 }],
+          terminationReason: 'goal_met',
+        });
+
+        await runCli([
+          'node',
+          'iris',
+          'run',
+          'buy a widget',
+          '--agent',
+          '--url',
+          'https://example.com',
+        ]);
+
+        // The start URL goes through the executor, so the URL policy applies to
+        // it exactly as in the one-shot path.
+        expect(executeAction).toHaveBeenCalledWith(
+          { type: 'navigate', url: 'https://example.com' },
+          expect.anything(),
+        );
+        expect(loop).toHaveBeenCalledWith(
+          expect.objectContaining({ instruction: 'buy a widget', maxTurns: 8 }),
+        );
+      });
+
+      test('--max-turns is passed through to the loop', async () => {
+        stubExecutor();
+        const loop = stubAgentLoop({
+          goalMet: null,
+          turns: 3,
+          results: [],
+          terminationReason: 'max_turns',
+        });
+
+        await runCli([
+          'node',
+          'iris',
+          'run',
+          'buy a widget',
+          '--agent',
+          '--url',
+          'https://example.com',
+          '--max-turns',
+          '3',
+        ]);
+
+        expect(loop).toHaveBeenCalledWith(expect.objectContaining({ maxTurns: 3 }));
+      });
+
+      test('the loop never runs when the starting page fails to open', async () => {
+        stubExecutor(jest.fn().mockResolvedValue({ success: false, error: 'boom', duration: 1 }));
+        const loop = stubAgentLoop({
+          goalMet: true,
+          turns: 1,
+          results: [],
+          terminationReason: 'goal_met',
+        });
+
+        await runCli([
+          'node',
+          'iris',
+          'run',
+          'buy a widget',
+          '--agent',
+          '--url',
+          'https://example.com',
+          '--json',
+        ]);
+
+        expect(loop).not.toHaveBeenCalled();
+        const payload = soleJsonPayload();
+        expect(payload.status).toBe('error');
+        expect(payload.agent).toBeNull();
+      });
+
+      test('the browser is cleaned up even when the loop throws', async () => {
+        stubExecutor();
+        const cleanup = jest
+          .spyOn(executorModule.ActionExecutor.prototype, 'cleanup')
+          .mockResolvedValue();
+        jest.spyOn(agentLoopModule, 'runAgentLoop').mockRejectedValue(new Error('loop exploded'));
+
+        // stdout captured separately here: the throw also writes to stderr, which
+        // this suite folds into consoleOutput, and stdout must stay pure JSON.
+        const stdout: string[] = [];
+        jest.spyOn(console, 'log').mockImplementation((l: string) => stdout.push(l));
+
+        await runCli([
+          'node',
+          'iris',
+          'run',
+          'buy a widget',
+          '--agent',
+          '--url',
+          'https://example.com',
+          '--json',
+        ]);
+
+        expect(cleanup).toHaveBeenCalled();
+        expect(stdout).toHaveLength(1);
+        expect(JSON.parse(stdout[0]).status).toBe('error');
+        expect(consoleOutput.some((l) => l.includes('Agent run failed: loop exploded'))).toBe(true);
+      });
+    });
+
+    describe('the JSON envelope', () => {
+      const runAgent = async (outcome: Record<string, unknown>) => {
+        stubExecutor();
+        stubAgentLoop(outcome);
+        await runCli([
+          'node',
+          'iris',
+          'run',
+          'buy a widget',
+          '--agent',
+          '--url',
+          'https://example.com',
+          '--json',
+        ]);
+        return soleJsonPayload();
+      };
+
+      test('reports turns, terminationReason and goalMet, and folds in loop results', async () => {
+        const payload = await runAgent({
+          goalMet: true,
+          turns: 2,
+          results: [
+            { success: true, action: { type: 'click', selector: '#a' }, duration: 5 },
+            { success: true, action: { type: 'assert', kind: 'text_visible' }, duration: 6 },
+          ],
+          terminationReason: 'goal_met',
+        });
+
+        expect(payload.agent).toEqual({ turns: 2, terminationReason: 'goal_met' });
+        expect(payload.goalMet).toBe(true);
+        expect(payload.executed).toBe(true);
+        expect(payload.status).toBe('success');
+        // The starting navigation plus both loop results.
+        expect(payload.results).toHaveLength(3);
+        // No single up-front translation exists in agent mode.
+        expect(payload.translation).toBeNull();
+      });
+
+      // In agent mode a failed action is expected — recovering from one is the
+      // whole point of re-planning — so the verdict is the loop's outcome, not
+      // whether every individual action succeeded.
+      test('a recovered-from action failure still reports success', async () => {
+        const payload = await runAgent({
+          goalMet: true,
+          turns: 3,
+          results: [
+            {
+              success: false,
+              action: { type: 'click', selector: '#wrong' },
+              error: 'no such element',
+              duration: 1,
+            },
+            { success: true, action: { type: 'click', selector: '#right' }, duration: 2 },
+            { success: true, action: { type: 'assert', kind: 'text_visible' }, duration: 3 },
+          ],
+          terminationReason: 'goal_met',
+        });
+
+        expect(payload.results.some((r: { success: boolean }) => !r.success)).toBe(true);
+        expect(payload.status).toBe('success');
+      });
+
+      test.each([
+        ['max_turns', null],
+        ['no_actions', null],
+        ['consecutive_failures', false],
+        ['error', null],
+      ])('terminating on %s without a met goal reports status error', async (reason, goalMet) => {
+        const payload = await runAgent({
+          goalMet,
+          turns: 4,
+          results: [],
+          terminationReason: reason,
+        });
+
+        expect(payload.agent.terminationReason).toBe(reason);
+        expect(payload.goalMet).toBe(goalMet);
+        expect(payload.status).toBe('error');
+      });
+
+      // Observed in the demo: a model that keeps acting alongside its assert never
+      // trips the completion signal, so the loop runs to the cap with the goal
+      // passing. Calling that a failure would contradict the goal verdict itself.
+      test.each(['max_turns', 'no_actions'])(
+        'terminating on %s with the goal met reports status success',
+        async (reason) => {
+          const payload = await runAgent({
+            goalMet: true,
+            turns: 4,
+            results: [],
+            terminationReason: reason,
+          });
+
+          expect(payload.goalMet).toBe(true);
+          expect(payload.status).toBe('success');
+        },
+      );
+
+      // ...but an abnormal exit stays an error even so, because goalMet there can
+      // be a stale verdict from a turn before things went wrong.
+      test.each(['consecutive_failures', 'error'])(
+        'terminating abnormally on %s stays an error even when goalMet is true',
+        async (reason) => {
+          const payload = await runAgent({
+            goalMet: true,
+            turns: 4,
+            results: [],
+            terminationReason: reason,
+          });
+
+          expect(payload.status).toBe('error');
+        },
+      );
+    });
+
+    test('human mode narrates turns and prints no JSON envelope', async () => {
+      stubExecutor();
+      jest.spyOn(agentLoopModule, 'runAgentLoop').mockImplementation(async ({ log }) => {
+        log?.('turn 1: observing (120 chars)');
+        log?.('turn 1: click → ok');
+        return { goalMet: true, turns: 1, results: [], terminationReason: 'goal_met' as const };
+      });
+
+      await runCli([
+        'node',
+        'iris',
+        'run',
+        'buy a widget',
+        '--agent',
+        '--url',
+        'https://example.com',
+      ]);
+
+      expect(consoleOutput.some((l) => l.includes('🤖 Agent mode'))).toBe(true);
+      expect(consoleOutput.some((l) => l.includes('turn 1: observing'))).toBe(true);
+      expect(consoleOutput.some((l) => l.includes('Goal check: passed'))).toBe(true);
+      expect(consoleOutput.some((l) => l.trimStart().startsWith('{"instruction"'))).toBe(false);
+    });
+
+    test('an unverified goal is reported as unverified, not as passed', async () => {
+      stubExecutor();
+      stubAgentLoop({ goalMet: null, turns: 8, results: [], terminationReason: 'max_turns' });
+
+      await runCli([
+        'node',
+        'iris',
+        'run',
+        'buy a widget',
+        '--agent',
+        '--url',
+        'https://example.com',
+      ]);
+
+      expect(consoleOutput.some((l) => l.includes('Goal unverified'))).toBe(true);
+      expect(consoleOutput.some((l) => l.includes('Goal check'))).toBe(false);
+    });
+
+    test('the one-shot path is untouched when --agent is absent', async () => {
+      const executeAction = stubExecutor(
+        jest.fn().mockImplementation((action) => ({ success: true, action, duration: 1 })),
+      );
+      const loop = jest.spyOn(agentLoopModule, 'runAgentLoop');
+
+      await runCli(['node', 'iris', 'run', 'click #btn', '--url', 'https://example.com', '--json']);
+
+      expect(loop).not.toHaveBeenCalled();
+      const payload = soleJsonPayload();
+      expect(payload.agent).toBeNull();
+      expect(payload.translation).not.toBeNull();
+      expect(executeAction.mock.calls.map((c) => c[0])).toEqual([
+        { type: 'navigate', url: 'https://example.com' },
+        { type: 'click', selector: '#btn' },
+      ]);
     });
   });
 });
