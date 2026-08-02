@@ -448,6 +448,30 @@ describe('URL policy guard', () => {
       expect(outcome).toBe('open');
     }, 60_000);
 
+    it('follows a pin that a later install changed', async () => {
+      // The WebSocket predicate must read the live policy. Closing over the
+      // value passed at install time would keep enforcing the origin that was
+      // pinned first, allowing sockets to it and refusing them to the new one.
+      await installUrlPolicyGuard(p, { pinnedOrigin: 'http://stale.example' });
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/final`);
+
+      const outcome = await p.evaluate(
+        (url) =>
+          new Promise<string>((resolve) => {
+            const ws = new WebSocket(url);
+            ws.onopen = () => resolve('open');
+            ws.onclose = (e) => resolve(`close ${e.code}`);
+            ws.onerror = () => resolve('error');
+            setTimeout(() => resolve('timeout'), 4000);
+          }),
+        'ws://stale.example/',
+      );
+
+      // Refused against the CURRENT pin, not permitted by the stale one.
+      expect(outcome).toBe('close 1008');
+    }, 60_000);
+
     it('does NOT block cross-origin sub-resources', async () => {
       // Pinning is a navigation control. A page legitimately loads images and
       // fonts from other origins, and refusing those would break the very page

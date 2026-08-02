@@ -227,14 +227,21 @@ function toHttpScheme(wsUrl: string): string {
 }
 
 /** @see toHttpScheme */
-async function installWebSocketPin(page: Page, pinnedOrigin: string): Promise<void> {
+async function installWebSocketPin(page: Page, state: GuardState): Promise<void> {
   // Match only the sockets to be refused, so an allowed one is never routed at
   // all. Routing everything and re-connecting the permitted ones would mean
   // proxying live traffic through the handler to keep a same-origin socket
   // working — far more machinery, and more to get wrong, than simply not
   // intercepting it.
   await page.routeWebSocket(
-    (url) => !isWithinPinnedOrigin(toHttpScheme(url.toString()), pinnedOrigin),
+    (url) => {
+      // Read the pin from the live state, not from a captured parameter: a
+      // later install can tighten or replace it, and a closed-over value would
+      // keep enforcing the origin that was pinned first.
+      const pinnedOrigin = state.policy.pinnedOrigin;
+      if (!pinnedOrigin) return false;
+      return !isWithinPinnedOrigin(toHttpScheme(url.toString()), pinnedOrigin);
+    },
     (ws) => ws.close({ code: 1008, reason: 'blocked: leaves the pinned origin' }),
   );
 }
@@ -242,6 +249,10 @@ async function installWebSocketPin(page: Page, pinnedOrigin: string): Promise<vo
 /**
  * Install the policy guard on a page. Call once, before the first navigation, so
  * that no request escapes it.
+ *
+ * Page-scoped, which is a known limit: a click that opens a new tab produces a
+ * different Page with no guard, and its first request is not intercepted
+ * (issue #155). Routing at the context level covers popups and is the fix.
  *
  * Pages without a guard are unaffected: {@link guardedGoto} falls back to a plain
  * `page.goto`, so a caller that does not want the policy simply does not install it.
@@ -257,10 +268,11 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   if (existing) {
     const hadPin = existing.policy.pinnedOrigin;
     existing.policy = { ...existing.policy, ...policy };
-    // A merge that introduces a pin still needs the WebSocket guard, which the
-    // first install had no reason to add.
+    // A merge that introduces a pin still needs the WebSocket route, which the
+    // first install had no reason to add. A merge that *changes* one does not:
+    // the predicate reads the live policy, so it follows the new value.
     if (!hadPin && existing.policy.pinnedOrigin) {
-      await installWebSocketPin(page, existing.policy.pinnedOrigin);
+      await installWebSocketPin(page, existing);
     }
     return;
   }
@@ -270,7 +282,7 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   const refusal = state.refusal;
 
   if (policy.pinnedOrigin) {
-    await installWebSocketPin(page, policy.pinnedOrigin);
+    await installWebSocketPin(page, state);
   }
 
   await page.route('**/*', async (route) => {

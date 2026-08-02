@@ -49,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1042/1044 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1043/1045 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -81,7 +81,7 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 1042/1044 tests passing (99.9% pass rate), 2 skipped, 0 failing
+**Test Results:** 1043/1045 tests passing (99.9% pass rate), 2 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
@@ -391,9 +391,12 @@ The script rule has a real cost: **a site serving its JavaScript from a CDN will
 under a pinned origin** and needs `--allow-cross-origin`. Taken deliberately — "executes
 attacker code, but only from a different hostname" is not a security boundary.
 
-Residual, stated plainly: images stay exempt, so same-origin script can still beacon out
-via `new Image().src`. Closing that would mean blocking cross-origin images too, which
-breaks far more than it protects.
+Residual, stated plainly:
+
+- images stay exempt, so same-origin script can still beacon out via `new Image().src`.
+  Closing that means blocking cross-origin images too, which breaks far more than it protects
+- routing is page-scoped, so a click opening a **new tab** escapes the pin
+  ([#155](https://github.com/frankbria/iris/issues/155))
 
 Commerce is deliberately **not** on the destructive list — "make sure users can
 complete checkout" is what this loop is for, and a purchase is reversible in a way
