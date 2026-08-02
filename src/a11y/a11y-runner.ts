@@ -11,7 +11,7 @@
  * e2e suite, not Istanbul.
  */
 
-import { chromium, Browser, Page } from 'playwright';
+import { chromium, Browser, Page, Route } from 'playwright';
 import { AxeRunner } from './axe-integration';
 import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
@@ -26,6 +26,72 @@ import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './t
  */
 interface NavigationRefusal {
   reason?: string;
+}
+
+/** Redirect hops followed while vetting a sub-resource before giving up. */
+const MAX_REDIRECT_HOPS = 10;
+
+/**
+ * Cap on a single guarded fetch. Must stay below `page.goto`'s 30s default:
+ * whichever fires first owns the error the caller sees, and the guard's reason
+ * ("redirects to X", "could not be fetched: …") is the useful one.
+ *
+ * It also bounds the commonest mistake — pointing the tool at a dev server that
+ * is not running. Playwright's Node-side fetch does not fail fast on a refused
+ * connection the way Chromium's own stack does (measured: ~28s to localhost:1),
+ * so without this the answer arrives late and says only "Timeout exceeded".
+ */
+const GUARDED_FETCH_TIMEOUT_MS = 15_000;
+
+/**
+ * Apply the URL policy to a non-document request, following any redirect chain
+ * one hop at a time.
+ *
+ * `route.continue()` is NOT usable here, despite the request being routed:
+ * Chromium follows a sub-resource's 30x internally and does not re-enter the
+ * handler with the new URL, exactly as it does for a main-frame navigation.
+ * Measured — an `<img>` pointing at a redirect to 169.254.169.254 reaches it
+ * with the handler only ever seeing the original URL.
+ *
+ * Unlike the document case this follows the chain rather than refusing it:
+ * a sub-resource has no document base to get wrong, and CDN redirects on
+ * images and fonts are ordinary enough that refusing them would degrade the
+ * very page being measured.
+ */
+async function guardSubresource(route: Route, policy: UrlPolicyOptions): Promise<void> {
+  let url = route.request().url();
+
+  for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+    if (!isNavigationAllowed(url, policy)) {
+      await route.abort('blockedbyclient');
+      return;
+    }
+
+    let response;
+    try {
+      response = await route.fetch({ url, maxRedirects: 0, timeout: GUARDED_FETCH_TIMEOUT_MS });
+    } catch {
+      await route.abort('failed');
+      return;
+    }
+
+    const status = response.status();
+    const location = response.headers()['location'];
+    if (status < 300 || status >= 400 || !location) {
+      await route.fulfill({ response });
+      return;
+    }
+
+    try {
+      url = new URL(location, url).toString();
+    } catch {
+      await route.abort('blockedbyclient');
+      return;
+    }
+  }
+
+  // Chain too long: a redirect loop, or an attempt to outlast the check.
+  await route.abort('blockedbyclient');
 }
 
 export interface AccessibilityRunnerConfig {
@@ -225,9 +291,7 @@ export class AccessibilityRunner {
       const request = route.request();
 
       if (request.resourceType() !== 'document') {
-        await (isNavigationAllowed(request.url(), policy)
-          ? route.continue()
-          : route.abort('blockedbyclient'));
+        await guardSubresource(route, policy);
         return;
       }
 
@@ -240,7 +304,7 @@ export class AccessibilityRunner {
 
       let response;
       try {
-        response = await route.fetch({ maxRedirects: 0 });
+        response = await route.fetch({ maxRedirects: 0, timeout: GUARDED_FETCH_TIMEOUT_MS });
       } catch (error) {
         // Unreachable host, TLS failure, etc. Fail the navigation rather than
         // leaving the request hanging until the goto timeout.

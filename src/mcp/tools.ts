@@ -56,9 +56,14 @@ function toolError(message: string) {
   };
 }
 
-/** Node's error cause chain carries the useful part of a Playwright navigation failure. */
+/**
+ * The first line of an error is the reason; Playwright appends a multi-line
+ * call log with ANSI colour codes after it. An assistant reading a tool result
+ * needs the reason — a terminal dump is noise it has to pay tokens to skip.
+ */
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split('\n')[0].trim();
 }
 
 /**

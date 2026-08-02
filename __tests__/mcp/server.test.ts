@@ -125,11 +125,15 @@ class McpStdioClient {
     this.proc.stdin.end();
     await new Promise<void>((resolve) => {
       if (this.proc.exitCode !== null) return resolve();
-      this.proc.on('exit', () => resolve());
-      setTimeout(() => {
-        this.proc.kill('SIGKILL');
+      // Always settle on the real 'exit', never straight after kill() — the
+      // process is still an open handle between the signal and the exit, and
+      // resolving early lets Jest tear the worker down on top of it.
+      const kill = setTimeout(() => this.proc.kill('SIGKILL'), 3000);
+      kill.unref();
+      this.proc.on('exit', () => {
+        clearTimeout(kill);
         resolve();
-      }, 3000).unref();
+      });
     });
   }
 }

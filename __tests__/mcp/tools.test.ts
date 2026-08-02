@@ -35,6 +35,19 @@ const SUBRESOURCE_HTML = `<!DOCTYPE html>
   </body>
 </html>`;
 
+/**
+ * Reaches the metadata address only via a redirect, so the guard must vet the
+ * hop rather than trusting the sub-resource's own (allowed) URL.
+ */
+const SUBRESOURCE_REDIRECT_HTML = `<!DOCTYPE html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Redirected subresource fixture</title></head>
+  <body>
+    <h1>Redirected subresource fixture</h1>
+    <img alt="off-host via redirect" src="/img-redirect" />
+  </body>
+</html>`;
+
 /** The same page with every one of those defects fixed. */
 const CLEAN_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -72,6 +85,7 @@ describe('run_accessibility_test tool', () => {
   let fixtureURL: string;
   let cleanURL: string;
   let subresourceURL: string;
+  let subresourceRedirectURL: string;
   let redirectBlockedURL: string;
   let redirectOkURL: string;
   let client: Client;
@@ -89,6 +103,16 @@ describe('run_accessibility_test tool', () => {
         res.end();
         return;
       }
+      if (req.url === '/img-redirect') {
+        res.writeHead(302, { Location: 'http://169.254.169.254/meta.png' });
+        res.end();
+        return;
+      }
+      if (req.url === '/subresource-redirect') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(SUBRESOURCE_REDIRECT_HTML);
+        return;
+      }
       if (req.url === '/subresource') {
         // Passes the pre-flight check (plain localhost), then asks the browser
         // to fetch from a link-local host the policy is meant to block.
@@ -104,6 +128,7 @@ describe('run_accessibility_test tool', () => {
     fixtureURL = `${origin}/`;
     cleanURL = `${origin}/clean`;
     subresourceURL = `${origin}/subresource`;
+    subresourceRedirectURL = `${origin}/subresource-redirect`;
     redirectBlockedURL = `${origin}/redirect-to-metadata`;
     redirectOkURL = `${origin}/redirect-ok`;
   });
@@ -189,6 +214,17 @@ describe('run_accessibility_test tool', () => {
       // the tool reports a failure instead. Asserting success is therefore what
       // discriminates guard-on from guard-off here.
       const result = await callTool({ url: subresourceURL });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });
+    }, 120_000);
+
+    it('aborts a sub-resource that only reaches a metadata host via a redirect', async () => {
+      // The image's own URL is in-policy; only the 30x target is not. Chromium
+      // does not re-route a redirected sub-resource any more than it re-routes a
+      // redirected navigation, so `route.continue()` here would let the request
+      // through — measured, and the reason the guard follows the chain itself.
+      const result = await callTool({ url: subresourceRedirectURL });
 
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });
@@ -288,11 +324,20 @@ describe('run_accessibility_test tool', () => {
 
   describe('failure handling', () => {
     it('returns a tool error, not a throw, when the page is unreachable', async () => {
-      // Port 1 is reserved and never listening: connection refused, not a timeout.
+      // Port 1 is reserved and never listening.
       const result = await callTool({ url: 'http://localhost:1/' });
+      const text = result.content?.[0]?.text ?? '';
 
       expect(result.isError).toBe(true);
-      expect(result.content?.[0]?.text).toContain('Accessibility scan failed');
+      expect(text).toContain('Accessibility scan failed');
+      // The guard's reason must win the race against page.goto's own timeout,
+      // otherwise the caller is told only "Timeout exceeded" with no URL.
+      expect(text).toContain('http://localhost:1/');
+
+      // One line, no ANSI. Playwright appends a coloured multi-line call log to
+      // its errors; forwarding that to an assistant is tokens spent on noise.
+      expect(text).not.toContain('\n');
+      expect(text).not.toMatch(/\[/);
     }, 120_000);
   });
 });
