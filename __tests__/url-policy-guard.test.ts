@@ -516,6 +516,24 @@ describe('URL policy guard', () => {
       expect(offsiteLog).not.toContain('/tab');
     }, 60_000);
 
+    it('vets each page against its OWN policy, not the first one installed', async () => {
+      // A context can hold several guarded pages. Using whichever installed the
+      // net first would refuse page 2's valid navigation and mis-scope the pin
+      // for anything page 2 opens.
+      await installUrlPolicyGuard(p, { pinnedOrigin: 'http://first.example' });
+
+      const second = await context.newPage();
+      await installUrlPolicyGuard(second, { pinnedOrigin: origin });
+
+      // Allowed under the SECOND page's pin; refused under the first's.
+      const landed = await guardedGoto(second, `${origin}/final`);
+      expect(landed).toBe(`${origin}/final`);
+      await expect(second.title()).resolves.toBe('Final');
+
+      // And the first page is still held to its own, different pin.
+      await expect(guardedGoto(p, `${origin}/final`)).rejects.toThrow(/leaves the pinned origin/);
+    }, 60_000);
+
     it('still lets a same-origin popup load', async () => {
       // A pin that broke ordinary new tabs would get switched off wholesale.
       await installUrlPolicyGuard(p, { pinnedOrigin: origin });

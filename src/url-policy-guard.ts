@@ -89,8 +89,15 @@ interface GuardState {
  */
 const guards = new WeakMap<Page, GuardState>();
 
-/** Contexts already carrying the popup net, so it is attached exactly once. */
-const guardedContexts = new WeakSet<BrowserContext>();
+/**
+ * Contexts already carrying the popup net, so it is attached exactly once.
+ *
+ * Holds the most recently installed state as the fallback policy: a popup's
+ * first request arrives before the popup has a guard of its own, so there is no
+ * per-page policy to consult yet, and the newest is a better guess than the
+ * oldest.
+ */
+const guardedContexts = new WeakMap<BrowserContext, { latest: GuardState }>();
 
 /**
  * Why the policy refuses this URL, or null when it does not.
@@ -198,10 +205,26 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<void> {
  * Only ever continues or aborts. Fulfilling is what broke WebSockets (#154) and
  * has no part here.
  */
-async function installContextNet(context: BrowserContext, state: GuardState): Promise<void> {
+async function installContextNet(
+  context: BrowserContext,
+  entry: { latest: GuardState },
+): Promise<void> {
   await context.route('**/*', async (route) => {
     const request = route.request();
-    const reason = blockReason(request.url(), policyFor(state.policy, request.resourceType()));
+
+    // The policy of the page that issued the request, not of whichever page
+    // happened to install this net first — a context can hold several guarded
+    // pages, and vetting page 2's requests against page 1's pin would both
+    // refuse valid navigation and mis-scope the pin for anything page 2 opens.
+    let owner: Page | undefined;
+    try {
+      owner = request.frame()?.page();
+    } catch {
+      // Not frame-associated (a service worker, say); fall back below.
+    }
+    const policy = (owner && guards.get(owner)?.policy) ?? entry.latest.policy;
+
+    const reason = blockReason(request.url(), policyFor(policy, request.resourceType()));
     try {
       await (reason ? route.abort('blockedbyclient') : route.continue());
     } catch {
@@ -212,7 +235,7 @@ async function installContextNet(context: BrowserContext, state: GuardState): Pr
   // A popup still gets its own CDP session, so requests after its first are
   // vetted as thoroughly as the page it was opened from.
   context.on('page', (popup) => {
-    void installUrlPolicyGuard(popup, state.policy).catch(() => {
+    void installUrlPolicyGuard(popup, entry.latest.policy).catch(() => {
       // A page that closed before the guard attached needs no guard.
     });
   });
@@ -251,9 +274,14 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   guards.set(page, state);
 
   const context = page.context();
-  if (!guardedContexts.has(context)) {
-    guardedContexts.add(context);
-    await installContextNet(context, state);
+  const contextEntry = guardedContexts.get(context);
+  if (contextEntry) {
+    // Keep the fallback current, for requests with no page-level policy to read.
+    contextEntry.latest = state;
+  } else {
+    const entry = { latest: state };
+    guardedContexts.set(context, entry);
+    await installContextNet(context, entry);
   }
 
   await installFetchGuard(page, state);
