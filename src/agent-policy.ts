@@ -50,6 +50,21 @@ const DESTRUCTIVE_TERMS = [
 
 const DESTRUCTIVE_PATTERN = new RegExp(`\\b(${DESTRUCTIVE_TERMS.join('|')})\\b`, 'i');
 
+/**
+ * Put word boundaries where selector conventions hide them.
+ *
+ * `\b` sees `#deleteAccount` and `#delete_account` as single words, so a plain
+ * word-boundary match would wave through exactly the ids a real app uses — the
+ * check would only fire on prose like `has-text("Delete account")`. Splitting
+ * camelCase and underscores first makes the same pattern see `delete Account`.
+ */
+function separateWords(text: string): string {
+  return text
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/_+/g, ' ');
+}
+
 export interface AgentPolicy {
   /** Action types the agent may execute. Defaults to all of them. */
   allow?: readonly ActionType[];
@@ -149,7 +164,7 @@ export function checkAction(
     // Asserts are read-only by construction, so they are exempt — checking them
     // would refuse to *verify* that a delete button exists, which is a
     // legitimate and harmless thing to ask.
-    const match = DESTRUCTIVE_PATTERN.exec(targetText(action));
+    const match = DESTRUCTIVE_PATTERN.exec(separateWords(targetText(action)));
     if (match) {
       return {
         allowed: false,

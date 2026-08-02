@@ -105,6 +105,36 @@ function isPrivateHost(host: string): boolean {
 }
 
 /**
+ * Whether a URL is within the pinned origin, allowing an http→https upgrade.
+ *
+ * Origins differ by scheme, so a strict comparison refuses a site that upgrades
+ * itself — an HSTS redirect, or a dev server that starts on http and moves. That
+ * is a security *improvement* being treated as an escape, which teaches users to
+ * pass --allow-cross-origin and lose the whole control. A downgrade is refused,
+ * since https→http is the direction that actually costs something.
+ */
+function satisfiesPinnedOrigin(parsed: URL, pinnedOrigin: string): boolean {
+  if (parsed.origin === pinnedOrigin) return true;
+
+  let pinned: URL;
+  try {
+    pinned = new URL(pinnedOrigin);
+  } catch {
+    return false;
+  }
+
+  const isUpgrade = pinned.protocol === 'http:' && parsed.protocol === 'https:';
+  if (!isUpgrade) return false;
+  if (normalizeHost(parsed.hostname) !== normalizeHost(pinned.hostname)) return false;
+
+  // Same host on its scheme's default port counts as the same site; an explicit
+  // port change does not, since that is a different service.
+  const port = (u: URL) => u.port || (u.protocol === 'https:' ? '443' : '80');
+  const defaulted = (u: URL) => u.port === '';
+  return (defaulted(parsed) && defaulted(pinned)) || port(parsed) === port(pinned);
+}
+
+/**
  * Throw if `url` is not a permitted navigation target. Returns normally when allowed.
  */
 export function assertNavigationAllowed(url: string, options: UrlPolicyOptions = {}): void {
@@ -127,7 +157,7 @@ export function assertNavigationAllowed(url: string, options: UrlPolicyOptions =
     throw new Error(`Navigation blocked: scheme "${scheme}" is not allowed (only http/https).`);
   }
 
-  if (options.pinnedOrigin && parsed.origin !== options.pinnedOrigin) {
+  if (options.pinnedOrigin && !satisfiesPinnedOrigin(parsed, options.pinnedOrigin)) {
     throw new Error(
       `Navigation blocked: ${parsed.origin} leaves the pinned origin ${options.pinnedOrigin}.`,
     );

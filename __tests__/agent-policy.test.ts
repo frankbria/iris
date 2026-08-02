@@ -161,6 +161,20 @@ describe('destructive-target policy', () => {
     expect(verdict.reason).toContain('--allow-destructive');
   });
 
+  it.each([
+    ['#deleteAccount'],
+    ['#delete_account'],
+    ['[data-testid="removeUser"]'],
+    ['#resetAllData'],
+    ['[data-test-id="deactivate_user"]'],
+    ['#DELETEAccount'],
+  ])('sees the word inside selector conventions: %s', (selector) => {
+    // \b treats deleteAccount and delete_account as single words, so a plain
+    // word-boundary match would fire only on prose and wave through exactly the
+    // ids a real app uses.
+    expect(check({ type: 'click', selector }).allowed).toBe(false);
+  });
+
   it('matches whole words only', () => {
     // "undelete" and "removal-policy" are not destructive; refusing them would
     // make the check feel arbitrary.
