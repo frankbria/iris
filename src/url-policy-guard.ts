@@ -52,6 +52,12 @@ interface NavigationRefusal {
   reason?: string;
   /** Set only for a policy-ALLOWED redirect, i.e. one `guardedGoto` may follow. */
   redirectTo?: string;
+  /**
+   * True while `guardedGoto` is awaiting a main-frame navigation, so it — and
+   * not the route handler — will re-drive the next hop. Any other document
+   * redirect (a click, a form POST, an iframe) has nobody waiting on it.
+   */
+  driving?: boolean;
 }
 
 /**
@@ -191,11 +197,30 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
     if (isNavigationAllowed(target, policy)) {
       refusal.reason = undefined;
       refusal.redirectTo = target;
-      // 'aborted', not 'blockedbyclient': this hop is being *deferred* to
-      // guardedGoto, not refused. It matters mechanically as well as
-      // semantically — blockedbyclient commits a chrome-error:// page, and that
-      // navigation then interrupts the very retry we are about to issue.
+      // 'aborted', not 'blockedbyclient': this hop is being *deferred*, not
+      // refused. It matters mechanically as well as semantically —
+      // blockedbyclient commits a chrome-error:// page, and that navigation
+      // then interrupts the very retry about to be issued.
       await route.abort('aborted');
+
+      // Only an explicit guardedGoto on the main frame has a caller waiting to
+      // re-drive the hop. Every other redirect — a clicked link, a form POST
+      // answered with a 302, an iframe — has nobody, and deferring it would
+      // simply strand the navigation on the previous page. Drive it here.
+      //
+      // Deliberately not awaited: awaiting a navigation from inside a route
+      // handler deadlocks, since the navigation's own requests need this
+      // handler to return first. Re-entry is fine and bounded — the new
+      // request is vetted like any other, and a chain that will not settle
+      // still terminates on the hop cap.
+      const frame = request.frame();
+      const drivenByCaller = refusal.driving && frame === page.mainFrame();
+      if (!drivenByCaller) {
+        void frame.goto(target).catch(() => {
+          // The navigation may be superseded or the frame detached; either way
+          // the failure surfaces to whatever is observing the page, not here.
+        });
+      }
       return;
     }
 
@@ -230,23 +255,30 @@ export async function guardedGoto(
 
   let target = url;
 
-  for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-    refusal.reason = undefined;
-    refusal.redirectTo = undefined;
+  try {
+    for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+      refusal.reason = undefined;
+      refusal.redirectTo = undefined;
+      // Claim the re-drive, so the route handler defers to this loop instead of
+      // navigating the main frame underneath it.
+      refusal.driving = true;
 
-    try {
-      await page.goto(target, options);
-      return target;
-    } catch (error) {
-      if (refusal.redirectTo) {
-        target = refusal.redirectTo;
-        continue;
+      try {
+        await page.goto(target, options);
+        return target;
+      } catch (error) {
+        if (refusal.redirectTo) {
+          target = refusal.redirectTo;
+          continue;
+        }
+        if (refusal.reason) {
+          throw new Error(`${target} ${refusal.reason}`);
+        }
+        throw error;
       }
-      if (refusal.reason) {
-        throw new Error(`${target} ${refusal.reason}`);
-      }
-      throw error;
     }
+  } finally {
+    refusal.driving = false;
   }
 
   throw new Error(`${url} exceeded ${MAX_REDIRECT_HOPS} redirects without settling.`);

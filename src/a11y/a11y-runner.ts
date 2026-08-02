@@ -216,12 +216,16 @@ export class AccessibilityRunner {
       // guardedGoto walks any redirect chain one vetted hop at a time, as real
       // navigations, so the scanned document's URL and asset base stay correct.
       // On a page with no guard installed it is a plain goto.
-      await guardedGoto(page, url, { waitUntil: 'networkidle' });
+      //
+      // Report where it LANDED, not where it was pointed: a scan of `http://host/`
+      // that redirects to `/login` measured `/login`, and labelling that result
+      // with the original URL would misattribute every violation on it.
+      const scannedUrl = await guardedGoto(page, url, { waitUntil: 'networkidle' });
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
 
       // Run axe-core tests
-      const axeResult = await this.axeRunner.run(page, testName, url);
+      const axeResult = await this.axeRunner.run(page, testName, scannedUrl);
 
       // Run keyboard navigation tests if enabled
       let keyboardResult: KeyboardTestResult | undefined;

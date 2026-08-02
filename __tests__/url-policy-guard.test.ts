@@ -73,6 +73,16 @@ describe('URL policy guard', () => {
         return res.end();
       }
 
+      if (url === '/click-source') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(
+          page('Home', '<a id="ok" href="/to-final">ok</a><a id="bad" href="/to-metadata">bad</a>'),
+        );
+      }
+      if (url === '/frame-host') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(page('Outer', '<iframe src="/to-final"></iframe>'));
+      }
       if (url === '/subresource-blocked') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(page('Sub', '<img alt="x" src="/img-to-metadata">'));
@@ -209,6 +219,46 @@ describe('URL policy guard', () => {
 
       expect(landed).toBe(`${origin}/final`);
       expect(p.url()).toBe(`${origin}/final`);
+    }, 60_000);
+  });
+
+  describe('redirects with no guardedGoto waiting', () => {
+    // Only an explicit guardedGoto has a caller to re-drive a deferred hop.
+    // Everything else — a clicked link, a form POST answered with a 302, an
+    // iframe — would otherwise be stranded on the previous page, which is a
+    // regression the first version of this guard actually shipped.
+    it('lands a clicked link that redirects', async () => {
+      await installUrlPolicyGuard(p, {});
+      await guardedGoto(p, `${origin}/click-source`);
+
+      await p.click('#ok');
+      await p.waitForURL(`${origin}/final`, { timeout: 15_000 });
+
+      await expect(p.title()).resolves.toBe('Final');
+    }, 60_000);
+
+    it('still blocks a clicked link that redirects to a metadata host', async () => {
+      await installUrlPolicyGuard(p, {});
+      await guardedGoto(p, `${origin}/click-source`);
+      requestLog = [];
+
+      await p.click('#bad').catch(() => {
+        // A blocked navigation may reject the click; the assertion is the
+        // absence of the request, not the click's outcome.
+      });
+      await p.waitForTimeout(1500);
+
+      // What matters: the browser never landed on the metadata host.
+      expect(p.url()).not.toContain('169.254.169.254');
+    }, 60_000);
+
+    it('lands an iframe whose src redirects', async () => {
+      await installUrlPolicyGuard(p, {});
+
+      await guardedGoto(p, `${origin}/frame-host`, { waitUntil: 'networkidle' });
+      await p.waitForTimeout(1000);
+
+      expect(p.frames().map((f) => f.url())).toContain(`${origin}/final`);
     }, 60_000);
   });
 

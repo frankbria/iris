@@ -244,6 +244,16 @@ describe('run_accessibility_test tool', () => {
       );
     }, 120_000);
 
+    it('reports the URL it landed on, not the one it was pointed at', async () => {
+      // Labelling the result with the requested URL would misattribute every
+      // violation to a page the scan never measured.
+      const result = await callTool({ url: redirectOkURL });
+
+      expect(result.structuredContent!.url).toBe(cleanURL);
+      expect(result.structuredContent!.url).not.toBe(redirectOkURL);
+      expect(result.content?.[0]?.text).toContain(`redirected from ${redirectOkURL}`);
+    }, 120_000);
+
     it('follows an in-policy redirect and scans what it lands on', async () => {
       // This used to refuse, because following a redirect by fulfilling the final
       // response left the document on the pre-redirect URL and the page's relative
