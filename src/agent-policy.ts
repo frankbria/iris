@@ -124,11 +124,14 @@ export function checkAction(
   if (policy.pinOrigin !== false && startOrigin) {
     // Drift first: if the page already moved, nothing proposed against it should
     // run, whatever the action is.
+    // An opaque current URL (about:blank, data:, blob:) is NOT same-origin with
+    // anything. Treating "no origin" as "no problem" would let a page that
+    // navigated itself somewhere opaque keep taking actions.
     const here = originOf(currentUrl);
-    if (here && here !== startOrigin) {
+    if (here !== startOrigin) {
       return {
         allowed: false,
-        reason: `page is on ${here}, not the starting origin ${startOrigin} — refusing to act off-origin`,
+        reason: `page is on ${here ?? 'an opaque origin'}, not the starting origin ${startOrigin} — refusing to act off-origin`,
       };
     }
     if (action.type === 'navigate') {

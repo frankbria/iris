@@ -114,6 +114,28 @@ describe('origin pinning', () => {
     ).toBe(true);
   });
 
+  it('refuses when the page has drifted to an opaque origin', () => {
+    // about:blank / data: / blob: are same-origin with nothing. Reading "no
+    // origin" as "no problem" would let a page that navigated itself somewhere
+    // opaque carry on taking actions.
+    for (const opaque of ['about:blank', 'data:text/html,<p>hi']) {
+      const verdict = check({ type: 'click', selector: '#ok' }, {}, opaque);
+
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.reason).toContain('opaque origin');
+    }
+  });
+
+  it('reads a blob: URL as its creating origin, not as opaque', () => {
+    // Per spec a blob URL inherits the origin that minted it, and Node's URL
+    // parser agrees — so this is the ordinary different-origin refusal, not the
+    // opaque one. Pinned here to document which path it takes.
+    const verdict = check({ type: 'click', selector: '#ok' }, {}, 'blob:https://evil.example/1');
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toContain('page is on https://evil.example');
+  });
+
   it('is skipped when the starting origin is unknown', () => {
     // A run started from about:blank has nothing to pin to; refusing everything
     // would be worse than not enforcing a limit that has no meaning.

@@ -161,6 +161,10 @@ program
                 executor,
                 page,
                 maxTurns: options.maxTurns ?? 8,
+                // What the user asked for, not where the navigation landed: a
+                // start URL that redirects cross-origin must not silently move
+                // the origin the agent is pinned to.
+                startUrl,
                 log: (message) => say(`   ${message}`),
                 policy: {
                   allow: options.allow,

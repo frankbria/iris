@@ -46,6 +46,15 @@ export interface AgentLoopOptions {
   page: Page;
   /** Upper bound on observe→act cycles. */
   maxTurns?: number;
+  /**
+   * The URL the run was pointed at, used to pin the origin.
+   *
+   * Supply it whenever the caller navigated before handing over the page. The
+   * fallback — reading the page's current URL — is what the page ended up on,
+   * which after a cross-origin redirect is the wrong thing to trust: the guard
+   * would pin to wherever the redirect landed and then happily act there.
+   */
+  startUrl?: string;
   /** Progress sink. Defaults to silence so the library never writes to stdout. */
   log?: (message: string) => void;
   /**
@@ -113,12 +122,22 @@ async function safeTitle(page: Page): Promise<string> {
  * consecutive empty plans, three consecutive action failures, or `maxTurns`.
  */
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunResult> {
-  const { instruction, executor, page, maxTurns = 8, log = () => {}, policy = {} } = options;
+  const {
+    instruction,
+    executor,
+    page,
+    maxTurns = 8,
+    log = () => {},
+    policy = {},
+    startUrl,
+  } = options;
 
-  // The origin the run is pinned to. Read once, before any turn can move the
-  // page — reading it later would pin to wherever an injection had already
-  // taken us, which is precisely backwards.
-  const startOrigin = originOf(page.url());
+  // The origin the run is pinned to: what the caller ASKED for, falling back to
+  // where the page is now. Read once, before any turn can move it — and
+  // preferring the requested URL matters, because the caller has usually
+  // navigated already and a cross-origin redirect would otherwise pin the guard
+  // to the redirect's destination, which is exactly backwards.
+  const startOrigin = originOf(startUrl ?? page.url());
 
   const results: ExecutionResult[] = [];
   const executedActions: Action[] = [];

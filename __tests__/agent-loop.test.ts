@@ -378,6 +378,29 @@ describe('agent loop', () => {
         expect(result.results[0].success).toBe(true);
       });
 
+      it('pins to the requested URL, not to where a redirect landed', async () => {
+        // The CLI navigates before handing the page over, so reading the page's
+        // current URL would pin to the redirect's destination — meaning a start
+        // URL that redirects to an attacker origin would make that origin the
+        // trusted one. Exactly backwards, so the caller's intent wins.
+        scriptAI([[{ type: 'click', selector: '#pay' }]]);
+        const execute = jest.spyOn(executor, 'executeAction');
+
+        const result = await runAgentLoop({
+          instruction: 'pay',
+          executor,
+          page,
+          maxTurns: 1,
+          // The page is a data: URL; claim it was meant to be example.com.
+          startUrl: 'https://trusted.example/start',
+        });
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(result.results[0].error).toMatch(
+          /not the starting origin https:\/\/trusted\.example/,
+        );
+      });
+
       it('stops after three refusals instead of burning the turn budget', async () => {
         // A model that keeps proposing a blocked action must not loop forever.
         scriptAI([
