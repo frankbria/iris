@@ -317,6 +317,19 @@ describe('URL policy guard', () => {
       await expect(guardedGoto(p, `${origin}/final`)).rejects.toThrow(/leaves the pinned origin/);
     }, 60_000);
 
+    it('merges a second install instead of registering a second handler', async () => {
+      // Playwright runs the most recently added handler first and ours never
+      // calls fallback(), so a second install would silently supersede the first
+      // and drop its options. The agent loop installs a pin on top of whatever
+      // the executor already set, so this has to merge.
+      await installUrlPolicyGuard(p, { blockPrivateHosts: true });
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+
+      // The pin is satisfied here — same origin — so the only thing that can
+      // refuse this is the FIRST install's option, which must have survived.
+      await expect(guardedGoto(p, `${origin}/final`)).rejects.toThrow(/private\/loopback/);
+    }, 60_000);
+
     it('does NOT block cross-origin sub-resources', async () => {
       // Pinning is a navigation control. A page legitimately loads images and
       // fonts from other origins, and refusing those would break the very page

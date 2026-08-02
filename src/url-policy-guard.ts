@@ -60,14 +60,21 @@ interface NavigationRefusal {
   driving?: boolean;
 }
 
+/** Everything the route handler and `guardedGoto` share for one page. */
+interface GuardState {
+  refusal: NavigationRefusal;
+  /** Live, so a later install can tighten the policy without a second handler. */
+  policy: UrlPolicyOptions;
+}
+
 /**
- * Per-page refusal state.
+ * Per-page guard state.
  *
  * A WeakMap rather than a parameter threaded through every caller: the route
  * handler and the goto live in different call stacks, and tying the record to
  * the page means it cannot be paired with the wrong one or outlive it.
  */
-const refusals = new WeakMap<Page, NavigationRefusal>();
+const guards = new WeakMap<Page, GuardState>();
 
 /**
  * Redirect hops this module has driven itself for a given frame, since nothing
@@ -170,10 +177,24 @@ async function guardSubresource(route: Route, policy: UrlPolicyOptions): Promise
  * `page.goto`, so a caller that does not want the policy simply does not install it.
  */
 export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions): Promise<void> {
-  const refusal: NavigationRefusal = {};
-  refusals.set(page, refusal);
+  // Installing twice must not register a second handler. Playwright runs the
+  // most recently added one first and ours never calls fallback(), so a second
+  // install would silently supersede the first — dropping whatever options the
+  // earlier caller set. Merge into the live policy instead, so a later caller
+  // (the agent loop pinning an origin) can tighten what an earlier one (the
+  // executor) established.
+  const existing = guards.get(page);
+  if (existing) {
+    existing.policy = { ...existing.policy, ...policy };
+    return;
+  }
+
+  const state: GuardState = { refusal: {}, policy };
+  guards.set(page, state);
+  const refusal = state.refusal;
 
   await page.route('**/*', async (route) => {
+    const policy = state.policy;
     const request = route.request();
 
     if (request.resourceType() !== 'document') {
@@ -292,7 +313,7 @@ export async function guardedGoto(
   url: string,
   options?: Parameters<Page['goto']>[1],
 ): Promise<string> {
-  const refusal = refusals.get(page);
+  const refusal = guards.get(page)?.refusal;
   if (!refusal) {
     // No guard installed: this page opted out of the policy entirely. Chromium
     // still follows redirects natively here, so report where it landed — the

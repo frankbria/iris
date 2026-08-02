@@ -444,6 +444,40 @@ describe('agent loop', () => {
         );
       });
 
+      it('installs request-layer origin pinning itself, not trusting the caller', async () => {
+        // A library caller gets the same guarantee the CLI does. Without this
+        // the loop would only refuse on the NEXT turn, after a same-origin click
+        // had already made the cross-origin request.
+        scriptAI([[{ type: 'assert', kind: 'text_visible', target: 'Your cart' }]]);
+        const route = jest.spyOn(page, 'route');
+
+        await runAgentLoop({
+          instruction: 'check the cart',
+          executor,
+          page,
+          maxTurns: 1,
+          startUrl: 'https://trusted.example/start',
+        });
+
+        expect(route).toHaveBeenCalledWith('**/*', expect.any(Function));
+      });
+
+      it('does not install a pin when the caller opted out', async () => {
+        scriptAI([[{ type: 'assert', kind: 'text_visible', target: 'Your cart' }]]);
+        const route = jest.spyOn(page, 'route');
+
+        await runAgentLoop({
+          instruction: 'check the cart',
+          executor,
+          page,
+          maxTurns: 1,
+          startUrl: 'https://trusted.example/start',
+          policy: { pinOrigin: false },
+        });
+
+        expect(route).not.toHaveBeenCalled();
+      });
+
       it('stops after three refusals instead of burning the turn budget', async () => {
         // A model that keeps proposing a blocked action must not loop forever.
         scriptAI([

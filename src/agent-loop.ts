@@ -16,6 +16,7 @@ import { loadConfig } from './config';
 import { createAIClient } from './ai-client';
 import { checkAction, originOf } from './agent-policy';
 import type { AgentPolicy } from './agent-policy';
+import { installUrlPolicyGuard } from './url-policy-guard';
 
 /** Cap on the serialized page digest. Keeps the prompt affordable on big pages. */
 export const MAX_DIGEST_CHARS = 4000;
@@ -141,6 +142,16 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
   // navigated already and a cross-origin redirect would otherwise pin the guard
   // to the redirect's destination, which is exactly backwards.
   const startOrigin = originOf(startUrl ?? page.url());
+
+  // The per-action check refuses on the NEXT turn, by which point a same-origin
+  // click that navigated away has already made the request. Confinement has to
+  // be enforced before the request, so the loop installs it itself rather than
+  // trusting the caller to have done it — the default is advertised as safe, and
+  // a library caller gets the same guarantee the CLI does. Installing is
+  // idempotent: it merges into whatever policy the executor already set.
+  if (policy.pinOrigin !== false && startOrigin) {
+    await installUrlPolicyGuard(page, { pinnedOrigin: startOrigin });
+  }
 
   const results: ExecutionResult[] = [];
   const executedActions: Action[] = [];
