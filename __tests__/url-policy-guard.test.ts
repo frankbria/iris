@@ -534,6 +534,42 @@ describe('URL policy guard', () => {
       await expect(guardedGoto(p, `${origin}/final`)).rejects.toThrow(/leaves the pinned origin/);
     }, 60_000);
 
+    it('leaves a page that never opted in alone', async () => {
+      // Opting out has to keep meaning something once a sibling page in the
+      // same context opts in — otherwise installing a guard anywhere silently
+      // polices everything, which is not what the API says it does.
+      await installUrlPolicyGuard(p, { pinnedOrigin: 'http://elsewhere.example' });
+
+      const unguarded = await context.newPage();
+      try {
+        // Would be refused under the sibling's pin; must not be.
+        const landed = await guardedGoto(unguarded, `${origin}/final`);
+
+        expect(landed).toBe(`${origin}/final`);
+        await expect(unguarded.title()).resolves.toBe('Final');
+      } finally {
+        await unguarded.close();
+      }
+    }, 60_000);
+
+    it('does not retro-guard a page the caller created itself', async () => {
+      // context.newPage() has no opener, which is how it is told apart from a
+      // popup. The previous test navigates immediately; this one waits first, so
+      // any install triggered by the 'page' event has had time to land — the
+      // pin below would refuse this navigation if it had.
+      await installUrlPolicyGuard(p, { pinnedOrigin: 'http://elsewhere.example' });
+
+      const own = await context.newPage();
+      try {
+        await own.waitForTimeout(1000);
+
+        await expect(guardedGoto(own, `${origin}/final`)).resolves.toBe(`${origin}/final`);
+        await expect(own.title()).resolves.toBe('Final');
+      } finally {
+        await own.close();
+      }
+    }, 60_000);
+
     it('still lets a same-origin popup load', async () => {
       // A pin that broke ordinary new tabs would get switched off wholesale.
       await installUrlPolicyGuard(p, { pinnedOrigin: origin });

@@ -92,10 +92,8 @@ const guards = new WeakMap<Page, GuardState>();
 /**
  * Contexts already carrying the popup net, so it is attached exactly once.
  *
- * Holds the most recently installed state as the fallback policy: a popup's
- * first request arrives before the popup has a guard of its own, so there is no
- * per-page policy to consult yet, and the newest is a better guess than the
- * oldest.
+ * Carries the most recently installed state, used for the one request that
+ * cannot be attributed to a page — see {@link installContextNet}.
  */
 const guardedContexts = new WeakMap<BrowserContext, { latest: GuardState }>();
 
@@ -212,17 +210,29 @@ async function installContextNet(
   await context.route('**/*', async (route) => {
     const request = route.request();
 
-    // The policy of the page that issued the request, not of whichever page
-    // happened to install this net first — a context can hold several guarded
-    // pages, and vetting page 2's requests against page 1's pin would both
-    // refuse valid navigation and mis-scope the pin for anything page 2 opens.
+    // `frame()` throws for the opening request of a page that does not exist
+    // yet — "issued before the frame is created" — which is exactly the popup
+    // case this net is here for. Playwright offers nothing else to attribute
+    // that one request to, so it is vetted against the context's most recent
+    // guard. Every other request names its own page and is judged by that
+    // page's policy.
     let owner: Page | undefined;
+    let attributable = true;
     try {
       owner = request.frame()?.page();
     } catch {
-      // Not frame-associated (a service worker, say); fall back below.
+      attributable = false;
     }
-    const policy = (owner && guards.get(owner)?.policy) ?? entry.latest.policy;
+
+    const policy = attributable ? guards.get(owner as Page)?.policy : entry.latest.policy;
+
+    // An attributable page with no guard never opted in. Leaving it alone is
+    // the documented contract; policing it with another page's pin would refuse
+    // requests it never agreed to.
+    if (!policy) {
+      await route.continue().catch(() => {});
+      return;
+    }
 
     const reason = blockReason(request.url(), policyFor(policy, request.resourceType()));
     try {
@@ -232,10 +242,18 @@ async function installContextNet(
     }
   });
 
-  // A popup still gets its own CDP session, so requests after its first are
-  // vetted as thoroughly as the page it was opened from.
-  context.on('page', (popup) => {
-    void installUrlPolicyGuard(popup, entry.latest.policy).catch(() => {
+  // A popup gets its own CDP session, so requests after its first are vetted as
+  // thoroughly as on the page that opened it. Deliberately NOT every new page:
+  // a caller that creates one itself and installs no guard has opted out, and
+  // an opener tells the two apart — `context.newPage()` has none.
+  context.on('page', (candidate) => {
+    void (async () => {
+      const opener = await candidate.opener();
+      const inherited = opener ? guards.get(opener)?.policy : undefined;
+      if (inherited) {
+        await installUrlPolicyGuard(candidate, inherited);
+      }
+    })().catch(() => {
       // A page that closed before the guard attached needs no guard.
     });
   });
@@ -276,7 +294,8 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   const context = page.context();
   const contextEntry = guardedContexts.get(context);
   if (contextEntry) {
-    // Keep the fallback current, for requests with no page-level policy to read.
+    // Keep the unattributable-request fallback current rather than frozen at
+    // whichever page happened to install the net first.
     contextEntry.latest = state;
   } else {
     const entry = { latest: state };
