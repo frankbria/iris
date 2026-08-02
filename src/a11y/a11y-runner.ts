@@ -15,6 +15,8 @@ import { chromium, Browser, Page } from 'playwright';
 import { AxeRunner } from './axe-integration';
 import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
+import { isNavigationAllowed } from '../url-policy';
+import type { UrlPolicyOptions } from '../url-policy';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 
 export interface AccessibilityRunnerConfig {
@@ -53,6 +55,22 @@ export interface AccessibilityRunnerConfig {
   };
   /** Origin for relative `pages` patterns. Defaults to `http://localhost:3000` when unset. */
   baseURL?: string;
+  /**
+   * When set, enforce the navigation URL policy on every request the page makes,
+   * not just the initial URL — so a scanned page cannot pull a sub-resource from
+   * a metadata/link-local host. Same mechanism as `Executor.createPage`.
+   *
+   * Scope, measured rather than assumed: Playwright invokes `page.route` for
+   * sub-resource requests (blocked here) but NOT for the target of a 30x
+   * redirect, which Chromium follows internally. So this does not close the
+   * redirect vector — see issue #148. Callers must still validate the initial
+   * URL themselves; this is defence in depth, not the only check.
+   *
+   * Left unset by the `iris a11y` CLI, whose URLs are typed by the operator and
+   * which legitimately scans `data:` pages. Set by the MCP tool, whose URLs are
+   * model-supplied and may be derived from untrusted page content.
+   */
+  urlPolicy?: UrlPolicyOptions;
 }
 
 export interface AccessibilityTestResult {
@@ -184,6 +202,18 @@ export class AccessibilityRunner {
 
     const context = await this.browser.newContext();
     const page = await context.newPage();
+
+    // Install before the first navigation so no request escapes the guard.
+    const urlPolicy = this.config.urlPolicy;
+    if (urlPolicy) {
+      await page.route('**/*', (route) => {
+        if (isNavigationAllowed(route.request().url(), urlPolicy)) {
+          route.continue();
+        } else {
+          route.abort('blockedbyclient');
+        }
+      });
+    }
 
     try {
       // Navigate to page. Treat any scheme-prefixed value (http:, https:, about:,

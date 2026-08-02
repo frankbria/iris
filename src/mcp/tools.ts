@@ -99,6 +99,11 @@ function scanConfig(url: string, wcagLevel: 'AA' | 'AAA') {
       groupByImpact: true,
       includeScreenshots: false,
     },
+    // The pre-flight assertNavigationAllowed() below only sees the URL the model
+    // handed us; this also applies the policy to what the loaded page then
+    // requests, so a scanned page cannot pull from a metadata host. It does not
+    // cover 30x redirect targets — see #148.
+    urlPolicy: {},
   };
 }
 

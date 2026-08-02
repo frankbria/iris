@@ -25,6 +25,16 @@ const FAILING_HTML = `<!DOCTYPE html>
   </body>
 </html>`;
 
+/** Clean markup, but it pulls an image from the cloud-metadata address. */
+const SUBRESOURCE_HTML = `<!DOCTYPE html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Subresource fixture</title></head>
+  <body>
+    <h1>Subresource fixture</h1>
+    <img alt="off-host" src="http://169.254.169.254/latest/meta-data/" />
+  </body>
+</html>`;
+
 /** The same page with every one of those defects fixed. */
 const CLEAN_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -61,11 +71,19 @@ describe('run_accessibility_test tool', () => {
   let fixtureServer: Server;
   let fixtureURL: string;
   let cleanURL: string;
+  let subresourceURL: string;
   let client: Client;
   let server: McpServer;
 
   beforeAll(async () => {
     fixtureServer = createServer((req, res) => {
+      if (req.url === '/subresource') {
+        // Passes the pre-flight check (plain localhost), then asks the browser
+        // to fetch from a link-local host the policy is meant to block.
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(SUBRESOURCE_HTML);
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(req.url === '/clean' ? CLEAN_HTML : FAILING_HTML);
     });
@@ -73,6 +91,7 @@ describe('run_accessibility_test tool', () => {
     const origin = `http://localhost:${(fixtureServer.address() as AddressInfo).port}`;
     fixtureURL = `${origin}/`;
     cleanURL = `${origin}/clean`;
+    subresourceURL = `${origin}/subresource`;
   });
 
   afterAll(async () => {
@@ -146,6 +165,20 @@ describe('run_accessibility_test tool', () => {
       expect(result.content?.[0]?.text).toMatch(expected);
       expect(result.structuredContent).toBeUndefined();
     });
+
+    it('aborts a sub-resource request to a metadata host', async () => {
+      // The pre-flight check passes here — the page's own origin is plain
+      // localhost — so only the per-request route guard can stop the image
+      // fetch. The observable is completion: an aborted request settles
+      // immediately and the scan returns, whereas an *unguarded* request to a
+      // link-local address hangs until `waitUntil: 'networkidle'` times out and
+      // the tool reports a failure instead. Asserting success is therefore what
+      // discriminates guard-on from guard-off here.
+      const result = await callTool({ url: subresourceURL });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });
+    }, 120_000);
   });
 
   describe('scan results', () => {
