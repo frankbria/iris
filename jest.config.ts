@@ -21,13 +21,20 @@ const config: Config.InitialOptions = {
     // tests pass under --coverage and the report isn't deflated by code that
     // inherently can't be instrumented. These are e2e-covered, not unit-covered.
     '!src/a11y/keyboard-tester.ts',
-    '!src/a11y/a11y-runner.ts'
+    '!src/a11y/a11y-runner.ts',
+    // MCP process entry point: 25 lines of wiring whose only reachable form is a
+    // spawned `node dist/mcp/server.js`, which the parent Jest process cannot
+    // instrument. It is covered by the protocol test in __tests__/mcp/server.test.ts.
+    // The tool logic it wires up (src/mcp/tools.ts) IS instrumented, in-process,
+    // by __tests__/mcp/tools.test.ts — only this shell is exempt.
+    '!src/mcp/server.ts'
   ],
   // Never instrument the browser-context a11y modules (see collectCoverageFrom).
   coveragePathIgnorePatterns: [
     '/node_modules/',
     '<rootDir>/src/a11y/keyboard-tester.ts',
-    '<rootDir>/src/a11y/a11y-runner.ts'
+    '<rootDir>/src/a11y/a11y-runner.ts',
+    '<rootDir>/src/mcp/server.ts'
   ],
   coverageThreshold: {
     global: {
