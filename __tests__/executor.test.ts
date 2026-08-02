@@ -43,6 +43,7 @@ describe('ActionExecutor', () => {
   let mockBrowser: jest.Mocked<Browser>;
   let mockPage: jest.Mocked<Page>;
   let mockCdpSession: { send: jest.Mock; on: jest.Mock };
+  let mockContext: { newCDPSession: jest.Mock; route: jest.Mock; on: jest.Mock };
 
   beforeAll(async () => {
     // Import the ActionExecutor class (which should be implemented)
@@ -87,6 +88,13 @@ describe('ActionExecutor', () => {
     // page.route (see src/url-policy-guard.ts), so a mock page has to be able to
     // hand one out or createPage cannot install the guard at all.
     mockCdpSession = { send: jest.fn().mockResolvedValue(undefined), on: jest.fn() };
+    // The guard also attaches a context-level net for popups (issue #155), so
+    // the fake context needs route/on as well as a CDP session.
+    mockContext = {
+      newCDPSession: jest.fn().mockResolvedValue(mockCdpSession),
+      route: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn(),
+    };
     mockPage = {
       url: jest.fn().mockReturnValue('https://example.com'),
       title: jest.fn().mockResolvedValue('Test Page'),
@@ -96,9 +104,7 @@ describe('ActionExecutor', () => {
       setDefaultTimeout: jest.fn(),
       route: jest.fn().mockResolvedValue(undefined),
       routeWebSocket: jest.fn().mockResolvedValue(undefined),
-      context: jest.fn().mockReturnValue({
-        newCDPSession: jest.fn().mockResolvedValue(mockCdpSession),
-      }),
+      context: jest.fn().mockReturnValue(mockContext),
       close: jest.fn().mockResolvedValue(undefined),
     } as any;
 

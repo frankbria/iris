@@ -49,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1044/1045 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1047/1048 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -81,7 +81,7 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 1044/1045 tests passing (99.9% pass rate), 1 skipped, 0 failing
+**Test Results:** 1047/1048 tests passing (99.9% pass rate), 1 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
@@ -395,8 +395,8 @@ Residual, stated plainly:
 
 - images stay exempt, so same-origin script can still beacon out via `new Image().src`.
   Closing that means blocking cross-origin images too, which breaks far more than it protects
-- routing is page-scoped, so a click opening a **new tab** escapes the pin
-  ([#155](https://github.com/frankbria/iris/issues/155))
+- a popup's **first** request is checked by URL only; what it goes on to request is
+  then vetted in full, like any other page
 
 Commerce is deliberately **not** on the destructive list — "make sure users can
 complete checkout" is what this loop is for, and a purchase is reversible in a way

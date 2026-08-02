@@ -81,6 +81,16 @@ describe('URL policy guard', () => {
         return res.end();
       }
 
+      if (url === '/popup-source') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(
+          page(
+            'Popup source',
+            `<a id="same" target="_blank" href="/final">same</a>` +
+              `<a id="off" target="_blank" href="${OFFSITE}/tab">off</a>`,
+          ),
+        );
+      }
       if (url === '/click-source') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(
@@ -483,6 +493,61 @@ describe('URL policy guard', () => {
 
       await expect(p.title()).resolves.toBe('Sub');
       expect(requestLog).toContain('/pixel');
+    }, 60_000);
+  });
+
+  describe('pages opened from the guarded one (issue #155)', () => {
+    // Both interception hooks are page-scoped, and a popup is a different Page.
+    // Installing a CDP session from context.on('page') loses the race — measured,
+    // the popup's first request has already gone — so a context-level route
+    // covers the opening request.
+    it('blocks a target=_blank link to another origin', async () => {
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      await p.click('#off').catch(() => {
+        // A blocked popup may reject the click; the assertion is the absence of
+        // the request, not the click's outcome.
+      });
+      await p.waitForTimeout(2000);
+
+      // The off-origin server counts its own hits, so this asserts the request
+      // was never made rather than that the tab looked empty.
+      expect(offsiteLog).not.toContain('/tab');
+    }, 60_000);
+
+    it('still lets a same-origin popup load', async () => {
+      // A pin that broke ordinary new tabs would get switched off wholesale.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      const [popup] = await Promise.all([
+        p.context().waitForEvent('page', { timeout: 15_000 }),
+        p.click('#same'),
+      ]);
+      await popup.waitForLoadState('load').catch(() => {});
+
+      expect(popup.url()).toBe(`${origin}/final`);
+      await expect(popup.title()).resolves.toBe('Final');
+    }, 60_000);
+
+    it('guards the popup itself, not just its opening request', async () => {
+      // The context net catches the first request; the popup then gets its own
+      // CDP session so what it goes on to request is vetted too.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      const [popup] = await Promise.all([
+        p.context().waitForEvent('page', { timeout: 15_000 }),
+        p.click('#same'),
+      ]);
+      await popup.waitForLoadState('load').catch(() => {});
+      offsiteLog = [];
+
+      await popup.evaluate((u) => fetch(u).catch(() => {}), `${OFFSITE}/from-popup`);
+      await popup.waitForTimeout(1500);
+
+      expect(offsiteLog).not.toContain('/from-popup');
     }, 60_000);
   });
 
