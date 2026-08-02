@@ -42,6 +42,7 @@ describe('ActionExecutor', () => {
   let ActionExecutor: any;
   let mockBrowser: jest.Mocked<Browser>;
   let mockPage: jest.Mocked<Page>;
+  let mockCdpSession: { send: jest.Mock; on: jest.Mock };
 
   beforeAll(async () => {
     // Import the ActionExecutor class (which should be implemented)
@@ -82,6 +83,10 @@ describe('ActionExecutor', () => {
       contexts: jest.fn().mockReturnValue([]),
     } as any;
 
+    // The URL-policy guard vets requests through a CDP Fetch session rather than
+    // page.route (see src/url-policy-guard.ts), so a mock page has to be able to
+    // hand one out or createPage cannot install the guard at all.
+    mockCdpSession = { send: jest.fn().mockResolvedValue(undefined), on: jest.fn() };
     mockPage = {
       url: jest.fn().mockReturnValue('https://example.com'),
       title: jest.fn().mockResolvedValue('Test Page'),
@@ -90,6 +95,10 @@ describe('ActionExecutor', () => {
       fill: jest.fn().mockResolvedValue(undefined),
       setDefaultTimeout: jest.fn(),
       route: jest.fn().mockResolvedValue(undefined),
+      routeWebSocket: jest.fn().mockResolvedValue(undefined),
+      context: jest.fn().mockReturnValue({
+        newCDPSession: jest.fn().mockResolvedValue(mockCdpSession),
+      }),
       close: jest.fn().mockResolvedValue(undefined),
     } as any;
 
@@ -153,15 +162,20 @@ describe('ActionExecutor', () => {
     });
 
     it('installs a request guard on every created page', async () => {
-      // The previous version of this test drove a synthetic handler and asserted
-      // that "a redirect hop to a metadata host arrives as a fresh request and is
-      // aborted". That is not true — Chromium follows a 30x without re-routing it
-      // — so the test was pinning a fiction (issue #148). Guard behaviour now
-      // lives in __tests__/url-policy-guard.test.ts, against a real browser and a
-      // real redirecting server. All that belongs here is that it gets installed.
+      // An earlier version of this test drove a synthetic route handler and
+      // asserted that "a redirect hop to a metadata host arrives as a fresh
+      // request and is aborted". That is not true of page.route — Chromium
+      // follows a 30x without re-routing it — so the test pinned a fiction
+      // (issue #148). Guard behaviour now lives in
+      // __tests__/url-policy-guard.test.ts, against a real browser and a real
+      // redirecting server. All that belongs here is that it gets installed.
       await executor.createPage();
 
-      expect(mockPage.route).toHaveBeenCalledWith('**/*', expect.any(Function));
+      expect(mockCdpSession.send).toHaveBeenCalledWith(
+        'Fetch.enable',
+        expect.objectContaining({ patterns: [{ urlPattern: '*', requestStage: 'Request' }] }),
+      );
+      expect(mockCdpSession.on).toHaveBeenCalledWith('Fetch.requestPaused', expect.any(Function));
     });
 
     it('should cleanup browser resources', async () => {
@@ -354,9 +368,13 @@ describe('ActionExecutor', () => {
 
         it('allows file:// when the executor opts in', async () => {
           const fileExecutor = new ActionExecutor({ urlPolicy: { allowFile: true } });
+          // Its OWN page: the guard is installed per page with the policy of the
+          // executor that created it, so driving a default executor's page
+          // through this one would be testing a mismatch that cannot occur.
+          const filePage = await fileExecutor.createPage();
           const action: Action = { type: 'navigate', url: 'file:///tmp/page.html' };
 
-          const result = await fileExecutor.executeAction(action, page);
+          const result = await fileExecutor.executeAction(action, filePage);
 
           expect(result.success).toBe(true);
           expect(mockPage.goto).toHaveBeenCalledWith('file:///tmp/page.html', undefined);
