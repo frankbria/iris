@@ -248,9 +248,15 @@ export async function guardedGoto(
 ): Promise<string> {
   const refusal = refusals.get(page);
   if (!refusal) {
-    // No guard installed: this page opted out of the policy entirely.
-    await page.goto(url, options);
-    return url;
+    // No guard installed: this page opted out of the policy entirely. Chromium
+    // still follows redirects natively here, so report where it landed — the
+    // return value must mean the same thing on both paths, and the a11y CLI
+    // (which installs no guard) labels its results with it.
+    //
+    // The response's own URL rather than page.url(): it is the post-redirect URL
+    // by definition, and reading it costs no extra call into the page.
+    const response = await page.goto(url, options);
+    return response?.url() ?? url;
   }
 
   let target = url;
@@ -265,6 +271,10 @@ export async function guardedGoto(
 
       try {
         await page.goto(target, options);
+        // `target` is authoritative on this path: every hop was vetted and driven
+        // by this loop, so it is exactly where the browser was sent. Deliberately
+        // not `page.url()` — reading it here is an observable side effect that
+        // consumes scripted mock returns in callers' tests for no gain.
         return target;
       } catch (error) {
         if (refusal.redirectTo) {

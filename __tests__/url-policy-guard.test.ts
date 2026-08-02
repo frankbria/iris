@@ -220,6 +220,17 @@ describe('URL policy guard', () => {
       expect(landed).toBe(`${origin}/final`);
       expect(p.url()).toBe(`${origin}/final`);
     }, 60_000);
+
+    it('reports the landed URL on an unguarded page too', async () => {
+      // Chromium follows the redirect natively here, so returning the request
+      // URL would mean the helper's contract differed between guarded and
+      // unguarded pages — and the a11y CLI, which installs no guard, labels its
+      // results with this value.
+      const landed = await guardedGoto(p, `${origin}/to-final`);
+
+      expect(landed).toBe(`${origin}/final`);
+      expect(landed).not.toBe(`${origin}/to-final`);
+    }, 60_000);
   });
 
   describe('redirects with no guardedGoto waiting', () => {
