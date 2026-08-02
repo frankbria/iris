@@ -19,8 +19,14 @@ import { isNavigationAllowed } from '../url-policy';
 import type { UrlPolicyOptions } from '../url-policy';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 
-/** Redirect hops followed while vetting a navigation chain before giving up. */
-const MAX_REDIRECT_HOPS = 10;
+/**
+ * Why the URL-policy guard turned a navigation away. Populated by the route
+ * handler, read after `page.goto` fails, so the opaque `net::ERR_BLOCKED_BY_CLIENT`
+ * can be replaced with something a caller can act on.
+ */
+interface NavigationRefusal {
+  reason?: string;
+}
 
 export interface AccessibilityRunnerConfig {
   pages: string[];
@@ -198,12 +204,23 @@ export class AccessibilityRunner {
    *
    * Sub-resources are simple: Playwright routes each one, so a single check
    * decides it. Navigations are not — Chromium follows a 30x internally and
-   * never re-enters the route handler with the new URL, so a `continue()` here
-   * would hand the browser an unchecked target (issue #148). The document case
-   * therefore walks the redirect chain itself, vetting every hop before
-   * fulfilling with the final response.
+   * never re-enters the route handler with the new URL, so `continue()` would
+   * hand the browser an unchecked target (issue #148).
+   *
+   * So a redirecting navigation is refused outright rather than followed. Two
+   * alternatives were measured and rejected: `fulfill()` with the redirect
+   * response does not make the browser re-issue a routed request (it hangs to
+   * the goto timeout), and fulfilling with the *final* response leaves the
+   * document on the pre-redirect URL, so relative assets resolve against the
+   * wrong base and the scan measures a broken page. Refusing keeps the policy
+   * airtight and never reports a silently inaccurate result; `refusal` carries
+   * the target back out so the caller can re-scan the real URL directly.
    */
-  private async installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions): Promise<void> {
+  private async installUrlPolicyGuard(
+    page: Page,
+    policy: UrlPolicyOptions,
+    refusal: NavigationRefusal,
+  ): Promise<void> {
     await page.route('**/*', async (route) => {
       const request = route.request();
 
@@ -214,39 +231,45 @@ export class AccessibilityRunner {
         return;
       }
 
-      let url = request.url();
-      for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-        if (!isNavigationAllowed(url, policy)) {
-          await route.abort('blockedbyclient');
-          return;
-        }
-
-        let response;
-        try {
-          response = await route.fetch({ url, maxRedirects: 0 });
-        } catch {
-          // Unreachable host, TLS failure, etc. Fail the navigation rather than
-          // leaving the request hanging until the goto timeout.
-          await route.abort('failed');
-          return;
-        }
-
-        const status = response.status();
-        const location = response.headers()['location'];
-        if (status < 300 || status >= 400 || !location) {
-          await route.fulfill({ response });
-          return;
-        }
-
-        try {
-          url = new URL(location, url).toString();
-        } catch {
-          await route.abort('blockedbyclient');
-          return;
-        }
+      const url = request.url();
+      if (!isNavigationAllowed(url, policy)) {
+        refusal.reason = `blocked by navigation policy: ${url}`;
+        await route.abort('blockedbyclient');
+        return;
       }
 
-      // Chain too long: a redirect loop, or an attempt to outlast the check.
+      let response;
+      try {
+        response = await route.fetch({ maxRedirects: 0 });
+      } catch (error) {
+        // Unreachable host, TLS failure, etc. Fail the navigation rather than
+        // leaving the request hanging until the goto timeout.
+        refusal.reason = `could not be fetched: ${error instanceof Error ? error.message : String(error)}`;
+        await route.abort('failed');
+        return;
+      }
+
+      const status = response.status();
+      const location = response.headers()['location'];
+      if (status < 300 || status >= 400 || !location) {
+        await route.fulfill({ response });
+        return;
+      }
+
+      // Report the target so a caller can act, but vet it first — an allowed
+      // redirect is a retry hint, a blocked one is a policy refusal.
+      let target: string;
+      try {
+        target = new URL(location, url).toString();
+      } catch {
+        refusal.reason = `redirects to an unparseable location: ${location}`;
+        await route.abort('blockedbyclient');
+        return;
+      }
+
+      refusal.reason = isNavigationAllowed(target, policy)
+        ? `redirects to ${target} — scan that URL directly, so page assets resolve against the right base`
+        : `redirects to ${target}, which is blocked by navigation policy`;
       await route.abort('blockedbyclient');
     });
   }
@@ -263,8 +286,9 @@ export class AccessibilityRunner {
     const page = await context.newPage();
 
     // Install before the first navigation so no request escapes the guard.
+    const refusal: NavigationRefusal = {};
     if (this.config.urlPolicy) {
-      await this.installUrlPolicyGuard(page, this.config.urlPolicy);
+      await this.installUrlPolicyGuard(page, this.config.urlPolicy, refusal);
     }
 
     try {
@@ -274,7 +298,16 @@ export class AccessibilityRunner {
       // Trim a trailing slash off the base so `https://host/` + `/about` doesn't double up.
       const base = (this.config.baseURL ?? 'http://localhost:3000').replace(/\/$/, '');
       const url = isFullUrl ? pagePattern : `${base}${pagePattern}`;
-      await page.goto(url, { waitUntil: 'networkidle' });
+      try {
+        await page.goto(url, { waitUntil: 'networkidle' });
+      } catch (error) {
+        // Playwright only reports net::ERR_BLOCKED_BY_CLIENT here. Swap in the
+        // guard's reason so the caller learns *why*, and can act on a redirect.
+        if (refusal.reason) {
+          throw new Error(`${url} ${refusal.reason}`);
+        }
+        throw error;
+      }
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
 

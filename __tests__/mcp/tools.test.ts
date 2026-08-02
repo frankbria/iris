@@ -194,23 +194,35 @@ describe('run_accessibility_test tool', () => {
       expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });
     }, 120_000);
 
-    it('blocks a redirect from an allowed URL to a metadata host', async () => {
+    it('names the blocked host when an allowed URL redirects to one', async () => {
       // The pre-flight check passes — the origin is plain localhost — and
-      // Chromium never re-routes a 30x target, so only the guard's explicit
-      // chain walk can catch this.
+      // Chromium never re-routes a 30x target, so only the guard can catch this.
       const result = await callTool({ url: redirectBlockedURL });
 
       expect(result.isError).toBe(true);
-      // ERR_BLOCKED_BY_CLIENT, not a timeout. That distinction is the whole
-      // assertion: the metadata address is unreachable from CI anyway, so a
-      // test that merely asserted "the scan failed" would pass even with the
-      // guard removed.
-      expect(result.content?.[0]?.text).toContain('ERR_BLOCKED_BY_CLIENT');
+      // Asserting the *reason* is the whole point. The metadata address is
+      // unreachable from CI anyway, so a test that merely asserted "the scan
+      // failed" would pass with the guard removed — verified, it does.
+      expect(result.content?.[0]?.text).toMatch(
+        /redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
+      );
     }, 120_000);
 
-    it('still follows a redirect chain that stays within policy', async () => {
-      // The guard must vet redirects, not break them.
+    it('refuses an in-policy redirect and hands back the target to re-scan', async () => {
+      // Following it would leave the document on the pre-redirect URL, so the
+      // page's relative assets would resolve against the wrong base and the scan
+      // would silently measure a broken page. Refusing with the target is honest
+      // and lets the assistant retry against the real URL.
       const result = await callTool({ url: redirectOkURL });
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain(cleanURL);
+      expect(result.content?.[0]?.text).toMatch(/scan that URL directly/);
+    }, 120_000);
+
+    it('scans the re-scan target the refusal pointed at', async () => {
+      // The retry the previous test tells the caller to make must actually work.
+      const result = await callTool({ url: cleanURL });
 
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });

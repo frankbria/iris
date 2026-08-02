@@ -26,7 +26,8 @@
     "dist",
     "README.md",
     "LICENSE",
-    ".env.example"
+    ".env.example",
+    ".mcp.json.example"
   ],
   "scripts": {
     "build": "tsc",
