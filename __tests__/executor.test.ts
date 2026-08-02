@@ -581,6 +581,32 @@ describe('ActionExecutor', () => {
       await executorNoRetry.cleanup();
     });
 
+    it.each([
+      [
+        'a blocked redirect target',
+        'https://x/ redirects to http://169.254.169.254/, which is blocked by navigation policy',
+      ],
+      ['a blocked URL', 'https://x/ blocked by navigation policy: https://x/'],
+      ['a redirect loop', 'https://x/ exceeded 10 redirects without settling'],
+      ['an unparseable Location', 'https://x/ redirects to an unparseable location: %%%'],
+    ])('does not retry a navigation the guard refused — %s', async (_label, message) => {
+      // These are deterministic policy verdicts: the URL is just as blocked on
+      // the fourth attempt, and each retry re-walks the whole redirect chain.
+      const retrying = new ActionExecutor({ retryAttempts: 3, retryDelay: 1 });
+      const retryPage = await retrying.createPage();
+      mockPage.goto.mockRejectedValue(new Error(message));
+
+      const result = await retrying.executeAction(
+        { type: 'navigate', url: 'https://example.com' } as Action,
+        retryPage,
+      );
+
+      expect(result.success).toBe(false);
+      expect(mockPage.goto).toHaveBeenCalledTimes(1);
+
+      await retrying.cleanup();
+    });
+
     // Issue #75: the non-retryable list said 'element not found', but Playwright
     // never emits that. A missing selector produces a timeout message, so the
     // most common failure mode was retried — each attempt burning the full page

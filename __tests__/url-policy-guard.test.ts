@@ -79,6 +79,10 @@ describe('URL policy guard', () => {
           page('Home', '<a id="ok" href="/to-final">ok</a><a id="bad" href="/to-metadata">bad</a>'),
         );
       }
+      if (url === '/frame-loop-host') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(page('Outer', '<iframe src="/loop"></iframe>'));
+      }
       if (url === '/frame-host') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(page('Outer', '<iframe src="/to-final"></iframe>'));
@@ -261,6 +265,23 @@ describe('URL policy guard', () => {
 
       // What matters: the browser never landed on the metadata host.
       expect(p.url()).not.toContain('169.254.169.254');
+    }, 60_000);
+
+    it('caps a self-redirecting iframe instead of spinning forever', async () => {
+      // guardedGoto bounds its own loop, but a redirect it did not initiate is
+      // re-driven from inside the route handler with no caller keeping score.
+      // Before this cap, /loop -> /loop in an iframe span unbounded while a
+      // comment claimed it "still terminates on the hop cap".
+      await installUrlPolicyGuard(p, {});
+
+      await guardedGoto(p, `${origin}/frame-loop-host`);
+      await p.waitForTimeout(3000);
+
+      // A handful of hops, not hundreds. Generous bound so this asserts
+      // "bounded" rather than an exact count.
+      expect(requestLog.filter((u) => u === '/loop').length).toBeLessThan(
+        (MAX_REDIRECT_HOPS + 2) * 2,
+      );
     }, 60_000);
 
     it('lands an iframe whose src redirects', async () => {

@@ -29,7 +29,7 @@
  * each hop is a genuine navigation the document URL and asset base stay correct.
  */
 
-import type { Page, Route } from 'playwright';
+import type { Frame, Page, Route } from 'playwright';
 import { isNavigationAllowed } from './url-policy';
 import type { UrlPolicyOptions } from './url-policy';
 
@@ -68,6 +68,19 @@ interface NavigationRefusal {
  * the page means it cannot be paired with the wrong one or outlive it.
  */
 const refusals = new WeakMap<Page, NavigationRefusal>();
+
+/**
+ * Redirect hops this module has driven itself for a given frame, since nothing
+ * else is counting them.
+ *
+ * `guardedGoto` bounds its own loop, but a redirect it did not initiate — a
+ * clicked link, a form POST, an iframe — is re-driven from inside the route
+ * handler with no caller keeping score. A self-redirecting iframe would
+ * otherwise spin forever. Cleared whenever a document request settles on a
+ * real response, so a page that legitimately redirects many times over its
+ * lifetime is not slowly starved.
+ */
+const selfDrivenHops = new WeakMap<Frame, number>();
 
 /**
  * Only http(s) can redirect, and only http(s) can be re-issued through
@@ -178,6 +191,8 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
     if (status < 300 || status >= 400 || !location) {
       refusal.reason = undefined;
       refusal.redirectTo = undefined;
+      // Settled on a real document: this frame's chain is over.
+      selfDrivenHops.delete(request.frame());
       await route.fulfill({ response });
       return;
     }
@@ -210,12 +225,21 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
       //
       // Deliberately not awaited: awaiting a navigation from inside a route
       // handler deadlocks, since the navigation's own requests need this
-      // handler to return first. Re-entry is fine and bounded — the new
-      // request is vetted like any other, and a chain that will not settle
-      // still terminates on the hop cap.
+      // handler to return first.
       const frame = request.frame();
       const drivenByCaller = refusal.driving && frame === page.mainFrame();
       if (!drivenByCaller) {
+        // Re-entry is fine, but nothing else is counting these — guardedGoto
+        // bounds its own loop and this path has no caller. A self-redirecting
+        // iframe would spin forever without a cap of its own.
+        const hops = (selfDrivenHops.get(frame) ?? 0) + 1;
+        if (hops > MAX_REDIRECT_HOPS) {
+          selfDrivenHops.delete(frame);
+          refusal.redirectTo = undefined;
+          refusal.reason = `exceeded ${MAX_REDIRECT_HOPS} redirects without settling`;
+          return;
+        }
+        selfDrivenHops.set(frame, hops);
         void frame.goto(target).catch(() => {
           // The navigation may be superseded or the frame detached; either way
           // the failure surfaces to whatever is observing the page, not here.

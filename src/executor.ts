@@ -385,6 +385,12 @@ export class ActionExecutor {
       'element not found',
       'net::err_blocked_by_client',
       'net::err_network_timeout',
+      // guardedGoto's own verdicts. These are deterministic policy decisions —
+      // the URL will be just as blocked on the fourth attempt — so without them
+      // a blocked navigation burns the full retry budget re-fetching the chain.
+      'blocked by navigation policy',
+      'redirects to an unparseable location',
+      'without settling',
     ];
 
     // Patterns needing structure rather than a substring. Tested against the
