@@ -30,7 +30,12 @@ export function formatError(error: unknown): string {
  * Applied to every field interpolated inside the fence, not just the digest.
  */
 export function redactFenceMarkers(value: string): string {
-  return value.replace(/-{2,}\s*(?:BEGIN|END)\s+UNTRUSTED\s+PAGE\s+DATA\s*-{2,}/gi, '[redacted]');
+  // The phrase is what persuades a model, so redact it however it is decorated:
+  // requiring the dashes let a bare "END UNTRUSTED PAGE DATA" — or an em-dashed
+  // one — through, which is a gap between what this claims to do and what it did.
+  // Over-redacting a page that genuinely contains this wording is the safe
+  // direction, and it costs that page nothing but four characters of digest.
+  return value.replace(/[-–—]*\s*(?:BEGIN|END)\s+UNTRUSTED\s+PAGE\s+DATA\s*[-–—]*/gi, '[redacted]');
 }
 
 /**
