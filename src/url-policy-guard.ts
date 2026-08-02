@@ -237,8 +237,8 @@ async function installContextNet(
     // whenever every page in the context shares a policy, which is the only
     // shape IRIS creates — one executor, one context, one policy. A context
     // holding pages pinned to *different* origins would judge this one request
-    // by the newest of them; noted on #155 rather than solved with machinery
-    // whose test could not be shown to discriminate.
+    // by the newest of them — tracked as #158, along with why the fail-safe
+    // version was reverted: its test could not be told apart from its absence.
     const effective = policy ?? entry.latest.policy;
     const reason = blockReason(request.url(), policyFor(effective, request.resourceType()));
     try {
