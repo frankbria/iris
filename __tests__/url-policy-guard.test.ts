@@ -79,6 +79,10 @@ describe('URL policy guard', () => {
           page('Home', '<a id="ok" href="/to-final">ok</a><a id="bad" href="/to-metadata">bad</a>'),
         );
       }
+      if (url === '/to-offsite') {
+        res.writeHead(302, { Location: 'https://example.com/' });
+        return res.end();
+      }
       if (url === '/frame-loop-host') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(page('Outer', '<iframe src="/loop"></iframe>'));
@@ -291,6 +295,38 @@ describe('URL policy guard', () => {
       await p.waitForTimeout(1000);
 
       expect(p.frames().map((f) => f.url())).toContain(`${origin}/final`);
+    }, 60_000);
+  });
+
+  describe('origin pinning at the request layer (issue #151)', () => {
+    // A pre-action policy check notices a same-origin click that navigates away
+    // only on the NEXT turn — by which time the cross-origin request has already
+    // gone out. Confinement has to happen before the request, not after.
+    it('blocks a same-origin link that redirects off-origin', async () => {
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/click-source`);
+
+      await expect(guardedGoto(p, `${origin}/to-offsite`)).rejects.toThrow(
+        /leaves the pinned origin/,
+      );
+    }, 60_000);
+
+    it('blocks a direct navigation to another origin', async () => {
+      await installUrlPolicyGuard(p, { pinnedOrigin: 'https://elsewhere.example' });
+
+      await expect(guardedGoto(p, `${origin}/final`)).rejects.toThrow(/leaves the pinned origin/);
+    }, 60_000);
+
+    it('does NOT block cross-origin sub-resources', async () => {
+      // Pinning is a navigation control. A page legitimately loads images and
+      // fonts from other origins, and refusing those would break the very page
+      // the agent is trying to read.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+
+      await guardedGoto(p, `${origin}/subresource-ok`, { waitUntil: 'networkidle' });
+
+      await expect(p.title()).resolves.toBe('Sub');
+      expect(requestLog).toContain('/pixel');
     }, 60_000);
   });
 

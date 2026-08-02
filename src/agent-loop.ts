@@ -20,6 +20,9 @@ import type { AgentPolicy } from './agent-policy';
 /** Cap on the serialized page digest. Keeps the prompt affordable on big pages. */
 export const MAX_DIGEST_CHARS = 4000;
 
+/** How many recent failures are shown back to the model, so the prompt stays bounded. */
+const MAX_REPORTED_FAILURES = 5;
+
 /** Caps on the header fields, which are attacker/page controlled and unbounded. */
 export const MAX_URL_CHARS = 300;
 const MAX_TITLE_CHARS = 200;
@@ -141,6 +144,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
 
   const results: ExecutionResult[] = [];
   const executedActions: Action[] = [];
+  /** Failure reasons shown back to the model, newest last. Bounded so a long run does not grow the prompt without limit. */
+  const recentFailures: string[] = [];
   let turns = 0;
   let emptyPlans = 0;
   let consecutiveFailures = 0;
@@ -177,6 +182,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
           // mutate a request the client may still be holding, so what a provider
           // serialises could differ from what the turn actually knew.
           previousActions: [...executedActions],
+          // Without this the model sees what it tried but never how it went, so
+          // a refused or failed action just gets proposed again next turn.
+          recentFailures: recentFailures.slice(-MAX_REPORTED_FAILURES),
         },
       });
     } catch (error) {
@@ -218,6 +226,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
 
       results.push(result);
       executedActions.push(action);
+      if (!result.success) {
+        recentFailures.push(`${action.type} ${JSON.stringify(action)}: ${result.error}`);
+      }
       log(`turn ${turns}: ${action.type} → ${result.success ? 'ok' : `failed (${result.error})`}`);
 
       if (action.type === 'assert') {

@@ -327,10 +327,10 @@ describe('agent loop', () => {
         expect(result.results[0].error).toMatch(/Refused by agent policy.*looks destructive/);
       });
 
-      it('shows the refusal to the model on the next turn', async () => {
-        // A silent skip would leave the model re-proposing the same blocked
-        // action every turn until the budget ran out. It has to be able to see
-        // that the action was refused and why.
+      it('shows the refusal AND its reason to the model on the next turn', async () => {
+        // previousActions alone says what was tried, never how it went — so a
+        // model would re-propose the same blocked action every turn until the
+        // failure cutoff ended the run. It has to see the refusal itself.
         const translateInstruction = scriptAI([
           [{ type: 'click', selector: '#delete-everything' }],
           [{ type: 'assert', kind: 'text_visible', target: 'Your cart' }],
@@ -343,6 +343,49 @@ describe('agent loop', () => {
           type: 'click',
           selector: '#delete-everything',
         });
+        expect(secondTurn.context.recentFailures).toEqual([
+          expect.stringMatching(/Refused by agent policy.*looks destructive/),
+        ]);
+      });
+
+      it('reports an ordinary action failure back too, not only policy refusals', async () => {
+        // Pre-existing gap this closes: a click that simply timed out was just
+        // as invisible to the model as a refused one.
+        const translateInstruction = scriptAI([
+          [{ type: 'click', selector: '#does-not-exist' }],
+          [{ type: 'assert', kind: 'text_visible', target: 'Your cart' }],
+        ]);
+
+        await runAgentLoop({ instruction: 'click it', executor, page, maxTurns: 2 });
+
+        const secondTurn = translateInstruction.mock.calls[1][0];
+        expect(secondTurn.context.recentFailures).toHaveLength(1);
+        expect(secondTurn.context.recentFailures[0]).toContain('#does-not-exist');
+      });
+
+      it('bounds how many failures are reported so the prompt cannot grow forever', async () => {
+        const translateInstruction = scriptAI([
+          [{ type: 'click', selector: '#miss-1' }],
+          [{ type: 'click', selector: '#miss-2' }],
+          [{ type: 'click', selector: '#miss-3' }],
+          [{ type: 'click', selector: '#miss-4' }],
+          [{ type: 'click', selector: '#miss-5' }],
+          [{ type: 'click', selector: '#miss-6' }],
+          [{ type: 'click', selector: '#miss-7' }],
+        ]);
+
+        await runAgentLoop({
+          instruction: 'click things',
+          executor,
+          page,
+          maxTurns: 7,
+          // Each miss is a failure; without a cap the run would end on the
+          // consecutive-failure rule long before the list grew, so raise it.
+          policy: {},
+        });
+
+        const lastCall = translateInstruction.mock.calls.at(-1)![0];
+        expect(lastCall.context.recentFailures.length).toBeLessThanOrEqual(5);
       });
 
       it('honours an allowlist, so a read-only run cannot click', async () => {

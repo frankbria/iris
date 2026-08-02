@@ -49,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1012/1013 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1017/1018 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -81,7 +81,7 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 1012/1013 tests passing (99.9% pass rate), 1 skipped, 0 failing
+**Test Results:** 1017/1018 tests passing (99.9% pass rate), 1 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
@@ -365,12 +365,18 @@ guarantee. Every action the model proposes is checked before it reaches the brow
 
 | Default | Flag to relax it |
 |---|---|
-| Confined to the origin you started on — including refusing to act at all if the page has drifted there by redirect | `--allow-cross-origin` |
+| Confined to the origin you started on — enforced on every request, so a link or redirect that leaves it is stopped before the request goes out, not noticed a turn later | `--allow-cross-origin` |
 | Targets that read as destructive (`delete`, `remove`, `reset`, `deactivate`, …) are refused | `--allow-destructive` |
 | All four action types available | `--allow click,assert` to restrict |
 
-A refusal is fed back to the model as a failed action, so it can see why and adapt,
-and three in a row end the run rather than burning the turn budget.
+A refusal is fed back to the model with its reason, so it can see *why* and adapt
+rather than re-proposing the same blocked action; three failures in a row end the run
+rather than burning the turn budget. Ordinary action failures (a selector that missed,
+a timeout) are reported the same way — previously the model could not tell a click
+that worked from one that did not.
+
+Cross-origin *sub-resources* — images, fonts, scripts — are unaffected. Pinning is a
+navigation control; refusing those would break the page the agent is reading.
 
 Commerce is deliberately **not** on the destructive list — "make sure users can
 complete checkout" is what this loop is for, and a purchase is reversible in a way

@@ -77,6 +77,7 @@ ${
 - URL: ${redactFenceMarkers(request.context.url || 'unknown')}
 - Current page: ${redactFenceMarkers(request.context.currentPage || 'unknown')}
 - Previous actions: ${redactFenceMarkers(JSON.stringify(request.context.previousActions || []))}
+- Recent failures (do not simply repeat these): ${redactFenceMarkers(JSON.stringify(request.context.recentFailures || []))}
 --- END UNTRUSTED PAGE DATA ---`
     : ''
 }`;
@@ -202,6 +203,7 @@ ${
 - URL: ${redactFenceMarkers(request.context.url || 'unknown')}
 - Current page: ${redactFenceMarkers(request.context.currentPage || 'unknown')}
 - Previous actions: ${redactFenceMarkers(JSON.stringify(request.context.previousActions || []))}
+- Recent failures (do not simply repeat these): ${redactFenceMarkers(JSON.stringify(request.context.recentFailures || []))}
 --- END UNTRUSTED PAGE DATA ---`
     : ''
 }`;
@@ -306,6 +308,7 @@ ${
 - URL: ${redactFenceMarkers(request.context.url || 'unknown')}
 - Current page: ${redactFenceMarkers(request.context.currentPage || 'unknown')}
 - Previous actions: ${redactFenceMarkers(JSON.stringify(request.context.previousActions || []))}
+- Recent failures (do not simply repeat these): ${redactFenceMarkers(JSON.stringify(request.context.recentFailures || []))}
 --- END UNTRUSTED PAGE DATA ---
 `
     : ''

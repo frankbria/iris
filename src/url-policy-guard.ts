@@ -30,7 +30,7 @@
  */
 
 import type { Frame, Page, Route } from 'playwright';
-import { isNavigationAllowed } from './url-policy';
+import { assertNavigationAllowed, isNavigationAllowed } from './url-policy';
 import type { UrlPolicyOptions } from './url-policy';
 
 /** Bound on a redirect chain, for both the sub-resource walk and {@link guardedGoto}. */
@@ -94,6 +94,22 @@ function isHttpScheme(url: string): boolean {
 }
 
 /**
+ * Why the policy refuses this URL, or null when it does not.
+ *
+ * The boolean form is enough to decide, but not to explain, and "blocked by
+ * navigation policy" tells a caller nothing about whether it was the scheme, a
+ * metadata host, or the pinned origin. Ask for the reason instead.
+ */
+function blockReason(url: string, policy: UrlPolicyOptions): string | null {
+  try {
+    assertNavigationAllowed(url, policy);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
  * Apply the policy to a non-document request, following any redirect chain one
  * hop at a time.
  *
@@ -102,10 +118,14 @@ function isHttpScheme(url: string): boolean {
  * enough that refusing them would degrade the very page being measured.
  */
 async function guardSubresource(route: Route, policy: UrlPolicyOptions): Promise<void> {
+  // Origin pinning is a navigation control, not a resource control: a page
+  // legitimately loads images, fonts and scripts from other origins, and
+  // refusing those would break the page the agent is trying to read.
+  const { pinnedOrigin: _pinned, ...subresourcePolicy } = policy;
   let url = route.request().url();
 
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-    if (!isNavigationAllowed(url, policy)) {
+    if (!isNavigationAllowed(url, subresourcePolicy)) {
       await route.abort('blockedbyclient');
       return;
     }
@@ -162,8 +182,9 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
     }
 
     const url = request.url();
-    if (!isNavigationAllowed(url, policy)) {
-      refusal.reason = `blocked by navigation policy: ${url}`;
+    const blocked = blockReason(url, policy);
+    if (blocked) {
+      refusal.reason = `blocked by navigation policy: ${blocked}`;
       refusal.redirectTo = undefined;
       await route.abort('blockedbyclient');
       return;
@@ -209,7 +230,8 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
       return;
     }
 
-    if (isNavigationAllowed(target, policy)) {
+    const targetBlocked = blockReason(target, policy);
+    if (!targetBlocked) {
       refusal.reason = undefined;
       refusal.redirectTo = target;
       // 'aborted', not 'blockedbyclient': this hop is being *deferred*, not
@@ -248,7 +270,7 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
       return;
     }
 
-    refusal.reason = `redirects to ${target}, which is blocked by navigation policy`;
+    refusal.reason = `redirects to ${target}, which is blocked by navigation policy: ${targetBlocked}`;
     refusal.redirectTo = undefined;
     await route.abort('blockedbyclient');
   });

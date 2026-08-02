@@ -129,7 +129,18 @@ program
 
           executed = true;
           const { ActionExecutor } = await import('./executor');
-          const executor = new ActionExecutor(executorOptions);
+          const { originOf } = await import('./agent-policy');
+
+          // Pin at the REQUEST layer, not just before each action. A pre-action
+          // check notices a same-origin click that navigates away only on the
+          // next turn, by which time the cross-origin request has gone out.
+          const pinnedOrigin = options.allowCrossOrigin
+            ? undefined
+            : (originOf(startUrl) ?? undefined);
+          const executor = new ActionExecutor({
+            ...executorOptions,
+            urlPolicy: { pinnedOrigin },
+          });
 
           try {
             await executor.launchBrowser();

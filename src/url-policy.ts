@@ -6,6 +6,21 @@
  */
 
 export interface UrlPolicyOptions {
+  /**
+   * When set, refuse any *navigation* that leaves this origin.
+   *
+   * Distinct from the SSRF checks below, which ask "is this host dangerous?".
+   * This asks "is this where the caller pointed me?", and exists because the
+   * agent loop can be talked into leaving a site while still carrying its
+   * session (issue #151). Checking it here rather than only before an action
+   * means a same-origin click that navigates away, or a same-origin URL that
+   * 302s elsewhere, is stopped before the request goes out — a pre-action check
+   * alone notices only after the fact.
+   *
+   * Applies to document requests only; the guard strips it for sub-resources,
+   * since a page legitimately loads images and fonts from other origins.
+   */
+  pinnedOrigin?: string;
   /** Allow `file://` navigation (e.g. the watcher rendering local files). Default: false. */
   allowFile?: boolean;
   /** Also block loopback + RFC1918 + IPv6 ULA hosts. Default: false (localhost dev-server testing stays allowed). */
@@ -110,6 +125,12 @@ export function assertNavigationAllowed(url: string, options: UrlPolicyOptions =
 
   if (scheme !== 'http:' && scheme !== 'https:') {
     throw new Error(`Navigation blocked: scheme "${scheme}" is not allowed (only http/https).`);
+  }
+
+  if (options.pinnedOrigin && parsed.origin !== options.pinnedOrigin) {
+    throw new Error(
+      `Navigation blocked: ${parsed.origin} leaves the pinned origin ${options.pinnedOrigin}.`,
+    );
   }
 
   const host = normalizeHost(parsed.hostname);
