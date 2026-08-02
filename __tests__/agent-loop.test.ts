@@ -306,6 +306,101 @@ describe('agent loop', () => {
       expect(result.terminationReason).not.toBe('goal_met');
     });
 
+    describe('capability policy (issue #151)', () => {
+      // These assume a prompt injection already succeeded and the model is
+      // proposing exactly what the page told it to. What is under test is that
+      // the action never reaches the browser.
+      it('refuses a destructive action without executing it', async () => {
+        scriptAI([[{ type: 'click', selector: 'button:has-text("Delete account")' }]]);
+        const execute = jest.spyOn(executor, 'executeAction');
+
+        const result = await runAgentLoop({
+          instruction: 'tidy up my account',
+          executor,
+          page,
+          maxTurns: 1,
+        });
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(result.results).toHaveLength(1);
+        expect(result.results[0].success).toBe(false);
+        expect(result.results[0].error).toMatch(/Refused by agent policy.*looks destructive/);
+      });
+
+      it('shows the refusal to the model on the next turn', async () => {
+        // A silent skip would leave the model re-proposing the same blocked
+        // action every turn until the budget ran out. It has to be able to see
+        // that the action was refused and why.
+        const translateInstruction = scriptAI([
+          [{ type: 'click', selector: '#delete-everything' }],
+          [{ type: 'assert', kind: 'text_visible', target: 'Your cart' }],
+        ]);
+
+        await runAgentLoop({ instruction: 'clean up', executor, page, maxTurns: 2 });
+
+        const secondTurn = translateInstruction.mock.calls[1][0];
+        expect(secondTurn.context.previousActions).toContainEqual({
+          type: 'click',
+          selector: '#delete-everything',
+        });
+      });
+
+      it('honours an allowlist, so a read-only run cannot click', async () => {
+        scriptAI([[{ type: 'click', selector: '#pay' }]]);
+        const execute = jest.spyOn(executor, 'executeAction');
+
+        const result = await runAgentLoop({
+          instruction: 'check the cart',
+          executor,
+          page,
+          maxTurns: 1,
+          policy: { allow: ['assert'] },
+        });
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(result.results[0].error).toMatch(/"click" is not permitted/);
+      });
+
+      it('still executes an allowed action, so the policy is not just a wall', async () => {
+        scriptAI([[{ type: 'click', selector: '#pay' }]]);
+        const execute = jest.spyOn(executor, 'executeAction');
+
+        const result = await runAgentLoop({
+          instruction: 'pay',
+          executor,
+          page,
+          // The fixture is a data: URL, which has no origin, so pinning is
+          // inert here — asserted directly in agent-policy.test.ts instead.
+          maxTurns: 1,
+        });
+
+        expect(execute).toHaveBeenCalled();
+        expect(result.results[0].success).toBe(true);
+      });
+
+      it('stops after three refusals instead of burning the turn budget', async () => {
+        // A model that keeps proposing a blocked action must not loop forever.
+        scriptAI([
+          [
+            { type: 'click', selector: '#delete-a' },
+            { type: 'click', selector: '#delete-b' },
+            { type: 'click', selector: '#delete-c' },
+            { type: 'click', selector: '#delete-d' },
+          ],
+        ]);
+
+        const result = await runAgentLoop({
+          instruction: 'clean up',
+          executor,
+          page,
+          maxTurns: 5,
+        });
+
+        expect(result.terminationReason).toBe('consecutive_failures');
+        expect(result.results).toHaveLength(3);
+      });
+    });
+
     it('returns error instead of rejecting when the AI client cannot be built', async () => {
       jest.spyOn(aiClient, 'createAIClient').mockImplementation(() => {
         throw new Error('unsupported provider');

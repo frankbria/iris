@@ -681,6 +681,85 @@ describe('CLI Commands', () => {
         );
       });
 
+      test('policy defaults are safe: origin pinned, destructive refused', async () => {
+        stubExecutor();
+        const loop = stubAgentLoop({
+          goalMet: true,
+          turns: 1,
+          results: [],
+          terminationReason: 'goal_met',
+        });
+
+        await runCli([
+          'node',
+          'iris',
+          'run',
+          'buy a widget',
+          '--agent',
+          '--url',
+          'https://example.com',
+        ]);
+
+        expect(loop).toHaveBeenCalledWith(
+          expect.objectContaining({
+            policy: { allow: undefined, pinOrigin: true, allowDestructive: false },
+          }),
+        );
+      });
+
+      test('the opt-out flags reach the loop', async () => {
+        stubExecutor();
+        const loop = stubAgentLoop({
+          goalMet: true,
+          turns: 1,
+          results: [],
+          terminationReason: 'goal_met',
+        });
+
+        await runCli([
+          'node',
+          'iris',
+          'run',
+          'buy a widget',
+          '--agent',
+          '--url',
+          'https://example.com',
+          '--allow',
+          'click,assert',
+          '--allow-cross-origin',
+          '--allow-destructive',
+        ]);
+
+        expect(loop).toHaveBeenCalledWith(
+          expect.objectContaining({
+            policy: { allow: ['click', 'assert'], pinOrigin: false, allowDestructive: true },
+          }),
+        );
+      });
+
+      test('--allow rejects an unknown action type', async () => {
+        const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {
+          throw new Error('process.exit called');
+        }) as never);
+        jest.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+        await expect(
+          runCli([
+            'node',
+            'iris',
+            'run',
+            'x',
+            '--agent',
+            '--url',
+            'https://example.com',
+            '--allow',
+            'click,teleport',
+          ]),
+        ).rejects.toThrow('process.exit called');
+
+        expect(exitSpy).toHaveBeenCalledWith(1);
+      });
+
       test('--max-turns is passed through to the loop', async () => {
         stubExecutor();
         const loop = stubAgentLoop({

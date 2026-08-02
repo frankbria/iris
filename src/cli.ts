@@ -31,6 +31,22 @@ program
     8,
   )
   .option(
+    '--allow <types>',
+    'Restrict --agent to these action types (comma-separated: click,fill,navigate,assert)',
+    (v) =>
+      v.split(',').map((t) => parseEnumOption(t, ['click', 'fill', 'navigate', 'assert'], 'allow')),
+  )
+  .option(
+    '--allow-cross-origin',
+    'Let --agent leave the starting origin (off by default: an agent that wanders onto another authenticated site is the risk)',
+    false,
+  )
+  .option(
+    '--allow-destructive',
+    'Let --agent act on targets that read as destructive (delete, remove, reset, …)',
+    false,
+  )
+  .option(
     '--timeout <ms>',
     'Timeout for actions in milliseconds',
     (v) => parseIntOption(v, { min: 1000, max: 3600000, name: 'timeout' }),
@@ -47,6 +63,9 @@ program
         json?: boolean;
         agent?: boolean;
         maxTurns?: number;
+        allow?: Array<'click' | 'fill' | 'navigate' | 'assert'>;
+        allowCrossOrigin?: boolean;
+        allowDestructive?: boolean;
       },
     ) => {
       const startTime = new Date();
@@ -117,6 +136,11 @@ program
             const page = await executor.createPage();
 
             say(`🤖 Agent mode (experimental), up to ${options.maxTurns ?? 8} turns`);
+            say(
+              `   Policy: ${options.allow ? options.allow.join('/') : 'all actions'}, ` +
+                `${options.allowCrossOrigin ? 'any origin' : 'start origin only'}, ` +
+                `${options.allowDestructive ? 'destructive allowed' : 'destructive refused'}`,
+            );
             say(`   Opening starting page: ${startUrl}`);
 
             // Routed through executeAction so the URL policy applies, exactly as
@@ -138,6 +162,11 @@ program
                 page,
                 maxTurns: options.maxTurns ?? 8,
                 log: (message) => say(`   ${message}`),
+                policy: {
+                  allow: options.allow,
+                  pinOrigin: !options.allowCrossOrigin,
+                  allowDestructive: options.allowDestructive,
+                },
               });
 
               executionResults.push(...outcome.results);

@@ -14,6 +14,8 @@ import type { Action } from './actions';
 import type { ActionExecutor, ExecutionResult } from './executor';
 import { loadConfig } from './config';
 import { createAIClient } from './ai-client';
+import { checkAction, originOf } from './agent-policy';
+import type { AgentPolicy } from './agent-policy';
 
 /** Cap on the serialized page digest. Keeps the prompt affordable on big pages. */
 export const MAX_DIGEST_CHARS = 4000;
@@ -46,6 +48,12 @@ export interface AgentLoopOptions {
   maxTurns?: number;
   /** Progress sink. Defaults to silence so the library never writes to stdout. */
   log?: (message: string) => void;
+  /**
+   * Bounds on what the agent may do. Defaults are the safe ones: every action
+   * type allowed, but confined to the starting origin and refusing targets that
+   * read as destructive. See `./agent-policy` for why.
+   */
+  policy?: AgentPolicy;
 }
 
 /**
@@ -105,7 +113,12 @@ async function safeTitle(page: Page): Promise<string> {
  * consecutive empty plans, three consecutive action failures, or `maxTurns`.
  */
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunResult> {
-  const { instruction, executor, page, maxTurns = 8, log = () => {} } = options;
+  const { instruction, executor, page, maxTurns = 8, log = () => {}, policy = {} } = options;
+
+  // The origin the run is pinned to. Read once, before any turn can move the
+  // page — reading it later would pin to wherever an injection had already
+  // taken us, which is precisely backwards.
+  const startOrigin = originOf(page.url());
 
   const results: ExecutionResult[] = [];
   const executedActions: Action[] = [];
@@ -166,7 +179,24 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     const turnAsserts: boolean[] = [];
 
     for (const action of plan.actions) {
-      const result = await executor.executeAction(action, page);
+      // Policy is checked per action, immediately before it runs, because an
+      // earlier action in the same turn may have moved the page.
+      const verdict = checkAction(action, policy, page.url(), startOrigin);
+
+      // A refusal is recorded as a failed result rather than skipped silently:
+      // it goes into `previousActions`, so the next turn's prompt shows the
+      // model that the action was refused and why, and it counts toward the
+      // consecutive-failure cutoff so an agent that keeps retrying a forbidden
+      // action stops instead of burning the turn budget.
+      const result: ExecutionResult = verdict.allowed
+        ? await executor.executeAction(action, page)
+        : {
+            success: false,
+            action,
+            error: `Refused by agent policy: ${verdict.reason}`,
+            duration: 0,
+          };
+
       results.push(result);
       executedActions.push(action);
       log(`turn ${turns}: ${action.type} → ${result.success ? 'ok' : `failed (${result.error})`}`);
