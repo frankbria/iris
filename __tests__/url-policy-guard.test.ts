@@ -14,6 +14,7 @@
 
 import { chromium, Browser, Page } from 'playwright';
 import { createServer, Server } from 'http';
+import { WebSocketServer } from 'ws';
 import { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -35,6 +36,7 @@ describe('URL policy guard', () => {
   /** A genuinely different origin, for the pinning tests. */
   let offsiteServer: Server;
   let offsiteLog: string[];
+  let offsiteSocketConnections = 0;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -128,6 +130,9 @@ describe('URL policy guard', () => {
       res.writeHead(200, { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'image/gif' });
       res.end(Buffer.from('R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==', 'base64'));
     });
+    new WebSocketServer({ server: offsiteServer }).on('connection', () => {
+      offsiteSocketConnections++;
+    });
     await new Promise<void>((resolve) => offsiteServer.listen(0, resolve));
     // 127.0.0.1 rather than localhost: a different host string is a different
     // origin, which is the point.
@@ -154,6 +159,7 @@ describe('URL policy guard', () => {
   beforeEach(async () => {
     requestLog = [];
     offsiteLog = [];
+    offsiteSocketConnections = 0;
     context = await browser.newContext();
     p = await context.newPage();
   });
@@ -392,6 +398,55 @@ describe('URL policy guard', () => {
       await guardedGoto(p, `${origin}/offsite-script`, { waitUntil: 'networkidle' });
 
       expect(offsiteLog).not.toContain('/evil.js');
+    }, 60_000);
+
+    it('closes a cross-origin WebSocket before it connects', async () => {
+      // page.route never sees a WebSocket upgrade, so the resource-type list
+      // could not cover this — it needs routeWebSocket. A readable,
+      // bidirectional channel off-origin is the last thing to leave exempt.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/final`);
+
+      const outcome = await p.evaluate(
+        (url) =>
+          new Promise<string>((resolve) => {
+            const ws = new WebSocket(url);
+            ws.onopen = () => resolve('open');
+            ws.onclose = (e) => resolve(`close ${e.code}`);
+            ws.onerror = () => resolve('error');
+            setTimeout(() => resolve('timeout'), 4000);
+          }),
+        OFFSITE.replace('http:', 'ws:'),
+      );
+
+      // 1008 is the guard's own close code, so this asserts the refusal rather
+      // than merely that the socket did not open.
+      expect(outcome).toBe('close 1008');
+      expect(offsiteSocketConnections).toBe(0);
+    }, 60_000);
+
+    // eslint-disable-next-line jest/no-disabled-tests
+    it.skip('permits a same-origin WebSocket (blocked by #154)', async () => {
+      // Kept, skipped, as the acceptance test for #154: fulfilling the document
+      // response breaks every WebSocket upgrade on a guarded page, same-origin
+      // included, so the permission half of the pin cannot be exercised yet.
+      // Enable this when #154 is fixed.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/final`);
+
+      const outcome = await p.evaluate(
+        (url) =>
+          new Promise<string>((resolve) => {
+            const ws = new WebSocket(url);
+            ws.onopen = () => resolve('open');
+            ws.onclose = (e) => resolve(`close ${e.code}`);
+            ws.onerror = () => resolve('error');
+            setTimeout(() => resolve('timeout'), 4000);
+          }),
+        origin.replace('http:', 'ws:'),
+      );
+
+      expect(outcome).toBe('open');
     }, 60_000);
 
     it('does NOT block cross-origin sub-resources', async () => {

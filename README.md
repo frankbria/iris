@@ -49,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1041/1042 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1042/1044 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -81,7 +81,7 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 1041/1042 tests passing (99.9% pass rate), 1 skipped, 0 failing
+**Test Results:** 1042/1044 tests passing (99.9% pass rate), 2 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
@@ -379,8 +379,11 @@ Cross-origin *rendered* sub-resources — images, fonts, stylesheets, media — 
 unaffected; refusing those would break the page the agent is reading. Blocked, when the
 origin is pinned:
 
-- `fetch`, XHR, WebSocket, beacons — they carry data off-origin and return readable
-  responses, so a same-origin click that fires one exfiltrates before anything else sees it
+- `fetch`, XHR, beacons — they carry data off-origin and return readable responses, so a
+  same-origin click that fires one exfiltrates before anything else sees it
+- cross-origin **WebSockets**, closed before they connect (they need a separate hook —
+  `page.route` does not see a WS upgrade at all). Note [#154](https://github.com/frankbria/iris/issues/154):
+  a guarded page currently cannot open *any* WebSocket, same-origin included
 - **`<script src>` from another origin** — that is code execution with the page's own
   authority, not a static asset, whatever a network log makes it look like
 
@@ -1099,5 +1102,5 @@ iris a11y --help
 **Status:**
 - Phase 1: ✅ Complete
 - Phase 2: 🚧 In Progress (visual regression complete; a11y integration ongoing)
-- Tests: 575/576 passing (99.8%), 1 skipped, 0 failing
+- Tests: 575/576 passing (99.8%), 2 skipped, 0 failing
 - Coverage: 75.7% statements (below 85% target)

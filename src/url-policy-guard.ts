@@ -30,7 +30,7 @@
  */
 
 import type { Frame, Page, Route } from 'playwright';
-import { assertNavigationAllowed, isNavigationAllowed } from './url-policy';
+import { assertNavigationAllowed, isNavigationAllowed, isWithinPinnedOrigin } from './url-policy';
 import type { UrlPolicyOptions } from './url-policy';
 
 /** Bound on a redirect chain, for both the sub-resource walk and {@link guardedGoto}. */
@@ -133,9 +133,11 @@ function blockReason(url: string, policy: UrlPolicyOptions): string | null {
  *
  * Everything NOT listed stays pinned, and the exclusions are deliberate:
  *
- * - `fetch`, `xhr`, `eventsource`, `websocket`, beacons — carry data off-origin
- *   and return readable responses, so a same-origin click that fires one is an
- *   exfiltration channel the per-action check cannot see.
+ * - `fetch`, `xhr`, `eventsource`, beacons — carry data off-origin and return
+ *   readable responses, so a same-origin click that fires one is an
+ *   exfiltration channel the per-action check cannot see. (WebSockets belong in
+ *   this group but never reach here — `page.route` does not intercept them at
+ *   all; they are handled by a separate `routeWebSocket` guard below.)
  * - `script` — code execution with the page's own authority. A cross-origin
  *   script can read the DOM and act as the user, which is precisely the
  *   post-click injection scenario this control exists for. It is NOT passive,
@@ -203,6 +205,41 @@ async function guardSubresource(route: Route, policy: UrlPolicyOptions): Promise
 }
 
 /**
+ * Refuse WebSocket connections that leave the pinned origin.
+ *
+ * Separate from the request guard because `page.route` does not intercept
+ * WebSockets *at all* — listing 'websocket' among the pinned resource types
+ * achieved nothing, since the handler never ran for one. A direct, readable,
+ * bidirectional channel off-origin is the last thing that should be exempt by
+ * accident.
+ *
+ * Caveat worth knowing before trusting this: a guarded page currently cannot
+ * open ANY WebSocket, same-origin included, because fulfilling the document
+ * response breaks the upgrade (issue #154). So the refusal below is verified
+ * and the permission is not — it is kept precisely so that fixing #154 does not
+ * silently reopen cross-origin WebSocket egress.
+ *
+ * ws/wss map onto http/https before the origin comparison, so a page's own
+ * same-origin socket is not mistaken for an escape.
+ */
+function toHttpScheme(wsUrl: string): string {
+  return wsUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+}
+
+/** @see toHttpScheme */
+async function installWebSocketPin(page: Page, pinnedOrigin: string): Promise<void> {
+  // Match only the sockets to be refused, so an allowed one is never routed at
+  // all. Routing everything and re-connecting the permitted ones would mean
+  // proxying live traffic through the handler to keep a same-origin socket
+  // working — far more machinery, and more to get wrong, than simply not
+  // intercepting it.
+  await page.routeWebSocket(
+    (url) => !isWithinPinnedOrigin(toHttpScheme(url.toString()), pinnedOrigin),
+    (ws) => ws.close({ code: 1008, reason: 'blocked: leaves the pinned origin' }),
+  );
+}
+
+/**
  * Install the policy guard on a page. Call once, before the first navigation, so
  * that no request escapes it.
  *
@@ -218,13 +255,23 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   // executor) established.
   const existing = guards.get(page);
   if (existing) {
+    const hadPin = existing.policy.pinnedOrigin;
     existing.policy = { ...existing.policy, ...policy };
+    // A merge that introduces a pin still needs the WebSocket guard, which the
+    // first install had no reason to add.
+    if (!hadPin && existing.policy.pinnedOrigin) {
+      await installWebSocketPin(page, existing.policy.pinnedOrigin);
+    }
     return;
   }
 
   const state: GuardState = { refusal: {}, policy };
   guards.set(page, state);
   const refusal = state.refusal;
+
+  if (policy.pinnedOrigin) {
+    await installWebSocketPin(page, policy.pinnedOrigin);
+  }
 
   await page.route('**/*', async (route) => {
     const policy = state.policy;
