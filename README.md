@@ -49,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 950/951 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 972/973 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -81,7 +81,7 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 950/951 tests passing (99.9% pass rate), 1 skipped, 0 failing
+**Test Results:** 972/973 tests passing (99.9% pass rate), 1 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
@@ -414,7 +414,7 @@ instead of shelling out. It is a **spike**: exactly one tool today.
 | **Input** | `url` (required, http/https), `wcagLevel` (`AA` default, or `AAA`) |
 | **Output** | `{ url, passed, violationCount, violations[] }`, each violation `{ id, impact, description, helpUrl, nodes }` |
 | **Keys** | none — axe-core runs locally |
-| **Redirects** | not followed — the tool returns the target so you can scan it directly |
+| **Redirects** | followed, with every hop checked against the navigation policy |
 
 Configure it by copying the example into your project (it is gitignored, so your
 copy stays local):
@@ -436,20 +436,15 @@ Then start Claude Code in the project and approve the server when prompted;
 `claude mcp list` should report `iris ... ✔ Connected`. Installed globally, the
 `iris-mcp` bin is the same entry point.
 
-**Redirects are refused, not followed.** Pass `http://localhost:3000` to a site
-whose root redirects to `/login` and you get an error naming the target rather
-than a result:
+**Redirects are followed, and every hop is checked.** Pass `http://localhost:3000`
+to a site whose root redirects to `/login` and you get a scan of `/login`.
 
-```
-http://localhost:3000/ redirects to http://localhost:3000/login — scan that URL
-directly, so page assets resolve against the right base
-```
-
-Call again with that URL. Following the redirect internally would leave the
-document on the pre-redirect URL, so the page's relative stylesheets and images
-would resolve against the wrong base — and a scan of a page whose CSS failed to
-load reports contrast violations that do not exist. An error you can act on beats
-a result you cannot trust.
+Each hop is vetted against the navigation policy *before* the browser is allowed
+to request it, and each is then re-issued as a real navigation — so the scanned
+document's URL and its asset base stay correct. That matters more than it sounds:
+a page whose stylesheet 404s because it resolved against the wrong base reports
+contrast violations that do not exist. A hop pointing somewhere the policy blocks
+fails the call with the offending URL named.
 
 **Deliberate limits.** The tool reports axe-core violations *only*. IRIS's
 keyboard-navigation and screen-reader sub-checks currently hardcode success

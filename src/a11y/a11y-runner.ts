@@ -11,88 +11,13 @@
  * e2e suite, not Istanbul.
  */
 
-import { chromium, Browser, Page, Route } from 'playwright';
+import { chromium, Browser, Page } from 'playwright';
 import { AxeRunner } from './axe-integration';
 import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
-import { isNavigationAllowed } from '../url-policy';
 import type { UrlPolicyOptions } from '../url-policy';
+import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
-
-/**
- * Why the URL-policy guard turned a navigation away. Populated by the route
- * handler, read after `page.goto` fails, so the opaque `net::ERR_BLOCKED_BY_CLIENT`
- * can be replaced with something a caller can act on.
- */
-interface NavigationRefusal {
-  reason?: string;
-}
-
-/** Redirect hops followed while vetting a sub-resource before giving up. */
-const MAX_REDIRECT_HOPS = 10;
-
-/**
- * Cap on a single guarded fetch. Must stay below `page.goto`'s 30s default:
- * whichever fires first owns the error the caller sees, and the guard's reason
- * ("redirects to X", "could not be fetched: …") is the useful one.
- *
- * It also bounds the commonest mistake — pointing the tool at a dev server that
- * is not running. Playwright's Node-side fetch does not fail fast on a refused
- * connection the way Chromium's own stack does (measured: ~28s to localhost:1),
- * so without this the answer arrives late and says only "Timeout exceeded".
- */
-const GUARDED_FETCH_TIMEOUT_MS = 15_000;
-
-/**
- * Apply the URL policy to a non-document request, following any redirect chain
- * one hop at a time.
- *
- * `route.continue()` is NOT usable here, despite the request being routed:
- * Chromium follows a sub-resource's 30x internally and does not re-enter the
- * handler with the new URL, exactly as it does for a main-frame navigation.
- * Measured — an `<img>` pointing at a redirect to 169.254.169.254 reaches it
- * with the handler only ever seeing the original URL.
- *
- * Unlike the document case this follows the chain rather than refusing it:
- * a sub-resource has no document base to get wrong, and CDN redirects on
- * images and fonts are ordinary enough that refusing them would degrade the
- * very page being measured.
- */
-async function guardSubresource(route: Route, policy: UrlPolicyOptions): Promise<void> {
-  let url = route.request().url();
-
-  for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-    if (!isNavigationAllowed(url, policy)) {
-      await route.abort('blockedbyclient');
-      return;
-    }
-
-    let response;
-    try {
-      response = await route.fetch({ url, maxRedirects: 0, timeout: GUARDED_FETCH_TIMEOUT_MS });
-    } catch {
-      await route.abort('failed');
-      return;
-    }
-
-    const status = response.status();
-    const location = response.headers()['location'];
-    if (status < 300 || status >= 400 || !location) {
-      await route.fulfill({ response });
-      return;
-    }
-
-    try {
-      url = new URL(location, url).toString();
-    } catch {
-      await route.abort('blockedbyclient');
-      return;
-    }
-  }
-
-  // Chain too long: a redirect loop, or an attempt to outlast the check.
-  await route.abort('blockedbyclient');
-}
 
 export interface AccessibilityRunnerConfig {
   pages: string[];
@@ -135,9 +60,9 @@ export interface AccessibilityRunnerConfig {
    * not just the initial URL — so a scanned page cannot pull a sub-resource from
    * a metadata/link-local host. Same mechanism as `Executor.createPage`.
    *
-   * Covers both sub-resources and redirect chains — Playwright does not re-route
-   * the target of a 30x, so those hops are followed and vetted explicitly here.
-   * See `installUrlPolicyGuard` and issue #148.
+   * Covers sub-resources and redirect chains alike — Playwright does not re-route
+   * the target of a 30x, so those hops are vetted explicitly. See
+   * `src/url-policy-guard.ts` and issue #148.
    *
    * Left unset by the `iris a11y` CLI, whose URLs are typed by the operator and
    * which legitimately scans `data:` pages. Set by the MCP tool, whose URLs are
@@ -266,79 +191,6 @@ export class AccessibilityRunner {
   }
 
   /**
-   * Enforce the navigation URL policy on every request the page makes.
-   *
-   * Sub-resources are simple: Playwright routes each one, so a single check
-   * decides it. Navigations are not — Chromium follows a 30x internally and
-   * never re-enters the route handler with the new URL, so `continue()` would
-   * hand the browser an unchecked target (issue #148).
-   *
-   * So a redirecting navigation is refused outright rather than followed. Two
-   * alternatives were measured and rejected: `fulfill()` with the redirect
-   * response does not make the browser re-issue a routed request (it hangs to
-   * the goto timeout), and fulfilling with the *final* response leaves the
-   * document on the pre-redirect URL, so relative assets resolve against the
-   * wrong base and the scan measures a broken page. Refusing keeps the policy
-   * airtight and never reports a silently inaccurate result; `refusal` carries
-   * the target back out so the caller can re-scan the real URL directly.
-   */
-  private async installUrlPolicyGuard(
-    page: Page,
-    policy: UrlPolicyOptions,
-    refusal: NavigationRefusal,
-  ): Promise<void> {
-    await page.route('**/*', async (route) => {
-      const request = route.request();
-
-      if (request.resourceType() !== 'document') {
-        await guardSubresource(route, policy);
-        return;
-      }
-
-      const url = request.url();
-      if (!isNavigationAllowed(url, policy)) {
-        refusal.reason = `blocked by navigation policy: ${url}`;
-        await route.abort('blockedbyclient');
-        return;
-      }
-
-      let response;
-      try {
-        response = await route.fetch({ maxRedirects: 0, timeout: GUARDED_FETCH_TIMEOUT_MS });
-      } catch (error) {
-        // Unreachable host, TLS failure, etc. Fail the navigation rather than
-        // leaving the request hanging until the goto timeout.
-        refusal.reason = `could not be fetched: ${error instanceof Error ? error.message : String(error)}`;
-        await route.abort('failed');
-        return;
-      }
-
-      const status = response.status();
-      const location = response.headers()['location'];
-      if (status < 300 || status >= 400 || !location) {
-        await route.fulfill({ response });
-        return;
-      }
-
-      // Report the target so a caller can act, but vet it first — an allowed
-      // redirect is a retry hint, a blocked one is a policy refusal.
-      let target: string;
-      try {
-        target = new URL(location, url).toString();
-      } catch {
-        refusal.reason = `redirects to an unparseable location: ${location}`;
-        await route.abort('blockedbyclient');
-        return;
-      }
-
-      refusal.reason = isNavigationAllowed(target, policy)
-        ? `redirects to ${target} — scan that URL directly, so page assets resolve against the right base`
-        : `redirects to ${target}, which is blocked by navigation policy`;
-      await route.abort('blockedbyclient');
-    });
-  }
-
-  /**
    * Test a single page for accessibility issues
    */
   private async testPage(pagePattern: string): Promise<AccessibilityTestResult['results'][0]> {
@@ -350,9 +202,8 @@ export class AccessibilityRunner {
     const page = await context.newPage();
 
     // Install before the first navigation so no request escapes the guard.
-    const refusal: NavigationRefusal = {};
     if (this.config.urlPolicy) {
-      await this.installUrlPolicyGuard(page, this.config.urlPolicy, refusal);
+      await installUrlPolicyGuard(page, this.config.urlPolicy);
     }
 
     try {
@@ -362,21 +213,19 @@ export class AccessibilityRunner {
       // Trim a trailing slash off the base so `https://host/` + `/about` doesn't double up.
       const base = (this.config.baseURL ?? 'http://localhost:3000').replace(/\/$/, '');
       const url = isFullUrl ? pagePattern : `${base}${pagePattern}`;
-      try {
-        await page.goto(url, { waitUntil: 'networkidle' });
-      } catch (error) {
-        // Playwright only reports net::ERR_BLOCKED_BY_CLIENT here. Swap in the
-        // guard's reason so the caller learns *why*, and can act on a redirect.
-        if (refusal.reason) {
-          throw new Error(`${url} ${refusal.reason}`);
-        }
-        throw error;
-      }
+      // guardedGoto walks any redirect chain one vetted hop at a time, as real
+      // navigations, so the scanned document's URL and asset base stay correct.
+      // On a page with no guard installed it is a plain goto.
+      //
+      // Report where it LANDED, not where it was pointed: a scan of `http://host/`
+      // that redirects to `/login` measured `/login`, and labelling that result
+      // with the original URL would misattribute every violation on it.
+      const scannedUrl = await guardedGoto(page, url, { waitUntil: 'networkidle' });
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
 
       // Run axe-core tests
-      const axeResult = await this.axeRunner.run(page, testName, url);
+      const axeResult = await this.axeRunner.run(page, testName, scannedUrl);
 
       // Run keyboard navigation tests if enabled
       let keyboardResult: KeyboardTestResult | undefined;

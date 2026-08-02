@@ -32,7 +32,9 @@ const inputSchema = {
 };
 
 const outputSchema = {
-  url: z.string().describe('The URL that was scanned.'),
+  url: z
+    .string()
+    .describe('The URL actually scanned. Differs from the request when it redirected.'),
   passed: z.boolean().describe('True when axe-core reported no violations at all.'),
   violationCount: z.number().describe('Total number of distinct axe rules violated.'),
   violations: z
@@ -156,16 +158,22 @@ export function registerTools(server: McpServer): void {
         nodes: violation.nodes.length,
       }));
 
+      // The URL that was actually measured, which differs from the requested one
+      // when it redirected. Reporting the request URL would misattribute every
+      // violation on the page the scan really landed on.
+      const scannedUrl = axeResult.url || url;
+      const redirectNote = scannedUrl === url ? '' : ` (redirected from ${url})`;
+
       const structuredContent = {
-        url,
+        url: scannedUrl,
         passed: violations.length === 0,
         violationCount: violations.length,
         violations,
       };
 
       const summary = structuredContent.passed
-        ? `No WCAG ${wcagLevel ?? 'AA'} violations found on ${url}.`
-        : `${violations.length} WCAG ${wcagLevel ?? 'AA'} violation(s) on ${url}:\n` +
+        ? `No WCAG ${wcagLevel ?? 'AA'} violations found on ${scannedUrl}${redirectNote}.`
+        : `${violations.length} WCAG ${wcagLevel ?? 'AA'} violation(s) on ${scannedUrl}${redirectNote}:\n` +
           violations.map((v) => `- [${v.impact}] ${v.id}: ${v.description}`).join('\n');
 
       return {
