@@ -281,7 +281,16 @@ selector button:has-text("Sign in").
 An assert target is NOT always a selector: text_visible takes the literal visible text
 (Welcome back — never text=Welcome back), url_matches takes a URL substring, and only
 element_visible and element_absent take a selector.
-
+${
+  request.context
+    ? `
+Context:
+- URL: ${request.context.url || 'unknown'}
+- Current page: ${request.context.currentPage || 'unknown'}
+- Previous actions: ${JSON.stringify(request.context.previousActions || [])}
+`
+    : ''
+}
 Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
               stream: false,
             }),

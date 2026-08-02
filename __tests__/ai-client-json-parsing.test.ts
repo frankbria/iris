@@ -108,3 +108,70 @@ describe('OllamaTextClient tolerates a fenced response (regression)', () => {
     expect(result.confidence).toBe(0);
   });
 });
+
+/**
+ * The agent loop's whole purpose is that the model plans against the live page.
+ * If a provider's prompt drops `context`, that provider replans blind every turn
+ * and the feature is silently useless there — which is exactly what had happened
+ * to Ollama. Pin it for every provider rather than the one that broke.
+ */
+describe('every text client puts the page context into its prompt', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  const context = {
+    url: 'http://localhost:3000/cart',
+    currentPage: 'PAGE:\n- button "Checkout"',
+    previousActions: [{ type: 'click' as const, selector: '#open-cart' }],
+  };
+
+  it('Ollama interpolates url, page digest and previous actions', async () => {
+    let sentPrompt = '';
+    jest.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+      sentPrompt = JSON.parse(String((init as RequestInit).body)).prompt;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ response: '{"actions":[],"confidence":0.5}' }),
+      } as Response;
+    });
+
+    await new OllamaTextClient({
+      provider: 'ollama',
+      endpoint: 'http://localhost:11434',
+      model: 'gemma3:latest',
+      timeout: 1000,
+    } as IrisConfig['ai']).translateInstruction({
+      instruction: 'make sure checkout works',
+      context,
+    });
+
+    expect(sentPrompt).toContain('http://localhost:3000/cart');
+    expect(sentPrompt).toContain('button "Checkout"');
+    expect(sentPrompt).toContain('#open-cart');
+  });
+
+  it('Ollama omits the context block entirely when there is none', async () => {
+    // The one-shot path sends no context; it must not be handed the string
+    // "unknown" as though the page had been observed and found empty.
+    let sentPrompt = '';
+    jest.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+      sentPrompt = JSON.parse(String((init as RequestInit).body)).prompt;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ response: '{"actions":[],"confidence":0.5}' }),
+      } as Response;
+    });
+
+    await new OllamaTextClient({
+      provider: 'ollama',
+      endpoint: 'http://localhost:11434',
+      model: 'gemma3:latest',
+      timeout: 1000,
+    } as IrisConfig['ai']).translateInstruction({ instruction: 'click #btn' });
+
+    expect(sentPrompt).not.toContain('Context:');
+  });
+});
