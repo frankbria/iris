@@ -1,6 +1,6 @@
 import { Browser, Page } from 'playwright';
 import { Action } from '../src/translator';
-import { launchBrowser, newPage, closeBrowser, navigate, click, typeText } from '../src/browser';
+import { launchBrowser, newPage, closeBrowser, click, typeText } from '../src/browser';
 
 // Define types for the ActionExecutor module
 export interface ExecutionResult {
@@ -97,7 +97,6 @@ describe('ActionExecutor', () => {
     (launchBrowser as jest.Mock).mockResolvedValue(mockBrowser);
     (newPage as jest.Mock).mockResolvedValue(mockPage);
     (closeBrowser as jest.Mock).mockResolvedValue(undefined);
-    (navigate as jest.Mock).mockResolvedValue(undefined);
     (click as jest.Mock).mockResolvedValue(undefined);
     (typeText as jest.Mock).mockResolvedValue(undefined);
 
@@ -153,33 +152,16 @@ describe('ActionExecutor', () => {
       expect(page).toBe(mockPage);
     });
 
-    it('installs a per-request route guard that aborts blocked hosts and continues allowed ones', async () => {
-      // Capture the route handler registered on the page so we can drive it with
-      // synthetic requests — this deterministically covers the redirect-SSRF guard
-      // (a redirect hop to a metadata host arrives as a fresh request and is aborted).
-      let handler: (route: any) => void = () => {};
-      (mockPage.route as jest.Mock).mockImplementation(async (_pattern: string, h: any) => {
-        handler = h;
-      });
-
+    it('installs a request guard on every created page', async () => {
+      // The previous version of this test drove a synthetic handler and asserted
+      // that "a redirect hop to a metadata host arrives as a fresh request and is
+      // aborted". That is not true — Chromium follows a 30x without re-routing it
+      // — so the test was pinning a fiction (issue #148). Guard behaviour now
+      // lives in __tests__/url-policy-guard.test.ts, against a real browser and a
+      // real redirecting server. All that belongs here is that it gets installed.
       await executor.createPage();
+
       expect(mockPage.route).toHaveBeenCalledWith('**/*', expect.any(Function));
-
-      const makeRoute = (url: string) => ({
-        request: () => ({ url: () => url }),
-        continue: jest.fn(),
-        abort: jest.fn(),
-      });
-
-      const allowed = makeRoute('https://example.com/');
-      handler(allowed);
-      expect(allowed.continue).toHaveBeenCalledTimes(1);
-      expect(allowed.abort).not.toHaveBeenCalled();
-
-      const blocked = makeRoute('http://169.254.169.254/latest/meta-data/');
-      handler(blocked);
-      expect(blocked.abort).toHaveBeenCalledTimes(1);
-      expect(blocked.continue).not.toHaveBeenCalled();
     });
 
     it('should cleanup browser resources', async () => {
@@ -320,13 +302,13 @@ describe('ActionExecutor', () => {
         expect(result.error).toBeUndefined();
         expect(result.context?.url).toBe('https://google.com');
         expect(result.context?.title).toBe('Google');
-        expect(navigate).toHaveBeenCalledWith(page, 'https://google.com');
+        expect(mockPage.goto).toHaveBeenCalledWith('https://google.com', undefined);
       });
 
       it('should handle navigate action failure', async () => {
         const action: Action = { type: 'navigate', url: 'https://invalid-url' };
         const error = new Error('Navigation failed');
-        (navigate as jest.Mock).mockRejectedValue(error);
+        mockPage.goto.mockRejectedValue(error);
 
         const result = await executor.executeAction(action, page);
 
@@ -338,7 +320,7 @@ describe('ActionExecutor', () => {
       it('should handle network timeout for navigate action', async () => {
         const action: Action = { type: 'navigate', url: 'https://slow-site.com' };
         const error = new Error('net::ERR_NETWORK_TIMEOUT');
-        (navigate as jest.Mock).mockRejectedValue(error);
+        mockPage.goto.mockRejectedValue(error);
 
         const result = await executor.executeAction(action, page);
 
@@ -354,7 +336,7 @@ describe('ActionExecutor', () => {
 
           expect(result.success).toBe(false);
           expect(result.error).toMatch(/blocked/i);
-          expect(navigate).not.toHaveBeenCalled();
+          expect(mockPage.goto).not.toHaveBeenCalled();
         });
 
         it('rejects the cloud-metadata IP without retrying', async () => {
@@ -367,7 +349,7 @@ describe('ActionExecutor', () => {
 
           expect(result.success).toBe(false);
           expect(result.error).toMatch(/blocked/i);
-          expect(navigate).not.toHaveBeenCalled();
+          expect(mockPage.goto).not.toHaveBeenCalled();
         });
 
         it('allows file:// when the executor opts in', async () => {
@@ -377,7 +359,7 @@ describe('ActionExecutor', () => {
           const result = await fileExecutor.executeAction(action, page);
 
           expect(result.success).toBe(true);
-          expect(navigate).toHaveBeenCalledWith(page, 'file:///tmp/page.html');
+          expect(mockPage.goto).toHaveBeenCalledWith('file:///tmp/page.html', undefined);
         });
       });
     });
@@ -442,7 +424,7 @@ describe('ActionExecutor', () => {
 
       expect(results).toHaveLength(4);
       expect(results.every((r: ExecutionResult) => r.success)).toBe(true);
-      expect(navigate).toHaveBeenCalledWith(page, 'https://login.example.com');
+      expect(mockPage.goto).toHaveBeenCalledWith('https://login.example.com', undefined);
       expect(typeText).toHaveBeenCalledWith(page, '#email', 'user@example.com');
       expect(typeText).toHaveBeenCalledWith(page, '#password', 'password123');
       expect(click).toHaveBeenCalledWith(page, '#login-btn');
@@ -477,7 +459,7 @@ describe('ActionExecutor', () => {
       const results = await executor.executeActions(actions, page);
 
       expect(results).toHaveLength(0);
-      expect(navigate).not.toHaveBeenCalled();
+      expect(mockPage.goto).not.toHaveBeenCalled();
       expect(click).not.toHaveBeenCalled();
       expect(typeText).not.toHaveBeenCalled();
     });
@@ -588,13 +570,13 @@ describe('ActionExecutor', () => {
 
       // Simulate a non-retryable error (e.g., invalid URL)
       const invalidUrlError = new Error('Invalid URL');
-      (navigate as jest.Mock).mockRejectedValue(invalidUrlError);
+      mockPage.goto.mockRejectedValue(invalidUrlError);
 
       const result = await executorNoRetry.executeAction(action, pageNoRetry);
 
       expect(result.success).toBe(false);
       // For invalid URLs, should not retry
-      expect(navigate).toHaveBeenCalledTimes(1);
+      expect(mockPage.goto).toHaveBeenCalledTimes(1);
 
       await executorNoRetry.cleanup();
     });
@@ -803,7 +785,7 @@ describe('ActionExecutor', () => {
         } else if (testCase.action.type === 'fill') {
           (typeText as jest.Mock).mockRejectedValueOnce(testCase.mockError);
         } else if (testCase.action.type === 'navigate') {
-          (navigate as jest.Mock).mockRejectedValueOnce(testCase.mockError);
+          mockPage.goto.mockRejectedValueOnce(testCase.mockError);
         }
 
         const result = await executor.executeAction(testCase.action, page);

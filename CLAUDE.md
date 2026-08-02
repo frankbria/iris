@@ -68,6 +68,8 @@ src/
 ├── mcp/                   # MCP stdio server (experimental, spike scope)
 │   ├── server.ts          # `iris-mcp` bin — McpServer over StdioServerTransport
 │   └── tools.ts           # run_accessibility_test (axe violations only)
+├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
+├── url-policy-guard.ts    # Makes that stick per-request: redirect hops + sub-resources
 └── config.ts              # Configuration types and validation
 
 __tests__/

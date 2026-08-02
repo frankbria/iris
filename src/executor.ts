@@ -4,12 +4,12 @@ import {
   launchBrowser,
   newPage,
   closeBrowser,
-  navigate,
   click,
   typeText,
   BrowserLaunchOptions,
 } from './browser';
-import { assertNavigationAllowed, isNavigationAllowed, UrlPolicyOptions } from './url-policy';
+import { assertNavigationAllowed, UrlPolicyOptions } from './url-policy';
+import { installUrlPolicyGuard, guardedGoto } from './url-policy-guard';
 
 /**
  * A page state that did not hold. Distinct from an infrastructure error so the
@@ -101,15 +101,11 @@ export class ActionExecutor {
       const page = await newPage(this.browser!);
 
       // Enforce the URL policy on EVERY request the page makes, not just the
-      // initial navigate action URL — this closes the redirect-based SSRF bypass
-      // where a public URL 30x-redirects to a metadata/link-local host.
-      await page.route('**/*', (route) => {
-        if (isNavigationAllowed(route.request().url(), this.options.urlPolicy)) {
-          route.continue();
-        } else {
-          route.abort('blockedbyclient');
-        }
-      });
+      // initial navigate action URL. Redirect targets included — Chromium follows
+      // a 30x without re-routing it, so the previous inline `route.continue()`
+      // here let a public URL redirect straight to a metadata host despite the
+      // comment claiming otherwise (issue #148).
+      await installUrlPolicyGuard(page, this.options.urlPolicy);
 
       // Set timeout if configured
       if (this.options.timeout) {
@@ -252,10 +248,15 @@ export class ActionExecutor {
         break;
 
       case 'navigate':
-        // Single security boundary: reject non-web schemes and SSRF/local-file
-        // targets before any page.goto. All RPC/AI/pattern navs funnel through here.
+        // Fail fast on a URL that is refused outright, so the caller gets a clear
+        // message rather than an aborted request. All RPC/AI/pattern navs funnel
+        // through here.
         assertNavigationAllowed(action.url, this.options.urlPolicy);
-        await navigate(page, action.url);
+        // Not `navigate()`/`page.goto` directly: that follows redirects inside
+        // Chromium, where the guard cannot see them. guardedGoto walks the chain
+        // one vetted hop at a time, as real navigations, so redirects still work
+        // and the document URL stays correct.
+        await guardedGoto(page, action.url);
         break;
 
       case 'assert':

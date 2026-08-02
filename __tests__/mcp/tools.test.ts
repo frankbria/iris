@@ -244,20 +244,19 @@ describe('run_accessibility_test tool', () => {
       );
     }, 120_000);
 
-    it('refuses an in-policy redirect and hands back the target to re-scan', async () => {
-      // Following it would leave the document on the pre-redirect URL, so the
-      // page's relative assets would resolve against the wrong base and the scan
-      // would silently measure a broken page. Refusing with the target is honest
-      // and lets the assistant retry against the real URL.
+    it('follows an in-policy redirect and scans what it lands on', async () => {
+      // This used to refuse, because following a redirect by fulfilling the final
+      // response left the document on the pre-redirect URL and the page's relative
+      // assets resolved against the wrong base. The shared guard (#148) re-drives
+      // each vetted hop as a real navigation instead, so the redirect is both
+      // followed and accurate, and the caller no longer needs a second call.
       const result = await callTool({ url: redirectOkURL });
 
-      expect(result.isError).toBe(true);
-      expect(result.content?.[0]?.text).toContain(cleanURL);
-      expect(result.content?.[0]?.text).toMatch(/scan that URL directly/);
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });
     }, 120_000);
 
-    it('scans the re-scan target the refusal pointed at', async () => {
-      // The retry the previous test tells the caller to make must actually work.
+    it('scans the redirect target directly too', async () => {
       const result = await callTool({ url: cleanURL });
 
       expect(result.isError).toBeFalsy();
