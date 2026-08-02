@@ -92,8 +92,8 @@ const guards = new WeakMap<Page, GuardState>();
 /**
  * Contexts already carrying the popup net, so it is attached exactly once.
  *
- * Carries the most recently installed state, used for the one request that
- * cannot be attributed to a page — see {@link installContextNet}.
+ * Carries the most recently installed guard, for the one request that cannot be
+ * attributed to a page — see {@link installContextNet}.
  */
 const guardedContexts = new WeakMap<BrowserContext, { latest: GuardState }>();
 
@@ -224,17 +224,23 @@ async function installContextNet(
       attributable = false;
     }
 
-    const policy = attributable ? guards.get(owner as Page)?.policy : entry.latest.policy;
-
     // An attributable page with no guard never opted in. Leaving it alone is
     // the documented contract; policing it with another page's pin would refuse
     // requests it never agreed to.
-    if (!policy) {
+    const policy = attributable ? guards.get(owner as Page)?.policy : undefined;
+    if (attributable && !policy) {
       await route.continue().catch(() => {});
       return;
     }
 
-    const reason = blockReason(request.url(), policyFor(policy, request.resourceType()));
+    // Unattributable: vetted against the context's most recent guard. Exact
+    // whenever every page in the context shares a policy, which is the only
+    // shape IRIS creates — one executor, one context, one policy. A context
+    // holding pages pinned to *different* origins would judge this one request
+    // by the newest of them; noted on #155 rather than solved with machinery
+    // whose test could not be shown to discriminate.
+    const effective = policy ?? entry.latest.policy;
+    const reason = blockReason(request.url(), policyFor(effective, request.resourceType()));
     try {
       await (reason ? route.abort('blockedbyclient') : route.continue());
     } catch {
@@ -294,8 +300,6 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   const context = page.context();
   const contextEntry = guardedContexts.get(context);
   if (contextEntry) {
-    // Keep the unattributable-request fallback current rather than frozen at
-    // whichever page happened to install the net first.
     contextEntry.latest = state;
   } else {
     const entry = { latest: state };
