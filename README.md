@@ -49,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1036/1037 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1037/1038 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -81,7 +81,7 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 1036/1037 tests passing (99.9% pass rate), 1 skipped, 0 failing
+**Test Results:** 1037/1038 tests passing (99.9% pass rate), 1 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
@@ -375,11 +375,22 @@ rather than burning the turn budget. Ordinary action failures (a selector that m
 a timeout) are reported the same way — previously the model could not tell a click
 that worked from one that did not.
 
-Cross-origin *passive* sub-resources — images, fonts, stylesheets, scripts — are
-unaffected; refusing those would break the page the agent is reading. Cross-origin
-`fetch`, XHR, WebSocket and beacon requests **are** blocked: those carry data off-origin
-and return readable responses, so a same-origin click that fires one is an exfiltration
-path nothing else would see.
+Cross-origin *rendered* sub-resources — images, fonts, stylesheets, media — are
+unaffected; refusing those would break the page the agent is reading. Blocked, when the
+origin is pinned:
+
+- `fetch`, XHR, WebSocket, beacons — they carry data off-origin and return readable
+  responses, so a same-origin click that fires one exfiltrates before anything else sees it
+- **`<script src>` from another origin** — that is code execution with the page's own
+  authority, not a static asset, whatever a network log makes it look like
+
+The script rule has a real cost: **a site serving its JavaScript from a CDN will not run
+under a pinned origin** and needs `--allow-cross-origin`. Taken deliberately — "executes
+attacker code, but only from a different hostname" is not a security boundary.
+
+Residual, stated plainly: images stay exempt, so same-origin script can still beacon out
+via `new Image().src`. Closing that would mean blocking cross-origin images too, which
+breaks far more than it protects.
 
 Commerce is deliberately **not** on the destructive list — "make sure users can
 complete checkout" is what this loop is for, and a purchase is reversible in a way

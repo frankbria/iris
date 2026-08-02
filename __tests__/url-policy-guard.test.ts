@@ -84,6 +84,10 @@ describe('URL policy guard', () => {
           page('Home', '<a id="ok" href="/to-final">ok</a><a id="bad" href="/to-metadata">bad</a>'),
         );
       }
+      if (url === '/offsite-script') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(page('Script', `<script src="${OFFSITE}/evil.js"></script>`));
+      }
       if (url === '/exfil') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(
@@ -376,6 +380,18 @@ describe('URL policy guard', () => {
       // than "refuse everything cross-origin".
       expect(offsiteLog).toContain('/pixel.gif');
       expect(offsiteLog).not.toContain('/steal?c=secret');
+    }, 60_000);
+
+    it('pins a cross-origin script, which is code execution not a static asset', async () => {
+      // A cross-origin script runs with the page's authority: it can read the
+      // DOM and act as the user, which is the post-click injection scenario this
+      // control exists for. Exempting it because it looks like a static asset in
+      // a network log would undo the confinement.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+
+      await guardedGoto(p, `${origin}/offsite-script`, { waitUntil: 'networkidle' });
+
+      expect(offsiteLog).not.toContain('/evil.js');
     }, 60_000);
 
     it('does NOT block cross-origin sub-resources', async () => {

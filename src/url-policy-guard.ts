@@ -127,22 +127,32 @@ function blockReason(url: string, policy: UrlPolicyOptions): string | null {
 /**
  * Resource types exempt from origin pinning.
  *
- * Passive fetches — the browser renders or executes them, the page cannot read
- * an arbitrary response out of them. Refusing these would break the very page
- * the agent is trying to read, for no security gain.
+ * These are rendered, not executed and not readable: the page cannot pull an
+ * arbitrary response body out of an image or a font. Refusing them would break
+ * the page the agent is trying to read, for no security gain.
  *
- * Everything NOT on this list stays pinned, which is the important half:
- * `fetch`, `xhr`, `eventsource`, `websocket` and `ping`/beacon requests DO carry
- * data off-origin and return readable responses, so a same-origin click that
- * fires one is an exfiltration channel the per-action check cannot see. Unknown
- * future types default to pinned rather than exempt.
+ * Everything NOT listed stays pinned, and the exclusions are deliberate:
+ *
+ * - `fetch`, `xhr`, `eventsource`, `websocket`, beacons — carry data off-origin
+ *   and return readable responses, so a same-origin click that fires one is an
+ *   exfiltration channel the per-action check cannot see.
+ * - `script` — code execution with the page's own authority. A cross-origin
+ *   script can read the DOM and act as the user, which is precisely the
+ *   post-click injection scenario this control exists for. It is NOT passive,
+ *   however much it looks like a static asset in a network log.
+ *
+ * The cost is real: a site serving its JavaScript from a CDN will not run under
+ * a pinned origin, and needs `--allow-cross-origin`. Taken deliberately, because
+ * "executes attacker code but only from a different hostname" is not a
+ * meaningful security boundary.
+ *
+ * Unknown future types default to pinned rather than exempt.
  */
 const PIN_EXEMPT_RESOURCE_TYPES = new Set([
   'stylesheet',
   'image',
   'media',
   'font',
-  'script',
   'texttrack',
   'manifest',
 ]);
