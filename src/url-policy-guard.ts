@@ -31,7 +31,7 @@
  * Chromium-only, which is what IRIS launches everywhere.
  */
 
-import type { CDPSession, Page } from 'playwright';
+import type { BrowserContext, CDPSession, Page } from 'playwright';
 import { assertNavigationAllowed, isWithinPinnedOrigin } from './url-policy';
 import type { UrlPolicyOptions } from './url-policy';
 
@@ -57,12 +57,12 @@ import type { UrlPolicyOptions } from './url-policy';
  * Unknown future types default to pinned rather than exempt.
  */
 const PIN_EXEMPT_RESOURCE_TYPES = new Set([
-  'Stylesheet',
-  'Image',
-  'Media',
-  'Font',
-  'TextTrack',
-  'Manifest',
+  'stylesheet',
+  'image',
+  'media',
+  'font',
+  'texttrack',
+  'manifest',
 ]);
 
 /** Why the guard turned a navigation away. */
@@ -90,6 +90,14 @@ interface GuardState {
 const guards = new WeakMap<Page, GuardState>();
 
 /**
+ * Contexts already carrying the popup net, so it is attached exactly once.
+ *
+ * Carries the most recently installed guard, for the one request that cannot be
+ * attributed to a page — see {@link installContextNet}.
+ */
+const guardedContexts = new WeakMap<BrowserContext, { latest: GuardState }>();
+
+/**
  * Why the policy refuses this URL, or null when it does not.
  *
  * The boolean form is enough to decide but not to explain, and "blocked by
@@ -105,9 +113,15 @@ function blockReason(url: string, policy: UrlPolicyOptions): string | null {
   }
 }
 
-/** The policy as it applies to one request, relaxing the pin for passive assets. */
+/**
+ * The policy as it applies to one request, relaxing the pin for passive assets.
+ *
+ * Case-insensitive because the two interception layers spell resource types
+ * differently — CDP says `Stylesheet`, Playwright says `stylesheet` — and a
+ * mismatch here would silently un-exempt every passive asset.
+ */
 function policyFor(policy: UrlPolicyOptions, resourceType: string): UrlPolicyOptions {
-  return PIN_EXEMPT_RESOURCE_TYPES.has(resourceType)
+  return PIN_EXEMPT_RESOURCE_TYPES.has(resourceType.toLowerCase())
     ? { ...policy, pinnedOrigin: undefined }
     : policy;
 }
@@ -176,12 +190,88 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<void> {
 }
 
 /**
+ * Catch requests from pages the per-page CDP guard is not on — a click that
+ * opens a new tab (issue #155).
+ *
+ * Needed because both hooks are page-scoped and a popup is a different Page.
+ * Installing a CDP session from `context.on('page')` loses the race: measured,
+ * the popup's first request has already gone by the time that fires. A
+ * context-level Playwright route does see it, so it covers the opening request
+ * while the CDP session installed alongside covers everything after — including
+ * redirect targets, which a route never sees.
+ *
+ * Only ever continues or aborts. Fulfilling is what broke WebSockets (#154) and
+ * has no part here.
+ */
+async function installContextNet(
+  context: BrowserContext,
+  entry: { latest: GuardState },
+): Promise<void> {
+  await context.route('**/*', async (route) => {
+    const request = route.request();
+
+    // `frame()` throws for the opening request of a page that does not exist
+    // yet — "issued before the frame is created" — which is exactly the popup
+    // case this net is here for. Playwright offers nothing else to attribute
+    // that one request to, so it is vetted against the context's most recent
+    // guard. Every other request names its own page and is judged by that
+    // page's policy.
+    let owner: Page | undefined;
+    let attributable = true;
+    try {
+      owner = request.frame()?.page();
+    } catch {
+      attributable = false;
+    }
+
+    // An attributable page with no guard never opted in. Leaving it alone is
+    // the documented contract; policing it with another page's pin would refuse
+    // requests it never agreed to.
+    const policy = attributable ? guards.get(owner as Page)?.policy : undefined;
+    if (attributable && !policy) {
+      await route.continue().catch(() => {});
+      return;
+    }
+
+    // Unattributable: vetted against the context's most recent guard. Exact
+    // whenever every page in the context shares a policy, which is the only
+    // shape IRIS creates — one executor, one context, one policy. A context
+    // holding pages pinned to *different* origins would judge this one request
+    // by the newest of them — tracked as #158, along with why the fail-safe
+    // version was reverted: its test could not be told apart from its absence.
+    const effective = policy ?? entry.latest.policy;
+    const reason = blockReason(request.url(), policyFor(effective, request.resourceType()));
+    try {
+      await (reason ? route.abort('blockedbyclient') : route.continue());
+    } catch {
+      // Page or request gone; nothing left to answer.
+    }
+  });
+
+  // A popup gets its own CDP session, so requests after its first are vetted as
+  // thoroughly as on the page that opened it. Deliberately NOT every new page:
+  // a caller that creates one itself and installs no guard has opted out, and
+  // an opener tells the two apart — `context.newPage()` has none.
+  context.on('page', (candidate) => {
+    void (async () => {
+      const opener = await candidate.opener();
+      const inherited = opener ? guards.get(opener)?.policy : undefined;
+      if (inherited) {
+        await installUrlPolicyGuard(candidate, inherited);
+      }
+    })().catch(() => {
+      // A page that closed before the guard attached needs no guard.
+    });
+  });
+}
+
+/**
  * Install the policy guard on a page. Call once, before the first navigation, so
  * that no request escapes it.
  *
- * Page-scoped, which is a known limit: a click that opens a new tab produces a
- * different Page with no guard, and its first request is not intercepted
- * (issue #155).
+ * Also attaches a context-level net the first time it sees a context, so a page
+ * opened from this one — a `target=_blank` click, `window.open` — is covered
+ * too (issue #155).
  *
  * Pages without a guard are unaffected: {@link guardedGoto} falls back to a plain
  * `page.goto`, so a caller that does not want the policy simply does not install it.
@@ -206,6 +296,16 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
 
   const state: GuardState = { refusal: {}, policy };
   guards.set(page, state);
+
+  const context = page.context();
+  const contextEntry = guardedContexts.get(context);
+  if (contextEntry) {
+    contextEntry.latest = state;
+  } else {
+    const entry = { latest: state };
+    guardedContexts.set(context, entry);
+    await installContextNet(context, entry);
+  }
 
   await installFetchGuard(page, state);
   if (policy.pinnedOrigin) {
