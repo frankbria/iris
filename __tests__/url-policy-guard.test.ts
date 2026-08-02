@@ -425,7 +425,6 @@ describe('URL policy guard', () => {
       expect(offsiteSocketConnections).toBe(0);
     }, 60_000);
 
-    // eslint-disable-next-line jest/no-disabled-tests
     it.skip('permits a same-origin WebSocket (blocked by #154)', async () => {
       // Kept, skipped, as the acceptance test for #154: fulfilling the document
       // response breaks every WebSocket upgrade on a guarded page, same-origin
