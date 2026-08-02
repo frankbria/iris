@@ -306,6 +306,201 @@ describe('agent loop', () => {
       expect(result.terminationReason).not.toBe('goal_met');
     });
 
+    describe('capability policy (issue #151)', () => {
+      // These assume a prompt injection already succeeded and the model is
+      // proposing exactly what the page told it to. What is under test is that
+      // the action never reaches the browser.
+      it('refuses a destructive action without executing it', async () => {
+        scriptAI([[{ type: 'click', selector: 'button:has-text("Delete account")' }]]);
+        const execute = jest.spyOn(executor, 'executeAction');
+
+        const result = await runAgentLoop({
+          instruction: 'tidy up my account',
+          executor,
+          page,
+          maxTurns: 1,
+        });
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(result.results).toHaveLength(1);
+        expect(result.results[0].success).toBe(false);
+        expect(result.results[0].error).toMatch(/Refused by agent policy.*looks destructive/);
+      });
+
+      it('shows the refusal AND its reason to the model on the next turn', async () => {
+        // previousActions alone says what was tried, never how it went — so a
+        // model would re-propose the same blocked action every turn until the
+        // failure cutoff ended the run. It has to see the refusal itself.
+        const translateInstruction = scriptAI([
+          [{ type: 'click', selector: '#delete-everything' }],
+          [{ type: 'assert', kind: 'text_visible', target: 'Your cart' }],
+        ]);
+
+        await runAgentLoop({ instruction: 'clean up', executor, page, maxTurns: 2 });
+
+        const secondTurn = translateInstruction.mock.calls[1][0];
+        expect(secondTurn.context.previousActions).toContainEqual({
+          type: 'click',
+          selector: '#delete-everything',
+        });
+        expect(secondTurn.context.recentFailures).toEqual([
+          expect.stringMatching(/Refused by agent policy.*looks destructive/),
+        ]);
+      });
+
+      it('reports an ordinary action failure back too, not only policy refusals', async () => {
+        // Pre-existing gap this closes: a click that simply timed out was just
+        // as invisible to the model as a refused one.
+        const translateInstruction = scriptAI([
+          [{ type: 'click', selector: '#does-not-exist' }],
+          [{ type: 'assert', kind: 'text_visible', target: 'Your cart' }],
+        ]);
+
+        await runAgentLoop({ instruction: 'click it', executor, page, maxTurns: 2 });
+
+        const secondTurn = translateInstruction.mock.calls[1][0];
+        expect(secondTurn.context.recentFailures).toHaveLength(1);
+        expect(secondTurn.context.recentFailures[0]).toContain('#does-not-exist');
+      });
+
+      it('bounds how many failures are reported so the prompt cannot grow forever', async () => {
+        const translateInstruction = scriptAI([
+          [{ type: 'click', selector: '#miss-1' }],
+          [{ type: 'click', selector: '#miss-2' }],
+          [{ type: 'click', selector: '#miss-3' }],
+          [{ type: 'click', selector: '#miss-4' }],
+          [{ type: 'click', selector: '#miss-5' }],
+          [{ type: 'click', selector: '#miss-6' }],
+          [{ type: 'click', selector: '#miss-7' }],
+        ]);
+
+        await runAgentLoop({
+          instruction: 'click things',
+          executor,
+          page,
+          maxTurns: 7,
+          // Each miss is a failure; without a cap the run would end on the
+          // consecutive-failure rule long before the list grew, so raise it.
+          policy: {},
+        });
+
+        const lastCall = translateInstruction.mock.calls.at(-1)![0];
+        expect(lastCall.context.recentFailures.length).toBeLessThanOrEqual(5);
+      });
+
+      it('honours an allowlist, so a read-only run cannot click', async () => {
+        scriptAI([[{ type: 'click', selector: '#pay' }]]);
+        const execute = jest.spyOn(executor, 'executeAction');
+
+        const result = await runAgentLoop({
+          instruction: 'check the cart',
+          executor,
+          page,
+          maxTurns: 1,
+          policy: { allow: ['assert'] },
+        });
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(result.results[0].error).toMatch(/"click" is not permitted/);
+      });
+
+      it('still executes an allowed action, so the policy is not just a wall', async () => {
+        scriptAI([[{ type: 'click', selector: '#pay' }]]);
+        const execute = jest.spyOn(executor, 'executeAction');
+
+        const result = await runAgentLoop({
+          instruction: 'pay',
+          executor,
+          page,
+          // The fixture is a data: URL, which has no origin, so pinning is
+          // inert here — asserted directly in agent-policy.test.ts instead.
+          maxTurns: 1,
+        });
+
+        expect(execute).toHaveBeenCalled();
+        expect(result.results[0].success).toBe(true);
+      });
+
+      it('pins to the requested URL, not to where a redirect landed', async () => {
+        // The CLI navigates before handing the page over, so reading the page's
+        // current URL would pin to the redirect's destination — meaning a start
+        // URL that redirects to an attacker origin would make that origin the
+        // trusted one. Exactly backwards, so the caller's intent wins.
+        scriptAI([[{ type: 'click', selector: '#pay' }]]);
+        const execute = jest.spyOn(executor, 'executeAction');
+
+        const result = await runAgentLoop({
+          instruction: 'pay',
+          executor,
+          page,
+          maxTurns: 1,
+          // The page is a data: URL; claim it was meant to be example.com.
+          startUrl: 'https://trusted.example/start',
+        });
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(result.results[0].error).toMatch(
+          /not the starting origin https:\/\/trusted\.example/,
+        );
+      });
+
+      it('installs request-layer origin pinning itself, not trusting the caller', async () => {
+        // A library caller gets the same guarantee the CLI does. Without this
+        // the loop would only refuse on the NEXT turn, after a same-origin click
+        // had already made the cross-origin request.
+        scriptAI([[{ type: 'assert', kind: 'text_visible', target: 'Your cart' }]]);
+        const route = jest.spyOn(page, 'route');
+
+        await runAgentLoop({
+          instruction: 'check the cart',
+          executor,
+          page,
+          maxTurns: 1,
+          startUrl: 'https://trusted.example/start',
+        });
+
+        expect(route).toHaveBeenCalledWith('**/*', expect.any(Function));
+      });
+
+      it('does not install a pin when the caller opted out', async () => {
+        scriptAI([[{ type: 'assert', kind: 'text_visible', target: 'Your cart' }]]);
+        const route = jest.spyOn(page, 'route');
+
+        await runAgentLoop({
+          instruction: 'check the cart',
+          executor,
+          page,
+          maxTurns: 1,
+          startUrl: 'https://trusted.example/start',
+          policy: { pinOrigin: false },
+        });
+
+        expect(route).not.toHaveBeenCalled();
+      });
+
+      it('stops after three refusals instead of burning the turn budget', async () => {
+        // A model that keeps proposing a blocked action must not loop forever.
+        scriptAI([
+          [
+            { type: 'click', selector: '#delete-a' },
+            { type: 'click', selector: '#delete-b' },
+            { type: 'click', selector: '#delete-c' },
+            { type: 'click', selector: '#delete-d' },
+          ],
+        ]);
+
+        const result = await runAgentLoop({
+          instruction: 'clean up',
+          executor,
+          page,
+          maxTurns: 5,
+        });
+
+        expect(result.terminationReason).toBe('consecutive_failures');
+        expect(result.results).toHaveLength(3);
+      });
+    });
+
     it('returns error instead of rejecting when the AI client cannot be built', async () => {
       jest.spyOn(aiClient, 'createAIClient').mockImplementation(() => {
         throw new Error('unsupported provider');

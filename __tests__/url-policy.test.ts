@@ -121,3 +121,80 @@ describe('assertNavigationAllowed', () => {
     });
   });
 });
+
+describe('pinnedOrigin (agent origin confinement, issue #151)', () => {
+  it('allows the pinned origin itself', () => {
+    expect(() =>
+      assertNavigationAllowed('https://app.example.com/x', {
+        pinnedOrigin: 'https://app.example.com',
+      }),
+    ).not.toThrow();
+  });
+
+  it('refuses another origin', () => {
+    expect(() =>
+      assertNavigationAllowed('https://evil.example.net/', {
+        pinnedOrigin: 'https://app.example.com',
+      }),
+    ).toThrow(/leaves the pinned origin/);
+  });
+
+  it('allows an http to https upgrade of the same host', () => {
+    // Refusing a site that upgrades itself treats a security improvement as an
+    // escape, which teaches users to pass --allow-cross-origin and lose the
+    // control entirely.
+    expect(() =>
+      assertNavigationAllowed('https://app.example.com/x', {
+        pinnedOrigin: 'http://app.example.com',
+      }),
+    ).not.toThrow();
+  });
+
+  it('refuses an https to http downgrade', () => {
+    expect(() =>
+      assertNavigationAllowed('http://app.example.com/x', {
+        pinnedOrigin: 'https://app.example.com',
+      }),
+    ).toThrow(/leaves the pinned origin/);
+  });
+
+  it('refuses a different host even on an upgrade', () => {
+    expect(() =>
+      assertNavigationAllowed('https://evil.example.net/', {
+        pinnedOrigin: 'http://app.example.com',
+      }),
+    ).toThrow(/leaves the pinned origin/);
+  });
+
+  it.each([
+    // The gap: both normalise to port 80, but :80 on https is an explicit
+    // non-default port, i.e. a different service.
+    ['https://app.example.com:80/', 'http://app.example.com'],
+    ['https://app.example.com/', 'http://app.example.com:443'],
+    ['https://app.example.com:8443/', 'http://app.example.com'],
+  ])('refuses %s against pinned %s despite the scheme upgrade', (url, pinnedOrigin) => {
+    expect(() => assertNavigationAllowed(url, { pinnedOrigin })).toThrow(
+      /leaves the pinned origin/,
+    );
+  });
+
+  it('allows an upgrade that keeps the same explicit port', () => {
+    expect(() =>
+      assertNavigationAllowed('https://app.example.com:3000/x', {
+        pinnedOrigin: 'http://app.example.com:3000',
+      }),
+    ).not.toThrow();
+  });
+
+  it('refuses an explicit port change', () => {
+    expect(() =>
+      assertNavigationAllowed('https://app.example.com:8443/', {
+        pinnedOrigin: 'http://app.example.com:3000',
+      }),
+    ).toThrow(/leaves the pinned origin/);
+  });
+
+  it('is inert when no origin is pinned', () => {
+    expect(() => assertNavigationAllowed('https://anywhere.example/')).not.toThrow();
+  });
+});

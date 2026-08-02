@@ -30,7 +30,7 @@
  */
 
 import type { Frame, Page, Route } from 'playwright';
-import { isNavigationAllowed } from './url-policy';
+import { assertNavigationAllowed, isNavigationAllowed, isWithinPinnedOrigin } from './url-policy';
 import type { UrlPolicyOptions } from './url-policy';
 
 /** Bound on a redirect chain, for both the sub-resource walk and {@link guardedGoto}. */
@@ -60,14 +60,21 @@ interface NavigationRefusal {
   driving?: boolean;
 }
 
+/** Everything the route handler and `guardedGoto` share for one page. */
+interface GuardState {
+  refusal: NavigationRefusal;
+  /** Live, so a later install can tighten the policy without a second handler. */
+  policy: UrlPolicyOptions;
+}
+
 /**
- * Per-page refusal state.
+ * Per-page guard state.
  *
  * A WeakMap rather than a parameter threaded through every caller: the route
  * handler and the goto live in different call stacks, and tying the record to
  * the page means it cannot be paired with the wrong one or outlive it.
  */
-const refusals = new WeakMap<Page, NavigationRefusal>();
+const guards = new WeakMap<Page, GuardState>();
 
 /**
  * Redirect hops this module has driven itself for a given frame, since nothing
@@ -94,6 +101,22 @@ function isHttpScheme(url: string): boolean {
 }
 
 /**
+ * Why the policy refuses this URL, or null when it does not.
+ *
+ * The boolean form is enough to decide, but not to explain, and "blocked by
+ * navigation policy" tells a caller nothing about whether it was the scheme, a
+ * metadata host, or the pinned origin. Ask for the reason instead.
+ */
+function blockReason(url: string, policy: UrlPolicyOptions): string | null {
+  try {
+    assertNavigationAllowed(url, policy);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
  * Apply the policy to a non-document request, following any redirect chain one
  * hop at a time.
  *
@@ -101,11 +124,50 @@ function isHttpScheme(url: string): boolean {
  * document base to get wrong, and CDN redirects on images and fonts are ordinary
  * enough that refusing them would degrade the very page being measured.
  */
+/**
+ * Resource types exempt from origin pinning.
+ *
+ * These are rendered, not executed and not readable: the page cannot pull an
+ * arbitrary response body out of an image or a font. Refusing them would break
+ * the page the agent is trying to read, for no security gain.
+ *
+ * Everything NOT listed stays pinned, and the exclusions are deliberate:
+ *
+ * - `fetch`, `xhr`, `eventsource`, beacons — carry data off-origin and return
+ *   readable responses, so a same-origin click that fires one is an
+ *   exfiltration channel the per-action check cannot see. (WebSockets belong in
+ *   this group but never reach here — `page.route` does not intercept them at
+ *   all; they are handled by a separate `routeWebSocket` guard below.)
+ * - `script` — code execution with the page's own authority. A cross-origin
+ *   script can read the DOM and act as the user, which is precisely the
+ *   post-click injection scenario this control exists for. It is NOT passive,
+ *   however much it looks like a static asset in a network log.
+ *
+ * The cost is real: a site serving its JavaScript from a CDN will not run under
+ * a pinned origin, and needs `--allow-cross-origin`. Taken deliberately, because
+ * "executes attacker code but only from a different hostname" is not a
+ * meaningful security boundary.
+ *
+ * Unknown future types default to pinned rather than exempt.
+ */
+const PIN_EXEMPT_RESOURCE_TYPES = new Set([
+  'stylesheet',
+  'image',
+  'media',
+  'font',
+  'texttrack',
+  'manifest',
+]);
+
 async function guardSubresource(route: Route, policy: UrlPolicyOptions): Promise<void> {
-  let url = route.request().url();
+  const request = route.request();
+  const subresourcePolicy = PIN_EXEMPT_RESOURCE_TYPES.has(request.resourceType())
+    ? { ...policy, pinnedOrigin: undefined }
+    : policy;
+  let url = request.url();
 
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-    if (!isNavigationAllowed(url, policy)) {
+    if (!isNavigationAllowed(url, subresourcePolicy)) {
       await route.abort('blockedbyclient');
       return;
     }
@@ -143,17 +205,88 @@ async function guardSubresource(route: Route, policy: UrlPolicyOptions): Promise
 }
 
 /**
+ * Refuse WebSocket connections that leave the pinned origin.
+ *
+ * Separate from the request guard because `page.route` does not intercept
+ * WebSockets *at all* — listing 'websocket' among the pinned resource types
+ * achieved nothing, since the handler never ran for one. A direct, readable,
+ * bidirectional channel off-origin is the last thing that should be exempt by
+ * accident.
+ *
+ * Caveat worth knowing before trusting this: a guarded page currently cannot
+ * open ANY WebSocket, same-origin included, because fulfilling the document
+ * response breaks the upgrade (issue #154). So the refusal below is verified
+ * and the permission is not — it is kept precisely so that fixing #154 does not
+ * silently reopen cross-origin WebSocket egress.
+ *
+ * ws/wss map onto http/https before the origin comparison, so a page's own
+ * same-origin socket is not mistaken for an escape.
+ */
+function toHttpScheme(wsUrl: string): string {
+  return wsUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+}
+
+/** @see toHttpScheme */
+async function installWebSocketPin(page: Page, state: GuardState): Promise<void> {
+  // Match only the sockets to be refused, so an allowed one is never routed at
+  // all. Routing everything and re-connecting the permitted ones would mean
+  // proxying live traffic through the handler to keep a same-origin socket
+  // working — far more machinery, and more to get wrong, than simply not
+  // intercepting it.
+  await page.routeWebSocket(
+    (url) => {
+      // Read the pin from the live state, not from a captured parameter: a
+      // later install can tighten or replace it, and a closed-over value would
+      // keep enforcing the origin that was pinned first.
+      const pinnedOrigin = state.policy.pinnedOrigin;
+      if (!pinnedOrigin) return false;
+      return !isWithinPinnedOrigin(toHttpScheme(url.toString()), pinnedOrigin);
+    },
+    (ws) => ws.close({ code: 1008, reason: 'blocked: leaves the pinned origin' }),
+  );
+}
+
+/**
  * Install the policy guard on a page. Call once, before the first navigation, so
  * that no request escapes it.
+ *
+ * Page-scoped, which is a known limit: a click that opens a new tab produces a
+ * different Page with no guard, and its first request is not intercepted
+ * (issue #155). Routing at the context level covers popups and is the fix.
  *
  * Pages without a guard are unaffected: {@link guardedGoto} falls back to a plain
  * `page.goto`, so a caller that does not want the policy simply does not install it.
  */
 export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions): Promise<void> {
-  const refusal: NavigationRefusal = {};
-  refusals.set(page, refusal);
+  // Installing twice must not register a second handler. Playwright runs the
+  // most recently added one first and ours never calls fallback(), so a second
+  // install would silently supersede the first — dropping whatever options the
+  // earlier caller set. Merge into the live policy instead, so a later caller
+  // (the agent loop pinning an origin) can tighten what an earlier one (the
+  // executor) established.
+  const existing = guards.get(page);
+  if (existing) {
+    const hadPin = existing.policy.pinnedOrigin;
+    existing.policy = { ...existing.policy, ...policy };
+    // A merge that introduces a pin still needs the WebSocket route, which the
+    // first install had no reason to add. A merge that *changes* one does not:
+    // the predicate reads the live policy, so it follows the new value.
+    if (!hadPin && existing.policy.pinnedOrigin) {
+      await installWebSocketPin(page, existing);
+    }
+    return;
+  }
+
+  const state: GuardState = { refusal: {}, policy };
+  guards.set(page, state);
+  const refusal = state.refusal;
+
+  if (policy.pinnedOrigin) {
+    await installWebSocketPin(page, state);
+  }
 
   await page.route('**/*', async (route) => {
+    const policy = state.policy;
     const request = route.request();
 
     if (request.resourceType() !== 'document') {
@@ -162,8 +295,9 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
     }
 
     const url = request.url();
-    if (!isNavigationAllowed(url, policy)) {
-      refusal.reason = `blocked by navigation policy: ${url}`;
+    const blocked = blockReason(url, policy);
+    if (blocked) {
+      refusal.reason = `blocked by navigation policy: ${blocked}`;
       refusal.redirectTo = undefined;
       await route.abort('blockedbyclient');
       return;
@@ -209,7 +343,8 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
       return;
     }
 
-    if (isNavigationAllowed(target, policy)) {
+    const targetBlocked = blockReason(target, policy);
+    if (!targetBlocked) {
       refusal.reason = undefined;
       refusal.redirectTo = target;
       // 'aborted', not 'blockedbyclient': this hop is being *deferred*, not
@@ -248,7 +383,7 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
       return;
     }
 
-    refusal.reason = `redirects to ${target}, which is blocked by navigation policy`;
+    refusal.reason = `redirects to ${target}, which is blocked by navigation policy: ${targetBlocked}`;
     refusal.redirectTo = undefined;
     await route.abort('blockedbyclient');
   });
@@ -270,7 +405,7 @@ export async function guardedGoto(
   url: string,
   options?: Parameters<Page['goto']>[1],
 ): Promise<string> {
-  const refusal = refusals.get(page);
+  const refusal = guards.get(page)?.refusal;
   if (!refusal) {
     // No guard installed: this page opted out of the policy entirely. Chromium
     // still follows redirects natively here, so report where it landed — the

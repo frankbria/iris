@@ -14,9 +14,15 @@ import type { Action } from './actions';
 import type { ActionExecutor, ExecutionResult } from './executor';
 import { loadConfig } from './config';
 import { createAIClient } from './ai-client';
+import { checkAction, originOf } from './agent-policy';
+import type { AgentPolicy } from './agent-policy';
+import { installUrlPolicyGuard } from './url-policy-guard';
 
 /** Cap on the serialized page digest. Keeps the prompt affordable on big pages. */
 export const MAX_DIGEST_CHARS = 4000;
+
+/** How many recent failures are shown back to the model, so the prompt stays bounded. */
+const MAX_REPORTED_FAILURES = 5;
 
 /** Caps on the header fields, which are attacker/page controlled and unbounded. */
 export const MAX_URL_CHARS = 300;
@@ -44,8 +50,23 @@ export interface AgentLoopOptions {
   page: Page;
   /** Upper bound on observe→act cycles. */
   maxTurns?: number;
+  /**
+   * The URL the run was pointed at, used to pin the origin.
+   *
+   * Supply it whenever the caller navigated before handing over the page. The
+   * fallback — reading the page's current URL — is what the page ended up on,
+   * which after a cross-origin redirect is the wrong thing to trust: the guard
+   * would pin to wherever the redirect landed and then happily act there.
+   */
+  startUrl?: string;
   /** Progress sink. Defaults to silence so the library never writes to stdout. */
   log?: (message: string) => void;
+  /**
+   * Bounds on what the agent may do. Defaults are the safe ones: every action
+   * type allowed, but confined to the starting origin and refusing targets that
+   * read as destructive. See `./agent-policy` for why.
+   */
+  policy?: AgentPolicy;
 }
 
 /**
@@ -105,10 +126,37 @@ async function safeTitle(page: Page): Promise<string> {
  * consecutive empty plans, three consecutive action failures, or `maxTurns`.
  */
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunResult> {
-  const { instruction, executor, page, maxTurns = 8, log = () => {} } = options;
+  const {
+    instruction,
+    executor,
+    page,
+    maxTurns = 8,
+    log = () => {},
+    policy = {},
+    startUrl,
+  } = options;
+
+  // The origin the run is pinned to: what the caller ASKED for, falling back to
+  // where the page is now. Read once, before any turn can move it — and
+  // preferring the requested URL matters, because the caller has usually
+  // navigated already and a cross-origin redirect would otherwise pin the guard
+  // to the redirect's destination, which is exactly backwards.
+  const startOrigin = originOf(startUrl ?? page.url());
+
+  // The per-action check refuses on the NEXT turn, by which point a same-origin
+  // click that navigated away has already made the request. Confinement has to
+  // be enforced before the request, so the loop installs it itself rather than
+  // trusting the caller to have done it — the default is advertised as safe, and
+  // a library caller gets the same guarantee the CLI does. Installing is
+  // idempotent: it merges into whatever policy the executor already set.
+  if (policy.pinOrigin !== false && startOrigin) {
+    await installUrlPolicyGuard(page, { pinnedOrigin: startOrigin });
+  }
 
   const results: ExecutionResult[] = [];
   const executedActions: Action[] = [];
+  /** Failure reasons shown back to the model, newest last. Bounded so a long run does not grow the prompt without limit. */
+  const recentFailures: string[] = [];
   let turns = 0;
   let emptyPlans = 0;
   let consecutiveFailures = 0;
@@ -145,6 +193,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
           // mutate a request the client may still be holding, so what a provider
           // serialises could differ from what the turn actually knew.
           previousActions: [...executedActions],
+          // Without this the model sees what it tried but never how it went, so
+          // a refused or failed action just gets proposed again next turn.
+          recentFailures: recentFailures.slice(-MAX_REPORTED_FAILURES),
         },
       });
     } catch (error) {
@@ -166,9 +217,29 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     const turnAsserts: boolean[] = [];
 
     for (const action of plan.actions) {
-      const result = await executor.executeAction(action, page);
+      // Policy is checked per action, immediately before it runs, because an
+      // earlier action in the same turn may have moved the page.
+      const verdict = checkAction(action, policy, page.url(), startOrigin);
+
+      // A refusal is recorded as a failed result rather than skipped silently:
+      // it goes into `previousActions`, so the next turn's prompt shows the
+      // model that the action was refused and why, and it counts toward the
+      // consecutive-failure cutoff so an agent that keeps retrying a forbidden
+      // action stops instead of burning the turn budget.
+      const result: ExecutionResult = verdict.allowed
+        ? await executor.executeAction(action, page)
+        : {
+            success: false,
+            action,
+            error: `Refused by agent policy: ${verdict.reason}`,
+            duration: 0,
+          };
+
       results.push(result);
       executedActions.push(action);
+      if (!result.success) {
+        recentFailures.push(`${action.type} ${JSON.stringify(action)}: ${result.error}`);
+      }
       log(`turn ${turns}: ${action.type} → ${result.success ? 'ok' : `failed (${result.error})`}`);
 
       if (action.type === 'assert') {

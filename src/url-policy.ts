@@ -6,6 +6,21 @@
  */
 
 export interface UrlPolicyOptions {
+  /**
+   * When set, refuse any *navigation* that leaves this origin.
+   *
+   * Distinct from the SSRF checks below, which ask "is this host dangerous?".
+   * This asks "is this where the caller pointed me?", and exists because the
+   * agent loop can be talked into leaving a site while still carrying its
+   * session (issue #151). Checking it here rather than only before an action
+   * means a same-origin click that navigates away, or a same-origin URL that
+   * 302s elsewhere, is stopped before the request goes out — a pre-action check
+   * alone notices only after the fact.
+   *
+   * Applies to document requests only; the guard strips it for sub-resources,
+   * since a page legitimately loads images and fonts from other origins.
+   */
+  pinnedOrigin?: string;
   /** Allow `file://` navigation (e.g. the watcher rendering local files). Default: false. */
   allowFile?: boolean;
   /** Also block loopback + RFC1918 + IPv6 ULA hosts. Default: false (localhost dev-server testing stays allowed). */
@@ -90,6 +105,59 @@ function isPrivateHost(host: string): boolean {
 }
 
 /**
+ * Whether a URL is within the pinned origin, allowing an http→https upgrade.
+ *
+ * Origins differ by scheme, so a strict comparison refuses a site that upgrades
+ * itself — an HSTS redirect, or a dev server that starts on http and moves. That
+ * is a security *improvement* being treated as an escape, which teaches users to
+ * pass --allow-cross-origin and lose the whole control. A downgrade is refused,
+ * since https→http is the direction that actually costs something.
+ */
+export function satisfiesPinnedOrigin(parsed: URL, pinnedOrigin: string): boolean {
+  if (parsed.origin === pinnedOrigin) return true;
+
+  let pinned: URL;
+  try {
+    pinned = new URL(pinnedOrigin);
+  } catch {
+    return false;
+  }
+
+  const isUpgrade = pinned.protocol === 'http:' && parsed.protocol === 'https:';
+  if (!isUpgrade) return false;
+  if (normalizeHost(parsed.hostname) !== normalizeHost(pinned.hostname)) return false;
+
+  // Raw port strings, not scheme-normalised numbers. Normalising made
+  // `http://host` (implicit 80) equal to `https://host:80` — an explicit
+  // non-default HTTPS port, which is a different service, and a gap in the very
+  // boundary this function draws. "" (default for its scheme) is its own value:
+  // default→default is an upgrade, explicit→same-explicit is an upgrade, and
+  // anything mixed is refused.
+  return parsed.port === pinned.port;
+}
+
+/**
+ * String form of {@link satisfiesPinnedOrigin}, for callers holding a URL rather
+ * than a parsed one.
+ *
+ * Exported so the agent's per-action check and this request-layer check share a
+ * single definition of "within the pinned origin". They disagreed once — the
+ * request layer allowed an http→https upgrade while the action check compared
+ * origins strictly, so an upgrading site would load and then refuse every
+ * action on it.
+ *
+ * @returns false for an unparseable URL, which callers treat as "no origin to
+ *   compare" rather than a refusal.
+ */
+export function isWithinPinnedOrigin(url: string, pinnedOrigin: string): boolean {
+  try {
+    return satisfiesPinnedOrigin(new URL(url), pinnedOrigin);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Throw if `url` is not a permitted navigation target. Returns normally when allowed.
  */
 export function assertNavigationAllowed(url: string, options: UrlPolicyOptions = {}): void {
@@ -110,6 +178,12 @@ export function assertNavigationAllowed(url: string, options: UrlPolicyOptions =
 
   if (scheme !== 'http:' && scheme !== 'https:') {
     throw new Error(`Navigation blocked: scheme "${scheme}" is not allowed (only http/https).`);
+  }
+
+  if (options.pinnedOrigin && !satisfiesPinnedOrigin(parsed, options.pinnedOrigin)) {
+    throw new Error(
+      `Navigation blocked: ${parsed.origin} leaves the pinned origin ${options.pinnedOrigin}.`,
+    );
   }
 
   const host = normalizeHost(parsed.hostname);

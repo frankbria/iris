@@ -31,6 +31,22 @@ program
     8,
   )
   .option(
+    '--allow <types>',
+    'Restrict --agent to these action types (comma-separated: click,fill,navigate,assert)',
+    (v) =>
+      v.split(',').map((t) => parseEnumOption(t, ['click', 'fill', 'navigate', 'assert'], 'allow')),
+  )
+  .option(
+    '--allow-cross-origin',
+    'Let --agent leave the starting origin (off by default: an agent that wanders onto another authenticated site is the risk)',
+    false,
+  )
+  .option(
+    '--allow-destructive',
+    'Let --agent act on targets that read as destructive (delete, remove, reset, …)',
+    false,
+  )
+  .option(
     '--timeout <ms>',
     'Timeout for actions in milliseconds',
     (v) => parseIntOption(v, { min: 1000, max: 3600000, name: 'timeout' }),
@@ -47,6 +63,9 @@ program
         json?: boolean;
         agent?: boolean;
         maxTurns?: number;
+        allow?: Array<'click' | 'fill' | 'navigate' | 'assert'>;
+        allowCrossOrigin?: boolean;
+        allowDestructive?: boolean;
       },
     ) => {
       const startTime = new Date();
@@ -110,13 +129,29 @@ program
 
           executed = true;
           const { ActionExecutor } = await import('./executor');
-          const executor = new ActionExecutor(executorOptions);
+          const { originOf } = await import('./agent-policy');
+
+          // Pin at the REQUEST layer, not just before each action. A pre-action
+          // check notices a same-origin click that navigates away only on the
+          // next turn, by which time the cross-origin request has gone out.
+          const pinnedOrigin = options.allowCrossOrigin
+            ? undefined
+            : (originOf(startUrl) ?? undefined);
+          const executor = new ActionExecutor({
+            ...executorOptions,
+            urlPolicy: { pinnedOrigin },
+          });
 
           try {
             await executor.launchBrowser();
             const page = await executor.createPage();
 
             say(`🤖 Agent mode (experimental), up to ${options.maxTurns ?? 8} turns`);
+            say(
+              `   Policy: ${options.allow ? options.allow.join('/') : 'all actions'}, ` +
+                `${options.allowCrossOrigin ? 'any origin' : 'start origin only'}, ` +
+                `${options.allowDestructive ? 'destructive allowed' : 'destructive refused'}`,
+            );
             say(`   Opening starting page: ${startUrl}`);
 
             // Routed through executeAction so the URL policy applies, exactly as
@@ -137,7 +172,16 @@ program
                 executor,
                 page,
                 maxTurns: options.maxTurns ?? 8,
+                // What the user asked for, not where the navigation landed: a
+                // start URL that redirects cross-origin must not silently move
+                // the origin the agent is pinned to.
+                startUrl,
                 log: (message) => say(`   ${message}`),
+                policy: {
+                  allow: options.allow,
+                  pinOrigin: !options.allowCrossOrigin,
+                  allowDestructive: options.allowDestructive,
+                },
               });
 
               executionResults.push(...outcome.results);
