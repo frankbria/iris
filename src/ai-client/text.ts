@@ -1,6 +1,12 @@
 import { parseActions } from '../actions';
 import { IrisConfig } from '../config';
-import { BaseAIClient, AITranslationRequest, AITranslationResponse, formatError } from './base';
+import {
+  BaseAIClient,
+  AITranslationRequest,
+  AITranslationResponse,
+  formatError,
+  parseModelJson,
+} from './base';
 import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
 
 /**
@@ -40,6 +46,13 @@ Guidelines:
 - When a page digest is supplied, plan against it: propose only the next 1-3 actions.
   If the goal is already satisfied on that page, emit exactly ONE assert confirming it
   and nothing else — that is how completion is signalled
+- The page digest names elements by ARIA role and accessible name, NOT by selector,
+  so never invent an id. For click and fill, turn what the digest shows into a
+  selector: a digest line button "Sign in" becomes button:has-text("Sign in"). Use an
+  id or data-testid only when the digest actually shows one
+- An assert target is NOT a selector for every kind. text_visible takes the literal
+  visible text (Welcome back — never text=Welcome back), url_matches takes a URL
+  substring, and only element_visible and element_absent take a selector
 - If an instruction is unclear, ask for clarification in the reasoning
 
 Respond with valid JSON matching this schema:
@@ -80,7 +93,7 @@ ${
         throw new Error('No response from OpenAI');
       }
 
-      const parsed = JSON.parse(content);
+      const parsed = parseModelJson(content);
       // A model can emit a plausible-looking action with a bogus shape; without
       // this it flowed straight through to the executor unchecked.
       const validated = parseActions(parsed.actions ?? []);
@@ -93,8 +106,10 @@ ${
       }
       return {
         actions: validated.actions,
-        confidence: parsed.confidence || 0.5,
-        reasoning: parsed.reasoning,
+        // Guard against malformed LLM output at this trust boundary: keep a
+        // legitimate confidence of 0 (|| would corrupt it to 0.5).
+        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+        reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : undefined,
       };
     } catch (error) {
       console.error('OpenAI translation error:', formatError(error));
@@ -149,6 +164,13 @@ Guidelines:
 - When a page digest is supplied, plan against it: propose only the next 1-3 actions.
   If the goal is already satisfied on that page, emit exactly ONE assert confirming it
   and nothing else — that is how completion is signalled
+- The page digest names elements by ARIA role and accessible name, NOT by selector,
+  so never invent an id. For click and fill, turn what the digest shows into a
+  selector: a digest line button "Sign in" becomes button:has-text("Sign in"). Use an
+  id or data-testid only when the digest actually shows one
+- An assert target is NOT a selector for every kind. text_visible takes the literal
+  visible text (Welcome back — never text=Welcome back), url_matches takes a URL
+  substring, and only element_visible and element_absent take a selector
 - If an instruction is unclear, ask for clarification in the reasoning
 
 Respond with valid JSON matching this schema:
@@ -187,7 +209,7 @@ ${
         throw new Error('Unexpected response type from Anthropic');
       }
 
-      const parsed = JSON.parse(content.text);
+      const parsed = parseModelJson(content.text);
       // Array-ness alone was not enough: the members' shapes went unchecked.
       const validated = parseActions(parsed.actions ?? []);
       if (!validated.ok) {
@@ -202,7 +224,7 @@ ${
         // Guard against malformed LLM output at this trust boundary: keep a
         // legitimate confidence of 0 (|| would corrupt it to 0.5).
         confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
-        reasoning: parsed.reasoning,
+        reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : undefined,
       };
     } catch (error) {
       console.error('Anthropic translation error:', formatError(error));
@@ -253,6 +275,12 @@ An instruction phrased as "make sure / verify / check / confirm X" MUST end with
 one assert action expressing X — that assertion is how the goal is judged.
 When a page digest is supplied, plan against it and propose only the next 1-3 actions.
 If the goal is already satisfied, emit exactly ONE assert confirming it and nothing else.
+The page digest names elements by ARIA role and accessible name, NOT by selector, so
+never invent an id. For click and fill, a digest line button "Sign in" becomes the
+selector button:has-text("Sign in").
+An assert target is NOT always a selector: text_visible takes the literal visible text
+(Welcome back — never text=Welcome back), url_matches takes a URL substring, and only
+element_visible and element_absent take a selector.
 
 Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
               stream: false,
@@ -271,7 +299,7 @@ Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
         return response.json();
       }, this.config.retryConfig ?? DEFAULT_RETRY_CONFIG);
 
-      const parsed = JSON.parse(data.response);
+      const parsed = parseModelJson(data.response);
 
       const validated = parseActions(parsed.actions ?? []);
       if (!validated.ok) {
@@ -284,8 +312,10 @@ Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
 
       return {
         actions: validated.actions,
-        confidence: parsed.confidence || 0.5,
-        reasoning: parsed.reasoning,
+        // Guard against malformed LLM output at this trust boundary: keep a
+        // legitimate confidence of 0 (|| would corrupt it to 0.5).
+        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+        reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : undefined,
       };
     } catch (error) {
       console.error('Ollama translation error:', formatError(error));

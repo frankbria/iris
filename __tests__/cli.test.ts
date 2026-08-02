@@ -828,13 +828,52 @@ describe('CLI Commands', () => {
         ['no_actions', null],
         ['consecutive_failures', false],
         ['error', null],
-      ])('terminating on %s reports status error', async (terminationReason, goalMet) => {
-        const payload = await runAgent({ goalMet, turns: 4, results: [], terminationReason });
+      ])('terminating on %s without a met goal reports status error', async (reason, goalMet) => {
+        const payload = await runAgent({
+          goalMet,
+          turns: 4,
+          results: [],
+          terminationReason: reason,
+        });
 
-        expect(payload.agent.terminationReason).toBe(terminationReason);
+        expect(payload.agent.terminationReason).toBe(reason);
         expect(payload.goalMet).toBe(goalMet);
         expect(payload.status).toBe('error');
       });
+
+      // Observed in the demo: a model that keeps acting alongside its assert never
+      // trips the completion signal, so the loop runs to the cap with the goal
+      // passing. Calling that a failure would contradict the goal verdict itself.
+      test.each(['max_turns', 'no_actions'])(
+        'terminating on %s with the goal met reports status success',
+        async (reason) => {
+          const payload = await runAgent({
+            goalMet: true,
+            turns: 4,
+            results: [],
+            terminationReason: reason,
+          });
+
+          expect(payload.goalMet).toBe(true);
+          expect(payload.status).toBe('success');
+        },
+      );
+
+      // ...but an abnormal exit stays an error even so, because goalMet there can
+      // be a stale verdict from a turn before things went wrong.
+      test.each(['consecutive_failures', 'error'])(
+        'terminating abnormally on %s stays an error even when goalMet is true',
+        async (reason) => {
+          const payload = await runAgent({
+            goalMet: true,
+            turns: 4,
+            results: [],
+            terminationReason: reason,
+          });
+
+          expect(payload.status).toBe('error');
+        },
+      );
     });
 
     test('human mode narrates turns and prints no JSON envelope', async () => {

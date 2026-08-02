@@ -145,10 +145,22 @@ program
               agent = { turns: outcome.turns, terminationReason: outcome.terminationReason };
 
               // A failed action is NOT a failed agent run — recovering from one is
-              // the entire point of re-planning, so the one-shot path's
-              // "every action succeeded" rule would be wrong here. The verdict is
-              // whether the loop actually confirmed the goal.
-              if (outcome.terminationReason !== 'goal_met') {
+              // the entire point of re-planning, so the one-shot path's "every
+              // action succeeded" rule would be wrong here. The verdict is whether
+              // the goal held at the end.
+              //
+              // Not `terminationReason === 'goal_met'` either: a model that keeps
+              // acting alongside its assert never trips the completion signal, so a
+              // run can end at the turn cap with the goal demonstrably passing.
+              // Reporting that as a failure contradicts the "Goal check: passed"
+              // printed a line earlier — observed with a small local model.
+              //
+              // Abnormal exits stay errors regardless, since `goalMet` there can be
+              // a stale verdict from a turn before things went wrong.
+              const abnormalExit =
+                outcome.terminationReason === 'error' ||
+                outcome.terminationReason === 'consecutive_failures';
+              if (goalMet !== true || abnormalExit) {
                 status = 'error';
               }
 

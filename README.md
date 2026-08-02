@@ -49,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 918/919 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 938/939 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -81,7 +81,7 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 918/919 tests passing (99.9% pass rate), 1 skipped, 0 failing
+**Test Results:** 938/939 tests passing (99.9% pass rate), 1 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
@@ -324,11 +324,15 @@ iris run --agent --url http://localhost:3000 --max-turns 6 \
 | `agent.turns` | observe→act cycles actually run |
 | `agent.terminationReason` | `goal_met`, `max_turns`, `no_actions`, `consecutive_failures`, `error` |
 | `translation` | always `null` — there is no single up-front translation to report |
-| `status` | `success` **only** when `terminationReason` is `goal_met` |
+| `status` | `success` when `goalMet` is `true` and the loop did not exit abnormally |
 
 A failed action does **not** by itself make the run a failure here: recovering from
-one is the entire point of re-planning. The verdict is whether the loop confirmed
-the goal.
+one is the entire point of re-planning. The verdict is whether the goal held at the
+end — so a run can legitimately report `terminationReason: "max_turns"` alongside
+`goalMet: true, status: "success"`, which happens when a model keeps acting instead
+of stopping at a bare confirming assert. `consecutive_failures` and `error` stay
+failures regardless, since `goalMet` there may be a stale verdict from an earlier
+turn.
 
 **Bounds.** Every exit is bounded, because an agent that cannot tell it is stuck
 will happily burn an API budget forever. The loop stops on: the goal being met, two

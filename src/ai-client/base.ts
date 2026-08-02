@@ -21,6 +21,50 @@ export function formatError(error: unknown): string {
 }
 
 /**
+ * Parse a model's JSON reply, tolerating the wrappers models add anyway.
+ *
+ * Every prompt here asks for bare JSON and models routinely ignore it —
+ * markdown-fencing the object, or prefacing it with a line of commentary. A
+ * bare `JSON.parse` turns that into a hard failure, which in the agent loop
+ * means an empty plan every turn and a run that terminates having done nothing.
+ * Observed with Ollama + gemma3, which fences on essentially every call.
+ *
+ * Candidates are tried strictest-first, so a clean response is never reshaped
+ * by the salvage paths.
+ *
+ * @throws if no candidate parses into an object.
+ */
+export function parseModelJson(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  const candidates = [trimmed];
+
+  // ```json … ``` or a bare ``` … ``` fence.
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+  if (fenced) candidates.push(fenced[1].trim());
+
+  // Last resort: the widest brace-delimited span, which survives leading prose
+  // ("Here is the JSON you asked for:") and a trailing sign-off.
+  const open = trimmed.indexOf('{');
+  const close = trimmed.lastIndexOf('}');
+  if (open !== -1 && close > open) candidates.push(trimmed.slice(open, close + 1));
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      // Arrays and primitives are valid JSON but never a valid response here,
+      // so keep looking rather than handing the caller something unusable.
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  throw new Error(`Model did not return a JSON object (got ${trimmed.slice(0, 80)}…)`);
+}
+
+/**
  * Request for translating natural language instructions to browser actions
  */
 export interface AITranslationRequest {
