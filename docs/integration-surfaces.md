@@ -41,6 +41,30 @@ assistant users at the one surface no assistant can consume.
   built against it.
 - When the MCP spike reports, a follow-up issue schedules the retirement review.
 
+## Update — 2026-08-01: the spike reported (#114)
+
+The revisit trigger has fired. The Context table above is the state as of
+2026-07-23 and is left unedited as the record of what was known then; this is what
+changed.
+
+**Verdict: MCP is viable, and cheaper than the spike assumed.** `src/mcp/` now
+ships an stdio server exposing one tool, `run_accessibility_test`, verified
+connected in Claude Code and covered by a protocol-level test that drives the
+built server over real stdio.
+
+The one finding worth carrying forward: `@modelcontextprotocol/sdk` sets
+`"type": "module"`, which reads as ESM-only and stalled a first attempt at this
+work. It is not — the package's `exports` map carries a `require` condition
+pointing at a real `dist/cjs` build, and a `typesVersions` shim serves types to
+`moduleResolution: node10` consumers. So the SDK is consumable from IRIS's
+existing CommonJS build with **no tsconfig change, no second build target, and no
+`engines.node` bump**, provided imports use the `.js`-suffixed deep specifier
+(`@modelcontextprotocol/sdk/server/mcp.js`); the bare `.../server` form does not
+resolve under node10 and is what produced the false ESM-only reading.
+
+Decision 3 is therefore unchanged but now actionable: the WebSocket JSON-RPC
+retirement review can be scheduled against evidence.
+
 ## What this decision does not do
 
 It does not shrink the product vision. The audit's conclusion was to *close* the

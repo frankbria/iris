@@ -21,7 +21,7 @@ before you invest.
 | | |
 |---|---|
 | **Shipped** | Visual regression (capture, diff, baselines, multi-device); accessibility auditing via axe-core plus real keyboard/ARIA checks; natural-language macros (`click` / `fill` / `navigate`); machine-readable CLI output for assistants |
-| **In progress** | Assertion + goal-verification vocabulary; the MCP bridge; richer watch-mode AI feedback; surfacing AI reasoning into reports |
+| **In progress** | Assertion + goal-verification vocabulary; the MCP bridge (experimental — an stdio server with one tool, `run_accessibility_test`); richer watch-mode AI feedback; surfacing AI reasoning into reports |
 | **Not started** | Autonomous UI exploration; design-system compliance checking |
 
 **[plans/README.md](plans/README.md) is the source of truth for status** — if any
@@ -321,6 +321,62 @@ Unlike `run`, the two reporting commands signal outcome through the exit code:
 
 Because `iris run` never sets a non-zero code, an assistant must branch on the
 `status` field rather than on the process result.
+
+### MCP (experimental)
+
+IRIS also ships an MCP server over stdio, so an assistant can call it as a tool
+instead of shelling out. It is a **spike**: exactly one tool today.
+
+| | |
+|---|---|
+| **Tool** | `run_accessibility_test` — scans a page with axe-core |
+| **Input** | `url` (required, http/https), `wcagLevel` (`AA` default, or `AAA`) |
+| **Output** | `{ url, passed, violationCount, violations[] }`, each violation `{ id, impact, description, helpUrl, nodes }` |
+| **Keys** | none — axe-core runs locally |
+| **Redirects** | not followed — the tool returns the target so you can scan it directly |
+
+Configure it by copying the example into your project (it is gitignored, so your
+copy stays local):
+
+```bash
+npm run build          # the server runs from dist/
+cp .mcp.json.example .mcp.json
+```
+
+```json
+{
+  "mcpServers": {
+    "iris": { "command": "node", "args": ["./dist/mcp/server.js"] }
+  }
+}
+```
+
+Then start Claude Code in the project and approve the server when prompted;
+`claude mcp list` should report `iris ... ✔ Connected`. Installed globally, the
+`iris-mcp` bin is the same entry point.
+
+**Redirects are refused, not followed.** Pass `http://localhost:3000` to a site
+whose root redirects to `/login` and you get an error naming the target rather
+than a result:
+
+```
+http://localhost:3000/ redirects to http://localhost:3000/login — scan that URL
+directly, so page assets resolve against the right base
+```
+
+Call again with that URL. Following the redirect internally would leave the
+document on the pre-redirect URL, so the page's relative stylesheets and images
+would resolve against the wrong base — and a scan of a page whose CSS failed to
+load reports contrast violations that do not exist. An error you can act on beats
+a result you cannot trust.
+
+**Deliberate limits.** The tool reports axe-core violations *only*. IRIS's
+keyboard-navigation and screen-reader sub-checks currently hardcode success
+([#73](https://github.com/frankbria/iris/issues/73),
+[#72](https://github.com/frankbria/iris/issues/72)), so surfacing them here would
+report passes that were never tested. Visual-diff and action tools come after the
+spike verdict — the CLI JSON contract above remains the supported integration
+surface in the meantime.
 
 ---
 

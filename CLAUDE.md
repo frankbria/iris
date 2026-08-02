@@ -65,6 +65,9 @@ src/
 │   ├── capture.ts         # Screenshot capture with stabilization
 │   ├── diff.ts            # SSIM + pixel diff engine
 │   └── baseline.ts        # Git-integrated baseline management
+├── mcp/                   # MCP stdio server (experimental, spike scope)
+│   ├── server.ts          # `iris-mcp` bin — McpServer over StdioServerTransport
+│   └── tools.ts           # run_accessibility_test (axe violations only)
 └── config.ts              # Configuration types and validation
 
 __tests__/
@@ -74,10 +77,12 @@ __tests__/
 ├── ai-client-vision.test.ts       # Vision AI client tests (17 tests)
 ├── ai-client-preprocessor.test.ts # Preprocessor tests (24 tests)
 ├── ai-client-batch4.test.ts       # Cache + cost tracker tests (19 tests)
-└── visual/                        # Visual testing tests
-    ├── capture.test.ts
-    ├── diff.test.ts
-    └── baseline.test.ts
+├── visual/                        # Visual testing tests
+│   ├── capture.test.ts
+│   ├── diff.test.ts
+│   └── baseline.test.ts
+└── mcp/
+    └── server.test.ts             # Protocol-level: spawns the built server over real stdio
 
 migrations/
 ├── 001_initial_schema.sql         # Phase 1 database schema

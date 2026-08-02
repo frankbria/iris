@@ -49,3 +49,6 @@ tasks/
 
 # Local beads issue-tracker db (legacy, not used)
 .beads/
+
+# Local MCP client config — copy .mcp.json.example, don't commit the copy
+.mcp.json
