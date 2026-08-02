@@ -124,12 +124,35 @@ function blockReason(url: string, policy: UrlPolicyOptions): string | null {
  * document base to get wrong, and CDN redirects on images and fonts are ordinary
  * enough that refusing them would degrade the very page being measured.
  */
+/**
+ * Resource types exempt from origin pinning.
+ *
+ * Passive fetches — the browser renders or executes them, the page cannot read
+ * an arbitrary response out of them. Refusing these would break the very page
+ * the agent is trying to read, for no security gain.
+ *
+ * Everything NOT on this list stays pinned, which is the important half:
+ * `fetch`, `xhr`, `eventsource`, `websocket` and `ping`/beacon requests DO carry
+ * data off-origin and return readable responses, so a same-origin click that
+ * fires one is an exfiltration channel the per-action check cannot see. Unknown
+ * future types default to pinned rather than exempt.
+ */
+const PIN_EXEMPT_RESOURCE_TYPES = new Set([
+  'stylesheet',
+  'image',
+  'media',
+  'font',
+  'script',
+  'texttrack',
+  'manifest',
+]);
+
 async function guardSubresource(route: Route, policy: UrlPolicyOptions): Promise<void> {
-  // Origin pinning is a navigation control, not a resource control: a page
-  // legitimately loads images, fonts and scripts from other origins, and
-  // refusing those would break the page the agent is trying to read.
-  const { pinnedOrigin: _pinned, ...subresourcePolicy } = policy;
-  let url = route.request().url();
+  const request = route.request();
+  const subresourcePolicy = PIN_EXEMPT_RESOURCE_TYPES.has(request.resourceType())
+    ? { ...policy, pinnedOrigin: undefined }
+    : policy;
+  let url = request.url();
 
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
     if (!isNavigationAllowed(url, subresourcePolicy)) {
