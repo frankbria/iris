@@ -113,7 +113,7 @@ function isPrivateHost(host: string): boolean {
  * pass --allow-cross-origin and lose the whole control. A downgrade is refused,
  * since https→http is the direction that actually costs something.
  */
-function satisfiesPinnedOrigin(parsed: URL, pinnedOrigin: string): boolean {
+export function satisfiesPinnedOrigin(parsed: URL, pinnedOrigin: string): boolean {
   if (parsed.origin === pinnedOrigin) return true;
 
   let pinned: URL;
@@ -132,6 +132,27 @@ function satisfiesPinnedOrigin(parsed: URL, pinnedOrigin: string): boolean {
   const port = (u: URL) => u.port || (u.protocol === 'https:' ? '443' : '80');
   const defaulted = (u: URL) => u.port === '';
   return (defaulted(parsed) && defaulted(pinned)) || port(parsed) === port(pinned);
+}
+
+/**
+ * String form of {@link satisfiesPinnedOrigin}, for callers holding a URL rather
+ * than a parsed one.
+ *
+ * Exported so the agent's per-action check and this request-layer check share a
+ * single definition of "within the pinned origin". They disagreed once — the
+ * request layer allowed an http→https upgrade while the action check compared
+ * origins strictly, so an upgrading site would load and then refuse every
+ * action on it.
+ *
+ * @returns false for an unparseable URL, which callers treat as "no origin to
+ *   compare" rather than a refusal.
+ */
+export function isWithinPinnedOrigin(url: string, pinnedOrigin: string): boolean {
+  try {
+    return satisfiesPinnedOrigin(new URL(url), pinnedOrigin);
+  } catch {
+    return false;
+  }
 }
 
 /**

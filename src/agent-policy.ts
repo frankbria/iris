@@ -13,6 +13,7 @@
  */
 
 import type { Action } from './actions';
+import { isWithinPinnedOrigin } from './url-policy';
 
 export type ActionType = Action['type'];
 
@@ -142,16 +143,20 @@ export function checkAction(
     // An opaque current URL (about:blank, data:, blob:) is NOT same-origin with
     // anything. Treating "no origin" as "no problem" would let a page that
     // navigated itself somewhere opaque keep taking actions.
-    const here = originOf(currentUrl);
-    if (here !== startOrigin) {
+    // Same predicate the request-layer guard uses, so the two layers cannot
+    // disagree — they did once, and an http→https upgrade would load fine and
+    // then have every action on it refused.
+    if (!isWithinPinnedOrigin(currentUrl, startOrigin)) {
       return {
         allowed: false,
-        reason: `page is on ${here ?? 'an opaque origin'}, not the starting origin ${startOrigin} — refusing to act off-origin`,
+        reason: `page is on ${originOf(currentUrl) ?? 'an opaque origin'}, not the starting origin ${startOrigin} — refusing to act off-origin`,
       };
     }
     if (action.type === 'navigate') {
+      // A relative URL has no origin to compare and stays put, so only an
+      // absolute one that resolves elsewhere is refused.
       const target = originOf(action.url);
-      if (target && target !== startOrigin) {
+      if (target && !isWithinPinnedOrigin(action.url, startOrigin)) {
         return {
           allowed: false,
           reason: `navigation to ${target} leaves the starting origin ${startOrigin}`,

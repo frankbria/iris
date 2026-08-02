@@ -108,6 +108,31 @@ describe('origin pinning', () => {
     }
   });
 
+  it('accepts a site that upgraded itself to https', () => {
+    // The request-layer guard permits an http→https upgrade, so this check must
+    // too — otherwise an upgrading site loads fine and then has every action on
+    // it refused, which is worse than either behaviour alone.
+    const verdict = checkAction(
+      { type: 'click', selector: '#ok' },
+      {},
+      'https://app.example.com/dashboard',
+      'http://app.example.com',
+    );
+
+    expect(verdict.allowed).toBe(true);
+  });
+
+  it('still refuses an https to http downgrade', () => {
+    expect(
+      checkAction(
+        { type: 'click', selector: '#ok' },
+        {},
+        'http://app.example.com/x',
+        'https://app.example.com',
+      ).allowed,
+    ).toBe(false);
+  });
+
   it('can be switched off deliberately', () => {
     expect(
       check({ type: 'navigate', url: 'https://sso.example.net/' }, { pinOrigin: false }).allowed,
