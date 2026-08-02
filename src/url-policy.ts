@@ -127,11 +127,13 @@ export function satisfiesPinnedOrigin(parsed: URL, pinnedOrigin: string): boolea
   if (!isUpgrade) return false;
   if (normalizeHost(parsed.hostname) !== normalizeHost(pinned.hostname)) return false;
 
-  // Same host on its scheme's default port counts as the same site; an explicit
-  // port change does not, since that is a different service.
-  const port = (u: URL) => u.port || (u.protocol === 'https:' ? '443' : '80');
-  const defaulted = (u: URL) => u.port === '';
-  return (defaulted(parsed) && defaulted(pinned)) || port(parsed) === port(pinned);
+  // Raw port strings, not scheme-normalised numbers. Normalising made
+  // `http://host` (implicit 80) equal to `https://host:80` — an explicit
+  // non-default HTTPS port, which is a different service, and a gap in the very
+  // boundary this function draws. "" (default for its scheme) is its own value:
+  // default→default is an upgrade, explicit→same-explicit is an upgrade, and
+  // anything mixed is refused.
+  return parsed.port === pinned.port;
 }
 
 /**

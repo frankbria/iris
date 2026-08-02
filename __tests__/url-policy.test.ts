@@ -166,6 +166,26 @@ describe('pinnedOrigin (agent origin confinement, issue #151)', () => {
     ).toThrow(/leaves the pinned origin/);
   });
 
+  it.each([
+    // The gap: both normalise to port 80, but :80 on https is an explicit
+    // non-default port, i.e. a different service.
+    ['https://app.example.com:80/', 'http://app.example.com'],
+    ['https://app.example.com/', 'http://app.example.com:443'],
+    ['https://app.example.com:8443/', 'http://app.example.com'],
+  ])('refuses %s against pinned %s despite the scheme upgrade', (url, pinnedOrigin) => {
+    expect(() => assertNavigationAllowed(url, { pinnedOrigin })).toThrow(
+      /leaves the pinned origin/,
+    );
+  });
+
+  it('allows an upgrade that keeps the same explicit port', () => {
+    expect(() =>
+      assertNavigationAllowed('https://app.example.com:3000/x', {
+        pinnedOrigin: 'http://app.example.com:3000',
+      }),
+    ).not.toThrow();
+  });
+
   it('refuses an explicit port change', () => {
     expect(() =>
       assertNavigationAllowed('https://app.example.com:8443/', {
