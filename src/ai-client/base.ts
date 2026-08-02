@@ -21,6 +21,19 @@ export function formatError(error: unknown): string {
 }
 
 /**
+ * Strip anything that could forge the untrusted-page-data fence.
+ *
+ * The fence is what tells the model where scraped page content starts and stops.
+ * A page that simply prints the closing marker in its own copy would appear to
+ * end the untrusted region early, and everything after it would read as
+ * instructions from us — the standard way these boundaries get walked out of.
+ * Applied to every field interpolated inside the fence, not just the digest.
+ */
+export function redactFenceMarkers(value: string): string {
+  return value.replace(/-{2,}\s*(?:BEGIN|END)\s+UNTRUSTED\s+PAGE\s+DATA\s*-{2,}/gi, '[redacted]');
+}
+
+/**
  * Parse a model's JSON reply, tolerating the wrappers models add anyway.
  *
  * Every prompt here asks for bare JSON and models routinely ignore it —
