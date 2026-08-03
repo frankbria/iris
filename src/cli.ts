@@ -449,6 +449,26 @@ program
     (v) => parseIntOption(v, { min: 0, max: 60000, name: 'retryDelay' }),
     1000,
   )
+  .option(
+    '--feedback',
+    'On each change, capture the page and report what changed visually instead of replaying --instruction',
+    false,
+  )
+  .option(
+    '--feedback-url <url>',
+    'Page to observe in --feedback mode (or set IRIS_BASE_URL). Defaults to the changed file itself.',
+  )
+  .option(
+    '--provider <name>',
+    'AI provider for --feedback (openai|anthropic|ollama). Default: auto-detect from environment',
+    (v) => parseEnumOption(v, ['openai', 'anthropic', 'ollama'], 'provider'),
+  )
+  .option(
+    '--max-ai-calls <n>',
+    'Session cap on AI calls in --feedback mode',
+    (v) => parseIntOption(v, { min: 1, max: 10000, name: 'max-ai-calls' }),
+    50,
+  )
   .action(
     async (
       target: string | undefined,
@@ -459,8 +479,26 @@ program
         browserTimeout?: number;
         retryAttempts?: number;
         retryDelay?: number;
+        feedback?: boolean;
+        feedbackUrl?: string;
+        provider?: string;
+        maxAiCalls?: number;
       },
     ) => {
+      // Resolved before the watcher starts: a missing key is a usage error the
+      // user can act on, not something to discover on the first file save.
+      let ai;
+      if (options.feedback) {
+        ai = resolveSemanticAI(options.provider);
+        if (ai.provider !== 'ollama' && !ai.apiKey) {
+          console.error(
+            `\n❌ --feedback requires an API key: set ${semanticKeyEnvVar(ai.provider)}, ` +
+              'or use --provider ollama to analyze locally.',
+          );
+          process.exit(2); // Invalid usage
+        }
+      }
+
       try {
         const { watchFiles } = await import('./watcher');
         await watchFiles(target, options.instruction, {
@@ -469,6 +507,10 @@ program
           browserTimeout: options.browserTimeout,
           retryAttempts: options.retryAttempts,
           retryDelay: options.retryDelay,
+          feedback: options.feedback,
+          feedbackUrl: options.feedbackUrl,
+          maxAiCalls: options.maxAiCalls,
+          ai,
         });
       } catch (error) {
         console.error('Watch error:', error);

@@ -27,7 +27,7 @@ commit `bdf7b7d` before planning. Plans are self-contained executor handoffs.
 | 017 | `P2.5` | Canonical-surface decision + README/PRD truth pass | [#115](https://github.com/frankbria/iris/issues/115) | — | DONE |
 | 013 | `P2.6` | Assertion vocabulary (`verify/make sure` representable, `goalMet`) | [#116](https://github.com/frankbria/iris/issues/116) | 010 | DONE |
 | 014 | `P2.7` | Agentic observe→act loop (`iris run --agent`) | [#117](https://github.com/frankbria/iris/issues/117) → subs [#121](https://github.com/frankbria/iris/issues/121), [#122](https://github.com/frankbria/iris/issues/122) | 010, 013 | DONE |
-| 015 | `P2.8` | Watch-mode AI feedback (classify changes on save) | [#118](https://github.com/frankbria/iris/issues/118) | 009 | TODO |
+| 015 | `P2.8` | Watch-mode AI feedback (classify changes on save) | [#118](https://github.com/frankbria/iris/issues/118) | 009 | DONE |
 | 016 | `P2.9` | Surface dropped AI intelligence; diff image into vision request | [#119](https://github.com/frankbria/iris/issues/119) → subs [#123](https://github.com/frankbria/iris/issues/123), [#124](https://github.com/frankbria/iris/issues/124) | 009 | TODO |
 
 **Dependency notes:** 009 unblocks 015/016 (and makes #68 user-relevant);
