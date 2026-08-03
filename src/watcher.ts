@@ -6,6 +6,11 @@ import { initializeDatabase, insertTestRun } from './db';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
 import { navigate } from './browser';
 import { Page } from 'playwright';
+import { VisualCaptureEngine } from './visual/capture';
+import { VisualDiffEngine } from './visual/diff';
+import { AIVisualClassifier } from './visual/ai-classifier';
+import type { AIProvider } from './visual/ai-classifier';
+import type { ProviderCredentials } from './config';
 import * as path from 'path';
 import * as os from 'os';
 import { pathToFileURL } from 'url';
@@ -23,7 +28,33 @@ export interface WatchOptions {
   browserTimeout?: number; // Browser operation timeout (default: 30000)
   retryAttempts?: number; // Retry attempts for failed actions (default: 2)
   retryDelay?: number; // Delay between retries (default: 1000)
+  // AI feedback mode options
+  /** Classify what changed on screen instead of replaying an instruction. */
+  feedback?: boolean;
+  /** Page to observe. Falls back to IRIS_BASE_URL, then the changed file itself. */
+  feedbackUrl?: string;
+  /** Session cap on AI calls, so a hot edit loop cannot run up a bill. */
+  maxAiCalls?: number;
+  /** Provider/key for the classifier, resolved by the caller (see cli.ts). */
+  ai?: {
+    provider: AIProvider;
+    apiKey?: string;
+    endpoint?: string;
+    credentials?: ProviderCredentials;
+  };
 }
+
+/**
+ * How much of the screen must differ before a change is worth an AI call.
+ *
+ * The diff engine reports `passed` against this: below it the capture counts as
+ * unchanged and the AI is never consulted, which is what keeps a save that
+ * touched no rendered pixels free.
+ */
+const FEEDBACK_DIFF_THRESHOLD = 0.001;
+
+/** Default session cap on AI calls in feedback mode. */
+const DEFAULT_MAX_AI_CALLS = 50;
 
 export interface WatchEvent {
   type: 'add' | 'change' | 'unlink';
@@ -42,6 +73,14 @@ export class FileWatcher {
   private activeExecution?: Promise<void>;
   private pendingEvent?: WatchEvent;
   private initPromise?: Promise<void>;
+  // Feedback mode state
+  private captureEngine?: VisualCaptureEngine;
+  private diffEngine?: VisualDiffEngine;
+  private classifier?: AIVisualClassifier;
+  /** The last capture, compared against on the next change. */
+  private referenceCapture?: Buffer;
+  private aiCallsUsed = 0;
+  private aiCapNotified = false;
 
   constructor(options: WatchOptions = {}) {
     const config = loadConfig();
@@ -57,7 +96,39 @@ export class FileWatcher {
       browserTimeout: options.browserTimeout ?? 30000,
       retryAttempts: options.retryAttempts ?? 2,
       retryDelay: options.retryDelay ?? 1000,
+      feedback: options.feedback ?? false,
+      feedbackUrl: options.feedbackUrl ?? '',
+      maxAiCalls: options.maxAiCalls ?? DEFAULT_MAX_AI_CALLS,
+      ai: options.ai ?? { provider: 'openai' },
     };
+
+    if (this.options.feedback) {
+      this.captureEngine = new VisualCaptureEngine();
+      this.diffEngine = new VisualDiffEngine();
+    }
+  }
+
+  /**
+   * The classifier, built on first use.
+   *
+   * Not in the constructor: building one opens a SQLite-backed vision cache, and
+   * a watcher that never sees a visual change — or never sees one past the diff
+   * gate — should not open a database to prove it. Constructing it eagerly also
+   * made the class impossible to instantiate without a writable cache
+   * directory, which is how CI found this.
+   */
+  private ensureClassifier(): AIVisualClassifier {
+    if (!this.classifier) {
+      this.classifier = new AIVisualClassifier({
+        provider: this.options.ai.provider,
+        apiKey: this.options.ai.apiKey,
+        baseURL: this.options.ai.endpoint,
+        credentials: this.options.ai.credentials,
+        maxTokens: 1024,
+        temperature: 0.1,
+      });
+    }
+    return this.classifier;
   }
 
   async start(): Promise<void> {
@@ -71,7 +142,23 @@ export class FileWatcher {
     console.log(`   Ignoring: ${this.options.ignore.join(', ')}`);
     console.log(`   Debounce: ${this.options.debounceMs}ms`);
     console.log(`   Working directory: ${this.options.cwd}`);
-    console.log(`   Mode: ${this.options.execute ? 'Execute actions' : 'Translation only'}`);
+    console.log(
+      `   Mode: ${
+        this.options.feedback
+          ? 'AI feedback (classify visual changes)'
+          : this.options.execute
+            ? 'Execute actions'
+            : 'Translation only'
+      }`,
+    );
+
+    if (this.options.feedback) {
+      console.log(
+        `   Observing: ${this.options.feedbackUrl || process.env.IRIS_BASE_URL || 'the changed file'}`,
+      );
+      console.log(`   AI call cap: ${this.options.maxAiCalls}`);
+      await this.captureStartupReference();
+    }
 
     if (this.options.execute) {
       console.log(`   Browser: ${this.options.headless ? 'Headless' : 'Visible'}`);
@@ -145,6 +232,11 @@ export class FileWatcher {
     // Clean up browser session
     await this.cleanupBrowserSession();
 
+    // The classifier holds a SQLite-backed cache; a watcher stopped and
+    // restarted in-process would otherwise accumulate open handles.
+    this.classifier?.close();
+    this.classifier = undefined;
+
     console.log('✅ File watcher stopped');
   }
 
@@ -194,7 +286,185 @@ export class FileWatcher {
     });
   }
 
+  /**
+   * The page feedback mode observes.
+   *
+   * Prefers what the user named, then the session's base URL, and only then the
+   * changed file itself — which is the right default for a static page being
+   * edited, and useless for a dev server, hence the ordering.
+   */
+  private resolveFeedbackUrl(event: WatchEvent): string {
+    if (this.options.feedbackUrl) {
+      return this.options.feedbackUrl;
+    }
+    if (process.env.IRIS_BASE_URL) {
+      return process.env.IRIS_BASE_URL;
+    }
+    // pathToFileURL escapes URL-reserved characters that plain concatenation
+    // would mis-parse when handed to page.goto().
+    return pathToFileURL(path.resolve(this.options.cwd, event.path)).href;
+  }
+
+  /**
+   * Capture the reference before any file changes, so the first save is
+   * already comparable.
+   *
+   * Without this the first edit after starting — the most likely thing a user
+   * does — produces only "Reference captured" and no feedback at all.
+   *
+   * Only possible when the page is known up front. With no URL configured the
+   * observed page is the changed file itself, which cannot be known before a
+   * change happens, so that case still establishes the reference on first save.
+   */
+  private async captureStartupReference(): Promise<void> {
+    const url = this.options.feedbackUrl || process.env.IRIS_BASE_URL;
+    if (!url) {
+      console.log('   No --feedback-url set — the first change will establish the reference.');
+      return;
+    }
+
+    try {
+      await this.initializeBrowserSession();
+      if (!this.page || !this.captureEngine) {
+        throw new Error('Feedback session not initialized');
+      }
+      await navigate(this.page, url);
+      const capture = await this.captureEngine.capture(this.page, {
+        fullPage: true,
+        maskSelectors: [],
+        stabilizeMs: 500,
+        disableAnimations: true,
+        type: 'png',
+      });
+
+      if (capture.success && capture.buffer) {
+        this.referenceCapture = capture.buffer;
+        console.log('   📸 Reference captured — your next save will be compared against it');
+      } else {
+        console.log(`   ⚠️  Could not capture a reference: ${capture.error ?? 'unknown error'}`);
+      }
+    } catch (error) {
+      // Never block startup on this: the first change re-establishes it.
+      console.log(
+        `   ⚠️  Could not capture a reference: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+  }
+
+  /**
+   * Capture the page and report what changed since the last capture.
+   *
+   * Deliberately gated twice before spending anything: an unchanged page never
+   * reaches the AI, and a session cap bounds a hot edit loop even when every
+   * save does change something.
+   */
+  private async runFeedback(event: WatchEvent): Promise<void> {
+    const url = this.resolveFeedbackUrl(event);
+    console.log(`🔄 File ${event.type}: ${event.path}`);
+    console.log(`👁️  Observing ${url}`);
+
+    if (!this.browserSessionActive) {
+      await this.initializeBrowserSession();
+    }
+    if (!this.page || !this.captureEngine || !this.diffEngine) {
+      throw new Error('Feedback session not initialized');
+    }
+
+    await navigate(this.page, url);
+    const capture = await this.captureEngine.capture(this.page, {
+      fullPage: true,
+      maskSelectors: [],
+      stabilizeMs: 500,
+      disableAnimations: true,
+      type: 'png',
+    });
+
+    if (!capture.success || !capture.buffer) {
+      console.log(`   ⚠️  Capture failed: ${capture.error ?? 'unknown error'}`);
+      return;
+    }
+
+    if (!this.referenceCapture) {
+      this.referenceCapture = capture.buffer;
+      console.log('   📸 Reference captured — edit a file to see what changed');
+      return;
+    }
+
+    const diff = await this.diffEngine.compare(this.referenceCapture, capture.buffer, {
+      threshold: FEEDBACK_DIFF_THRESHOLD,
+      includeAA: false,
+      alpha: 0.1,
+      diffMask: true,
+      diffColor: [255, 0, 0],
+    });
+
+    // `passed` means the change stayed under the threshold, i.e. nothing worth
+    // asking about. This is the gate that makes a save touching no rendered
+    // pixels cost nothing at all.
+    if (diff.success && diff.passed) {
+      console.log('   ✅ No visual change');
+      this.referenceCapture = capture.buffer;
+      return;
+    }
+
+    if (this.aiCallsUsed >= this.options.maxAiCalls) {
+      if (!this.aiCapNotified) {
+        console.log(
+          `   ⏸️  AI call cap reached (${this.options.maxAiCalls}). Raise it with --max-ai-calls <n>.`,
+        );
+        this.aiCapNotified = true;
+      }
+      this.referenceCapture = capture.buffer;
+      return;
+    }
+
+    this.aiCallsUsed++;
+    let analysed = false;
+    try {
+      const analysis = await this.ensureClassifier().analyzeChange({
+        baselineImage: this.referenceCapture,
+        currentImage: capture.buffer,
+        diffImage: diff.diffBuffer,
+        context: { url },
+      });
+
+      if (analysis.analysisFailed) {
+        // The classifier answers with a fallback shape rather than throwing, so
+        // without this check a provider outage prints as a confident severity
+        // whose description is really an error string.
+        console.error(`   ❌ AI analysis unavailable: ${analysis.description}`);
+      } else {
+        analysed = true;
+        console.log(`   🎨 ${analysis.severity.toUpperCase()}: ${analysis.description}`);
+        for (const suggestion of analysis.suggestions) {
+          console.log(`      → ${suggestion}`);
+        }
+      }
+    } catch (error) {
+      // A watcher that dies on a provider hiccup is worse than one that says so
+      // and keeps watching, which is the whole point of a companion process.
+      console.error(`   ❌ AI analysis failed: ${error instanceof Error ? error.message : error}`);
+    }
+
+    // Advanced only when the change was actually reported on. Advancing after a
+    // failure would compare the NEXT save against an unanalysed state, silently
+    // dropping the change nobody ever heard about; holding the reference means
+    // it is simply included in the next comparison.
+    if (analysed) {
+      this.referenceCapture = capture.buffer;
+    }
+  }
+
   private async executeInstruction(event: WatchEvent): Promise<void> {
+    if (this.options.feedback) {
+      try {
+        await this.runFeedback(event);
+      } catch (error) {
+        console.error(`\n❌ Feedback failed: ${error instanceof Error ? error.message : error}`);
+      }
+      return;
+    }
+
     const startTime = new Date();
     let status: 'success' | 'error' = 'success';
     const executionResults: ExecutionResult[] = [];
@@ -478,6 +748,10 @@ export interface WatchExecutionOptions {
   browserTimeout?: number;
   retryAttempts?: number;
   retryDelay?: number;
+  feedback?: boolean;
+  feedbackUrl?: string;
+  maxAiCalls?: number;
+  ai?: WatchOptions['ai'];
 }
 
 // Utility function for CLI usage
@@ -526,6 +800,18 @@ export async function watchFiles(
     }
     if (executionOptions.browserTimeout !== undefined) {
       options.browserTimeout = executionOptions.browserTimeout;
+    }
+    if (executionOptions.feedback !== undefined) {
+      options.feedback = executionOptions.feedback;
+    }
+    if (executionOptions.feedbackUrl !== undefined) {
+      options.feedbackUrl = executionOptions.feedbackUrl;
+    }
+    if (executionOptions.maxAiCalls !== undefined) {
+      options.maxAiCalls = executionOptions.maxAiCalls;
+    }
+    if (executionOptions.ai !== undefined) {
+      options.ai = executionOptions.ai;
     }
     if (executionOptions.retryAttempts !== undefined) {
       options.retryAttempts = executionOptions.retryAttempts;

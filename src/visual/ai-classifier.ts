@@ -78,6 +78,16 @@ export interface AIAnalysisResponse {
   isIntentional: boolean;
   changeType: 'layout' | 'color' | 'content' | 'typography' | 'animation' | 'unknown';
   reasoning: string;
+  /**
+   * Set when analysis did not actually happen and this is the fallback shape.
+   *
+   * Additive rather than a thrown error, because callers already treat this as
+   * a total function. Without it the fallback is indistinguishable from a real
+   * verdict — a provider outage renders as a confident `medium` severity with a
+   * description that is really an error string, which is worse than saying
+   * nothing.
+   */
+  analysisFailed?: boolean;
   regions?: Array<{
     x: number;
     y: number;
@@ -462,6 +472,7 @@ export class AIVisualClassifier {
       isIntentional: false,
       changeType: 'unknown',
       reasoning: `Analysis failed: ${message}`,
+      analysisFailed: true,
     };
   }
 

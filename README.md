@@ -49,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1050/1051 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1065/1066 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -81,7 +81,7 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 1050/1051 tests passing (99.9% pass rate), 1 skipped, 0 failing
+**Test Results:** 1065/1066 tests passing (99.9% pass rate), 1 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
@@ -207,7 +207,58 @@ iris a11y \
 # Watch files and auto-execute on changes
 iris watch src/ --instruction "reload page"
 iris watch "**/*.ts" --execute
+
+# Or: on every save, tell me what changed on screen (see below)
+iris watch src/ --feedback --feedback-url http://localhost:3000
 ```
+
+### `iris watch --feedback` — what changed on screen, on every save
+
+Without `--feedback`, `watch` re-runs one fixed instruction on every change
+(default: `click submit`). That is useful for replaying a known interaction, and
+useless for the question you usually have while editing CSS: *did I just break
+something?*
+
+`--feedback` answers that instead. On each save it captures the page, compares it
+to the previous capture, and — only if pixels actually moved — asks the AI what
+changed:
+
+```
+🔄 File change: src/app.css
+👁️  Observing http://localhost:3000
+   🎨 MEDIUM: The primary button lost its vertical padding, shifting the form up
+      → Check the padding shorthand on .btn-primary
+```
+
+**What it costs, and why not much.** Two gates sit in front of every AI call:
+
+| | |
+|---|---|
+| A save that changed no rendered pixels | pixel-diffed, reported as `No visual change`, **never reaches the AI** |
+| An identical image pair | served from the vision cache, no provider call |
+| A hot edit loop | capped at 50 AI calls per session (`--max-ai-calls <n>`) |
+
+Provider resolution matches `visual-diff --semantic`: auto-detected from the
+environment, or pick one with `--provider openai|anthropic|ollama`. Ollama runs
+locally and needs no key. A missing key is reported **before** the watcher
+starts, not on your first save.
+
+**Honest about latency.** The PRD target is feedback within 2 seconds. In practice
+a capture with stabilization (fonts, animations, network-idle) usually takes
+longer than that on its own, before the model is even called — expect a few
+seconds per changed save, and effectively nothing for saves that changed no
+pixels. It is a companion process, not an inner-loop linter.
+
+**Which page.** `--feedback-url`, else `IRIS_BASE_URL`, else the changed file's
+own `file://` URL. That last fallback suits a static page being edited directly;
+for anything served by a dev server, pass the URL.
+
+When a URL is configured the reference is captured **at startup**, so your very
+first save already gets compared. With no URL there is nothing to capture until
+something changes, so the first save establishes the reference instead.
+
+A provider failure prints and the watcher keeps running — a companion process
+that dies on a hiccup is worse than one that says so.
 
 **JSON-RPC Server (advanced / experimental):**
 ```bash
