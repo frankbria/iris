@@ -105,6 +105,20 @@ export class FileWatcher {
     if (this.options.feedback) {
       this.captureEngine = new VisualCaptureEngine();
       this.diffEngine = new VisualDiffEngine();
+    }
+  }
+
+  /**
+   * The classifier, built on first use.
+   *
+   * Not in the constructor: building one opens a SQLite-backed vision cache, and
+   * a watcher that never sees a visual change — or never sees one past the diff
+   * gate — should not open a database to prove it. Constructing it eagerly also
+   * made the class impossible to instantiate without a writable cache
+   * directory, which is how CI found this.
+   */
+  private ensureClassifier(): AIVisualClassifier {
+    if (!this.classifier) {
       this.classifier = new AIVisualClassifier({
         provider: this.options.ai.provider,
         apiKey: this.options.ai.apiKey,
@@ -114,6 +128,7 @@ export class FileWatcher {
         temperature: 0.1,
       });
     }
+    return this.classifier;
   }
 
   async start(): Promise<void> {
@@ -216,6 +231,11 @@ export class FileWatcher {
 
     // Clean up browser session
     await this.cleanupBrowserSession();
+
+    // The classifier holds a SQLite-backed cache; a watcher stopped and
+    // restarted in-process would otherwise accumulate open handles.
+    this.classifier?.close();
+    this.classifier = undefined;
 
     console.log('✅ File watcher stopped');
   }
@@ -346,7 +366,7 @@ export class FileWatcher {
     if (!this.browserSessionActive) {
       await this.initializeBrowserSession();
     }
-    if (!this.page || !this.captureEngine || !this.diffEngine || !this.classifier) {
+    if (!this.page || !this.captureEngine || !this.diffEngine) {
       throw new Error('Feedback session not initialized');
     }
 
@@ -401,7 +421,7 @@ export class FileWatcher {
     this.aiCallsUsed++;
     let analysed = false;
     try {
-      const analysis = await this.classifier.analyzeChange({
+      const analysis = await this.ensureClassifier().analyzeChange({
         baselineImage: this.referenceCapture,
         currentImage: capture.buffer,
         diffImage: diff.diffBuffer,

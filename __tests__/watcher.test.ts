@@ -37,10 +37,10 @@ jest.mock('../src/config', () => ({
 jest.mock('../src/db', () => ({
   initializeDatabase: jest.fn().mockReturnValue({ close: jest.fn() }),
   insertTestRun: jest.fn(),
-  // Feedback mode constructs AIVisualClassifier, whose vision cache opens a
-  // SQLite file through this helper. Without it the mock is narrower than the
-  // module and the watcher cannot be constructed at all.
-  ensureDatabaseDir: jest.fn(),
+  // Feedback mode's classifier opens a SQLite vision cache through this. The
+  // REAL implementation, not a stub: a no-op left the directory uncreated, which
+  // passed locally (the dir already existed) and failed in CI.
+  ensureDatabaseDir: jest.requireActual('../src/db').ensureDatabaseDir,
 }));
 
 // Mock executor
@@ -960,6 +960,54 @@ describe('FileWatcher AI feedback mode', () => {
 
       await expect(startFeedbackWatcher()).resolves.toBeDefined();
       expect(logged()).toContain('Could not capture a reference');
+    });
+  });
+
+  describe('resource lifecycle', () => {
+    it('does not build the classifier until a change actually needs one', async () => {
+      // Building one opens a SQLite-backed vision cache. A watcher that never
+      // sees a visual change should not open a database to prove it — and the
+      // eager version could not even be constructed without a writable cache
+      // directory, which is how CI found this.
+      const construct = jest.spyOn(classifierModule, 'AIVisualClassifier');
+
+      await startFeedbackWatcher();
+      expect(construct).not.toHaveBeenCalled();
+
+      changeCallback!('src/app.css');
+      await jest.advanceTimersByTimeAsync(60);
+      expect(construct).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes the classifier on stop', async () => {
+      const close = jest
+        .spyOn(classifierModule.AIVisualClassifier.prototype, 'close')
+        .mockImplementation();
+      const watcher = await startFeedbackWatcher();
+
+      changeCallback!('src/app.css'); // forces the classifier into existence
+      await jest.advanceTimersByTimeAsync(60);
+      await watcher.stop();
+
+      // A watcher stopped and restarted in-process would otherwise accumulate
+      // open SQLite handles.
+      expect(close).toHaveBeenCalled();
+    });
+
+    it('is safe to stop when no classifier was ever built', async () => {
+      compare.mockResolvedValue({
+        success: true,
+        passed: true,
+        similarity: 1,
+        pixelDifference: 0,
+        threshold: 0.001,
+      });
+      const watcher = await startFeedbackWatcher();
+
+      changeCallback!('src/app.css');
+      await jest.advanceTimersByTimeAsync(60);
+
+      await expect(watcher.stop()).resolves.toBeUndefined();
     });
   });
 
