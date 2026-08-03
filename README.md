@@ -49,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1060/1061 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1062/1063 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -81,7 +81,7 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 1060/1061 tests passing (99.9% pass rate), 1 skipped, 0 failing
+**Test Results:** 1062/1063 tests passing (99.9% pass rate), 1 skipped, 0 failing
 
 **Coverage:** 75.7% statements overall (below the 85% target)
 - Branch coverage: 57.34% (primary improvement area)
@@ -252,6 +252,10 @@ pixels. It is a companion process, not an inner-loop linter.
 **Which page.** `--feedback-url`, else `IRIS_BASE_URL`, else the changed file's
 own `file://` URL. That last fallback suits a static page being edited directly;
 for anything served by a dev server, pass the URL.
+
+When a URL is configured the reference is captured **at startup**, so your very
+first save already gets compared. With no URL there is nothing to capture until
+something changes, so the first save establishes the reference instead.
 
 A provider failure prints and the watcher keeps running — a companion process
 that dies on a hiccup is worse than one that says so.

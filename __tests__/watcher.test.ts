@@ -838,7 +838,7 @@ describe('watchFiles entry point', () => {
  * AI feedback mode (issue #118 / plan 015).
  *
  * The pipeline is gated twice before it spends anything — an unchanged page
- * never reaches the AI, and a session cap bounds a hot edit loop — so most of
+ * never reaches the AI, and a session cap bounds a hot edit loop — so much of
  * what is under test here is what does NOT happen.
  */
 describe('FileWatcher AI feedback mode', () => {
@@ -866,7 +866,8 @@ describe('FileWatcher AI feedback mode', () => {
     };
     (chokidar.watch as jest.Mock).mockReturnValue(mockWatcher);
 
-    // Distinct buffers so "did the reference advance?" is observable.
+    // Distinct buffers so "which capture was compared against which?" is
+    // observable. The first is taken at startup, before any file change.
     capture
       .mockResolvedValueOnce({ success: true, buffer: Buffer.from('shot-1'), metadata: {} })
       .mockResolvedValue({ success: true, buffer: Buffer.from('shot-2'), metadata: {} });
@@ -921,167 +922,188 @@ describe('FileWatcher AI feedback mode', () => {
   };
 
   const logged = () => logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+  const errored = () => errorSpy.mock.calls.map((c) => String(c[0])).join('\n');
 
-  it('captures a reference on the first change without calling the AI', async () => {
-    await startFeedbackWatcher();
+  describe('the reference', () => {
+    it('is captured at startup, so the very first save gets feedback', async () => {
+      // Establishing it on the first *change* instead would mean the most
+      // likely first thing a user does produces no feedback at all.
+      await startFeedbackWatcher();
 
-    changeCallback!('src/app.css');
-    await jest.advanceTimersByTimeAsync(60);
+      expect(capture).toHaveBeenCalledTimes(1);
+      expect(analyzeChange).not.toHaveBeenCalled();
+      expect(logged()).toContain('Reference captured');
 
-    expect(capture).toHaveBeenCalledTimes(1);
-    // Nothing to compare against yet, so asking the AI would be asking about
-    // nothing — and would bill for it.
-    expect(analyzeChange).not.toHaveBeenCalled();
-    expect(logged()).toContain('Reference captured');
-  });
-
-  it('skips the AI when the page did not visually change', async () => {
-    compare.mockResolvedValue({
-      success: true,
-      passed: true,
-      similarity: 1,
-      pixelDifference: 0,
-      threshold: 0.001,
-    });
-    await startFeedbackWatcher();
-
-    changeCallback!('src/app.css');
-    await jest.advanceTimersByTimeAsync(60);
-    changeCallback!('src/app.css');
-    await jest.advanceTimersByTimeAsync(60);
-
-    expect(compare).toHaveBeenCalledTimes(1);
-    // The gate that makes a save touching no rendered pixels free.
-    expect(analyzeChange).not.toHaveBeenCalled();
-    expect(logged()).toContain('No visual change');
-  });
-
-  it('classifies a real change and prints severity, description and suggestions', async () => {
-    await startFeedbackWatcher();
-
-    changeCallback!('src/app.css');
-    await jest.advanceTimersByTimeAsync(60);
-    changeCallback!('src/app.css');
-    await jest.advanceTimersByTimeAsync(60);
-
-    expect(analyzeChange).toHaveBeenCalledTimes(1);
-    const request = analyzeChange.mock.calls[0][0];
-    // Compared against the PREVIOUS capture, not against itself.
-    expect(request.baselineImage.toString()).toBe('shot-1');
-    expect(request.currentImage.toString()).toBe('shot-2');
-    expect(request.diffImage.toString()).toBe('diff');
-
-    const output = logged();
-    expect(output).toContain('MEDIUM');
-    expect(output).toContain('The header moved down');
-    expect(output).toContain('Check the new margin on .header');
-  });
-
-  it('keeps watching after an AI failure, and keeps the comparison point', async () => {
-    analyzeChange.mockRejectedValueOnce(new Error('provider exploded'));
-    await startFeedbackWatcher();
-
-    changeCallback!('src/app.css'); // reference
-    await jest.advanceTimersByTimeAsync(60);
-    changeCallback!('src/app.css'); // AI throws
-    await jest.advanceTimersByTimeAsync(60);
-
-    expect(errorSpy.mock.calls.map((c) => String(c[0])).join('\n')).toContain('provider exploded');
-
-    // A watcher that dies on a provider hiccup is worse than one that says so.
-    changeCallback!('src/app.css');
-    await jest.advanceTimersByTimeAsync(60);
-    expect(analyzeChange).toHaveBeenCalledTimes(2);
-  });
-
-  it('reports a provider outage as a failure, not as a confident finding', async () => {
-    // analyzeChange answers with a fallback shape rather than throwing, so
-    // without the analysisFailed check an outage prints as "MEDIUM: Failed to
-    // analyze visual changes: …" — a verdict-shaped error. Observed live.
-    analyzeChange.mockResolvedValueOnce({
-      classification: 'unknown',
-      confidence: 0.5,
-      description: 'Failed to analyze visual changes: All providers failed',
-      severity: 'medium',
-      suggestions: ['Review the visual changes manually'],
-      isIntentional: false,
-      changeType: 'unknown',
-      reasoning: 'Analysis failed: All providers failed',
-      analysisFailed: true,
-    });
-    await startFeedbackWatcher();
-
-    changeCallback!('src/app.css');
-    await jest.advanceTimersByTimeAsync(60);
-    changeCallback!('src/app.css');
-    await jest.advanceTimersByTimeAsync(60);
-
-    expect(errorSpy.mock.calls.map((c) => String(c[0])).join('\n')).toContain(
-      'AI analysis unavailable',
-    );
-    // Crucially NOT rendered as a severity line.
-    expect(logged()).not.toContain('MEDIUM');
-  });
-
-  it('holds the comparison point when analysis did not happen', async () => {
-    // Advancing the reference after a failure would compare the NEXT save
-    // against an unanalysed state, silently dropping the change nobody heard
-    // about. Holding it means the change is included next time.
-    analyzeChange.mockRejectedValueOnce(new Error('provider exploded'));
-    capture
-      .mockReset()
-      .mockResolvedValueOnce({ success: true, buffer: Buffer.from('a'), metadata: {} })
-      .mockResolvedValueOnce({ success: true, buffer: Buffer.from('b'), metadata: {} })
-      .mockResolvedValue({ success: true, buffer: Buffer.from('c'), metadata: {} });
-    await startFeedbackWatcher();
-
-    changeCallback!('src/app.css'); // reference = a
-    await jest.advanceTimersByTimeAsync(60);
-    changeCallback!('src/app.css'); // a -> b, AI throws
-    await jest.advanceTimersByTimeAsync(60);
-    changeCallback!('src/app.css'); // should still compare against a, not b
-    await jest.advanceTimersByTimeAsync(60);
-
-    expect(compare.mock.calls[1][0].toString()).toBe('a');
-    expect(analyzeChange.mock.calls[1][0].baselineImage.toString()).toBe('a');
-  });
-
-  it('stops calling the AI once the session cap is reached, and says so once', async () => {
-    await startFeedbackWatcher({ maxAiCalls: 1 });
-
-    for (let i = 0; i < 4; i++) {
       changeCallback!('src/app.css');
       await jest.advanceTimersByTimeAsync(60);
-    }
 
-    // First change is the reference; the second spends the only allowed call.
-    expect(analyzeChange).toHaveBeenCalledTimes(1);
-    const notices = logSpy.mock.calls
-      .map((c) => String(c[0]))
-      .filter((line) => line.includes('AI call cap reached'));
-    expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain('--max-ai-calls');
+      expect(analyzeChange).toHaveBeenCalledTimes(1);
+    });
+
+    it('is deferred to the first change when no URL is configured', async () => {
+      // The observed page is then the changed file itself, which cannot be
+      // known before something changes.
+      await startFeedbackWatcher({ feedbackUrl: undefined });
+
+      expect(capture).not.toHaveBeenCalled();
+      expect(logged()).toContain('first change will establish the reference');
+
+      changeCallback!('page.html');
+      await jest.advanceTimersByTimeAsync(60);
+
+      expect(capture).toHaveBeenCalledTimes(1);
+      expect(analyzeChange).not.toHaveBeenCalled();
+    });
+
+    it('does not block startup when the reference capture fails', async () => {
+      capture.mockReset().mockRejectedValue(new Error('page unreachable'));
+
+      await expect(startFeedbackWatcher()).resolves.toBeDefined();
+      expect(logged()).toContain('Could not capture a reference');
+    });
   });
 
-  it('observes the feedback URL rather than the changed file', async () => {
-    await startFeedbackWatcher();
+  describe('cost gates', () => {
+    it('skips the AI when the page did not visually change', async () => {
+      compare.mockResolvedValue({
+        success: true,
+        passed: true,
+        similarity: 1,
+        pixelDifference: 0,
+        threshold: 0.001,
+      });
+      await startFeedbackWatcher();
 
-    changeCallback!('src/app.css');
-    await jest.advanceTimersByTimeAsync(60);
+      changeCallback!('src/app.css');
+      await jest.advanceTimersByTimeAsync(60);
 
-    // A dev server is the point; the changed .css file would render as nothing.
-    expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000');
+      expect(compare).toHaveBeenCalledTimes(1);
+      // The gate that makes a save touching no rendered pixels free.
+      expect(analyzeChange).not.toHaveBeenCalled();
+      expect(logged()).toContain('No visual change');
+    });
+
+    it('stops calling the AI once the session cap is reached, and says so once', async () => {
+      await startFeedbackWatcher({ maxAiCalls: 1 });
+
+      for (let i = 0; i < 4; i++) {
+        changeCallback!('src/app.css');
+        await jest.advanceTimersByTimeAsync(60);
+      }
+
+      expect(analyzeChange).toHaveBeenCalledTimes(1);
+      const notices = logSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((line) => line.includes('AI call cap reached'));
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toContain('--max-ai-calls');
+    });
   });
 
-  it('falls back to the changed file when no URL is configured', async () => {
-    await startFeedbackWatcher({ feedbackUrl: undefined });
+  describe('reporting', () => {
+    it('classifies a real change and prints severity, description and suggestions', async () => {
+      await startFeedbackWatcher();
 
-    changeCallback!('page.html');
-    await jest.advanceTimersByTimeAsync(60);
+      changeCallback!('src/app.css');
+      await jest.advanceTimersByTimeAsync(60);
 
-    expect(mockPage.goto).toHaveBeenCalledWith(
-      pathToFileURL(path.resolve(process.cwd(), 'page.html')).href,
-    );
+      expect(analyzeChange).toHaveBeenCalledTimes(1);
+      const request = analyzeChange.mock.calls[0][0];
+      // Compared against the startup reference, not against itself.
+      expect(request.baselineImage.toString()).toBe('shot-1');
+      expect(request.currentImage.toString()).toBe('shot-2');
+      expect(request.diffImage.toString()).toBe('diff');
+
+      const output = logged();
+      expect(output).toContain('MEDIUM');
+      expect(output).toContain('The header moved down');
+      expect(output).toContain('Check the new margin on .header');
+    });
+
+    it('reports a provider outage as a failure, not as a confident finding', async () => {
+      // analyzeChange answers with a fallback shape rather than throwing, so
+      // without the analysisFailed check an outage prints as "MEDIUM: Failed to
+      // analyze visual changes: …" — a verdict-shaped error. Observed live.
+      analyzeChange.mockResolvedValueOnce({
+        classification: 'unknown',
+        confidence: 0.5,
+        description: 'Failed to analyze visual changes: All providers failed',
+        severity: 'medium',
+        suggestions: ['Review the visual changes manually'],
+        isIntentional: false,
+        changeType: 'unknown',
+        reasoning: 'Analysis failed: All providers failed',
+        analysisFailed: true,
+      });
+      await startFeedbackWatcher();
+
+      changeCallback!('src/app.css');
+      await jest.advanceTimersByTimeAsync(60);
+
+      expect(errored()).toContain('AI analysis unavailable');
+      // Crucially NOT rendered as a severity line.
+      expect(logged()).not.toContain('MEDIUM');
+    });
+  });
+
+  describe('resilience', () => {
+    it('keeps watching after an AI failure', async () => {
+      analyzeChange.mockRejectedValueOnce(new Error('provider exploded'));
+      await startFeedbackWatcher();
+
+      changeCallback!('src/app.css');
+      await jest.advanceTimersByTimeAsync(60);
+      expect(errored()).toContain('provider exploded');
+
+      // A watcher that dies on a provider hiccup is worse than one that says so.
+      changeCallback!('src/app.css');
+      await jest.advanceTimersByTimeAsync(60);
+      expect(analyzeChange).toHaveBeenCalledTimes(2);
+    });
+
+    it('holds the comparison point when analysis did not happen', async () => {
+      // Advancing the reference after a failure would compare the NEXT save
+      // against an unanalysed state, silently dropping the change nobody heard
+      // about. Holding it means the change is included next time.
+      analyzeChange.mockRejectedValueOnce(new Error('provider exploded'));
+      capture
+        .mockReset()
+        .mockResolvedValueOnce({ success: true, buffer: Buffer.from('a'), metadata: {} })
+        .mockResolvedValueOnce({ success: true, buffer: Buffer.from('b'), metadata: {} })
+        .mockResolvedValue({ success: true, buffer: Buffer.from('c'), metadata: {} });
+      await startFeedbackWatcher();
+
+      changeCallback!('src/app.css'); // a -> b, AI throws
+      await jest.advanceTimersByTimeAsync(60);
+      changeCallback!('src/app.css'); // should still compare against a, not b
+      await jest.advanceTimersByTimeAsync(60);
+
+      expect(compare.mock.calls[1][0].toString()).toBe('a');
+      expect(analyzeChange.mock.calls[1][0].baselineImage.toString()).toBe('a');
+    });
+  });
+
+  describe('which page is observed', () => {
+    it('uses the feedback URL rather than the changed file', async () => {
+      await startFeedbackWatcher();
+
+      changeCallback!('src/app.css');
+      await jest.advanceTimersByTimeAsync(60);
+
+      // A dev server is the point; the changed .css file would render as nothing.
+      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000');
+    });
+
+    it('falls back to the changed file when no URL is configured', async () => {
+      await startFeedbackWatcher({ feedbackUrl: undefined });
+
+      changeCallback!('page.html');
+      await jest.advanceTimersByTimeAsync(60);
+
+      expect(mockPage.goto).toHaveBeenCalledWith(
+        pathToFileURL(path.resolve(process.cwd(), 'page.html')).href,
+      );
+    });
   });
 
   it('leaves the default watch path untouched', async () => {

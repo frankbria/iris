@@ -142,6 +142,7 @@ export class FileWatcher {
         `   Observing: ${this.options.feedbackUrl || process.env.IRIS_BASE_URL || 'the changed file'}`,
       );
       console.log(`   AI call cap: ${this.options.maxAiCalls}`);
+      await this.captureStartupReference();
     }
 
     if (this.options.execute) {
@@ -282,6 +283,52 @@ export class FileWatcher {
     // pathToFileURL escapes URL-reserved characters that plain concatenation
     // would mis-parse when handed to page.goto().
     return pathToFileURL(path.resolve(this.options.cwd, event.path)).href;
+  }
+
+  /**
+   * Capture the reference before any file changes, so the first save is
+   * already comparable.
+   *
+   * Without this the first edit after starting — the most likely thing a user
+   * does — produces only "Reference captured" and no feedback at all.
+   *
+   * Only possible when the page is known up front. With no URL configured the
+   * observed page is the changed file itself, which cannot be known before a
+   * change happens, so that case still establishes the reference on first save.
+   */
+  private async captureStartupReference(): Promise<void> {
+    const url = this.options.feedbackUrl || process.env.IRIS_BASE_URL;
+    if (!url) {
+      console.log('   No --feedback-url set — the first change will establish the reference.');
+      return;
+    }
+
+    try {
+      await this.initializeBrowserSession();
+      if (!this.page || !this.captureEngine) {
+        throw new Error('Feedback session not initialized');
+      }
+      await navigate(this.page, url);
+      const capture = await this.captureEngine.capture(this.page, {
+        fullPage: true,
+        maskSelectors: [],
+        stabilizeMs: 500,
+        disableAnimations: true,
+        type: 'png',
+      });
+
+      if (capture.success && capture.buffer) {
+        this.referenceCapture = capture.buffer;
+        console.log('   📸 Reference captured — your next save will be compared against it');
+      } else {
+        console.log(`   ⚠️  Could not capture a reference: ${capture.error ?? 'unknown error'}`);
+      }
+    } catch (error) {
+      // Never block startup on this: the first change re-establishes it.
+      console.log(
+        `   ⚠️  Could not capture a reference: ${error instanceof Error ? error.message : error}`,
+      );
+    }
   }
 
   /**
