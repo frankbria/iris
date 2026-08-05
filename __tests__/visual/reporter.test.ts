@@ -607,6 +607,53 @@ describe('VisualReporter renders the full AI analysis', () => {
     });
   });
 
+  describe('a failed analysis', () => {
+    // The classifier answers a provider outage with a fallback that carries a
+    // severity, an isIntentional and a description that is really an error
+    // string. Rendering it as a verdict presents an outage as a judgement —
+    // and the new intent badge made that worse, not better.
+    const failed = {
+      classification: 'unknown',
+      confidence: 0.5,
+      description: 'Failed to analyze visual changes: All providers failed',
+      severity: 'medium',
+      suggestions: ['Review the visual changes manually', 'Check AI provider configuration'],
+      isIntentional: false,
+      changeType: 'unknown',
+      reasoning: 'Analysis failed: All providers failed',
+      analysisFailed: true,
+    };
+
+    it('is never rendered as an intent judgement in HTML', async () => {
+      const content = await render('html', failed);
+
+      expect(content).toContain('Analysis unavailable');
+      expect(content).toContain('All providers failed');
+      // The specific trap: isIntentional is false in the fallback.
+      expect(content).not.toContain('Looks unintentional');
+      expect(content).not.toContain('<div class="analysis-reasoning">');
+      // Troubleshooting suggestions still help, so they stay.
+      expect(content).toContain('Check AI provider configuration');
+    });
+
+    it('is marked unavailable in Markdown rather than classified', async () => {
+      const content = await render('markdown', failed);
+
+      expect(content).toContain('- Analysis unavailable:');
+      expect(content).not.toContain('- Classification: unknown');
+      expect(content).not.toContain('- Looks intentional:');
+      expect(content).not.toContain('- Change type:');
+    });
+
+    it('is marked unavailable in JUnit rather than classified', async () => {
+      const content = await render('junit', failed);
+
+      expect(content).toContain('AI Analysis Unavailable:');
+      expect(content).not.toContain('AI Classification:');
+      expect(content).not.toContain('AI Reasoning:');
+    });
+  });
+
   describe('Markdown', () => {
     it('lists suggestions and reasoning as bullets', async () => {
       const content = await render('markdown');

@@ -600,6 +600,41 @@ describe('VisualTestRunner', () => {
       expect(analysis?.changeType).toBe('layout');
     });
 
+    it('carries the analysis-failure flag through, so reports can tell an outage from a verdict', async () => {
+      // The classifier's fallback is verdict-shaped: it has a severity, an
+      // isIntentional and a description that is really an error string. If the
+      // flag is dropped here, the report renders an outage as a judgement.
+      mockAIClassifier.analyzeChange.mockResolvedValue({
+        classification: 'unknown',
+        confidence: 0.5,
+        description: 'Failed to analyze visual changes: All providers failed',
+        severity: 'medium',
+        suggestions: ['Check AI provider configuration'],
+        isIntentional: false,
+        changeType: 'unknown',
+        reasoning: 'Analysis failed: All providers failed',
+        analysisFailed: true,
+      });
+      const configWithAI = {
+        ...defaultConfig,
+        diff: { ...defaultConfig.diff, semanticAnalysis: true, apiKey: 'sk-test' },
+      };
+      visualRunner = new VisualTestRunner(configWithAI);
+
+      mockDiffEngine.compare.mockResolvedValue({
+        success: true,
+        passed: false,
+        similarity: 0.8,
+        pixelDifference: 0.2,
+        threshold: 0.95,
+        diffBuffer: Buffer.from('test-diff'),
+      });
+
+      const result = await visualRunner.run();
+
+      expect(result.results[0].aiAnalysis?.analysisFailed).toBe(true);
+    });
+
     it('defaults suggestions to an empty list when the classifier omits them', async () => {
       // AIAnalysisResponse types `suggestions` as required, so this is cast
       // deliberately: the classifier maps provider output, and a provider that

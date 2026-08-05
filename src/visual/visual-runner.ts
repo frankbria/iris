@@ -104,6 +104,15 @@ export interface VisualTestResult {
       changeType?: string;
       /** Why the model classified it this way — the part a reviewer actually argues with. */
       reasoning?: string;
+      /**
+       * True when analysis did not happen and this is the classifier's fallback.
+       *
+       * The fallback is verdict-shaped — it carries a severity, an
+       * `isIntentional` and a description that is really an error string — so
+       * without this a provider outage renders as a confident judgement. Same
+       * trap the watcher hit in #118.
+       */
+      analysisFailed?: boolean;
     };
     screenshotPath: string;
     baselinePath?: string;
@@ -474,6 +483,7 @@ export class VisualTestRunner {
           isIntentional: analysis.isIntentional,
           changeType: analysis.changeType,
           reasoning: analysis.reasoning,
+          analysisFailed: analysis.analysisFailed,
         };
 
         // Map AI severity to test severity

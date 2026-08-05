@@ -280,15 +280,24 @@ export class VisualReporter {
           <div class="ai-analysis">
             <h4>AI Analysis</h4>
             <div class="analysis-content">
-              <div class="analysis-classification">
+              ${
+                result.aiAnalysis.analysisFailed
+                  ? // The fallback carries a severity, an isIntentional and a
+                    // description that is really an error string. Rendering it
+                    // as a verdict would present an outage as a judgement.
+                    `<div class="analysis-unavailable">
+                <strong>Analysis unavailable:</strong> ${this.escapeHtml(result.aiAnalysis.description)}
+              </div>`
+                  : `<div class="analysis-classification">
                 <strong>Classification:</strong> ${this.escapeHtml(result.aiAnalysis.classification)}
                 <span class="confidence">(${(result.aiAnalysis.confidence * 100).toFixed(0)}% confidence)</span>
               </div>
               <div class="analysis-description">
                 ${this.escapeHtml(result.aiAnalysis.description)}
-              </div>
+              </div>`
+              }
               ${
-                result.aiAnalysis.isIntentional !== undefined
+                !result.aiAnalysis.analysisFailed && result.aiAnalysis.isIntentional !== undefined
                   ? `<div class="analysis-intent">
                 <span class="intent-badge ${result.aiAnalysis.isIntentional ? 'intent-yes' : 'intent-no'}">
                   ${result.aiAnalysis.isIntentional ? 'Looks intentional' : 'Looks unintentional'}
@@ -297,7 +306,7 @@ export class VisualReporter {
                   : ''
               }
               ${
-                result.aiAnalysis.reasoning
+                !result.aiAnalysis.analysisFailed && result.aiAnalysis.reasoning
                   ? `<div class="analysis-reasoning">
                 <strong>Reasoning:</strong> ${this.escapeHtml(result.aiAnalysis.reasoning)}
               </div>`
@@ -438,9 +447,12 @@ ${
       // model-authored text quoting page content. A bare `<` or `&` makes the
       // XML unparseable, which fails the CI job for the wrong reason. The
       // attributes above were already escaped; the body was not.
-      `AI Classification: ${this.escapeXml(test.aiAnalysis.classification)}
-AI Description: ${this.escapeXml(test.aiAnalysis.description)}${
-        test.aiAnalysis.reasoning
+      (test.aiAnalysis.analysisFailed
+        ? `AI Analysis Unavailable: ${this.escapeXml(test.aiAnalysis.description)}`
+        : `AI Classification: ${this.escapeXml(test.aiAnalysis.classification)}
+AI Description: ${this.escapeXml(test.aiAnalysis.description)}`) +
+      `${
+        !test.aiAnalysis.analysisFailed && test.aiAnalysis.reasoning
           ? `\nAI Reasoning: ${this.escapeXml(test.aiAnalysis.reasoning)}`
           : ''
       }${
@@ -517,16 +529,21 @@ AI Description: ${this.escapeXml(test.aiAnalysis.description)}${
 
       if (result.aiAnalysis) {
         markdown += `\n**AI Analysis:**\n`;
-        markdown += `- Classification: ${result.aiAnalysis.classification}\n`;
-        markdown += `- Confidence: ${(result.aiAnalysis.confidence * 100).toFixed(0)}%\n`;
-        markdown += `- Description: ${result.aiAnalysis.description}\n`;
-        if (result.aiAnalysis.isIntentional !== undefined) {
+        if (result.aiAnalysis.analysisFailed) {
+          // Not a verdict: the classifier's fallback only looks like one.
+          markdown += `- Analysis unavailable: ${result.aiAnalysis.description}\n`;
+        } else {
+          markdown += `- Classification: ${result.aiAnalysis.classification}\n`;
+          markdown += `- Confidence: ${(result.aiAnalysis.confidence * 100).toFixed(0)}%\n`;
+          markdown += `- Description: ${result.aiAnalysis.description}\n`;
+        }
+        if (!result.aiAnalysis.analysisFailed && result.aiAnalysis.isIntentional !== undefined) {
           markdown += `- Looks intentional: ${result.aiAnalysis.isIntentional ? 'yes' : 'no'}\n`;
         }
-        if (result.aiAnalysis.changeType) {
+        if (!result.aiAnalysis.analysisFailed && result.aiAnalysis.changeType) {
           markdown += `- Change type: ${result.aiAnalysis.changeType}\n`;
         }
-        if (result.aiAnalysis.reasoning) {
+        if (!result.aiAnalysis.analysisFailed && result.aiAnalysis.reasoning) {
           markdown += `- Reasoning: ${result.aiAnalysis.reasoning}\n`;
         }
         if (result.aiAnalysis.suggestions && result.aiAnalysis.suggestions.length > 0) {
