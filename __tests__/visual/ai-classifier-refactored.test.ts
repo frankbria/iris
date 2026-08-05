@@ -148,6 +148,31 @@ describe('AIVisualClassifier (real, backed by Phase 2A infrastructure)', () => {
       expect(mockPreprocessor.preprocess).not.toHaveBeenCalled();
     });
 
+    // Issue #124: the computed diff mask localizes WHAT changed. Dropping it
+    // (the pre-#124 behavior) made the model compare two full screenshots with
+    // no pointer to the changed region.
+    it('forwards the diff image to the smart client when the caller supplies one', async () => {
+      await classifier.analyzeChange({
+        baselineImage: mockBaselineBuffer,
+        currentImage: mockCurrentBuffer,
+        diffImage: mockDiffBuffer,
+      });
+
+      const callArgs = mockSmartClient.analyzeVisualDiff.mock.calls[0][0];
+      // RAW buffer, same as baseline/current — the smart client preprocesses.
+      expect(callArgs.diff).toBe(mockDiffBuffer);
+    });
+
+    it('leaves diff undefined when the caller supplies none', async () => {
+      await classifier.analyzeChange({
+        baselineImage: mockBaselineBuffer,
+        currentImage: mockCurrentBuffer,
+      });
+
+      const callArgs = mockSmartClient.analyzeVisualDiff.mock.calls[0][0];
+      expect(callArgs.diff).toBeUndefined();
+    });
+
     it('maps a moderate response to medium/regression', async () => {
       const result = await classifier.analyzeChange({
         baselineImage: mockBaselineBuffer,

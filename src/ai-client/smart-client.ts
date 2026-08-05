@@ -126,6 +126,11 @@ export class SmartAIVisionClient {
     // Preprocess images
     const baselineProcessed = await this.preprocessor.preprocess(request.baseline);
     const currentProcessed = await this.preprocessor.preprocess(request.current);
+    // The diff mask goes through the same pipeline so the provider gets a
+    // size-capped image and the cache gets a hash to key on (issue #124).
+    const diffProcessed = request.diff
+      ? await this.preprocessor.preprocess(request.diff)
+      : undefined;
 
     // Try provider chain with fallback
     const providers = this.config.enableFallback
@@ -142,17 +147,21 @@ export class SmartAIVisionClient {
       // write, and cost tracking all key on the exact same value.
       const model = this.resolveModel(providerName);
 
+      // Derive the key ONCE per attempt too. Two separate derivations for the
+      // read and the write is how they silently drifted apart in issue #60 —
+      // every added key input has to be remembered in both places.
+      const cacheKey = this.cache?.generateKey(
+        baselineProcessed.hash,
+        currentProcessed.hash,
+        providerName,
+        model,
+        contextKey,
+        diffProcessed?.hash ?? '',
+      );
+
       // Check cache for this provider+model (cache hits are free, so this runs
       // before availability/budget checks)
-      if (this.cache) {
-        const cacheKey = this.cache.generateKey(
-          baselineProcessed.hash,
-          currentProcessed.hash,
-          providerName,
-          model,
-          contextKey,
-        );
-
+      if (this.cache && cacheKey) {
         const cached = this.cache.get(cacheKey);
         if (cached) {
           if (this.costTracker) {
@@ -188,6 +197,7 @@ export class SmartAIVisionClient {
         const result = await client.analyzeVisualDiff({
           baseline: baselineProcessed.buffer,
           current: currentProcessed.buffer,
+          ...(diffProcessed ? { diff: diffProcessed.buffer } : {}),
           context: request.context,
         });
 
@@ -198,14 +208,7 @@ export class SmartAIVisionClient {
         }
 
         // Cache result
-        if (this.cache) {
-          const cacheKey = this.cache.generateKey(
-            baselineProcessed.hash,
-            currentProcessed.hash,
-            providerName,
-            model,
-            contextKey,
-          );
+        if (this.cache && cacheKey) {
           this.cache.set(cacheKey, result, providerName, model);
         }
 

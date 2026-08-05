@@ -32,7 +32,10 @@ jest.mock('@anthropic-ai/sdk', () => ({
 
 const baseline = Buffer.from('baseline-bytes');
 const current = Buffer.from('current-bytes');
+const diff = Buffer.from('diff-bytes');
 const request = { baseline, current, context: { url: 'https://example.com' } };
+// Issue #124: same request plus the computed diff mask as a third image.
+const requestWithDiff = { ...request, diff };
 
 const parsed = {
   severity: 'moderate',
@@ -76,6 +79,40 @@ describe('vision clients', () => {
       expect(imageParts).toHaveLength(2);
       expect(imageParts[0].image_url.url).toContain(baseline.toString('base64'));
       expect(imageParts[1].image_url.url).toContain(current.toString('base64'));
+    });
+
+    it('appends the diff mask as a third image and points the prompt at it (issue #124)', async () => {
+      mockOpenAICreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify(parsed) } }],
+      });
+
+      await new OpenAIVisionClient(config).analyzeVisualDiff(requestWithDiff);
+
+      const payload = mockOpenAICreate.mock.calls[0][0];
+      const userContent = payload.messages.find((m: { role: string }) => m.role === 'user').content;
+      const imageParts = userContent.filter((p: { type: string }) => p.type === 'image_url');
+      expect(imageParts).toHaveLength(3);
+      // Order matters: the prompt describes first/second/third positionally.
+      expect(imageParts[0].image_url.url).toContain(baseline.toString('base64'));
+      expect(imageParts[1].image_url.url).toContain(current.toString('base64'));
+      expect(imageParts[2].image_url.url).toContain(diff.toString('base64'));
+
+      const text = userContent.find((p: { type: string }) => p.type === 'text').text;
+      expect(text).toMatch(/third image/i);
+    });
+
+    it('leaves the two-image prompt untouched when no diff is supplied (issue #124)', async () => {
+      mockOpenAICreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify(parsed) } }],
+      });
+
+      await new OpenAIVisionClient(config).analyzeVisualDiff(request);
+
+      const userContent = mockOpenAICreate.mock.calls[0][0].messages.find(
+        (m: { role: string }) => m.role === 'user',
+      ).content;
+      const text = userContent.find((p: { type: string }) => p.type === 'text').text;
+      expect(text).not.toMatch(/third image/i);
     });
 
     it('throws when the model omits severity instead of defaulting to none (issue #66)', async () => {
@@ -172,6 +209,41 @@ describe('vision clients', () => {
       expect(imageBlocks[1].source.data).toBe(current.toString('base64'));
     });
 
+    it('appends the diff mask as a third image and points the prompt at it (issue #124)', async () => {
+      mockAnthropicCreate.mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify(parsed) }],
+      });
+
+      await new AnthropicVisionClient(config).analyzeVisualDiff(requestWithDiff);
+
+      const content = mockAnthropicCreate.mock.calls[0][0].messages[0].content;
+      const imageBlocks = content.filter((b: { type: string }) => b.type === 'image');
+      expect(imageBlocks).toHaveLength(3);
+      expect(imageBlocks[0].source.data).toBe(baseline.toString('base64'));
+      expect(imageBlocks[1].source.data).toBe(current.toString('base64'));
+      expect(imageBlocks[2].source.data).toBe(diff.toString('base64'));
+
+      const text = content
+        .filter((b: { type: string }) => b.type === 'text')
+        .map((b: { text: string }) => b.text)
+        .join('\n');
+      expect(text).toMatch(/third image/i);
+    });
+
+    it('leaves the two-image prompt untouched when no diff is supplied (issue #124)', async () => {
+      mockAnthropicCreate.mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify(parsed) }],
+      });
+
+      await new AnthropicVisionClient(config).analyzeVisualDiff(request);
+
+      const text = mockAnthropicCreate.mock.calls[0][0].messages[0].content
+        .filter((b: { type: string }) => b.type === 'text')
+        .map((b: { text: string }) => b.text)
+        .join('\n');
+      expect(text).not.toMatch(/third image/i);
+    });
+
     it('maps SDK usage into normalized inputTokens/outputTokens (issue #67)', async () => {
       mockAnthropicCreate.mockResolvedValue({
         content: [{ type: 'text', text: JSON.stringify(parsed) }],
@@ -231,6 +303,35 @@ describe('vision clients', () => {
       const body = JSON.parse(init.body);
       expect(body.model).toBe('llava');
       expect(body.images).toEqual([baseline.toString('base64'), current.toString('base64')]);
+    });
+
+    it('appends the diff mask as a third image and points the prompt at it (issue #124)', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ response: JSON.stringify(parsed) }),
+      });
+
+      await new OllamaVisionClient(config).analyzeVisualDiff(requestWithDiff);
+
+      const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+      expect(body.images).toEqual([
+        baseline.toString('base64'),
+        current.toString('base64'),
+        diff.toString('base64'),
+      ]);
+      expect(body.prompt).toMatch(/third image/i);
+    });
+
+    it('leaves the two-image prompt untouched when no diff is supplied (issue #124)', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ response: JSON.stringify(parsed) }),
+      });
+
+      await new OllamaVisionClient(config).analyzeVisualDiff(request);
+
+      const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+      expect(body.prompt).not.toMatch(/third image/i);
     });
 
     it('maps prompt_eval_count/eval_count into normalized usage (issue #67)', async () => {

@@ -53,6 +53,35 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       expect(withCtx).not.toBe(otherCtx);
     });
 
+    // Issue #124: a diff-aware verdict and a diff-less one answer different
+    // questions, so they must never be served for each other.
+    it('should fold the diff hash into the key so diff-aware and diff-less answers never cross-serve', () => {
+      const noDiff = cache.generateKey('hash1', 'hash2', 'openai', 'gpt-4o');
+      const withDiff = cache.generateKey('hash1', 'hash2', 'openai', 'gpt-4o', '', 'diffhash');
+      const otherDiff = cache.generateKey('hash1', 'hash2', 'openai', 'gpt-4o', '', 'diffhash2');
+
+      // Diff-less keys keep the legacy format, so existing cache entries survive.
+      expect(noDiff).toBe('openai:gpt-4o:hash1:hash2');
+      expect(withDiff).toBe('openai:gpt-4o:hash1:hash2:diff=diffhash');
+      expect(withDiff).not.toBe(noDiff);
+      expect(withDiff).not.toBe(otherDiff);
+    });
+
+    it('should not let a diff hash collide with an identical context string', () => {
+      // Without a marker on the diff segment these two would both render as
+      // `openai:gpt-4o:hash1:hash2:X` — a diff-aware answer served to a
+      // diff-less request that merely carried X as its context.
+      const diffOnly = cache.generateKey('hash1', 'hash2', 'openai', 'gpt-4o', '', 'X');
+      const contextOnly = cache.generateKey('hash1', 'hash2', 'openai', 'gpt-4o', 'X');
+      expect(diffOnly).not.toBe(contextOnly);
+
+      // Both present: each occupies its own labeled segment.
+      const both = cache.generateKey('hash1', 'hash2', 'openai', 'gpt-4o', '{"url":"/a"}', 'X');
+      expect(both).toBe('openai:gpt-4o:hash1:hash2:diff=X:{"url":"/a"}');
+      expect(both).not.toBe(diffOnly);
+      expect(both).not.toBe(contextOnly);
+    });
+
     it('should store and retrieve cached results', () => {
       const key = cache.generateKey('baseline', 'current', 'openai', 'gpt-4o');
       const value = {
@@ -557,6 +586,57 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
           processedSize: 1,
         } as never),
       );
+
+    // Issue #124. Two things have to hold at once here: the diff buffer must
+    // survive the smart client's field-by-field rebuild of the provider request
+    // (it is the second place the diff used to be dropped), and it must change
+    // the cache identity so a diff-less request cannot be answered from a
+    // diff-aware entry.
+    it('preprocesses the diff image, forwards it to the provider, and keys the cache on it', async () => {
+      const preprocessSpy = stubPreprocess();
+      const analyzeSpy = jest.fn().mockResolvedValue({
+        severity: 'minor',
+        confidence: 0.9,
+        reasoning: 'Diff-aware verdict',
+        categories: ['color'],
+      });
+      const fakeClient = {
+        analyzeVisualDiff: analyzeSpy,
+        isAvailable: jest.fn().mockResolvedValue(true),
+      };
+      const factorySpy = jest.spyOn(AIClientFactory, 'create').mockReturnValue(fakeClient as never);
+
+      const client = createSmartClient(
+        { ...mockConfig, ai: { ...mockConfig.ai, provider: 'openai', model: 'gpt-4o-mini' } },
+        {
+          enableFallback: false,
+          cacheConfig: { dbPath: ':memory:' },
+          costConfig: { dbPath: ':memory:' },
+        },
+      );
+
+      const baseline = Buffer.from('base');
+      const current = Buffer.from('curr');
+      const diff = Buffer.from('diffmask');
+
+      await client.analyzeVisualDiff({ baseline, current, diff });
+
+      expect(preprocessSpy).toHaveBeenCalledWith(diff);
+      expect(analyzeSpy.mock.calls[0][0].diff).toEqual(diff);
+
+      // Same screenshots, no diff: a distinct cache identity, so a real call.
+      await client.analyzeVisualDiff({ baseline, current });
+      expect(analyzeSpy).toHaveBeenCalledTimes(2);
+      expect(analyzeSpy.mock.calls[1][0].diff).toBeUndefined();
+
+      // Repeating the diff-aware request is served from cache.
+      await client.analyzeVisualDiff({ baseline, current, diff });
+      expect(analyzeSpy).toHaveBeenCalledTimes(2);
+
+      client.close();
+      factorySpy.mockRestore();
+      preprocessSpy.mockRestore();
+    });
 
     it('advances past a failing provider to the next in the fallback chain', async () => {
       const preprocessSpy = stubPreprocess();

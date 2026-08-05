@@ -144,6 +144,13 @@ export class AIVisionCache {
    * @param context - Serialized request context (url/selector/etc). Included in
    *   the key only when non-empty, since context influences the analysis result
    *   and identical images with different context must not share a cache entry.
+   * @param diffHash - Hash of the diff mask sent as a third image, when one was
+   *   sent. A diff-aware answer must never be served for a diff-less request
+   *   (issue #124), so it is part of the key identity. It carries a `diff=`
+   *   marker rather than being appended bare: without one, `(context: "X", no
+   *   diff)` and `(no context, diff: "X")` would produce the same key. Callers
+   *   passing a `context` that could itself start with `diff=` would defeat
+   *   that — in-repo it is always a JSON object.
    * @returns Cache key string
    */
   generateKey(
@@ -152,9 +159,14 @@ export class AIVisionCache {
     provider: string,
     model: string,
     context = '',
+    diffHash = '',
   ): string {
-    const base = `${provider}:${model}:${baselineHash}:${currentHash}`;
-    return context ? `${base}:${context}` : base;
+    const parts = [provider, model, baselineHash, currentHash];
+    // Omitted when absent, so keys for diff-less requests stay byte-identical
+    // to the pre-#124 format and existing cache entries survive the upgrade.
+    if (diffHash) parts.push(`diff=${diffHash}`);
+    if (context) parts.push(context);
+    return parts.join(':');
   }
 
   /**

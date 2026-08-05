@@ -10,6 +10,16 @@ import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG }
 import { AIVisionResponseSchema } from './types';
 
 /**
+ * Appended to the user prompt when a diff mask travels with the screenshots.
+ *
+ * Shared across providers so the wording can only drift deliberately. Nothing
+ * is appended when there is no diff, which keeps the two-image prompt (and so
+ * every existing provider payload) byte-identical. See issue #124.
+ */
+const DIFF_IMAGE_PROMPT =
+  '\n\nThe third image highlights the changed regions (diff mask) — use it to localize what changed.';
+
+/**
  * OpenAI GPT-4V/GPT-4o vision client for visual diff analysis
  */
 export class OpenAIVisionClient extends BaseAIVisionClient {
@@ -39,6 +49,7 @@ export class OpenAIVisionClient extends BaseAIVisionClient {
       // Convert buffers to base64
       const baselineBase64 = request.baseline.toString('base64');
       const currentBase64 = request.current.toString('base64');
+      const diffBase64 = request.diff?.toString('base64');
 
       const systemPrompt = `You are an expert at analyzing visual differences in web UIs for regression testing.
 
@@ -83,7 +94,7 @@ ${
     : ''
 }
 
-Compare the baseline (first image) with the current (second image) and identify any visual regressions.`;
+Compare the baseline (first image) with the current (second image) and identify any visual regressions.${diffBase64 ? DIFF_IMAGE_PROMPT : ''}`;
 
       const response = await withRetry(
         () =>
@@ -109,6 +120,17 @@ Compare the baseline (first image) with the current (second image) and identify 
                       detail: 'high',
                     },
                   },
+                  ...(diffBase64
+                    ? [
+                        {
+                          type: 'image_url' as const,
+                          image_url: {
+                            url: `data:image/png;base64,${diffBase64}`,
+                            detail: 'high' as const,
+                          },
+                        },
+                      ]
+                    : []),
                 ],
               },
             ],
@@ -183,6 +205,7 @@ export class AnthropicVisionClient extends BaseAIVisionClient {
       // Convert buffers to base64
       const baselineBase64 = request.baseline.toString('base64');
       const currentBase64 = request.current.toString('base64');
+      const diffBase64 = request.diff?.toString('base64');
 
       const systemPrompt = `You are an expert at analyzing visual differences in web UIs for regression testing.
 
@@ -206,7 +229,7 @@ ${
     : ''
 }
 
-Compare the baseline (first image) with the current (second image).
+Compare the baseline (first image) with the current (second image).${diffBase64 ? DIFF_IMAGE_PROMPT : ''}
 
 Respond with JSON:
 {
@@ -244,6 +267,18 @@ Respond with JSON:
                       data: currentBase64,
                     },
                   },
+                  ...(diffBase64
+                    ? [
+                        {
+                          type: 'image' as const,
+                          source: {
+                            type: 'base64' as const,
+                            media_type: 'image/png' as const,
+                            data: diffBase64,
+                          },
+                        },
+                      ]
+                    : []),
                 ],
               },
             ],
@@ -306,6 +341,7 @@ export class OllamaVisionClient extends BaseAIVisionClient {
       // Convert buffers to base64
       const baselineBase64 = request.baseline.toString('base64');
       const currentBase64 = request.current.toString('base64');
+      const diffBase64 = request.diff?.toString('base64');
 
       const prompt = `You are an expert at analyzing visual differences in web UIs for regression testing.
 
@@ -318,7 +354,7 @@ Severity levels:
 - "breaking": Major changes likely indicating bugs
 
 Categories: layout, text, color, spacing, content
-
+${diffBase64 ? DIFF_IMAGE_PROMPT.trimStart() : ''}
 ${
   request.context
     ? `Context:
@@ -345,7 +381,9 @@ Respond with JSON only:
             body: JSON.stringify({
               model: this.config.model || 'llava',
               prompt,
-              images: [baselineBase64, currentBase64],
+              images: diffBase64
+                ? [baselineBase64, currentBase64, diffBase64]
+                : [baselineBase64, currentBase64],
               stream: false,
               options: {
                 temperature: 0.1,
