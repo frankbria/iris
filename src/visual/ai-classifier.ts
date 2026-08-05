@@ -266,6 +266,10 @@ export class AIVisualClassifier {
       const visionRequest: AIVisionRequest = {
         baseline: request.baselineImage,
         current: request.currentImage,
+        // The caller already computed the pixel diff; handing it over as a third
+        // image tells the model WHERE to look instead of making it rediscover
+        // the change from two full screenshots (issue #124).
+        diff: request.diffImage,
         context: {
           url: request.context?.url,
           selector: undefined, // Not used in legacy interface

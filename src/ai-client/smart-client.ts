@@ -88,6 +88,17 @@ export class SmartAIVisionClient {
   private cache?: AIVisionCache;
   private costTracker?: CostTracker;
   private preprocessor: ImagePreprocessor;
+  /**
+   * Separate pipeline for the diff mask, because it is a signal and not a photo.
+   *
+   * `generateDiffImage` emits RGBA PNG where pixelmatch marks unchanged pixels
+   * *transparent*. The default preprocessor re-encodes to JPEG, which has no
+   * alpha channel — so the mask gets flattened and its hard region edges are
+   * blurred away by lossy 8x8 blocks. That destroys precisely the localization
+   * the third image exists to carry, while still producing a plausible-looking
+   * payload. PNG keeps it lossless; the size cap still applies.
+   */
+  private diffPreprocessor: ImagePreprocessor;
   private clients: Map<string, AIVisionClient>;
   private irisConfig: IrisConfig;
 
@@ -101,6 +112,7 @@ export class SmartAIVisionClient {
     this.irisConfig = irisConfig;
     this.clients = new Map();
     this.preprocessor = new ImagePreprocessor();
+    this.diffPreprocessor = new ImagePreprocessor({ format: 'png' });
 
     // Initialize cache
     if (this.config.enableCache) {
@@ -126,6 +138,12 @@ export class SmartAIVisionClient {
     // Preprocess images
     const baselineProcessed = await this.preprocessor.preprocess(request.baseline);
     const currentProcessed = await this.preprocessor.preprocess(request.current);
+    // Size-cap the diff and hash it for the cache key (issue #124). An empty
+    // buffer is treated as no diff at all: sharp throws on zero bytes, which
+    // would fail the whole analysis over an image that carries no signal.
+    const diffProcessed = request.diff?.length
+      ? await this.diffPreprocessor.preprocess(request.diff)
+      : undefined;
 
     // Try provider chain with fallback
     const providers = this.config.enableFallback
@@ -142,17 +160,21 @@ export class SmartAIVisionClient {
       // write, and cost tracking all key on the exact same value.
       const model = this.resolveModel(providerName);
 
+      // Derive the key ONCE per attempt too. Two separate derivations for the
+      // read and the write is how they silently drifted apart in issue #60 —
+      // every added key input has to be remembered in both places.
+      const cacheKey = this.cache?.generateKey(
+        baselineProcessed.hash,
+        currentProcessed.hash,
+        providerName,
+        model,
+        contextKey,
+        diffProcessed?.hash ?? '',
+      );
+
       // Check cache for this provider+model (cache hits are free, so this runs
       // before availability/budget checks)
-      if (this.cache) {
-        const cacheKey = this.cache.generateKey(
-          baselineProcessed.hash,
-          currentProcessed.hash,
-          providerName,
-          model,
-          contextKey,
-        );
-
+      if (this.cache && cacheKey) {
         const cached = this.cache.get(cacheKey);
         if (cached) {
           if (this.costTracker) {
@@ -188,6 +210,7 @@ export class SmartAIVisionClient {
         const result = await client.analyzeVisualDiff({
           baseline: baselineProcessed.buffer,
           current: currentProcessed.buffer,
+          ...(diffProcessed ? { diff: diffProcessed.buffer } : {}),
           context: request.context,
         });
 
@@ -198,14 +221,7 @@ export class SmartAIVisionClient {
         }
 
         // Cache result
-        if (this.cache) {
-          const cacheKey = this.cache.generateKey(
-            baselineProcessed.hash,
-            currentProcessed.hash,
-            providerName,
-            model,
-            contextKey,
-          );
+        if (this.cache && cacheKey) {
           this.cache.set(cacheKey, result, providerName, model);
         }
 

@@ -118,6 +118,15 @@ export interface AITranslationResponse {
 export interface AIVisionRequest {
   baseline: Buffer;
   current: Buffer;
+  /**
+   * Optional diff mask highlighting the changed regions, sent as a third image.
+   *
+   * Without it the model compares two full screenshots and has to rediscover
+   * what moved; the pixel diff is already computed upstream, so handing it over
+   * localizes the question at no extra compute (issue #124). Absent means the
+   * provider payload is exactly the two-image one — this is additive.
+   */
+  diff?: Buffer;
   context?: {
     url?: string;
     selector?: string;

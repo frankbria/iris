@@ -19,6 +19,13 @@
 - **Depends on**: plans/009 (nothing here is user-visible until --semantic works)
 - **Category**: tech-debt
 - **Planned at**: commit `bdf7b7d`, 2026-07-23
+- **Completed**: Steps 1-2 via #123 (PR #160); Steps 3-4 via #124.
+  Ollama was **not** deferred — its `/api/generate` body already takes an
+  `images: []` array, so a third entry is the same shape the STOP note asked
+  about. Scope grew by one file the plan did not list,
+  `src/ai-client/smart-client.ts`: it preprocesses/hashes the images and rebuilds
+  the provider request field-by-field, so the diff had to be threaded there too
+  or it would have been dropped a second time.
 
 ## Why this matters
 
@@ -128,12 +135,12 @@ As Step 4; pattern files named inline above.
 
 ## Done criteria
 
-- [ ] `npm run verify` exits 0
-- [ ] `grep -n "suggestions" src/visual/visual-runner.ts` shows the field copied into aiAnalysis
-- [ ] Vision provider tests include a 3-image payload case for OpenAI and Anthropic
-- [ ] Cache key differs with/without diff (test proves it)
-- [ ] Two-image requests (no diff) produce byte-identical provider payloads to before (existing 2-image tests untouched and green)
-- [ ] `plans/README.md` status row updated
+- [x] `npm run verify` exits 0
+- [x] `grep -n "suggestions" src/visual/visual-runner.ts` shows the field copied into aiAnalysis
+- [x] Vision provider tests include a 3-image payload case for OpenAI and Anthropic (and Ollama)
+- [x] Cache key differs with/without diff (test proves it)
+- [x] Two-image requests (no diff) produce byte-identical provider payloads to before (existing 2-image tests untouched and green)
+- [x] `plans/README.md` status row updated
 
 ## STOP conditions
 
