@@ -4,6 +4,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { VisualReporter } from '../../src/visual/reporter';
 import type { VisualTestResult } from '../../src/visual/visual-runner';
 
@@ -48,6 +49,10 @@ describe('VisualReporter', () => {
           confidence: 0.95,
           description: 'Layout shift detected in navigation bar',
           severity: 'high',
+          suggestions: ['Check the flex-basis on .nav', 'Compare against the previous release'],
+          isIntentional: false,
+          changeType: 'layout',
+          reasoning: 'The nav dropped 12px with no corresponding markup change',
         },
       },
       {
@@ -486,6 +491,215 @@ describe('VisualReporter', () => {
 
       expect(artifacts.screenshotPaths).toHaveLength(3);
       expect(artifacts.screenshotPaths[0]).toBe('/tmp/home-desktop.png');
+    });
+  });
+});
+
+/**
+ * The AI's fuller output in reports (issue #123 / plan 016 steps 1-2).
+ *
+ * The classifier already computed suggestions, reasoning, isIntentional and
+ * changeType; the runner copied four fields and dropped the rest, so work that
+ * had already been paid for never reached a reader.
+ */
+describe('VisualReporter renders the full AI analysis', () => {
+  let tempDir: string;
+
+  const withAnalysis = (
+    analysis: NonNullable<VisualTestResult['results'][0]['aiAnalysis']>,
+  ): VisualTestResult => ({
+    summary: {
+      totalComparisons: 1,
+      passed: 0,
+      failed: 1,
+      newBaselines: 0,
+      overallStatus: 'failed',
+      severityCounts: { breaking: 1, moderate: 0, minor: 0 },
+    },
+    results: [
+      {
+        page: '/',
+        device: 'desktop',
+        passed: false,
+        similarity: 0.8,
+        pixelDifference: 0.2,
+        threshold: 0.1,
+        severity: 'breaking',
+        screenshotPath: '/tmp/a.png',
+        aiAnalysis: analysis,
+      },
+    ],
+    duration: 1,
+  });
+
+  const base = {
+    classification: 'unintentional',
+    confidence: 0.9,
+    description: 'The header moved',
+    severity: 'high',
+    suggestions: ['Check the margin on .header'],
+    isIntentional: false,
+    changeType: 'layout',
+    reasoning: 'No markup change accompanies the shift',
+  };
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-reporter-ai-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  type Analysis = NonNullable<VisualTestResult['results'][0]['aiAnalysis']>;
+
+  const render = async (format: 'html' | 'markdown' | 'junit', analysis: Analysis = base) => {
+    const reporter = new VisualReporter({
+      format,
+      outputPath: path.join(tempDir, `report.${format}`),
+    });
+    const artifacts = await reporter.generateReport(withAnalysis(analysis));
+    return fs.readFileSync(artifacts.reportPath, 'utf-8');
+  };
+
+  describe('HTML', () => {
+    it('renders suggestions, reasoning and the intent badge', async () => {
+      const content = await render('html');
+
+      expect(content).toContain('Check the margin on .header');
+      expect(content).toContain('No markup change accompanies the shift');
+      expect(content).toContain('Looks unintentional');
+    });
+
+    it('escapes suggestion text, which the model wrote', async () => {
+      // Suggestions are model output quoting page content, so they reach the
+      // report as untrusted strings — a report that executes them is a report
+      // that turned a visual diff into stored XSS.
+      const content = await render('html', {
+        ...base,
+        suggestions: ['<script>alert(1)</script>'],
+        reasoning: '<img src=x onerror=alert(2)>',
+      });
+
+      expect(content).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+      expect(content).not.toContain('<script>alert(1)</script>');
+      expect(content).toContain('&lt;img src=x onerror=alert(2)&gt;');
+    });
+
+    it('omits each section when the model did not supply it', async () => {
+      // An empty suggestions list should not render an empty bulleted list, and
+      // an undefined intent should not be reported as "unintentional".
+      const content = await render('html', {
+        classification: 'unknown',
+        confidence: 0.5,
+        description: 'Something changed',
+        severity: 'low',
+        suggestions: [],
+      });
+
+      // Asserted on the rendered ELEMENT, not the bare class name: the
+      // stylesheet always ships every selector, so `not.toContain('analysis-
+      // suggestions')` would be matching CSS and would pass however the markup
+      // behaved.
+      expect(content).not.toContain('<div class="analysis-suggestions">');
+      expect(content).not.toContain('<div class="analysis-reasoning">');
+      expect(content).not.toContain('<span class="intent-badge');
+    });
+  });
+
+  describe('a failed analysis', () => {
+    // The classifier answers a provider outage with a fallback that carries a
+    // severity, an isIntentional and a description that is really an error
+    // string. Rendering it as a verdict presents an outage as a judgement —
+    // and the new intent badge made that worse, not better.
+    const failed = {
+      classification: 'unknown',
+      confidence: 0.5,
+      description: 'Failed to analyze visual changes: All providers failed',
+      severity: 'medium',
+      suggestions: ['Review the visual changes manually', 'Check AI provider configuration'],
+      isIntentional: false,
+      changeType: 'unknown',
+      reasoning: 'Analysis failed: All providers failed',
+      analysisFailed: true,
+    };
+
+    it('is never rendered as an intent judgement in HTML', async () => {
+      const content = await render('html', failed);
+
+      expect(content).toContain('Analysis unavailable');
+      expect(content).toContain('All providers failed');
+      // The specific trap: isIntentional is false in the fallback.
+      expect(content).not.toContain('Looks unintentional');
+      expect(content).not.toContain('<div class="analysis-reasoning">');
+      // Troubleshooting suggestions still help, so they stay.
+      expect(content).toContain('Check AI provider configuration');
+    });
+
+    it('is marked unavailable in Markdown rather than classified', async () => {
+      const content = await render('markdown', failed);
+
+      expect(content).toContain('- Analysis unavailable:');
+      expect(content).not.toContain('- Classification: unknown');
+      expect(content).not.toContain('- Looks intentional:');
+      expect(content).not.toContain('- Change type:');
+    });
+
+    it('is marked unavailable in JUnit rather than classified', async () => {
+      const content = await render('junit', failed);
+
+      expect(content).toContain('AI Analysis Unavailable:');
+      expect(content).not.toContain('AI Classification:');
+      expect(content).not.toContain('AI Reasoning:');
+    });
+  });
+
+  describe('Markdown', () => {
+    it('lists suggestions and reasoning as bullets', async () => {
+      const content = await render('markdown');
+
+      expect(content).toContain('- Reasoning: No markup change accompanies the shift');
+      expect(content).toContain('- Looks intentional: no');
+      expect(content).toContain('- Change type: layout');
+      expect(content).toContain('  - Check the margin on .header');
+    });
+  });
+
+  describe('JUnit', () => {
+    it('escapes the failure body so the XML stays parseable', async () => {
+      // The <failure> body carries model-authored text quoting page content. A
+      // bare `<` or `&` makes the document unparseable, which fails the CI job
+      // for a reason that has nothing to do with the regression. Attributes were
+      // already escaped; the body was not.
+      const content = await render('junit', {
+        ...base,
+        description: 'The <header> & <nav> moved',
+        reasoning: 'a < b && c > d',
+        suggestions: ['Check <script> ordering'],
+      });
+
+      expect(content).toContain('&lt;header&gt; &amp; &lt;nav&gt;');
+      expect(content).toContain('a &lt; b &amp;&amp; c &gt; d');
+      expect(content).toContain('Check &lt;script&gt; ordering');
+      expect(content).not.toContain('<header>');
+
+      // The real invariant, stronger than the substrings above and needing no
+      // XML parser: the failure body contains no unescaped markup character at
+      // all. A half-escaped document would satisfy the checks above and still
+      // fail to parse.
+      const body = content.slice(content.indexOf('<failure'), content.indexOf('</failure>'));
+      const afterOpenTag = body.slice(body.indexOf('>') + 1);
+      expect(afterOpenTag).not.toMatch(/[<>]/);
+      expect(afterOpenTag).not.toMatch(/&(?!(amp|lt|gt|quot|#0?39);)/);
+    });
+
+    it('appends reasoning and suggestions to the failure message', async () => {
+      // No schema change: JUnit consumers read the message text, so the extra
+      // context goes there rather than into new elements they would ignore.
+      const content = await render('junit');
+
+      expect(content).toContain('AI Reasoning: No markup change accompanies the shift');
+      expect(content).toContain('- Check the margin on .header');
     });
   });
 });

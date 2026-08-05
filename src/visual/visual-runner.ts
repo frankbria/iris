@@ -97,6 +97,22 @@ export interface VisualTestResult {
       confidence: number;
       description: string;
       severity: string;
+      /** What the model suggests doing about the change. Empty when it offered none. */
+      suggestions: string[];
+      /** The model's read on whether this looks deliberate. Undefined when it did not say. */
+      isIntentional?: boolean;
+      changeType?: string;
+      /** Why the model classified it this way — the part a reviewer actually argues with. */
+      reasoning?: string;
+      /**
+       * True when analysis did not happen and this is the classifier's fallback.
+       *
+       * The fallback is verdict-shaped — it carries a severity, an
+       * `isIntentional` and a description that is really an error string — so
+       * without this a provider outage renders as a confident judgement. Same
+       * trap the watcher hit in #118.
+       */
+      analysisFailed?: boolean;
     };
     screenshotPath: string;
     baselinePath?: string;
@@ -455,11 +471,19 @@ export class VisualTestRunner {
           },
         });
 
+        // Everything the classifier computed, not the four fields that used to
+        // survive the trip. The rest was being paid for and thrown away before
+        // anyone saw it.
         aiAnalysis = {
           classification: analysis.classification,
           confidence: analysis.confidence,
           description: analysis.description,
           severity: analysis.severity,
+          suggestions: analysis.suggestions ?? [],
+          isIntentional: analysis.isIntentional,
+          changeType: analysis.changeType,
+          reasoning: analysis.reasoning,
+          analysisFailed: analysis.analysisFailed,
         };
 
         // Map AI severity to test severity

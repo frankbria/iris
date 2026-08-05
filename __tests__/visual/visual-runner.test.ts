@@ -572,6 +572,104 @@ describe('VisualTestRunner', () => {
       expect(result.results[0].aiAnalysis?.confidence).toBe(0.85);
     });
 
+    it('carries the whole AI analysis through, not just four fields', async () => {
+      // The classifier already computed suggestions, reasoning, isIntentional
+      // and changeType. The runner used to copy four fields and drop the rest,
+      // so work that had already been paid for never reached a reader.
+      const configWithAI = {
+        ...defaultConfig,
+        diff: { ...defaultConfig.diff, semanticAnalysis: true, apiKey: 'sk-test' },
+      };
+      visualRunner = new VisualTestRunner(configWithAI);
+
+      mockDiffEngine.compare.mockResolvedValue({
+        success: true,
+        passed: false,
+        similarity: 0.8,
+        pixelDifference: 0.2,
+        threshold: 0.95,
+        diffBuffer: Buffer.from('test-diff'),
+      });
+
+      const result = await visualRunner.run();
+      const analysis = result.results[0].aiAnalysis;
+
+      expect(analysis?.suggestions).toEqual(['Review layout changes', 'Check responsive behavior']);
+      expect(analysis?.reasoning).toBe('Detected significant layout shift in header area');
+      expect(analysis?.isIntentional).toBe(false);
+      expect(analysis?.changeType).toBe('layout');
+    });
+
+    it('carries the analysis-failure flag through, so reports can tell an outage from a verdict', async () => {
+      // The classifier's fallback is verdict-shaped: it has a severity, an
+      // isIntentional and a description that is really an error string. If the
+      // flag is dropped here, the report renders an outage as a judgement.
+      mockAIClassifier.analyzeChange.mockResolvedValue({
+        classification: 'unknown',
+        confidence: 0.5,
+        description: 'Failed to analyze visual changes: All providers failed',
+        severity: 'medium',
+        suggestions: ['Check AI provider configuration'],
+        isIntentional: false,
+        changeType: 'unknown',
+        reasoning: 'Analysis failed: All providers failed',
+        analysisFailed: true,
+      });
+      const configWithAI = {
+        ...defaultConfig,
+        diff: { ...defaultConfig.diff, semanticAnalysis: true, apiKey: 'sk-test' },
+      };
+      visualRunner = new VisualTestRunner(configWithAI);
+
+      mockDiffEngine.compare.mockResolvedValue({
+        success: true,
+        passed: false,
+        similarity: 0.8,
+        pixelDifference: 0.2,
+        threshold: 0.95,
+        diffBuffer: Buffer.from('test-diff'),
+      });
+
+      const result = await visualRunner.run();
+
+      expect(result.results[0].aiAnalysis?.analysisFailed).toBe(true);
+    });
+
+    it('defaults suggestions to an empty list when the classifier omits them', async () => {
+      // AIAnalysisResponse types `suggestions` as required, so this is cast
+      // deliberately: the classifier maps provider output, and a provider that
+      // returns nothing is a runtime possibility the type cannot prevent.
+      // Consumers iterate this list — the reporter calls .map on it — so the
+      // guard is what stops a thin provider response becoming a crash.
+      mockAIClassifier.analyzeChange.mockResolvedValue({
+        classification: 'layout',
+        confidence: 0.5,
+        description: 'Something moved',
+        severity: 'low',
+        isIntentional: false,
+        changeType: 'unknown',
+        reasoning: 'n/a',
+      } as unknown as Awaited<ReturnType<AIVisualClassifier['analyzeChange']>>);
+      const configWithAI = {
+        ...defaultConfig,
+        diff: { ...defaultConfig.diff, semanticAnalysis: true, apiKey: 'sk-test' },
+      };
+      visualRunner = new VisualTestRunner(configWithAI);
+
+      mockDiffEngine.compare.mockResolvedValue({
+        success: true,
+        passed: false,
+        similarity: 0.8,
+        pixelDifference: 0.2,
+        threshold: 0.95,
+        diffBuffer: Buffer.from('test-diff'),
+      });
+
+      const result = await visualRunner.run();
+
+      expect(result.results[0].aiAnalysis?.suggestions).toEqual([]);
+    });
+
     it('should not run AI analysis when test passes', async () => {
       const configWithAI = {
         ...defaultConfig,
