@@ -638,6 +638,109 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       preprocessSpy.mockRestore();
     });
 
+    // Regression for the cross-family review of #124. The diff mask is a
+    // signal, not a photo: pixelmatch marks unchanged pixels TRANSPARENT, and
+    // the default preprocessor re-encodes to JPEG — which has no alpha channel
+    // and blurs hard edges into its 8x8 blocks. That yields a plausible-looking
+    // three-image payload carrying no localization, which is the whole point of
+    // sending it. Real sharp on purpose: a stubbed preprocessor hands back
+    // whatever buffer it was given and can never catch this.
+    it('sends the diff mask losslessly as PNG with its alpha channel intact', async () => {
+      const sharp = (await import('sharp')).default;
+      const mask = await sharp({
+        create: {
+          width: 40,
+          height: 40,
+          channels: 4,
+          background: { r: 255, g: 0, b: 0, alpha: 0 },
+        },
+      })
+        .png()
+        .toBuffer();
+      const screenshot = await sharp({
+        create: { width: 40, height: 40, channels: 3, background: { r: 10, g: 20, b: 30 } },
+      })
+        .png()
+        .toBuffer();
+
+      const analyzeSpy = jest.fn().mockResolvedValue({
+        severity: 'minor',
+        confidence: 0.9,
+        reasoning: 'r',
+        categories: ['color'],
+      });
+      const factorySpy = jest.spyOn(AIClientFactory, 'create').mockReturnValue({
+        analyzeVisualDiff: analyzeSpy,
+        isAvailable: jest.fn().mockResolvedValue(true),
+      } as never);
+
+      const client = createSmartClient(
+        { ...mockConfig, ai: { ...mockConfig.ai, provider: 'openai', model: 'gpt-4o-mini' } },
+        {
+          enableFallback: false,
+          cacheConfig: { dbPath: ':memory:' },
+          costConfig: { dbPath: ':memory:' },
+        },
+      );
+
+      await client.analyzeVisualDiff({ baseline: screenshot, current: screenshot, diff: mask });
+
+      const sent = analyzeSpy.mock.calls[0][0];
+      const diffMeta = await sharp(sent.diff).metadata();
+      expect(diffMeta.format).toBe('png');
+      expect(diffMeta.hasAlpha).toBe(true);
+
+      // The two screenshots keep their existing lossy treatment — this must not
+      // have turned into a blanket "everything is PNG now" change.
+      expect((await sharp(sent.baseline).metadata()).format).toBe('jpeg');
+
+      client.close();
+      factorySpy.mockRestore();
+    });
+
+    it('treats an empty diff buffer as no diff rather than failing the analysis', async () => {
+      const sharp = (await import('sharp')).default;
+      const screenshot = await sharp({
+        create: { width: 20, height: 20, channels: 3, background: { r: 1, g: 2, b: 3 } },
+      })
+        .png()
+        .toBuffer();
+
+      const analyzeSpy = jest.fn().mockResolvedValue({
+        severity: 'none',
+        confidence: 1,
+        reasoning: 'r',
+        categories: [],
+      });
+      const factorySpy = jest.spyOn(AIClientFactory, 'create').mockReturnValue({
+        analyzeVisualDiff: analyzeSpy,
+        isAvailable: jest.fn().mockResolvedValue(true),
+      } as never);
+
+      const client = createSmartClient(
+        { ...mockConfig, ai: { ...mockConfig.ai, provider: 'openai', model: 'gpt-4o-mini' } },
+        {
+          enableFallback: false,
+          cacheConfig: { dbPath: ':memory:' },
+          costConfig: { dbPath: ':memory:' },
+        },
+      );
+
+      // Zero bytes carry no signal, and sharp throws on them — degrading to the
+      // two-image request beats failing the whole analysis.
+      await expect(
+        client.analyzeVisualDiff({
+          baseline: screenshot,
+          current: screenshot,
+          diff: Buffer.alloc(0),
+        }),
+      ).resolves.toBeDefined();
+      expect(analyzeSpy.mock.calls[0][0].diff).toBeUndefined();
+
+      client.close();
+      factorySpy.mockRestore();
+    });
+
     it('advances past a failing provider to the next in the fallback chain', async () => {
       const preprocessSpy = stubPreprocess();
       const ollamaClient = {

@@ -88,6 +88,17 @@ export class SmartAIVisionClient {
   private cache?: AIVisionCache;
   private costTracker?: CostTracker;
   private preprocessor: ImagePreprocessor;
+  /**
+   * Separate pipeline for the diff mask, because it is a signal and not a photo.
+   *
+   * `generateDiffImage` emits RGBA PNG where pixelmatch marks unchanged pixels
+   * *transparent*. The default preprocessor re-encodes to JPEG, which has no
+   * alpha channel — so the mask gets flattened and its hard region edges are
+   * blurred away by lossy 8x8 blocks. That destroys precisely the localization
+   * the third image exists to carry, while still producing a plausible-looking
+   * payload. PNG keeps it lossless; the size cap still applies.
+   */
+  private diffPreprocessor: ImagePreprocessor;
   private clients: Map<string, AIVisionClient>;
   private irisConfig: IrisConfig;
 
@@ -101,6 +112,7 @@ export class SmartAIVisionClient {
     this.irisConfig = irisConfig;
     this.clients = new Map();
     this.preprocessor = new ImagePreprocessor();
+    this.diffPreprocessor = new ImagePreprocessor({ format: 'png' });
 
     // Initialize cache
     if (this.config.enableCache) {
@@ -126,10 +138,11 @@ export class SmartAIVisionClient {
     // Preprocess images
     const baselineProcessed = await this.preprocessor.preprocess(request.baseline);
     const currentProcessed = await this.preprocessor.preprocess(request.current);
-    // The diff mask goes through the same pipeline so the provider gets a
-    // size-capped image and the cache gets a hash to key on (issue #124).
-    const diffProcessed = request.diff
-      ? await this.preprocessor.preprocess(request.diff)
+    // Size-cap the diff and hash it for the cache key (issue #124). An empty
+    // buffer is treated as no diff at all: sharp throws on zero bytes, which
+    // would fail the whole analysis over an image that carries no signal.
+    const diffProcessed = request.diff?.length
+      ? await this.diffPreprocessor.preprocess(request.diff)
       : undefined;
 
     // Try provider chain with fallback

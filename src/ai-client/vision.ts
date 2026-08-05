@@ -15,9 +15,14 @@ import { AIVisionResponseSchema } from './types';
  * Shared across providers so the wording can only drift deliberately. Nothing
  * is appended when there is no diff, which keeps the two-image prompt (and so
  * every existing provider payload) byte-identical. See issue #124.
+ *
+ * Carries no surrounding whitespace: each provider's template sits at a
+ * different place in its prompt, so the separator belongs to the call site.
+ * Baking one in here meant one provider had to strip it back off, and any later
+ * edit to this string would have silently reformatted that provider's prompt.
  */
 const DIFF_IMAGE_PROMPT =
-  '\n\nThe third image highlights the changed regions (diff mask) — use it to localize what changed.';
+  'The third image highlights the changed regions (diff mask) — use it to localize what changed.';
 
 /**
  * OpenAI GPT-4V/GPT-4o vision client for visual diff analysis
@@ -94,7 +99,7 @@ ${
     : ''
 }
 
-Compare the baseline (first image) with the current (second image) and identify any visual regressions.${diffBase64 ? DIFF_IMAGE_PROMPT : ''}`;
+Compare the baseline (first image) with the current (second image) and identify any visual regressions.${diffBase64 ? `\n\n${DIFF_IMAGE_PROMPT}` : ''}`;
 
       const response = await withRetry(
         () =>
@@ -229,7 +234,7 @@ ${
     : ''
 }
 
-Compare the baseline (first image) with the current (second image).${diffBase64 ? DIFF_IMAGE_PROMPT : ''}
+Compare the baseline (first image) with the current (second image).${diffBase64 ? `\n\n${DIFF_IMAGE_PROMPT}` : ''}
 
 Respond with JSON:
 {
@@ -354,7 +359,7 @@ Severity levels:
 - "breaking": Major changes likely indicating bugs
 
 Categories: layout, text, color, spacing, content
-${diffBase64 ? DIFF_IMAGE_PROMPT.trimStart() : ''}
+${diffBase64 ? DIFF_IMAGE_PROMPT : ''}
 ${
   request.context
     ? `Context:
