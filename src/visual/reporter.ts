@@ -287,6 +287,34 @@ export class VisualReporter {
               <div class="analysis-description">
                 ${this.escapeHtml(result.aiAnalysis.description)}
               </div>
+              ${
+                result.aiAnalysis.isIntentional !== undefined
+                  ? `<div class="analysis-intent">
+                <span class="intent-badge ${result.aiAnalysis.isIntentional ? 'intent-yes' : 'intent-no'}">
+                  ${result.aiAnalysis.isIntentional ? 'Looks intentional' : 'Looks unintentional'}
+                </span>
+              </div>`
+                  : ''
+              }
+              ${
+                result.aiAnalysis.reasoning
+                  ? `<div class="analysis-reasoning">
+                <strong>Reasoning:</strong> ${this.escapeHtml(result.aiAnalysis.reasoning)}
+              </div>`
+                  : ''
+              }
+              ${
+                result.aiAnalysis.suggestions && result.aiAnalysis.suggestions.length > 0
+                  ? `<div class="analysis-suggestions">
+                <strong>Suggestions:</strong>
+                <ul>
+                  ${result.aiAnalysis.suggestions
+                    .map((suggestion) => `<li>${this.escapeHtml(suggestion)}</li>`)
+                    .join('\n                  ')}
+                </ul>
+              </div>`
+                  : ''
+              }
             </div>
           </div>
           `
@@ -406,8 +434,22 @@ Threshold: ${(test.threshold * 100).toFixed(2)}%
 Severity: ${test.severity || 'unknown'}
 ${
   test.aiAnalysis
-    ? `AI Classification: ${test.aiAnalysis.classification}
-AI Description: ${test.aiAnalysis.description}`
+    ? // Escaped: this is a <failure> element's body, and every field below is
+      // model-authored text quoting page content. A bare `<` or `&` makes the
+      // XML unparseable, which fails the CI job for the wrong reason. The
+      // attributes above were already escaped; the body was not.
+      `AI Classification: ${this.escapeXml(test.aiAnalysis.classification)}
+AI Description: ${this.escapeXml(test.aiAnalysis.description)}${
+        test.aiAnalysis.reasoning
+          ? `\nAI Reasoning: ${this.escapeXml(test.aiAnalysis.reasoning)}`
+          : ''
+      }${
+        test.aiAnalysis.suggestions && test.aiAnalysis.suggestions.length > 0
+          ? `\nAI Suggestions:\n${test.aiAnalysis.suggestions
+              .map((suggestion) => `  - ${this.escapeXml(suggestion)}`)
+              .join('\n')}`
+          : ''
+      }`
     : ''
 }
       </failure>`
@@ -478,6 +520,21 @@ AI Description: ${test.aiAnalysis.description}`
         markdown += `- Classification: ${result.aiAnalysis.classification}\n`;
         markdown += `- Confidence: ${(result.aiAnalysis.confidence * 100).toFixed(0)}%\n`;
         markdown += `- Description: ${result.aiAnalysis.description}\n`;
+        if (result.aiAnalysis.isIntentional !== undefined) {
+          markdown += `- Looks intentional: ${result.aiAnalysis.isIntentional ? 'yes' : 'no'}\n`;
+        }
+        if (result.aiAnalysis.changeType) {
+          markdown += `- Change type: ${result.aiAnalysis.changeType}\n`;
+        }
+        if (result.aiAnalysis.reasoning) {
+          markdown += `- Reasoning: ${result.aiAnalysis.reasoning}\n`;
+        }
+        if (result.aiAnalysis.suggestions && result.aiAnalysis.suggestions.length > 0) {
+          markdown += `- Suggestions:\n`;
+          for (const suggestion of result.aiAnalysis.suggestions) {
+            markdown += `  - ${suggestion}\n`;
+          }
+        }
       }
 
       markdown += `\n`;
@@ -833,6 +890,46 @@ AI Description: ${test.aiAnalysis.description}`
 
       .analysis-description {
         color: #334155;
+        line-height: 1.5;
+      }
+
+      .analysis-intent {
+        margin-top: 0.5rem;
+      }
+
+      .intent-badge {
+        display: inline-block;
+        padding: 0.125rem 0.5rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      /* Unintentional is the one a reviewer needs to look at, so it carries the
+         warmer colour; intentional stays quiet rather than reassuring. */
+      .intent-yes {
+        background: #e2e8f0;
+        color: #334155;
+      }
+
+      .intent-no {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .analysis-reasoning {
+        margin-top: 0.5rem;
+        color: #334155;
+        line-height: 1.5;
+      }
+
+      .analysis-suggestions {
+        margin-top: 0.5rem;
+        color: #334155;
+      }
+
+      .analysis-suggestions ul {
+        margin: 0.25rem 0 0 1.25rem;
         line-height: 1.5;
       }
 
