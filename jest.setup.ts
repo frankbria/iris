@@ -9,6 +9,7 @@
  */
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 // Increase Jest timeout for integration tests that may involve browser automation
@@ -21,8 +22,15 @@ jest.setTimeout(30000);
 // this default, running the suite writes test rows into the user's own history
 // — which it had been doing for a long time. Individual tests still override
 // this freely; this only stops the fallback from ever reaching $HOME.
+//
+// The path is per-worker and deliberately NOT under __tests__/temp: the
+// afterEach at the bottom of this file empties that directory after every test
+// in every worker, which would delete a database another worker still had open.
+// SQLite surfaces that as "readonly database" / "disk I/O error", nowhere near
+// the real cause.
 process.env.IRIS_DB_PATH =
-  process.env.IRIS_DB_PATH || path.join(__dirname, '__tests__', 'temp', 'jest-history.db');
+  process.env.IRIS_DB_PATH ||
+  path.join(os.tmpdir(), `iris-jest-history-${process.env.JEST_WORKER_ID || '0'}.db`);
 
 // Mock console methods to reduce noise in test output while preserving error logging
 const originalError = console.error;
