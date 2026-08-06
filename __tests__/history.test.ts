@@ -11,7 +11,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { recordA11yRun, recordVisualRun } from '../src/history';
-import { getA11yTestResults, getVisualTestResults, getTestRuns, initializeDatabase } from '../src/db';
+import {
+  getA11yTestResults,
+  getVisualTestResults,
+  getTestRuns,
+  initializeDatabase,
+} from '../src/db';
 import type { VisualTestResult as VisualRunResult } from '../src/visual/visual-runner';
 import type { AccessibilityTestResult } from '../src/a11y/a11y-runner';
 
@@ -89,13 +94,11 @@ const a11yRun: AccessibilityTestResult = {
           { id: 'a', impact: 'critical' },
           { id: 'b', impact: 'serious' },
           { id: 'c', impact: 'moderate' },
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
         ] as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
         passes: [] as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       keyboardResult: { testName: 'home', passed: false } as any,
     },
   ],

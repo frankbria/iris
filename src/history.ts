@@ -99,7 +99,11 @@ export function recordVisualRun(result: VisualRunResult, startTime: Date, endTim
 }
 
 /** Record a completed `iris a11y` run: one test_run plus a row per page. */
-export function recordA11yRun(result: AccessibilityTestResult, startTime: Date, endTime: Date): void {
+export function recordA11yRun(
+  result: AccessibilityTestResult,
+  startTime: Date,
+  endTime: Date,
+): void {
   withHistoryDb('accessibility', (db) => {
     const testRunId = insertTestRun(db, {
       instruction: `a11y: ${result.summary.pagesTested} page(s), ${result.summary.totalViolations} violation(s)`,

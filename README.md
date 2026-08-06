@@ -773,6 +773,7 @@ Options:
   --pages <patterns>        Page patterns (comma-separated, default: /)
   --rules <rules>           Specific axe rules (comma-separated)
   --tags <tags>             Rule tags: wcag2a,wcag2aa,wcag21aa (default: wcag2a,wcag2aa)
+  --exclude <selectors>     CSS selectors to exclude from the scan (comma-separated)
   --fail-on <impacts>       Impact levels: critical,serious,moderate,minor (default: critical,serious)
   --format <type>           Output: html|json|junit (default: html)
   --output <path>           Output file path
@@ -910,10 +911,13 @@ Performance baselines:
 - `axe-integration.ts` - WCAG compliance (6,279 bytes)
 - `keyboard-tester.ts` - Keyboard navigation (12,271 bytes)
 
-**Database** (`src/db.ts`)
+**Database** (`src/db.ts`, `src/history.ts`)
 - Extended schema with visual_test_results and a11y_test_results tables
 - Migration system for schema versioning
 - Aggregate statistics and query functions
+- `iris visual-diff` and `iris a11y` record every run (one `test_results` row plus
+  a row per page) to `$IRIS_DB_PATH`, defaulting to `~/.iris/iris.db`. Persistence
+  failures are logged and never fail the test run.
 
 ---
 
