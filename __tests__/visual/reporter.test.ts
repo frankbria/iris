@@ -40,6 +40,7 @@ describe('VisualReporter', () => {
         similarity: 0.85,
         pixelDifference: 0.15,
         threshold: 0.1,
+        ssim: 0.78,
         severity: 'breaking',
         screenshotPath: '/tmp/about-mobile.png',
         baselinePath: '/tmp/baseline-about-mobile.png',
@@ -264,6 +265,37 @@ describe('VisualReporter', () => {
       const content = fs.readFileSync(artifacts.reportPath, 'utf-8');
 
       expect(content).toContain('Custom Test Report');
+    });
+
+    // Issue #77: SSIM reached the report only after being wired into the diff
+    // engine; before that the docs advertised a metric nothing ever displayed.
+    it('should show the structural similarity metric for failures that carry one', async () => {
+      const reporter = new VisualReporter({
+        format: 'html',
+        outputPath: path.join(tempDir, 'report-ssim.html'),
+      });
+
+      const artifacts = await reporter.generateReport(mockResults);
+      const content = fs.readFileSync(artifacts.reportPath, 'utf-8');
+
+      expect(content).toContain('Structural');
+      expect(content).toContain('78.00%'); // /about carries ssim 0.78
+    });
+
+    it('should omit the structural metric for results without one', async () => {
+      const reporter = new VisualReporter({
+        format: 'html',
+        outputPath: path.join(tempDir, 'report-nossim.html'),
+      });
+
+      const artifacts = await reporter.generateReport({
+        ...mockResults,
+        // Only the passing /home result, which never carries an SSIM score.
+        results: [mockResults.results[0]],
+      });
+      const content = fs.readFileSync(artifacts.reportPath, 'utf-8');
+
+      expect(content).not.toContain('Structural');
     });
   });
 

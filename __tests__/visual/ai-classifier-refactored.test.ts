@@ -187,7 +187,6 @@ describe('AIVisualClassifier (real, backed by Phase 2A infrastructure)', () => {
       expect(result.description).toContain('Layout shift detected');
       expect(result.suggestions).toEqual(mockAIVisionResponse.suggestions);
       expect(result.reasoning).toBe(mockAIVisionResponse.reasoning);
-      expect(result.regions).toBeUndefined();
     });
 
     it.each([
@@ -423,7 +422,6 @@ describe('AIVisualClassifier (real, backed by Phase 2A infrastructure)', () => {
         description: response.description,
         severity: response.severity,
         suggestions: response.suggestions,
-        regions: response.regions,
       });
     });
 

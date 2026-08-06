@@ -140,11 +140,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -200,11 +195,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: true,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -255,11 +245,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -301,11 +286,6 @@ describe('Accessibility CLI E2E Tests', () => {
         failureThreshold: {
           critical: true,
           serious: true,
-        },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
         },
       };
 
@@ -364,11 +344,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -421,11 +396,6 @@ describe('Accessibility CLI E2E Tests', () => {
         failureThreshold: {
           critical: true,
           serious: true,
-        },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
         },
       };
 
@@ -480,11 +450,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -535,11 +500,6 @@ describe('Accessibility CLI E2E Tests', () => {
         failureThreshold: {
           critical: true,
           serious: true,
-        },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
         },
       };
 
@@ -596,11 +556,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -653,11 +608,6 @@ describe('Accessibility CLI E2E Tests', () => {
         failureThreshold: {
           critical: true,
           serious: true,
-        },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
         },
       };
 
@@ -719,11 +669,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -776,11 +721,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -832,11 +772,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -880,11 +815,6 @@ describe('Accessibility CLI E2E Tests', () => {
         failureThreshold: {
           critical: true,
           serious: true,
-        },
-        reporting: {
-          includePassedTests: true,
-          groupByImpact: true,
-          includeScreenshots: false,
         },
         output: {
           format: 'json',
@@ -935,11 +865,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: true,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -987,11 +912,6 @@ describe('Accessibility CLI E2E Tests', () => {
           critical: true,
           serious: true,
         },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -1037,11 +957,6 @@ describe('Accessibility CLI E2E Tests', () => {
           moderate: false,
           minor: false,
         },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
-        },
       };
 
       const runner = new AccessibilityRunner(config);
@@ -1082,11 +997,6 @@ describe('Accessibility CLI E2E Tests', () => {
         failureThreshold: {
           critical: true,
           serious: true,
-        },
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: false,
         },
       };
 
@@ -1152,11 +1062,6 @@ describe('Accessibility CLI E2E Tests', () => {
         failureThreshold: {
           critical: true,
           serious: true,
-        },
-        reporting: {
-          includePassedTests: true,
-          groupByImpact: true,
-          includeScreenshots: false,
         },
       };
 

@@ -395,7 +395,6 @@ describe('Performance Optimizations', () => {
           semanticAnalysis: false,
           aiProvider: 'claude' as any,
           antiAliasing: true,
-          regions: [],
           maxConcurrency: 3,
         },
         devices: ['desktop', 'mobile'],

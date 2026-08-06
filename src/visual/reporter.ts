@@ -272,6 +272,16 @@ export class VisualReporter {
               <span class="metric-label">Threshold</span>
               <span class="metric-value">${(result.threshold * 100).toFixed(2)}%</span>
             </div>
+            ${
+              // Only failures carry a structural score, so this metric appears
+              // exactly where it is worth reading (issue #77).
+              result.ssim !== undefined
+                ? `<div class="metric">
+              <span class="metric-label">Structural (SSIM)</span>
+              <span class="metric-value">${(result.ssim * 100).toFixed(2)}%</span>
+            </div>`
+                : ''
+            }
           </div>
 
           ${
@@ -526,6 +536,9 @@ AI Description: ${this.escapeXml(test.aiAnalysis.description)}`) +
       markdown += `- **Similarity:** ${(result.similarity * 100).toFixed(2)}%\n`;
       markdown += `- **Pixel Difference:** ${(result.pixelDifference * 100).toFixed(2)}%\n`;
       markdown += `- **Threshold:** ${(result.threshold * 100).toFixed(2)}%\n`;
+      if (result.ssim !== undefined) {
+        markdown += `- **Structural (SSIM):** ${(result.ssim * 100).toFixed(2)}%\n`;
+      }
 
       if (result.aiAnalysis) {
         markdown += `\n**AI Analysis:**\n`;

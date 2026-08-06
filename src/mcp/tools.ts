@@ -101,11 +101,6 @@ function scanConfig(url: string, wcagLevel: 'AA' | 'AAA') {
       simulateScreenReader: false,
     },
     failureThreshold: { critical: true, serious: true },
-    reporting: {
-      includePassedTests: false,
-      groupByImpact: true,
-      includeScreenshots: false,
-    },
     // The pre-flight assertNavigationAllowed() below only sees the URL the model
     // handed us. This applies the policy to every request that follows too, so
     // neither a 30x redirect nor a sub-resource can reach a host the model was

@@ -683,7 +683,6 @@ program
   )
   .option('--update-baseline', 'Update baseline with current screenshots', false)
   .option('--mask <selectors>', 'CSS selectors to mask (comma-separated)')
-  .option('--exclude <selectors>', 'CSS selectors to exclude (comma-separated)')
   .option(
     '--concurrency <number>',
     'Max concurrent comparisons',
@@ -742,7 +741,6 @@ program
           aiEndpoint: ai?.endpoint,
           aiCredentials: ai?.credentials,
           antiAliasing: true,
-          regions: [],
           maxConcurrency: options.concurrency,
         },
         devices: options.devices.split(',').map((d: string) => d.trim()),
@@ -821,6 +819,7 @@ program
   .option('--pages <patterns>', 'Page patterns to test (comma-separated)', '/')
   .option('--rules <rules>', 'Specific axe rules to run (comma-separated)')
   .option('--tags <tags>', 'Axe rule tags (wcag2a,wcag2aa,wcag21aa)', 'wcag2a,wcag2aa')
+  .option('--exclude <selectors>', 'CSS selectors to exclude from the scan (comma-separated)')
   .option(
     '--fail-on <impacts>',
     'Fail on impact levels (critical,serious,moderate,minor)',
@@ -857,7 +856,15 @@ program
                 .filter(Boolean)
             : undefined,
           include: [],
-          exclude: [],
+          // AxeRunner has always applied these (axe-integration.ts), but this was
+          // hardcoded `[]`, so there was no way to reach it — the matching flag
+          // lived on `iris visual`, where nothing consumed it (issue #77).
+          exclude: options.exclude
+            ? options.exclude
+                .split(',')
+                .map((s: string) => s.trim())
+                .filter(Boolean)
+            : [],
           disableRules: [],
           timeout: 30000,
         },
@@ -881,11 +888,6 @@ program
             acc[impact.trim()] = true;
             return acc;
           }, {}),
-        reporting: {
-          includePassedTests: false,
-          groupByImpact: true,
-          includeScreenshots: true,
-        },
         output: {
           format: options.format,
           path: options.output,

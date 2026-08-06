@@ -145,13 +145,19 @@ export class VisualDiffEngine {
         baseline.height,
       );
 
-      const result = {
+      const result: DiffResult = {
         success: true,
         passed,
         similarity,
         pixelDifference,
         threshold: options.threshold,
         diffBuffer: diffImageBuffer,
+        // Only on failures: a structural score is what tells a reviewer whether
+        // the regression is a layout shift or a recolour, and it is worth
+        // nothing on a comparison that already passed. Both images are already
+        // decoded to RGBA above, so this reuses them rather than paying sharp a
+        // second time (issue #77).
+        ...(passed ? {} : this.structuralScore(baseline, current)),
       };
 
       // Store in cache
@@ -170,6 +176,31 @@ export class VisualDiffEngine {
         threshold: options.threshold,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
+    }
+  }
+
+  /**
+   * SSIM over images `compare()` has already decoded.
+   *
+   * Returns an empty object rather than throwing: the structural score is
+   * supplementary, so losing it must never downgrade a real pixel verdict into
+   * an error result.
+   */
+  private structuralScore(
+    baseline: PreparedImage,
+    current: PreparedImage,
+  ): { ssim?: number; mcs?: number } {
+    try {
+      const toImage = (image: PreparedImage) => ({
+        data: image.buffer,
+        width: image.width,
+        height: image.height,
+        channels: image.channels,
+      });
+      const { ssim, mcs } = imageSsim.compare(toImage(baseline), toImage(current));
+      return { ssim, mcs };
+    } catch {
+      return {};
     }
   }
 

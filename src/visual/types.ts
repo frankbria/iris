@@ -169,6 +169,18 @@ export interface DiffResult {
   pixelDifference: number;
   threshold: number;
   diffBuffer?: Buffer;
+  /**
+   * Structural Similarity Index (0-1), present only on failed comparisons.
+   *
+   * `similarity` above counts *how many* pixels moved; SSIM describes *how
+   * structurally* the image changed, which is the number that separates "the
+   * whole layout shifted" from "one button changed colour". It is informational
+   * — the pass/fail gate stays purely pixel-based — and is skipped on passing
+   * comparisons so the happy path pays nothing for it (issue #77).
+   */
+  ssim?: number;
+  /** Mean contrast similarity, companion to `ssim`. Same presence rules. */
+  mcs?: number;
   error?: string;
 }
 
@@ -255,14 +267,6 @@ export interface AIVisualAnalysis {
   description: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
   suggestions: string[];
-  regions?: Array<{
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    type: string;
-    description: string;
-  }>;
 }
 
 // Error types for visual testing

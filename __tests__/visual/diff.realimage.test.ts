@@ -59,3 +59,51 @@ describe('VisualDiffEngine real-image threshold semantics', () => {
     expect(result.passed).toBe(true); // 5% differ <= 10% allowed
   });
 });
+
+// Issue #77: SSIM was implemented, tested in isolation, and never reached the
+// pipeline. The mocked suite pins the wiring; this one proves the real vendored
+// SSIM produces a sane score through compare() on real PNGs.
+describe('VisualDiffEngine real-image SSIM integration', () => {
+  const engine = new VisualDiffEngine();
+  const size = 100;
+
+  it('reports a real structural score on a failed comparison', async () => {
+    const baseline = await makePng(size, size, 0);
+    const current = await makePng(size, size, 15); // fails the 0.1 threshold
+
+    const result = await engine.compare(baseline, current, { ...baseOptions, threshold: 0.1 });
+
+    expect(result.passed).toBe(false);
+    // A real number from the vendored implementation, not a stub.
+    expect(typeof result.ssim).toBe('number');
+    expect(result.ssim).toBeGreaterThan(0);
+    expect(result.ssim).toBeLessThan(1); // the images genuinely differ
+    expect(typeof result.mcs).toBe('number');
+  });
+
+  it('scores a bigger structural change lower than a smaller one', async () => {
+    // The property that makes SSIM worth surfacing at all: it must move in the
+    // right direction. A constant would satisfy the test above but not this one.
+    const baseline = await makePng(size, size, 0);
+    const small = await engine.compare(baseline, await makePng(size, size, 15), {
+      ...baseOptions,
+      threshold: 0.1,
+    });
+    const large = await engine.compare(baseline, await makePng(size, size, 60), {
+      ...baseOptions,
+      threshold: 0.1,
+    });
+
+    expect(large.ssim).toBeLessThan(small.ssim!);
+  });
+
+  it('omits the score when the comparison passes', async () => {
+    const baseline = await makePng(size, size, 0);
+    const current = await makePng(size, size, 5); // under threshold
+
+    const result = await engine.compare(baseline, current, { ...baseOptions, threshold: 0.1 });
+
+    expect(result.passed).toBe(true);
+    expect(result.ssim).toBeUndefined();
+  });
+});

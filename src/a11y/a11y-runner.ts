@@ -44,11 +44,6 @@ export interface AccessibilityRunnerConfig {
     simulateScreenReader: boolean;
   };
   failureThreshold: Record<string, boolean>; // { critical: true, serious: true, ... }
-  reporting: {
-    includePassedTests: boolean;
-    groupByImpact: boolean;
-    includeScreenshots: boolean;
-  };
   output?: {
     format: 'html' | 'json' | 'junit';
     path?: string;

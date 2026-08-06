@@ -58,7 +58,6 @@ describe('VisualTestRunner', () => {
       semanticAnalysis: false,
       aiProvider: 'openai' as const,
       antiAliasing: true,
-      regions: [],
       maxConcurrency: 3,
     },
   };
