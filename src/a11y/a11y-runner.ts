@@ -94,6 +94,31 @@ export interface AccessibilityTestResult {
 /**
  * AccessibilityRunner orchestrates comprehensive accessibility testing
  */
+/**
+ * Weighted accessibility score (0-100) for a set of violation counts.
+ *
+ * Module-level so run history can score each page on its own violations with
+ * the same weights the runner uses for its summary, rather than duplicating
+ * the penalties or storing the run-wide score against every page (issue #77).
+ */
+export function calculateAccessibilityScore(
+  violations: { critical: number; serious: number; moderate: number; minor: number },
+  pageCount: number,
+): number {
+  // Weighted scoring: critical issues heavily penalized
+  const criticalPenalty = violations.critical * 25;
+  const seriousPenalty = violations.serious * 10;
+  const moderatePenalty = violations.moderate * 5;
+  const minorPenalty = violations.minor * 2;
+
+  const totalPenalty = criticalPenalty + seriousPenalty + moderatePenalty + minorPenalty;
+  const maxPossibleScore = 100 * pageCount;
+
+  const score = (Math.max(0, maxPossibleScore - totalPenalty) / maxPossibleScore) * 100;
+
+  return Math.round(score);
+}
+
 export class AccessibilityRunner {
   private config: AccessibilityRunnerConfig;
   private axeRunner: AxeRunner;
@@ -470,18 +495,7 @@ export class AccessibilityRunner {
     violations: { critical: number; serious: number; moderate: number; minor: number },
     pageCount: number,
   ): number {
-    // Weighted scoring: critical issues heavily penalized
-    const criticalPenalty = violations.critical * 25;
-    const seriousPenalty = violations.serious * 10;
-    const moderatePenalty = violations.moderate * 5;
-    const minorPenalty = violations.minor * 2;
-
-    const totalPenalty = criticalPenalty + seriousPenalty + moderatePenalty + minorPenalty;
-    const maxPossibleScore = 100 * pageCount;
-
-    const score = (Math.max(0, maxPossibleScore - totalPenalty) / maxPossibleScore) * 100;
-
-    return Math.round(score);
+    return calculateAccessibilityScore(violations, pageCount);
   }
 
   /**

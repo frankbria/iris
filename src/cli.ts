@@ -755,6 +755,11 @@ program
 
       const result = await runner.run();
 
+      // Record the run before any exit path below — the failure branches call
+      // process.exit(), so persisting later would only ever capture passes.
+      const { recordVisualRun } = await import('./history');
+      recordVisualRun(result, new Date(startTime), new Date());
+
       const duration = Date.now() - startTime;
       console.log(`\n📊 Visual testing completed in ${duration}ms`);
       console.log(`   Total comparisons: ${result.summary.totalComparisons}`);
@@ -896,6 +901,10 @@ program
       });
 
       const result = await runner.run();
+
+      // Before the exit paths below, for the same reason as the visual command.
+      const { recordA11yRun } = await import('./history');
+      recordA11yRun(result, new Date(startTime), new Date());
 
       const duration = Date.now() - startTime;
       console.log(`\n📊 Accessibility testing completed in ${duration}ms`);

@@ -14,6 +14,16 @@ import path from 'path';
 // Increase Jest timeout for integration tests that may involve browser automation
 jest.setTimeout(30000);
 
+// Keep run history out of the developer's real database.
+//
+// Anything that persists a run (the watcher, and since #77 the visual and a11y
+// commands) resolves `IRIS_DB_PATH` or falls back to ~/.iris/iris.db. Without
+// this default, running the suite writes test rows into the user's own history
+// — which it had been doing for a long time. Individual tests still override
+// this freely; this only stops the fallback from ever reaching $HOME.
+process.env.IRIS_DB_PATH =
+  process.env.IRIS_DB_PATH || path.join(__dirname, '__tests__', 'temp', 'jest-history.db');
+
 // Mock console methods to reduce noise in test output while preserving error logging
 const originalError = console.error;
 const originalWarn = console.warn;

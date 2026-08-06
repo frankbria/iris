@@ -481,6 +481,46 @@ describe('visual-diff CLI command', () => {
     });
   });
 
+  // Issue #77: the visual/a11y persistence helpers existed, were tested, and had
+  // no caller — every run's history was discarded. These pin the CLI wiring; the
+  // mapping itself is covered in __tests__/history.test.ts.
+  describe('run history', () => {
+    it('records the run, including on the failing path that exits non-zero', async () => {
+      const recordVisualRun = jest.fn();
+      jest.doMock('../src/history', () => ({ recordVisualRun }));
+      jest.doMock('../src/visual/visual-runner', () => ({
+        VisualTestRunner: jest.fn().mockImplementation(() => ({
+          run: jest.fn().mockResolvedValue({
+            summary: {
+              totalComparisons: 1,
+              passed: 0,
+              failed: 1,
+              newBaselines: 0,
+              // The failing branch calls process.exit(), so recording has to
+              // happen before it or history would only ever hold passes.
+              overallStatus: 'failed',
+              severityCounts: { breaking: 1 },
+            },
+            results: [],
+            duration: 100,
+          }),
+        })),
+      }));
+
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+
+      try {
+        await freshRunCli(['node', 'iris', 'visual-diff']);
+      } catch {
+        // process.exit is mocked to throw
+      }
+
+      expect(recordVisualRun).toHaveBeenCalledTimes(1);
+      expect(recordVisualRun.mock.calls[0][0].summary.failed).toBe(1);
+    });
+  });
+
   describe('output reporting', () => {
     it('should display summary statistics', async () => {
       jest.doMock('../src/visual/visual-runner', () => ({
