@@ -10,6 +10,13 @@
  */
 
 // Core types and interfaces
+//
+// Several of these (A11yReport, the error classes, the report schema) have no
+// consumer inside `src`. Issue #81 listed them as dead; they are kept because
+// this file IS the module's declared public surface — a type nothing internal
+// happens to use is not the same as a type nobody uses. Removing them would be
+// a breaking change for anyone importing `iris/a11y`, in exchange for deleting
+// declarations that cost nothing at runtime.
 export type {
   A11yTestConfig,
   A11yViolation,

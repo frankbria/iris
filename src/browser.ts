@@ -99,6 +99,13 @@ export async function typeText(page: Page, selector: string, text: string): Prom
 
 /**
  * Take a screenshot of the page. Returns a Buffer by default.
+ *
+ * KEPT DELIBERATELY, though no other `src` module calls it (issue #81 listed it
+ * as dead). Visual capture has its own stabilising pipeline in
+ * `visual/capture.ts` and does not need this, but it sits alongside
+ * click/typeText as part of this module's small exported browser vocabulary,
+ * and it is two lines. Deleting an exported helper to save two lines is a
+ * breaking change with no upside.
  */
 export async function takeScreenshot(page: Page): Promise<Buffer> {
   return await page.screenshot();

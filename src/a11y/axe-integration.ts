@@ -201,7 +201,13 @@ export class AxeRunner {
   }
 
   /**
-   * Run axe-core on specific element
+   * Run axe-core scoped to a single element.
+   *
+   * KEPT DELIBERATELY, though nothing in `src` calls it (issue #81 listed it as
+   * dead). It is a working, tested, exported method on a class this package
+   * exports — scoping a scan to one component is the obvious thing a library
+   * consumer wants, and deleting it would be a breaking change to buy back ~40
+   * lines. Reconsider if `AxeRunner` ever stops being public.
    */
   async runOnElement(
     page: Page,
