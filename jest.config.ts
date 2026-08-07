@@ -10,14 +10,15 @@ const config: Config.InitialOptions = {
     '!**/__tests__/**/report-generator.ts'
   ],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
-  // pixelmatch 7 is ESM-only. Node 20.19+/22.12+ can `require()` ESM natively —
+  // pixelmatch 7, chokidar 5 and its readdirp dep are ESM-only. Node can
+  // `require()` ESM natively —
   // and engines.node now floors exactly there (#138) — so the built CLI loads it
   // without ceremony. Jest's own sandboxed require does NOT support require(esm),
   // so the package has to be transformed for tests specifically.
   //
   // Narrow allowlist rather than transforming all of node_modules, which would
   // be slow and would drag in every dependency's build output.
-  transformIgnorePatterns: ['/node_modules/(?!(pixelmatch)/)'],
+  transformIgnorePatterns: ['/node_modules/(?!(pixelmatch|chokidar|readdirp)/)'],
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {}],
     // pixelmatch ships .js ESM; ts-jest can downlevel it to CJS for the sandbox.

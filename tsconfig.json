@@ -1,6 +1,12 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    // ES2022, matching the Node floor in package.json (^22.13.0 || >=24).
+    // ES2020 understated the runtime the same way @types/node ^18 did: it
+    // withheld built-ins Node has supported for years, so `Array#at` only
+    // compiled because older @types/node happened to declare it. Newer
+    // @types/node stopped, surfacing as TS2550 in tests — and only in tests,
+    // since `include` here covers src alone and ts-jest compiles the rest.
+    "target": "ES2022",
     "module": "CommonJS",
     "rootDir": "src",
     "outDir": "dist",

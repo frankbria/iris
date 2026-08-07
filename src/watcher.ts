@@ -1,4 +1,5 @@
-import chokidar from 'chokidar';
+import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
+import picomatch from 'picomatch';
 import { loadConfig } from './config';
 import { translate } from './translator';
 import { describeAction } from './actions';
@@ -97,7 +98,9 @@ export interface WatchEvent {
 }
 
 export class FileWatcher {
-  private watcher?: chokidar.FSWatcher;
+  private watcher?: FSWatcher;
+  /** Compiled include matcher, built lazily and reused across events. */
+  private isIncluded?: (testPath: string) => boolean;
   private debounceTimer?: NodeJS.Timeout;
   // `logger`/`quiet` are resolved into `this.logger` in the constructor, so they
   // are not part of the settled option bag.
@@ -175,6 +178,60 @@ export class FileWatcher {
     return this.classifier;
   }
 
+  /**
+   * Does this path match the configured watch patterns?
+   *
+   * Built once per call site rather than per event — picomatch compiles the
+   * glob, and recompiling it for every filesystem event on a large tree is the
+   * kind of cost that only shows up under load.
+   */
+  private matchesPatterns(relativePath: string): boolean {
+    this.isIncluded ??= picomatch(this.normalizedPatterns());
+    return this.isIncluded(relativePath);
+  }
+
+  /**
+   * Watch patterns as POSIX paths relative to `cwd`.
+   *
+   * `watch <target>` can put an absolute path in `patterns` (see watchFiles),
+   * while chokidar reports paths relative to `cwd`. Comparing the two without
+   * normalising would silently match nothing.
+   */
+  private normalizedPatterns(): string[] {
+    return this.options.patterns.map((pattern) =>
+      path.isAbsolute(pattern)
+        ? path.relative(this.options.cwd, pattern).split(path.sep).join('/')
+        : pattern,
+    );
+  }
+
+  /**
+   * The `ignored` predicate chokidar 5 uses in place of glob watching.
+   *
+   * Directories and files are treated differently on purpose. Returning true
+   * for a directory stops chokidar descending into it, so a directory may only
+   * be excluded by an explicit ignore pattern — filtering directories by the
+   * *include* patterns would prune the whole tree and watch nothing, since
+   * `src` does not match `**\/*.ts`.
+   *
+   * When chokidar calls without stats we fall back to ignore-patterns only. The
+   * include filter is applied again in handleFileEvent, so a file admitted here
+   * for lack of stats is still dropped before it triggers a run.
+   */
+  private buildIgnoreFilter(): (testPath: string, stats?: { isDirectory(): boolean }) => boolean {
+    const isIgnored = picomatch(this.options.ignore);
+
+    return (testPath, stats) => {
+      const relative = path.relative(this.options.cwd, testPath).split(path.sep).join('/');
+      // The watch root itself must never be ignored.
+      if (relative === '' || relative === '.') return false;
+
+      if (isIgnored(relative)) return true;
+      if (stats && !stats.isDirectory()) return !this.matchesPatterns(relative);
+      return false;
+    };
+  }
+
   async start(): Promise<void> {
     if (this.isRunning) {
       this.logger.warn('Watcher is already running');
@@ -215,8 +272,14 @@ export class FileWatcher {
       }
     }
 
-    this.watcher = chokidar.watch(this.options.patterns, {
-      ignored: this.options.ignore,
+    // chokidar 4 removed glob support entirely, so the watch target is the
+    // directory and all pattern matching moves into `ignored` (issue #172).
+    //
+    // This is the failure mode worth guarding: passing a glob to chokidar 5
+    // does not throw — it watches a literal path named `**/*.{ts,...}`, which
+    // does not exist, and the watcher silently never fires again.
+    this.watcher = chokidarWatch(this.options.cwd, {
+      ignored: this.buildIgnoreFilter(),
       cwd: this.options.cwd,
       persistent: this.options.persistent,
       ignoreInitial: true,
@@ -285,6 +348,17 @@ export class FileWatcher {
   }
 
   private handleFileEvent(type: 'add' | 'change' | 'unlink', filePath: string): void {
+    // Authoritative include gate. `ignored` also applies it, but only when
+    // chokidar supplies stats — so this is what makes the filter correct
+    // regardless of when that happens. chokidar reports paths relative to cwd
+    // already; normalise separators for the matcher on Windows (issue #172).
+    const relative = path.isAbsolute(filePath)
+      ? path.relative(this.options.cwd, filePath).split(path.sep).join('/')
+      : filePath.split(path.sep).join('/');
+    if (!this.matchesPatterns(relative)) {
+      return;
+    }
+
     const event: WatchEvent = {
       type,
       path: filePath,
