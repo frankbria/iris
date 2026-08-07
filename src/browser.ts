@@ -32,13 +32,25 @@ export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise
     // Narrow on purpose: a sandbox or permissions failure keeps its own
     // diagnostics, which this message would only obscure.
     if (error instanceof Error && /Executable doesn't exist/i.test(error.message)) {
-      const actionable = new Error(
-        'Playwright browsers are not installed. Run: npx playwright install chromium',
-      );
-      // Playwright's original text carries the resolved cache path, which is
-      // what you need when PLAYWRIGHT_BROWSERS_PATH points somewhere
-      // unexpected. Replacing the message must not throw that away.
+      // The resolved cache path goes in the MESSAGE, not just `cause`.
       //
+      // `cause` does not survive the trip: ActionExecutor.launchBrowser rebuilds
+      // the error from `.message`, createPage rebuilds it again, and the
+      // JSON-RPC layer serialises `message` alone — so a value parked on `cause`
+      // is stripped before any user sees it. The message is the one field every
+      // layer carries, so the diagnostic belongs there.
+      //
+      // It matters because the two failures look identical and have opposite
+      // fixes: browsers genuinely missing (run the command) versus
+      // PLAYWRIGHT_BROWSERS_PATH pointing somewhere wrong (running the command
+      // installs to the default cache and changes nothing). The path is what
+      // tells them apart.
+      const expectedPath = error.message.match(/Executable doesn't exist at (\S+)/i)?.[1];
+      const actionable = new Error(
+        'Playwright browsers are not installed. Run: npx playwright install chromium' +
+          (expectedPath ? ` (expected the browser at ${expectedPath})` : ''),
+      );
+      // Kept as well, for programmatic callers that want the untouched original.
       // Assigned rather than passed to the constructor: `cause` is ES2022 and
       // this project's tsconfig targets ES2020, so the two-argument Error
       // overload isn't in the type lib. It exists at runtime on Node >=20.9,

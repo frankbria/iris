@@ -62,20 +62,42 @@ describe('launchBrowser with missing Playwright browsers (issue #79)', () => {
     await expect(launchBrowser()).rejects.not.toThrow(/npx playwright install/);
   });
 
+  it('puts the resolved cache path in the message, where it survives re-wrapping', async () => {
+    mockLaunch.mockRejectedValue(missingExecutableError());
+
+    // `cause` does not survive: the executor, createPage, and the JSON-RPC layer
+    // each rebuild the error from `.message` alone. The path has to ride there.
+    await expect(launchBrowser()).rejects.toThrow(
+      /expected the browser at \/home\/u\/\.cache\/ms-playwright\/chromium-1200/,
+    );
+  });
+
+  it('omits the path clause when Playwright did not state one', async () => {
+    mockLaunch.mockRejectedValue(new Error("Executable doesn't exist"));
+
+    const error = await launchBrowser().catch((e) => e);
+    expect(error.message).toBe(
+      'Playwright browsers are not installed. Run: npx playwright install chromium',
+    );
+  });
+
   // The executor is the only non-test caller, so its wrapper is the path every
-  // `iris run` / `watch` / `connect` user actually travels. It rebuilds the error
-  // from `.message` alone, which silently dropped everything below.
-  it('surfaces the guidance and the original path through ActionExecutor', async () => {
+  // `iris run` / `watch` / `connect` user actually travels.
+  it('surfaces guidance AND the path through ActionExecutor', async () => {
     const original = missingExecutableError();
     mockLaunch.mockRejectedValue(original);
 
     const { ActionExecutor } = await import('../src/executor');
     const executor = new ActionExecutor();
 
-    await expect(executor.launchBrowser()).rejects.toThrow(/npx playwright install chromium/);
-    // Without propagation the resolved cache path — the thing you need when
-    // PLAYWRIGHT_BROWSERS_PATH points somewhere unexpected — dies in the wrapper.
-    await expect(executor.launchBrowser()).rejects.toMatchObject({ cause: original });
+    const error = await executor.launchBrowser().catch((e) => e);
+
+    // Both halves reach the layer users actually read. Asserting on `.message`
+    // rather than `.cause` is the point: no production code reads `.cause`.
+    expect(error.message).toMatch(/npx playwright install chromium/);
+    expect(error.message).toMatch(/expected the browser at \/home\/u\/\.cache/);
+    // Still preserved for programmatic callers.
+    expect(error.cause).toBe(original);
   });
 
   it('still returns the browser on the happy path', async () => {
