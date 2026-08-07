@@ -8,15 +8,46 @@ export interface BrowserLaunchOptions {
 
 /**
  * Launch a Chromium browser instance.
+ *
+ * @throws a message naming `npx playwright install chromium` when the browser
+ * binary is missing — see {@link launchBrowser} internals and issue #79.
  */
 export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise<Browser> {
-  return await chromium.launch({
-    headless: options.headless ?? true,
-    slowMo: options.slowMo ?? 0,
-    // Playwright >=1.61 removed the deprecated `devtools` launch option; this
-    // Chromium arg is its documented equivalent.
-    args: options.devtools ? ['--auto-open-devtools-for-tabs'] : [],
-  });
+  try {
+    return await chromium.launch({
+      headless: options.headless ?? true,
+      slowMo: options.slowMo ?? 0,
+      // Playwright >=1.61 removed the deprecated `devtools` launch option; this
+      // Chromium arg is its documented equivalent.
+      args: options.devtools ? ['--auto-open-devtools-for-tabs'] : [],
+    });
+  } catch (error) {
+    // Installing iris does not guarantee the browser binaries: Playwright
+    // downloads them from a postinstall script, which pnpm skips by default and
+    // which `--ignore-scripts` and hardened CI images disable outright. The
+    // first `iris run` then died on Playwright's raw "Executable doesn't exist"
+    // banner, which reads like a broken install rather than one missing step
+    // (issue #79).
+    //
+    // Narrow on purpose: a sandbox or permissions failure keeps its own
+    // diagnostics, which this message would only obscure.
+    if (error instanceof Error && /Executable doesn't exist/i.test(error.message)) {
+      const actionable = new Error(
+        'Playwright browsers are not installed. Run: npx playwright install chromium',
+      );
+      // Playwright's original text carries the resolved cache path, which is
+      // what you need when PLAYWRIGHT_BROWSERS_PATH points somewhere
+      // unexpected. Replacing the message must not throw that away.
+      //
+      // Assigned rather than passed to the constructor: `cause` is ES2022 and
+      // this project's tsconfig targets ES2020, so the two-argument Error
+      // overload isn't in the type lib. It exists at runtime on Node >=20.9,
+      // which package.json already requires.
+      (actionable as Error & { cause?: unknown }).cause = error;
+      throw actionable;
+    }
+    throw error;
+  }
 }
 
 /**
