@@ -106,6 +106,9 @@ describe('ActionExecutor', () => {
       routeWebSocket: jest.fn().mockResolvedValue(undefined),
       context: jest.fn().mockReturnValue(mockContext),
       close: jest.fn().mockResolvedValue(undefined),
+      // The guard registers a close listener so a closed page's policy stops
+      // being consulted for unattributable requests (issue #158).
+      once: jest.fn(),
     } as any;
 
     // Setup browser module mocks

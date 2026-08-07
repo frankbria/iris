@@ -19,7 +19,8 @@ import { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { installUrlPolicyGuard, guardedGoto } from '../src/url-policy-guard';
+import { installUrlPolicyGuard, guardedGoto, observeGuardDecisions } from '../src/url-policy-guard';
+import type { GuardDecision } from '../src/url-policy-guard';
 
 const METADATA = 'http://169.254.169.254/latest/meta-data/';
 
@@ -602,6 +603,97 @@ describe('URL policy guard', () => {
       await popup.waitForTimeout(1500);
 
       expect(offsiteLog).not.toContain('/from-popup');
+    }, 60_000);
+  });
+
+  // Issue #158: an unattributable request — a popup's opening request, issued
+  // before its frame exists — was judged by whichever guard was installed most
+  // recently. The fail-safe version was written once and reverted, because no
+  // test could tell it apart from its own absence: whether such a request is
+  // checked against all policies, the newest, or none, the popup tests above
+  // pass identically. Whether a request reached a server cannot reveal WHICH
+  // policy refused it.
+  //
+  // observeGuardDecisions closes exactly that gap.
+  describe('which policy judged an unattributable request (issue #158)', () => {
+    let decisions: GuardDecision[];
+
+    beforeEach(() => {
+      decisions = [];
+      observeGuardDecisions((d) => decisions.push(d));
+    });
+
+    afterEach(() => observeGuardDecisions());
+
+    it('judges a popup opening request against EVERY guard in the context', async () => {
+      // Two pages, two different pins — the shape where "newest wins" is wrong.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      const second = await context.newPage();
+      await installUrlPolicyGuard(second, { pinnedOrigin: 'http://other.example' });
+
+      await guardedGoto(p, `${origin}/popup-source`);
+      decisions = [];
+      await p.click('#off').catch(() => {});
+      await p.waitForTimeout(2000);
+
+      const unattributable = decisions.filter((d) => d.attribution === 'context-net');
+      expect(unattributable.length).toBeGreaterThan(0);
+
+      // The assertion the old harness could not make: both pins were consulted,
+      // not just the most recently installed one.
+      const pins = unattributable[0].policies.map((x) => x.pinnedOrigin).sort();
+      expect(pins).toEqual([origin, 'http://other.example'].sort());
+    }, 60_000);
+
+    it('refuses when any guard in the context refuses', async () => {
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      const second = await context.newPage();
+      await installUrlPolicyGuard(second, { pinnedOrigin: 'http://other.example' });
+
+      await guardedGoto(p, `${origin}/popup-source`);
+      decisions = [];
+      await p.click('#off').catch(() => {});
+      await p.waitForTimeout(2000);
+
+      const refused = decisions.filter((d) => d.attribution === 'context-net' && !d.allowed);
+      expect(refused.length).toBeGreaterThan(0);
+      expect(refused[0].reason).toBeTruthy();
+      expect(offsiteLog).not.toContain('/tab');
+    }, 60_000);
+
+    it('reports an attributable request as judged by its own page alone', async () => {
+      // The contrast that makes the above meaningful: an ordinary request names
+      // its frame, so exactly one policy is consulted however many guards exist.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      const second = await context.newPage();
+      await installUrlPolicyGuard(second, { pinnedOrigin: 'http://other.example' });
+
+      decisions = [];
+      await guardedGoto(p, `${origin}/final`);
+
+      const attributed = decisions.filter((d) => d.attribution === 'page');
+      expect(attributed.length).toBeGreaterThan(0);
+      for (const d of attributed) {
+        expect(d.policies).toHaveLength(1);
+        expect(d.policies[0].pinnedOrigin).toBe(origin);
+      }
+    }, 60_000);
+
+    it('consults one policy in a single-guard context, so nothing changes for real callers', async () => {
+      // Every context IRIS creates today has one policy, and there the
+      // fail-safe treatment is identical to the old newest-wins behaviour.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/popup-source`);
+      decisions = [];
+
+      await p.click('#off').catch(() => {});
+      await p.waitForTimeout(2000);
+
+      const unattributable = decisions.filter((d) => d.attribution === 'context-net');
+      for (const d of unattributable) {
+        expect(d.policies).toHaveLength(1);
+      }
+      expect(offsiteLog).not.toContain('/tab');
     }, 60_000);
   });
 
