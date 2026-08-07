@@ -326,6 +326,73 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       expect(status.circuitBreakerTriggered).toBe(true);
     });
 
+    // Regression tests for issue #132: the budget getters bounded their sum at
+    // Date.now(). A backward clock jump (NTP correction, VM/WSL suspend-resume)
+    // makes every already-written row future-dated, so recorded spend vanishes
+    // from the sum and the breaker never arms — unbounded overspend until the
+    // clock catches up. Observed for real on WSL2, and it flaked the breaker
+    // test above roughly 1-in-40 runs.
+    describe('backward clock movement (issue #132)', () => {
+      // Mid-day, so shifting by seconds cannot cross a day/month boundary and
+      // change which period we are asking about.
+      const noon = new Date('2026-07-25T12:00:00.000Z').getTime();
+
+      /**
+       * Record spend "in the future", then put the clock back where it was.
+       *
+       * The breaker tripping *during* the loop is expected and correct — while
+       * the clock is ahead it is self-consistent, so the sum is right. The bug
+       * only appears once the clock moves back, which is what we assert after.
+       */
+      const trackWithClockAhead = (aheadMs: number, operations: number) => {
+        const spy = jest.spyOn(Date, 'now').mockReturnValue(noon + aheadMs);
+        try {
+          for (let i = 0; i < operations; i++) {
+            try {
+              tracker.trackOperation('openai', 'gpt-4o', false);
+            } catch {
+              break; // budget reached; enough spend is on the books
+            }
+          }
+        } finally {
+          spy.mockReturnValue(noon); // the clock jumps back
+        }
+      };
+
+      afterEach(() => {
+        jest.restoreAllMocks();
+      });
+
+      it('still counts spend recorded ahead of the current clock', () => {
+        trackWithClockAhead(10_000, 1000); // 1000 * 0.002 = $2.00
+
+        // Bounding at Date.now() returned 0 here: every row was 10s in the future.
+        expect(tracker.getDailyCost()).toBeCloseTo(2.0, 5);
+        expect(tracker.getMonthlyCost()).toBeCloseTo(2.0, 5);
+      });
+
+      it('still arms the circuit breaker on spend recorded ahead of the clock', () => {
+        // $5.00/day limit; 2600 operations = $5.20, comfortably over.
+        trackWithClockAhead(10_000, 2600);
+
+        const status = tracker.getBudgetStatus();
+        expect(status.dailyPercent).toBeGreaterThanOrEqual(1.0);
+        expect(status.circuitBreakerTriggered).toBe(true);
+        // And the breaker actually blocks the next paid operation.
+        expect(() => tracker.trackOperation('openai', 'gpt-4o', false)).toThrow();
+      });
+
+      it('leaves getCostForPeriod range queries bounded as before', () => {
+        // The fix is scoped to the budget getters. Explicit reporting ranges
+        // must still exclude what falls outside them, or range queries become
+        // meaningless.
+        trackWithClockAhead(10_000, 500);
+
+        expect(tracker.getCostForPeriod(noon - 60_000, noon)).toBe(0);
+        expect(tracker.getCostForPeriod(noon - 60_000, noon + 60_000)).toBeCloseTo(1.0, 5);
+      });
+    });
+
     // Regression tests for issue #68: the breaker must block only paid
     // operations — $0 cache hits and free providers always proceed.
     describe('circuit breaker with free operations (issue #68)', () => {
