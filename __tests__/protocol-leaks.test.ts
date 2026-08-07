@@ -180,4 +180,149 @@ describe('Protocol session/page resource leaks (issue #69)', () => {
       ws.close();
     }
   });
+
+  // Issue #128: #69 fixed the sequential re-launch leak, but two *concurrent*
+  // interleavings survived. Both handlers suspend at an `await`, so a second
+  // message runs in the gap the first left open.
+  describe('concurrent session mutation (issue #128)', () => {
+    /** Send without awaiting, so both messages are in flight simultaneously. */
+    const launchReq = (id: number) => ({
+      jsonrpc: '2.0',
+      id,
+      method: 'launchBrowser',
+      params: {},
+    });
+
+    test('two pipelined launchBrowser requests leave exactly one live session and orphan nothing', async () => {
+      const ws = await createPersistentConnection();
+      try {
+        // An existing session is what makes this race real: `await
+        // cleanupSession(...)` only suspends for a meaningful length of time
+        // when there is a browser to close, and closing Chromium is slow.
+        await sendRequestViaConnection(ws, launchReq(30));
+        mockInstances[0].cleanup.mockImplementation(() => new Promise((r) => setTimeout(r, 50)));
+
+        const [a, b] = await Promise.all([
+          sendRequestViaConnection(ws, launchReq(31)),
+          sendRequestViaConnection(ws, launchReq(32)),
+        ]);
+        expect(a.result?.success).toBe(true);
+        expect(b.result?.success).toBe(true);
+
+        // Three executors were constructed; exactly one may still be alive.
+        // Every other one must have been cleaned up, or its Chromium is
+        // orphaned with no map entry and no future cleanup path.
+        expect(mockInstances).toHaveLength(3);
+        const alive = mockInstances.filter((m) => m.cleanup.mock.calls.length === 0);
+        expect(alive).toHaveLength(1);
+
+        // The first session must not be torn down twice either — both handlers
+        // reading it before either deletes it is the same interleaving.
+        expect(mockInstances[0].cleanup).toHaveBeenCalledTimes(1);
+
+        // The survivor is the one still serving actions.
+        const action = await sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 33,
+          method: 'executeBrowserAction',
+          params: { actions: [{ type: 'click', selector: '#button' }] },
+        });
+        expect(action.result?.success).toBe(true);
+        expect(alive[0].executeActions).toHaveBeenCalledTimes(1);
+      } finally {
+        ws.close();
+      }
+    });
+
+    test('a launchBrowser arriving mid-action waits instead of tearing down under it', async () => {
+      const ws = await createPersistentConnection();
+      try {
+        await sendRequestViaConnection(ws, launchReq(40));
+        const executor = mockInstances[0];
+
+        // Order-of-events log. Asserting on invocationCallOrder alone would only
+        // prove when cleanup was *called* relative to when the action *started* —
+        // the bug is cleanup landing before the action *finishes*.
+        const events: string[] = [];
+        executor.executeActions.mockImplementation(async () => {
+          events.push('action:start');
+          await new Promise((r) => setTimeout(r, 60));
+          events.push('action:end');
+          return [
+            {
+              success: true,
+              action: { type: 'click', selector: '#button' },
+              duration: 1,
+              context: { url: 'http://example.com', timestamp: Date.now() },
+            },
+          ];
+        });
+        executor.cleanup.mockImplementation(async () => {
+          events.push('cleanup');
+        });
+
+        const actionPromise = sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 41,
+          method: 'executeBrowserAction',
+          params: { actions: [{ type: 'click', selector: '#button' }] },
+        });
+        // Let the action get past createPage and into executeActions, then
+        // launch while it is genuinely in flight.
+        await new Promise((r) => setTimeout(r, 40));
+        const launchPromise = sendRequestViaConnection(ws, launchReq(42));
+
+        const [actionRes, launchRes] = await Promise.all([actionPromise, launchPromise]);
+
+        expect(actionRes.result?.success).toBe(true);
+        expect(launchRes.result?.success).toBe(true);
+        expect(events).toEqual(['action:start', 'action:end', 'cleanup']);
+      } finally {
+        ws.close();
+      }
+    });
+
+    test('pipelined executeBrowserAction requests still run concurrently', async () => {
+      // Guard against over-serialising: the fix must not turn actions into a
+      // queue. Two actions overlapping is deliberate and tested for above; this
+      // pins it against the new gate.
+      const ws = await createPersistentConnection();
+      try {
+        await sendRequestViaConnection(ws, launchReq(50));
+        const executor = mockInstances[0];
+
+        let inFlight = 0;
+        let maxConcurrent = 0;
+        executor.executeActions.mockImplementation(async () => {
+          inFlight += 1;
+          maxConcurrent = Math.max(maxConcurrent, inFlight);
+          await new Promise((r) => setTimeout(r, 40));
+          inFlight -= 1;
+          return [
+            {
+              success: true,
+              action: { type: 'click', selector: '#button' },
+              duration: 1,
+              context: { url: 'http://example.com', timestamp: Date.now() },
+            },
+          ];
+        });
+
+        const actionReq = (id: number) => ({
+          jsonrpc: '2.0',
+          id,
+          method: 'executeBrowserAction',
+          params: { actions: [{ type: 'click', selector: '#button' }] },
+        });
+        await Promise.all([
+          sendRequestViaConnection(ws, actionReq(51)),
+          sendRequestViaConnection(ws, actionReq(52)),
+        ]);
+
+        expect(maxConcurrent).toBe(2);
+      } finally {
+        ws.close();
+      }
+    });
+  });
 });

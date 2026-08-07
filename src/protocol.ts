@@ -134,6 +134,11 @@ export function startServer(
       return;
     }
 
+    // One gate per connection: sessions are keyed by socket, so ordering only
+    // needs to hold within a connection. Scoped to this closure so it dies with
+    // the socket rather than needing its own cleanup path.
+    const gate = new SessionGate();
+
     ws.on('message', async (data) => {
       let req: JsonRpcRequest;
       try {
@@ -162,32 +167,40 @@ export function startServer(
               res.error = { code: -32602, message: 'Invalid params' };
               break;
             }
-            // Tear down any existing session first so its Chromium process
-            // isn't orphaned when the map entry is overwritten (issue #69).
-            await cleanupSession(ws, sessions);
-            const session = await createBrowserSession(parsedOptions.data);
-            sessions.set(ws, session);
-            res.result = {
-              success: true,
-              message: 'Browser launched successfully',
-              sessionId: getSessionId(ws),
-            };
+            // Exclusive: cleanup + create + map-write must be indivisible, or a
+            // second pipelined launch interleaves at one of those awaits and
+            // orphans an executor (issue #128).
+            res.result = await gate.write(async () => {
+              // Tear down any existing session first so its Chromium process
+              // isn't orphaned when the map entry is overwritten (issue #69).
+              await cleanupSession(ws, sessions);
+              const session = await createBrowserSession(parsedOptions.data);
+              sessions.set(ws, session);
+              return {
+                success: true,
+                message: 'Browser launched successfully',
+                sessionId: getSessionId(ws),
+              };
+            });
             break;
           }
 
           case 'closeBrowser': {
-            const session = sessions.get(ws);
-            if (!session) {
-              throw { code: -32000, message: 'No active browser session' };
-            }
-            await cleanupSession(ws, sessions);
-            res.result = { success: true, message: 'Browser closed successfully' };
+            res.result = await gate.write(async () => {
+              // Read the session inside the gate: a launch queued ahead of this
+              // one may have replaced it since the message arrived.
+              const session = sessions.get(ws);
+              if (!session) {
+                throw { code: -32000, message: 'No active browser session' };
+              }
+              await cleanupSession(ws, sessions);
+              return { success: true, message: 'Browser closed successfully' };
+            });
             break;
           }
 
           case 'getBrowserStatus': {
-            const session = sessions.get(ws);
-            res.result = await getBrowserSessionStatus(session);
+            res.result = await gate.read(async () => getBrowserSessionStatus(sessions.get(ws)));
             break;
           }
 
@@ -198,17 +211,21 @@ export function startServer(
               break;
             }
             const { instruction, actions, url } = parsed.data;
-            const session = sessions.get(ws);
 
-            if (!session) {
-              throw {
-                code: -32000,
-                message: 'No active browser session. Call launchBrowser first.',
-              };
-            }
-
-            const result = await executeBrowserActions(session, instruction, actions, url);
-            res.result = result;
+            // Shared: actions still run concurrently with each other, but never
+            // alongside a session mutation. Resolving the session inside the
+            // callback is the point — reading it before waiting would hand this
+            // action an executor a queued launch is about to destroy (#128).
+            res.result = await gate.read(async () => {
+              const session = sessions.get(ws);
+              if (!session) {
+                throw {
+                  code: -32000,
+                  message: 'No active browser session. Call launchBrowser first.',
+                };
+              }
+              return executeBrowserActions(session, instruction, actions, url);
+            });
             break;
           }
 
@@ -255,6 +272,57 @@ export function startServer(
   });
 
   return wss;
+}
+
+/**
+ * Per-connection ordering gate for handlers that touch the browser session.
+ *
+ * Message handlers are async, so a handler that suspends at an `await` leaves a
+ * gap the next pipelined message runs in. Two interleavings mattered (#128):
+ * concurrent `launchBrowser` calls both passing cleanup and both writing to the
+ * session map — orphaning the loser's Chromium — and a `launchBrowser` tearing
+ * down the executor beneath an action still using it.
+ *
+ * This is a reader/writer lock rather than a plain queue, because pipelined
+ * `executeBrowserAction` concurrency is deliberate and tested. Writers
+ * (session-mutating handlers) run exclusively; readers run concurrently with
+ * each other but never alongside a writer.
+ *
+ * Both methods capture what they must wait for *synchronously*, before their
+ * first await, so ordering follows message arrival order rather than the order
+ * the event loop happens to resume things.
+ */
+class SessionGate {
+  private writeChain: Promise<unknown> = Promise.resolve();
+  private readers = new Set<Promise<unknown>>();
+
+  /** Run exclusively: after earlier writers, and after every in-flight reader. */
+  write<T>(fn: () => Promise<T>): Promise<T> {
+    const earlierWrites = this.writeChain;
+    const readersInFlight = [...this.readers];
+    const run = (async () => {
+      await earlierWrites.catch(() => undefined);
+      // allSettled, not all: a failed action must not block the teardown that
+      // follows it, and its rejection is already reported to its own caller.
+      await Promise.allSettled(readersInFlight);
+      return fn();
+    })();
+    // Swallow here only to keep the chain usable; `run` still rejects for the caller.
+    this.writeChain = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Run shared: after any pending writer, but concurrently with other readers. */
+  read<T>(fn: () => Promise<T>): Promise<T> {
+    const pendingWrites = this.writeChain;
+    const run = (async () => {
+      await pendingWrites.catch(() => undefined);
+      return fn();
+    })();
+    this.readers.add(run);
+    run.catch(() => undefined).finally(() => this.readers.delete(run));
+    return run;
+  }
 }
 
 /**
