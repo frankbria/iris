@@ -35,6 +35,10 @@ export interface WatchOptions {
   feedbackUrl?: string;
   /** Session cap on AI calls, so a hot edit loop cannot run up a bill. */
   maxAiCalls?: number;
+  /** Suppress narration and warnings on the default console logger. Errors still print. */
+  quiet?: boolean;
+  /** Route all output somewhere else entirely. Wins over `quiet`. */
+  logger?: WatchLogger;
   /** Provider/key for the classifier, resolved by the caller (see cli.ts). */
   ai?: {
     provider: AIProvider;
@@ -56,6 +60,36 @@ const FEEDBACK_DIFF_THRESHOLD = 0.001;
 /** Default session cap on AI calls in feedback mode. */
 const DEFAULT_MAX_AI_CALLS = 50;
 
+/**
+ * Sink for the watcher's narration.
+ *
+ * FileWatcher is an exported class, so a consumer embedding it inherited ~59
+ * unsilenceable emoji `console.*` calls straight onto their stdout (issue #81).
+ * Signatures mirror `console` so call sites stay unchanged and any console-like
+ * object can be passed directly.
+ */
+export interface WatchLogger {
+  log(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+  error(...args: unknown[]): void;
+}
+
+/**
+ * Console-backed logger. `quiet` silences narration and warnings.
+ *
+ * `error` is deliberately NOT silenced: suppressing failures is not quiet, it
+ * is hiding. A caller who genuinely wants total silence passes their own
+ * logger, which is an explicit choice rather than a side effect of a flag.
+ */
+export function createConsoleLogger(quiet = false): WatchLogger {
+  const noop = () => {};
+  return {
+    log: quiet ? noop : (...args: unknown[]) => console.log(...args),
+    warn: quiet ? noop : (...args: unknown[]) => console.warn(...args),
+    error: (...args: unknown[]) => console.error(...args),
+  };
+}
+
 export interface WatchEvent {
   type: 'add' | 'change' | 'unlink';
   path: string;
@@ -65,7 +99,9 @@ export interface WatchEvent {
 export class FileWatcher {
   private watcher?: chokidar.FSWatcher;
   private debounceTimer?: NodeJS.Timeout;
-  private options: Required<WatchOptions>;
+  // `logger`/`quiet` are resolved into `this.logger` in the constructor, so they
+  // are not part of the settled option bag.
+  private options: Required<Omit<WatchOptions, 'quiet' | 'logger'>>;
   private isRunning = false;
   private executor?: ActionExecutor;
   private page?: Page;
@@ -81,9 +117,17 @@ export class FileWatcher {
   private referenceCapture?: Buffer;
   private aiCallsUsed = 0;
   private aiCapNotified = false;
+  /**
+   * Public so `watchFiles` can narrate its own shutdown through the same sink
+   * rather than reaching for console and defeating the caller's logger.
+   */
+  readonly logger: WatchLogger;
 
   constructor(options: WatchOptions = {}) {
     const config = loadConfig();
+    // An explicit logger wins over `quiet`: passing both is a caller telling us
+    // exactly where output goes, and a flag should not override that.
+    this.logger = options.logger ?? createConsoleLogger(options.quiet ?? false);
     this.options = {
       patterns: options.patterns || config.watch.patterns,
       ignore: options.ignore || config.watch.ignore,
@@ -133,16 +177,16 @@ export class FileWatcher {
 
   async start(): Promise<void> {
     if (this.isRunning) {
-      console.warn('Watcher is already running');
+      this.logger.warn('Watcher is already running');
       return;
     }
 
-    console.log(`🔍 Starting file watcher...`);
-    console.log(`   Patterns: ${this.options.patterns.join(', ')}`);
-    console.log(`   Ignoring: ${this.options.ignore.join(', ')}`);
-    console.log(`   Debounce: ${this.options.debounceMs}ms`);
-    console.log(`   Working directory: ${this.options.cwd}`);
-    console.log(
+    this.logger.log(`🔍 Starting file watcher...`);
+    this.logger.log(`   Patterns: ${this.options.patterns.join(', ')}`);
+    this.logger.log(`   Ignoring: ${this.options.ignore.join(', ')}`);
+    this.logger.log(`   Debounce: ${this.options.debounceMs}ms`);
+    this.logger.log(`   Working directory: ${this.options.cwd}`);
+    this.logger.log(
       `   Mode: ${
         this.options.feedback
           ? 'AI feedback (classify visual changes)'
@@ -153,20 +197,20 @@ export class FileWatcher {
     );
 
     if (this.options.feedback) {
-      console.log(
+      this.logger.log(
         `   Observing: ${this.options.feedbackUrl || process.env.IRIS_BASE_URL || 'the changed file'}`,
       );
-      console.log(`   AI call cap: ${this.options.maxAiCalls}`);
+      this.logger.log(`   AI call cap: ${this.options.maxAiCalls}`);
       await this.captureStartupReference();
     }
 
     if (this.options.execute) {
-      console.log(`   Browser: ${this.options.headless ? 'Headless' : 'Visible'}`);
-      console.log(`   Timeout: ${this.options.browserTimeout}ms`);
+      this.logger.log(`   Browser: ${this.options.headless ? 'Headless' : 'Visible'}`);
+      this.logger.log(`   Timeout: ${this.options.browserTimeout}ms`);
       try {
         await this.initializeBrowserSession();
       } catch (error) {
-        console.error('Failed to initialize browser session:', error);
+        this.logger.error('Failed to initialize browser session:', error);
         throw error;
       }
     }
@@ -184,10 +228,10 @@ export class FileWatcher {
       .on('add', (filePath) => this.handleFileEvent('add', filePath))
       .on('change', (filePath) => this.handleFileEvent('change', filePath))
       .on('unlink', (filePath) => this.handleFileEvent('unlink', filePath))
-      .on('error', (error) => console.error('Watcher error:', error))
+      .on('error', (error) => this.logger.error('Watcher error:', error))
       .on('ready', () => {
         this.isRunning = true;
-        console.log('🎯 File watcher ready. Waiting for changes...');
+        this.logger.log('🎯 File watcher ready. Waiting for changes...');
       });
   }
 
@@ -204,7 +248,7 @@ export class FileWatcher {
       return;
     }
 
-    console.log('⏹️  Stopping file watcher...');
+    this.logger.log('⏹️  Stopping file watcher...');
 
     // Mark as stopped up front: chokidar can still emit during close(), and a
     // debounce timer set then would otherwise fire after teardown and relaunch
@@ -237,7 +281,7 @@ export class FileWatcher {
     this.classifier?.close();
     this.classifier = undefined;
 
-    console.log('✅ File watcher stopped');
+    this.logger.log('✅ File watcher stopped');
   }
 
   private handleFileEvent(type: 'add' | 'change' | 'unlink', filePath: string): void {
@@ -319,7 +363,7 @@ export class FileWatcher {
   private async captureStartupReference(): Promise<void> {
     const url = this.options.feedbackUrl || process.env.IRIS_BASE_URL;
     if (!url) {
-      console.log('   No --feedback-url set — the first change will establish the reference.');
+      this.logger.log('   No --feedback-url set — the first change will establish the reference.');
       return;
     }
 
@@ -339,13 +383,15 @@ export class FileWatcher {
 
       if (capture.success && capture.buffer) {
         this.referenceCapture = capture.buffer;
-        console.log('   📸 Reference captured — your next save will be compared against it');
+        this.logger.log('   📸 Reference captured — your next save will be compared against it');
       } else {
-        console.log(`   ⚠️  Could not capture a reference: ${capture.error ?? 'unknown error'}`);
+        this.logger.log(
+          `   ⚠️  Could not capture a reference: ${capture.error ?? 'unknown error'}`,
+        );
       }
     } catch (error) {
       // Never block startup on this: the first change re-establishes it.
-      console.log(
+      this.logger.log(
         `   ⚠️  Could not capture a reference: ${error instanceof Error ? error.message : error}`,
       );
     }
@@ -360,8 +406,8 @@ export class FileWatcher {
    */
   private async runFeedback(event: WatchEvent): Promise<void> {
     const url = this.resolveFeedbackUrl(event);
-    console.log(`🔄 File ${event.type}: ${event.path}`);
-    console.log(`👁️  Observing ${url}`);
+    this.logger.log(`🔄 File ${event.type}: ${event.path}`);
+    this.logger.log(`👁️  Observing ${url}`);
 
     if (!this.browserSessionActive) {
       await this.initializeBrowserSession();
@@ -380,13 +426,13 @@ export class FileWatcher {
     });
 
     if (!capture.success || !capture.buffer) {
-      console.log(`   ⚠️  Capture failed: ${capture.error ?? 'unknown error'}`);
+      this.logger.log(`   ⚠️  Capture failed: ${capture.error ?? 'unknown error'}`);
       return;
     }
 
     if (!this.referenceCapture) {
       this.referenceCapture = capture.buffer;
-      console.log('   📸 Reference captured — edit a file to see what changed');
+      this.logger.log('   📸 Reference captured — edit a file to see what changed');
       return;
     }
 
@@ -402,14 +448,14 @@ export class FileWatcher {
     // asking about. This is the gate that makes a save touching no rendered
     // pixels cost nothing at all.
     if (diff.success && diff.passed) {
-      console.log('   ✅ No visual change');
+      this.logger.log('   ✅ No visual change');
       this.referenceCapture = capture.buffer;
       return;
     }
 
     if (this.aiCallsUsed >= this.options.maxAiCalls) {
       if (!this.aiCapNotified) {
-        console.log(
+        this.logger.log(
           `   ⏸️  AI call cap reached (${this.options.maxAiCalls}). Raise it with --max-ai-calls <n>.`,
         );
         this.aiCapNotified = true;
@@ -432,18 +478,20 @@ export class FileWatcher {
         // The classifier answers with a fallback shape rather than throwing, so
         // without this check a provider outage prints as a confident severity
         // whose description is really an error string.
-        console.error(`   ❌ AI analysis unavailable: ${analysis.description}`);
+        this.logger.error(`   ❌ AI analysis unavailable: ${analysis.description}`);
       } else {
         analysed = true;
-        console.log(`   🎨 ${analysis.severity.toUpperCase()}: ${analysis.description}`);
+        this.logger.log(`   🎨 ${analysis.severity.toUpperCase()}: ${analysis.description}`);
         for (const suggestion of analysis.suggestions) {
-          console.log(`      → ${suggestion}`);
+          this.logger.log(`      → ${suggestion}`);
         }
       }
     } catch (error) {
       // A watcher that dies on a provider hiccup is worse than one that says so
       // and keeps watching, which is the whole point of a companion process.
-      console.error(`   ❌ AI analysis failed: ${error instanceof Error ? error.message : error}`);
+      this.logger.error(
+        `   ❌ AI analysis failed: ${error instanceof Error ? error.message : error}`,
+      );
     }
 
     // Advanced only when the change was actually reported on. Advancing after a
@@ -460,7 +508,9 @@ export class FileWatcher {
       try {
         await this.runFeedback(event);
       } catch (error) {
-        console.error(`\n❌ Feedback failed: ${error instanceof Error ? error.message : error}`);
+        this.logger.error(
+          `\n❌ Feedback failed: ${error instanceof Error ? error.message : error}`,
+        );
       }
       return;
     }
@@ -470,8 +520,8 @@ export class FileWatcher {
     const executionResults: ExecutionResult[] = [];
 
     try {
-      console.log(`🔄 File ${event.type}: ${event.path}`);
-      console.log(`📝 Processing: "${this.options.instruction}"`);
+      this.logger.log(`🔄 File ${event.type}: ${event.path}`);
+      this.logger.log(`📝 Processing: "${this.options.instruction}"`);
 
       // pathToFileURL escapes URL-reserved characters (#, %, ?) that plain string
       // concatenation would mis-parse when handed to page.goto().
@@ -481,15 +531,15 @@ export class FileWatcher {
         url: fileUrl,
       });
 
-      console.log(`✨ Translation result (${result.method}):`);
-      console.log(`   Actions: ${JSON.stringify(result.actions)}`);
-      console.log(`   Confidence: ${result.confidence}`);
+      this.logger.log(`✨ Translation result (${result.method}):`);
+      this.logger.log(`   Actions: ${JSON.stringify(result.actions)}`);
+      this.logger.log(`   Confidence: ${result.confidence}`);
       if (result.reasoning) {
-        console.log(`   Reasoning: ${result.reasoning}`);
+        this.logger.log(`   Reasoning: ${result.reasoning}`);
       }
 
       if (result.actions.length === 0) {
-        console.log('⚠️  No actions generated from instruction');
+        this.logger.log('⚠️  No actions generated from instruction');
         status = 'error';
         return;
       }
@@ -498,7 +548,7 @@ export class FileWatcher {
       // gone, so there is nothing to navigate to, and running translated DOM actions
       // against the stale reused page would act on the previous file's content.
       if (this.options.execute && event.type !== 'unlink') {
-        console.log('\n🚀 Executing actions in browser...');
+        this.logger.log('\n🚀 Executing actions in browser...');
 
         try {
           // Ensure browser session is ready
@@ -513,13 +563,13 @@ export class FileWatcher {
           // Navigate to the changed file first so DOM-targeting actions run against
           // its real DOM rather than the blank page. This is execution setup, not a
           // translated action, so it is not counted in executionResults.
-          console.log(`   🌐 Navigating to ${fileUrl}`);
+          this.logger.log(`   🌐 Navigating to ${fileUrl}`);
           await navigate(this.page, fileUrl);
 
           // Execute each action and report progress
           for (let i = 0; i < result.actions.length; i++) {
             const action = result.actions[i];
-            console.log(
+            this.logger.log(
               `   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`,
             );
 
@@ -527,12 +577,12 @@ export class FileWatcher {
             executionResults.push(execResult);
 
             if (execResult.success) {
-              console.log(`   ✅ Success (${execResult.duration}ms)`);
+              this.logger.log(`   ✅ Success (${execResult.duration}ms)`);
               if (execResult.context?.url) {
-                console.log(`      Current page: ${execResult.context.url}`);
+                this.logger.log(`      Current page: ${execResult.context.url}`);
               }
             } else {
-              console.log(`   ❌ Failed: ${execResult.error}`);
+              this.logger.log(`   ❌ Failed: ${execResult.error}`);
               status = 'error';
               // Continue with remaining actions instead of stopping
             }
@@ -543,14 +593,14 @@ export class FileWatcher {
           const totalCount = executionResults.length;
 
           if (successCount === totalCount) {
-            console.log(`\n🎉 All ${totalCount} actions completed successfully!`);
+            this.logger.log(`\n🎉 All ${totalCount} actions completed successfully!`);
           } else {
-            console.log(`\n⚠️  ${successCount}/${totalCount} actions completed successfully`);
+            this.logger.log(`\n⚠️  ${successCount}/${totalCount} actions completed successfully`);
             status = 'error';
           }
         } catch (executionError) {
           status = 'error';
-          console.error(
+          this.logger.error(
             '\n❌ Browser execution failed:',
             executionError instanceof Error ? executionError.message : executionError,
           );
@@ -559,11 +609,11 @@ export class FileWatcher {
           await this.recoverBrowserSession();
         }
       } else {
-        console.log('\n🔍 Translation mode - actions not executed');
+        this.logger.log('\n🔍 Translation mode - actions not executed');
       }
     } catch (error) {
       status = 'error';
-      console.error('❌ Error processing instruction:', error);
+      this.logger.error('❌ Error processing instruction:', error);
     } finally {
       const endTime = new Date();
 
@@ -591,7 +641,7 @@ export class FileWatcher {
           db.close();
         }
       } catch (dbError) {
-        console.error('⚠️  Failed to persist watch execution to database:', dbError);
+        this.logger.error('⚠️  Failed to persist watch execution to database:', dbError);
       }
     }
   }
@@ -618,7 +668,7 @@ export class FileWatcher {
 
   private async doInitializeBrowserSession(): Promise<void> {
     try {
-      console.log('🌐 Initializing browser session...');
+      this.logger.log('🌐 Initializing browser session...');
 
       const executorOptions: ActionExecutorOptions = {
         timeout: this.options.browserTimeout,
@@ -639,7 +689,7 @@ export class FileWatcher {
       this.page = await this.executor.createPage();
       this.browserSessionActive = true;
 
-      console.log('✅ Browser session initialized');
+      this.logger.log('✅ Browser session initialized');
     } catch (error) {
       // Tear down a partially initialized session (e.g. browser launched but
       // page creation failed) so the failed init doesn't orphan a Chromium process.
@@ -671,7 +721,7 @@ export class FileWatcher {
       return;
     }
 
-    console.log('🧹 Cleaning up browser session...');
+    this.logger.log('🧹 Cleaning up browser session...');
 
     try {
       if (this.executor) {
@@ -680,9 +730,12 @@ export class FileWatcher {
       }
       this.page = undefined;
       this.browserSessionActive = false;
-      console.log('✅ Browser session cleaned up');
+      this.logger.log('✅ Browser session cleaned up');
     } catch (error) {
-      console.error('⚠️  Browser cleanup failed:', error instanceof Error ? error.message : error);
+      this.logger.error(
+        '⚠️  Browser cleanup failed:',
+        error instanceof Error ? error.message : error,
+      );
       // Force cleanup
       this.executor = undefined;
       this.page = undefined;
@@ -698,7 +751,7 @@ export class FileWatcher {
       return;
     }
 
-    console.log('🔄 Attempting browser session recovery...');
+    this.logger.log('🔄 Attempting browser session recovery...');
 
     try {
       // Clean up existing session
@@ -715,9 +768,9 @@ export class FileWatcher {
 
       // Reinitialize
       await this.initializeBrowserSession();
-      console.log('✅ Browser session recovered');
+      this.logger.log('✅ Browser session recovered');
     } catch (error) {
-      console.error(
+      this.logger.error(
         '❌ Browser session recovery failed:',
         error instanceof Error ? error.message : error,
       );
@@ -727,7 +780,7 @@ export class FileWatcher {
 
   getStatus(): {
     isRunning: boolean;
-    options: Required<WatchOptions>;
+    options: Required<Omit<WatchOptions, 'quiet' | 'logger'>>;
     browserSessionActive: boolean;
   } {
     return {
@@ -744,6 +797,8 @@ export async function createWatcher(options: WatchOptions = {}): Promise<FileWat
 
 export interface WatchExecutionOptions {
   execute?: boolean;
+  /** Suppress narration; errors still print. Threaded to the watcher's logger. */
+  quiet?: boolean;
   headless?: boolean;
   browserTimeout?: number;
   retryAttempts?: number;
@@ -795,6 +850,9 @@ export async function watchFiles(
     if (executionOptions.execute !== undefined) {
       options.execute = executionOptions.execute;
     }
+    if (executionOptions.quiet !== undefined) {
+      options.quiet = executionOptions.quiet;
+    }
     if (executionOptions.headless !== undefined) {
       options.headless = executionOptions.headless;
     }
@@ -825,7 +883,9 @@ export async function watchFiles(
 
   // Handle graceful shutdown
   const cleanup = async () => {
-    console.log('\n🛑 Received shutdown signal...');
+    // Through the watcher's sink, not console: reaching for console here would
+    // defeat a caller who supplied their own logger (issue #81).
+    watcher.logger.log('\n🛑 Received shutdown signal...');
     await watcher.stop();
     process.exit(0);
   };

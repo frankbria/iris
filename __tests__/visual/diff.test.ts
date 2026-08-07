@@ -55,9 +55,6 @@ describe('VisualDiffEngine', () => {
       // Act
       const result = await diffEngine.compare(mockBaselineBuffer, mockCurrentBuffer, options);
 
-      // Debug output
-      console.log('Test result:', result);
-
       // Assert
       expect(result.success).toBe(true);
       expect(result.pixelDifference).toBe(1500);

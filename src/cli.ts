@@ -437,6 +437,7 @@ program
   .option('-i, --instruction <instruction>', 'Instruction to run when files change', 'click submit')
   .option('--execute', 'Enable browser execution (default: translation only)')
   .option('--headless', 'Run browser in headless mode (default: true when executing)')
+  .option('--quiet', 'Suppress per-change narration; errors still print', false)
   // Same unreachable-branch fix as `run` — see the note there (issue #78).
   .option('--no-headless', 'Run browser visibly with devtools open, for debugging')
   .option(
@@ -483,6 +484,7 @@ program
       options: {
         instruction: string;
         execute?: boolean;
+        quiet?: boolean;
         headless?: boolean;
         browserTimeout?: number;
         retryAttempts?: number;
@@ -511,6 +513,7 @@ program
         const { watchFiles } = await import('./watcher');
         await watchFiles(target, options.instruction, {
           execute: options.execute,
+          quiet: options.quiet,
           headless: options.headless,
           browserTimeout: options.browserTimeout,
           retryAttempts: options.retryAttempts,

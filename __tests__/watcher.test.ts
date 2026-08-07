@@ -1168,4 +1168,81 @@ describe('FileWatcher AI feedback mode', () => {
     expect(capture).not.toHaveBeenCalled();
     expect(analyzeChange).not.toHaveBeenCalled();
   });
+
+  // Issue #81: FileWatcher is an exported class, so anyone embedding it inherited
+  // ~59 emoji console.* calls straight onto their own stdout with no way to turn
+  // them off.
+  describe('injectable logging (issue #81)', () => {
+    const collectLogger = () => {
+      const lines: string[] = [];
+      return {
+        lines,
+        logger: {
+          log: (...a: unknown[]) => lines.push(`log:${a.join(' ')}`),
+          warn: (...a: unknown[]) => lines.push(`warn:${a.join(' ')}`),
+          error: (...a: unknown[]) => lines.push(`error:${a.join(' ')}`),
+        },
+      };
+    };
+
+    it('sends narration to an injected logger instead of the console', async () => {
+      const consoleLog = jest.spyOn(console, 'log').mockImplementation();
+      const { lines, logger } = collectLogger();
+
+      const watcher = new FileWatcher({ logger, patterns: ['**/*.ts'] });
+      await watcher.start();
+      await watcher.stop();
+
+      expect(lines.length).toBeGreaterThan(0);
+      // The point of the change: none of it leaked to the real console.
+      expect(consoleLog).not.toHaveBeenCalled();
+      consoleLog.mockRestore();
+    });
+
+    it('quiet suppresses narration on the default logger', async () => {
+      const consoleLog = jest.spyOn(console, 'log').mockImplementation();
+
+      const watcher = new FileWatcher({ quiet: true, patterns: ['**/*.ts'] });
+      await watcher.start();
+      await watcher.stop();
+
+      expect(consoleLog).not.toHaveBeenCalled();
+      consoleLog.mockRestore();
+    });
+
+    it('still narrates by default, so existing CLI output is unchanged', async () => {
+      const consoleLog = jest.spyOn(console, 'log').mockImplementation();
+
+      const watcher = new FileWatcher({ patterns: ['**/*.ts'] });
+      await watcher.start();
+      await watcher.stop();
+
+      expect(consoleLog).toHaveBeenCalled();
+      consoleLog.mockRestore();
+    });
+
+    it('quiet does not silence errors', () => {
+      // Suppressing failures is not "quiet", it is hiding. A caller who genuinely
+      // wants total silence injects a logger, which is an explicit choice.
+      const consoleError = jest.spyOn(console, 'error').mockImplementation();
+      const { createConsoleLogger } = require('../src/watcher');
+
+      createConsoleLogger(true).error('boom');
+
+      expect(consoleError).toHaveBeenCalledWith('boom');
+      consoleError.mockRestore();
+    });
+
+    it('an explicit logger wins over quiet', async () => {
+      const { lines, logger } = collectLogger();
+
+      const watcher = new FileWatcher({ logger, quiet: true, patterns: ['**/*.ts'] });
+      await watcher.start();
+      await watcher.stop();
+
+      // Passing both is a caller saying exactly where output goes; a flag must
+      // not override that into silence.
+      expect(lines.length).toBeGreaterThan(0);
+    });
+  });
 });

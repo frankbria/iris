@@ -176,7 +176,9 @@ export class AxeRunner {
       // Get test runner info
       const testRunner = {
         name: axeResults.testEngine?.name || 'axe-core',
-        version: axeResults.testEngine?.version || '4.8.0',
+        // 'unknown' rather than a pinned number: a stale version stated with
+        // confidence is worse than admitting axe did not report one (issue #81).
+        version: axeResults.testEngine?.version ?? 'unknown',
       };
 
       return {
@@ -199,7 +201,13 @@ export class AxeRunner {
   }
 
   /**
-   * Run axe-core on specific element
+   * Run axe-core scoped to a single element.
+   *
+   * KEPT DELIBERATELY, though nothing in `src` calls it (issue #81 listed it as
+   * dead). It is a working, tested, exported method on a class this package
+   * exports — scoping a scan to one component is the obvious thing a library
+   * consumer wants, and deleting it would be a breaking change to buy back ~40
+   * lines. Reconsider if `AxeRunner` ever stops being public.
    */
   async runOnElement(
     page: Page,
@@ -247,8 +255,12 @@ export class AxeRunner {
           inapplicable: 0,
         },
         testRunner: {
-          name: 'axe-core',
-          version: '4.8.0',
+          // Derived from the engine that actually ran. This used to be a
+          // hardcoded '4.8.0' while the installed axe-core was 4.10.3, so every
+          // element-scan report attributed its findings to a version that never
+          // produced them (issue #81).
+          name: axeResults.testEngine?.name || 'axe-core',
+          version: axeResults.testEngine?.version ?? 'unknown',
         },
       };
     } catch (error) {

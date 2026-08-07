@@ -35,6 +35,9 @@ process.env.IRIS_DB_PATH =
 // Mock console methods to reduce noise in test output while preserving error logging
 const originalError = console.error;
 const originalWarn = console.warn;
+const originalLog = console.log;
+const originalInfo = console.info;
+const originalDebug = console.debug;
 
 beforeAll(() => {
   // Only suppress non-error console output in tests
@@ -48,10 +51,13 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  // Restore original console methods
-  console.log = console.log;
-  console.info = console.info;
-  console.debug = console.debug;
+  // Restore the real console. The previous version assigned each property to
+  // itself (`console.log = console.log`), which reads like a restore but leaves
+  // the jest.fn() stubs installed for the rest of the process — so anything
+  // logging after the last suite vanished silently (issue #81).
+  console.log = originalLog;
+  console.info = originalInfo;
+  console.debug = originalDebug;
 });
 
 // Global test utilities for Phase 2 modules
