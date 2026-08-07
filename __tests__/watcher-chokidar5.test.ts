@@ -138,6 +138,39 @@ describe('watcher against real chokidar 5 (issue #172)', () => {
     expect(await until(() => seen.some((p) => p.endsWith('page.html')))).toBe(true);
   }, 30000);
 
+  it('watches a RELATIVE file target that carries a directory component', async () => {
+    // Caught in the second review pass of #182 — the gap my own fix opened.
+    // `iris watch src/page.html` moves cwd to <root>/src, so chokidar reports
+    // 'page.html', which never matches a pattern still reading 'src/page.html'.
+    // The previous tests used a bare filename and an absolute path, so neither
+    // exercised a relative target with a directory in it.
+    const nestedDir = path.join(dir, 'src');
+    const rel = path.join('src', 'page.html');
+    fs.writeFileSync(path.join(nestedDir, 'page.html'), '<html></html>');
+
+    const seen: string[] = [];
+    // Mirrors what watchFiles now does for a relative file target.
+    const resolved = path.resolve(dir, rel);
+    watcher = new FileWatcher({
+      patterns: [resolved],
+      ignore: [],
+      cwd: path.dirname(resolved),
+      debounceMs: 30,
+      persistent: true,
+      logger: silent,
+    });
+    type Handler = (type: string, filePath: string) => void;
+    (watcher as unknown as { handleFileEvent: Handler }).handleFileEvent = (_t, p) => {
+      seen.push(p);
+    };
+    await watcher.start();
+    expect(await until(() => watcher!.getStatus().isRunning, 10000)).toBe(true);
+
+    fs.writeFileSync(path.join(nestedDir, 'page.html'), '<html><body>x</body></html>');
+
+    expect(await until(() => seen.some((p) => p.endsWith('page.html')))).toBe(true);
+  }, 30000);
+
   it('watches nested directories, proving the tree was not pruned', async () => {
     // The subtle prune bug: `src` matches no include pattern, so an ignore
     // filter that judged directories by the include patterns would stop

@@ -916,7 +916,12 @@ export async function watchFiles(
         // watches `cwd` and filters, so a file outside it would never be under
         // the watched root and `iris watch /elsewhere/page.html` would silently
         // watch nothing (issue #172).
-        options.patterns = [target];
+        // Resolve the pattern too, not just cwd. A relative target carrying a
+        // directory ('src/page.html') would otherwise stay verbatim while cwd
+        // moved to its parent — chokidar then reports 'page.html', which never
+        // matches 'src/page.html', and the watcher goes silent again. Absolute
+        // patterns are converted back to cwd-relative by normalizedPatterns().
+        options.patterns = [path.resolve(target)];
         options.cwd = path.dirname(path.resolve(target));
       }
     }
