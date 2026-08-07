@@ -909,8 +909,15 @@ export async function watchFiles(
       if (stat?.isDirectory()) {
         options.cwd = target;
       } else {
-        // Treat as file pattern
+        // A single file: watch its directory and narrow with the pattern.
+        //
+        // The cwd move is load-bearing under chokidar 5. chokidar 3 took the
+        // path as a watch target directly, so cwd did not matter; chokidar 5
+        // watches `cwd` and filters, so a file outside it would never be under
+        // the watched root and `iris watch /elsewhere/page.html` would silently
+        // watch nothing (issue #172).
         options.patterns = [target];
+        options.cwd = path.dirname(path.resolve(target));
       }
     }
   }

@@ -837,8 +837,15 @@ describe('watchFiles entry point', () => {
     await startWatchFiles(file);
 
     const calls = (chokidar.watch as jest.Mock).mock.calls;
-    const [, options] = calls[calls.length - 1];
+    const [target, options] = calls[calls.length - 1];
     expect(options.ignoreInitial).toBe(true);
+
+    // cwd must move to the file's directory. chokidar 5 watches cwd and
+    // filters, so leaving it at process.cwd() would put a file elsewhere
+    // outside the watched root entirely — `iris watch /elsewhere/page.html`
+    // would silently watch nothing (caught in review of #182).
+    expect(options.cwd).toBe(dir);
+    expect(target).toBe(dir);
 
     // The single named file is admitted; a sibling is not.
     const ignored = options.ignored as (p: string, s?: { isDirectory(): boolean }) => boolean;

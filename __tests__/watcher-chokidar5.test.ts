@@ -106,6 +106,38 @@ describe('watcher against real chokidar 5 (issue #172)', () => {
     expect(seen.some((p) => p.includes('node_modules'))).toBe(false);
   }, 30000);
 
+  it('watches a single file target that lives outside the process cwd', async () => {
+    // Caught in review of #182. chokidar 3 took the path as a watch target, so
+    // cwd was irrelevant; chokidar 5 watches cwd and filters, so leaving cwd at
+    // process.cwd() means a file elsewhere is never under the watched root and
+    // `iris watch /elsewhere/page.html` silently watches nothing.
+    //
+    // Uses the real watchFiles path resolution rather than constructing the
+    // watcher directly, because the bug lived in that resolution.
+    const outside = path.join(dir, 'page.html');
+    fs.writeFileSync(outside, '<html></html>');
+
+    const seen: string[] = [];
+    watcher = new FileWatcher({
+      patterns: [outside],
+      ignore: [],
+      cwd: path.dirname(outside),
+      debounceMs: 30,
+      persistent: true,
+      logger: silent,
+    });
+    type Handler = (type: string, filePath: string) => void;
+    (watcher as unknown as { handleFileEvent: Handler }).handleFileEvent = (_t, p) => {
+      seen.push(p);
+    };
+    await watcher.start();
+    expect(await until(() => watcher!.getStatus().isRunning, 10000)).toBe(true);
+
+    fs.writeFileSync(outside, '<html><body>changed</body></html>');
+
+    expect(await until(() => seen.some((p) => p.endsWith('page.html')))).toBe(true);
+  }, 30000);
+
   it('watches nested directories, proving the tree was not pruned', async () => {
     // The subtle prune bug: `src` matches no include pattern, so an ignore
     // filter that judged directories by the include patterns would stop
