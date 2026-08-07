@@ -92,10 +92,68 @@ const guards = new WeakMap<Page, GuardState>();
 /**
  * Contexts already carrying the popup net, so it is attached exactly once.
  *
- * Carries the most recently installed guard, for the one request that cannot be
- * attributed to a page — see {@link installContextNet}.
+ * Carries *every* live guard in the context, not just the newest, so the one
+ * request that cannot be attributed to a page can be judged against all of them
+ * — see {@link installContextNet} and issue #158.
  */
-const guardedContexts = new WeakMap<BrowserContext, { latest: GuardState }>();
+const guardedContexts = new WeakMap<BrowserContext, ContextEntry>();
+
+interface ContextEntry {
+  /** Every guard currently installed in this context. Pruned when a page closes. */
+  guards: Set<GuardState>;
+}
+
+/**
+ * What the guard decided about one request, and on what basis.
+ *
+ * Exists because the behaviour it describes is otherwise untestable. The
+ * fail-safe treatment of unattributable requests was written once before and
+ * reverted, because no test could tell it apart from its own absence: whether
+ * such a request is checked against all policies, the newest one, or none, the
+ * popup-blocking tests pass identically (issue #158). Whether a request reached
+ * a server cannot distinguish *which* policy refused it.
+ *
+ * Reporting the decision makes that observable, so security behaviour can be
+ * asserted directly rather than inferred.
+ */
+export interface GuardDecision {
+  url: string;
+  resourceType: string;
+  /**
+   * `page` — the request named its own frame and was judged by that page's policy.
+   * `context-net` — unattributable (a popup's opening request); judged against
+   * every guard in the context.
+   */
+  attribution: 'page' | 'context-net';
+  /** Every policy consulted, in the order consulted. */
+  policies: UrlPolicyOptions[];
+  allowed: boolean;
+  /** Why it was refused, or null when allowed. */
+  reason: string | null;
+}
+
+let decisionObserver: ((decision: GuardDecision) => void) | undefined;
+
+/**
+ * Observe guard decisions. Diagnostic/test seam; pass nothing to stop.
+ *
+ * Deliberately module-level rather than an option threaded through
+ * {@link installUrlPolicyGuard}: the context net is installed once per context
+ * from whichever page arrives first, so a per-page observer could not see the
+ * decisions this exists to expose.
+ */
+export function observeGuardDecisions(observer?: (decision: GuardDecision) => void): void {
+  decisionObserver = observer;
+}
+
+function reportDecision(decision: GuardDecision): void {
+  // Never let a misbehaving observer change what the guard does.
+  try {
+    decisionObserver?.(decision);
+  } catch {
+    // ignored
+  }
+}
 
 /**
  * Why the policy refuses this URL, or null when it does not.
@@ -203,10 +261,7 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<void> {
  * Only ever continues or aborts. Fulfilling is what broke WebSockets (#154) and
  * has no part here.
  */
-async function installContextNet(
-  context: BrowserContext,
-  entry: { latest: GuardState },
-): Promise<void> {
+async function installContextNet(context: BrowserContext, entry: ContextEntry): Promise<void> {
   await context.route('**/*', async (route) => {
     const request = route.request();
 
@@ -233,14 +288,35 @@ async function installContextNet(
       return;
     }
 
-    // Unattributable: vetted against the context's most recent guard. Exact
-    // whenever every page in the context shares a policy, which is the only
-    // shape IRIS creates — one executor, one context, one policy. A context
-    // holding pages pinned to *different* origins would judge this one request
-    // by the newest of them — tracked as #158, along with why the fail-safe
-    // version was reverted: its test could not be told apart from its absence.
-    const effective = policy ?? entry.latest.policy;
-    const reason = blockReason(request.url(), policyFor(effective, request.resourceType()));
+    const url = request.url();
+    const resourceType = request.resourceType();
+
+    // Attributable: judged by its own page's policy, as before.
+    //
+    // Unattributable (a popup's opening request): judged against EVERY guard in
+    // the context, refusing if any refuses. Playwright cannot name the opener
+    // for a request issued before its frame exists, so there is no way to pick
+    // the right policy — and picking the newest, as this did, would let an
+    // off-origin URL through whenever it happened to match a newer sibling's
+    // pin. Consulting all of them cannot be too permissive; it can only be too
+    // strict, and in the single-policy contexts IRIS actually creates the two
+    // are identical (issue #158).
+    const consulted = policy ? [policy] : [...entry.guards].map((g) => g.policy);
+    let reason: string | null = null;
+    for (const candidate of consulted) {
+      reason = blockReason(url, policyFor(candidate, resourceType));
+      if (reason) break; // one refusal is enough
+    }
+
+    reportDecision({
+      url,
+      resourceType,
+      attribution: policy ? 'page' : 'context-net',
+      policies: consulted,
+      allowed: reason === null,
+      reason,
+    });
+
     try {
       await (reason ? route.abort('blockedbyclient') : route.continue());
     } catch {
@@ -298,14 +374,18 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   guards.set(page, state);
 
   const context = page.context();
-  const contextEntry = guardedContexts.get(context);
-  if (contextEntry) {
-    contextEntry.latest = state;
-  } else {
-    const entry = { latest: state };
-    guardedContexts.set(context, entry);
-    await installContextNet(context, entry);
+  let contextEntry = guardedContexts.get(context);
+  if (!contextEntry) {
+    contextEntry = { guards: new Set() };
+    guardedContexts.set(context, contextEntry);
+    await installContextNet(context, contextEntry);
   }
+  // Every live guard, so an unattributable request can be judged against all of
+  // them. Pruned on close: a policy from a page that is gone must not keep
+  // refusing requests for the pages still open.
+  contextEntry.guards.add(state);
+  const entryRef = contextEntry;
+  page.once('close', () => entryRef.guards.delete(state));
 
   await installFetchGuard(page, state);
   if (policy.pinnedOrigin) {
