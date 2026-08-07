@@ -53,11 +53,6 @@ export interface VisualTestRunnerConfig {
      */
     aiCredentials?: ProviderCredentials;
     antiAliasing: boolean;
-    regions: Array<{
-      name: string;
-      selector: string;
-      weight: number;
-    }>;
     maxConcurrency: number;
   };
   devices?: string[];
@@ -91,6 +86,14 @@ export interface VisualTestResult {
     similarity: number;
     pixelDifference: number;
     threshold: number;
+    /**
+     * Structural similarity (0-1), present only on failures.
+     *
+     * `similarity` says how many pixels moved; this says how much the structure
+     * changed — the difference between a layout shift and a recolour. Computed
+     * by the diff engine from buffers it already decoded (issue #77).
+     */
+    ssim?: number;
     severity?: 'minor' | 'moderate' | 'breaking';
     aiAnalysis?: {
       classification: string;
@@ -500,6 +503,7 @@ export class VisualTestRunner {
         similarity: diffResult.similarity,
         pixelDifference: diffResult.pixelDifference,
         threshold: this.config.diff.threshold,
+        ssim: diffResult.ssim,
         severity,
         aiAnalysis,
         screenshotPath,

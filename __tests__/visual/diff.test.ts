@@ -142,6 +142,84 @@ describe('VisualDiffEngine', () => {
     });
   });
 
+  describe('compare() SSIM integration (issue #77)', () => {
+    // SSIM was implemented and tested but never reached the pipeline — the runner
+    // only ever called pixelmatch. These tests pin the wiring: a structural score
+    // rides along on failures (where it is worth reading) and is skipped on the
+    // passing path (where it would only cost CPU).
+    const options: DiffOptions = {
+      threshold: 0.1,
+      includeAA: false,
+      alpha: 0.1,
+      diffMask: true,
+      diffColor: [255, 0, 0],
+    };
+
+    it('should attach an SSIM score when the pixel gate fails', async () => {
+      // Arrange: 300000/2073600 ≈ 14.5% differ — over the 10% threshold
+      mockPixelmatch.mockReturnValue(300000);
+      const mockImageSsim = require('../../src/vendor/image-ssim');
+      mockImageSsim.compare.mockReturnValue({ ssim: 0.82, mcs: 0.88 });
+
+      // Act
+      const result = await diffEngine.compare(mockBaselineBuffer, mockCurrentBuffer, options);
+
+      // Assert
+      expect(result.passed).toBe(false);
+      expect(result.ssim).toBeCloseTo(0.82, 5);
+      expect(result.mcs).toBeCloseTo(0.88, 5);
+      expect(mockImageSsim.compare).toHaveBeenCalled();
+    });
+
+    it('should reuse the already-decoded buffers rather than re-decoding', async () => {
+      // compare() decodes both images via prepareImage(); computing SSIM must not
+      // pay for a second sharp decode of the same two buffers.
+      mockPixelmatch.mockReturnValue(300000);
+      const sharpCallsBefore = (sharp as jest.MockedFunction<any>).mock.calls.length;
+
+      await diffEngine.compare(mockBaselineBuffer, mockCurrentBuffer, options);
+
+      // 2 decodes (baseline + current) + 1 sharp() to encode the diff PNG = 3.
+      // A re-decode for SSIM would make it 5.
+      const sharpCalls = (sharp as jest.MockedFunction<any>).mock.calls.length - sharpCallsBefore;
+      expect(sharpCalls).toBe(3);
+    });
+
+    it('should skip SSIM on the passing path to keep it fast', async () => {
+      // Arrange: well under threshold
+      mockPixelmatch.mockReturnValue(1500);
+      const mockImageSsim = require('../../src/vendor/image-ssim');
+      mockImageSsim.compare.mockClear();
+
+      // Act
+      const result = await diffEngine.compare(mockBaselineBuffer, mockCurrentBuffer, options);
+
+      // Assert
+      expect(result.passed).toBe(true);
+      expect(result.ssim).toBeUndefined();
+      expect(mockImageSsim.compare).not.toHaveBeenCalled();
+    });
+
+    it('should still return the pixel verdict when SSIM computation throws', async () => {
+      // A structural score is a nice-to-have; losing it must never turn a real
+      // regression verdict into an error result.
+      mockPixelmatch.mockReturnValue(300000);
+      const mockImageSsim = require('../../src/vendor/image-ssim');
+      mockImageSsim.compare.mockImplementation(() => {
+        throw new Error('SSIM exploded');
+      });
+
+      // Act
+      const result = await diffEngine.compare(mockBaselineBuffer, mockCurrentBuffer, options);
+
+      // Assert
+      expect(result.success).toBe(true);
+      expect(result.passed).toBe(false);
+      expect(result.pixelDifference).toBe(300000);
+      expect(result.ssim).toBeUndefined();
+    });
+  });
+
   describe('ssimCompare()', () => {
     it('should perform SSIM comparison', async () => {
       // Arrange

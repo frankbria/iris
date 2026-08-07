@@ -286,7 +286,6 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
           simulateScreenReader: true,
         },
         failureThreshold: {},
-        reporting: { includePassedTests: false, groupByImpact: true, includeScreenshots: false },
       });
       const result = await runner.run();
       return result.results[0].screenReaderResult!;

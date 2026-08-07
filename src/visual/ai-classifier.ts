@@ -88,14 +88,6 @@ export interface AIAnalysisResponse {
    * nothing.
    */
   analysisFailed?: boolean;
-  regions?: Array<{
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    type: string;
-    description: string;
-  }>;
 }
 
 /**
@@ -345,7 +337,6 @@ export class AIVisualClassifier {
       isIntentional,
       changeType,
       reasoning: visionResponse.reasoning,
-      regions: undefined, // Phase 2A doesn't provide regions yet
     };
   }
 
@@ -531,7 +522,6 @@ export class AIVisualClassifier {
       description: response.description,
       severity: response.severity,
       suggestions: response.suggestions,
-      regions: response.regions,
     };
   }
 

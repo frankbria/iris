@@ -71,6 +71,7 @@ src/
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── url-policy-guard.ts    # Makes that stick per-request (CDP Fetch): redirect hops + sub-resources
+├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
 └── config.ts              # Configuration types and validation
 
 __tests__/

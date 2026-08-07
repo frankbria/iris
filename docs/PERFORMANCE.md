@@ -72,7 +72,7 @@ ts-node __tests__/benchmarks/report-generator.ts .iris-bench-results/a11y-perf-*
 
 | Operation | Target | Baseline | Status | Notes |
 |-----------|--------|----------|--------|-------|
-| Single Page (1920x1080) | < 100ms | **42.61ms** | ✅ **57% better** | Includes pixel diff + SSIM |
+| Single Page (1920x1080) | < 100ms | **42.61ms** | ✅ **57% better** | Pixel diff only; SSIM adds cost on failures |
 | 10 Pages Sequential | < 1000ms | **420.11ms** | ✅ **58% better** | Linear scaling achieved |
 | 10 Pages Parallel | < 300ms | **263.74ms** | ✅ **12% better** | 1.6x speedup (target: 3-5x) |
 | 50 Pages Parallel | < 1500ms | **1257.49ms** | ✅ **16% better** | CPU bound, needs worker threads |

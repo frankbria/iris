@@ -55,11 +55,6 @@ const runner = new AccessibilityRunner({
     moderate: false,
     minor: false
   },
-  reporting: {
-    includePassedTests: false,
-    groupByImpact: true,
-    includeScreenshots: true
-  }
 });
 
 const result = await runner.run();
@@ -299,11 +294,6 @@ interface AccessibilityRunnerConfig {
     simulateScreenReader: boolean;
   };
   failureThreshold: Record<string, boolean>;  // Which impacts fail the test
-  reporting: {
-    includePassedTests: boolean;
-    groupByImpact: boolean;
-    includeScreenshots: boolean;
-  };
   output?: {
     format: 'html' | 'json' | 'junit';
     path?: string;
@@ -350,11 +340,6 @@ const runner = new AccessibilityRunner({
     serious: true,
     moderate: false,
     minor: false
-  },
-  reporting: {
-    includePassedTests: false,
-    groupByImpact: true,
-    includeScreenshots: true
   },
   output: {
     format: 'html',
@@ -698,8 +683,7 @@ const runner = new AccessibilityRunner({
     testHeadingStructure: true,
     simulateScreenReader: true
   },
-  failureThreshold: {},
-  reporting: {}
+  failureThreshold: {}
 });
 
 const result = await runner.run();
@@ -875,11 +859,6 @@ const runner = new AccessibilityRunner({
     moderate: false,
     minor: false
   },
-  reporting: {
-    includePassedTests: false,
-    groupByImpact: true,
-    includeScreenshots: true
-  },
   output: {
     format: 'html',
     path: './reports/accessibility-report.html'
@@ -968,11 +947,6 @@ async function runAccessibilityTests() {
       serious: true,
       moderate: false,
       minor: false
-    },
-    reporting: {
-      includePassedTests: false,
-      groupByImpact: true,
-      includeScreenshots: true
     },
     output: {
       format: 'junit',

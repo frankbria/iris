@@ -307,9 +307,18 @@ interface DiffResult {
   pixelDifference: number;      // Count of different pixels
   threshold: number;
   diffBuffer?: Buffer;          // PNG image showing differences
+  ssim?: number;                // Structural similarity (0-1); failures only
+  mcs?: number;                 // Mean contrast similarity; failures only
   error?: string;
 }
 ```
+
+`ssim`/`mcs` are present only when the comparison **fails**. `similarity` counts
+how many pixels moved; SSIM describes how much the structure changed, which is
+what separates a layout shift from a recolour. It is informational — the
+pass/fail gate stays purely pixel-based — and is skipped on passing comparisons
+so the happy path pays nothing for it. It reuses the buffers `compare()` has
+already decoded, so it costs no extra image decoding.
 
 **Example:**
 
@@ -342,7 +351,11 @@ if (result.passed) {
 
 ### ssimCompare()
 
-Compare images using Structural Similarity Index (SSIM).
+Compare images using Structural Similarity Index (SSIM), standalone.
+
+Use this when you want a structural score for two images without running a full
+pixel comparison. Inside a normal `compare()` run you do not need it — failed
+comparisons already carry `ssim`/`mcs`.
 
 ```typescript
 async ssimCompare(

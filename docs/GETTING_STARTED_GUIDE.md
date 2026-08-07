@@ -628,8 +628,7 @@ cat > .irisrc << 'EOF'
       "stabilizationDelay": 500
     },
     "comparison": {
-      "ignoreAntialiasing": true,
-      "ssimThreshold": 0.95
+      "ignoreAntialiasing": true
     }
   },
   "accessibility": {
@@ -1116,8 +1115,8 @@ iris visual-diff \
   --pages "http://localhost:8080/homepage.html" \
   --mask ".timestamp,.random-id"
 
-# Exclude elements
-iris visual-diff \
+# Exclude elements from an accessibility scan
+iris a11y \
   --pages "http://localhost:8080/homepage.html" \
   --exclude ".ads,.tracking"
 

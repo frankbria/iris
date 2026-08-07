@@ -73,7 +73,6 @@ describe('Visual capture against a real HTTP page (P0.1 regression)', () => {
         semanticAnalysis: false,
         aiProvider: 'openai',
         antiAliasing: true,
-        regions: [],
         maxConcurrency: 1,
       },
       devices: ['desktop'],

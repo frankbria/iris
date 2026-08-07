@@ -58,7 +58,6 @@ describe('VisualTestRunner', () => {
       semanticAnalysis: false,
       aiProvider: 'openai' as const,
       antiAliasing: true,
-      regions: [],
       maxConcurrency: 3,
     },
   };
@@ -300,7 +299,7 @@ describe('VisualTestRunner', () => {
       expect(result.summary.newBaselines).toBe(0);
       expect(result.summary.overallStatus).toBe('failed');
       expect(result.results[0].passed).toBe(false);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       expect((result.results[0] as any).error).toContain('EACCES: permission denied');
     });
 

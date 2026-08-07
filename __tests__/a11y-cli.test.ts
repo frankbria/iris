@@ -112,6 +112,43 @@ describe('a11y CLI command', () => {
       expect(mockRun).toHaveBeenCalled();
     });
 
+    // Issue #77: AxeRunner has always honoured `axe.exclude` (axe-integration.ts),
+    // but the CLI hardcoded `[]`, so the capability had no way in. The matching
+    // `--exclude` flag meanwhile sat on `iris visual`, where nothing read it.
+    it('parses --exclude into the axe exclude list', async () => {
+      const mockRun = jest.fn().mockResolvedValue(passingResult);
+
+      jest.doMock('../src/a11y/a11y-runner', () => ({
+        AccessibilityRunner: jest.fn().mockImplementation((config) => {
+          expect(config.axe.exclude).toEqual(['.ads', '#tracking-pixel']);
+          return { run: mockRun };
+        }),
+      }));
+
+      jest.resetModules();
+      const { runCli } = await import('../src/cli');
+      await runCli(['node', 'iris', 'a11y', '--exclude', '.ads, #tracking-pixel']);
+
+      expect(mockRun).toHaveBeenCalled();
+    });
+
+    it('defaults the axe exclude list to empty when --exclude is omitted', async () => {
+      const mockRun = jest.fn().mockResolvedValue(passingResult);
+
+      jest.doMock('../src/a11y/a11y-runner', () => ({
+        AccessibilityRunner: jest.fn().mockImplementation((config) => {
+          expect(config.axe.exclude).toEqual([]);
+          return { run: mockRun };
+        }),
+      }));
+
+      jest.resetModules();
+      const { runCli } = await import('../src/cli');
+      await runCli(['node', 'iris', 'a11y']);
+
+      expect(mockRun).toHaveBeenCalled();
+    });
+
     it('leaves runOnlyRules undefined when --rules is omitted', async () => {
       const mockRun = jest.fn().mockResolvedValue(passingResult);
 
@@ -177,6 +214,34 @@ describe('a11y CLI command', () => {
       await runCli(['node', 'iris', 'a11y', '--include-screenreader']);
 
       expect(mockRun).toHaveBeenCalled();
+    });
+  });
+
+  // Issue #77 — same gap as the visual command: results were never persisted.
+  describe('run history', () => {
+    it('records the run, including on the violation path that exits non-zero', async () => {
+      const recordA11yRun = jest.fn();
+      jest.doMock('../src/history', () => ({ recordA11yRun }));
+      jest.doMock('../src/a11y/a11y-runner', () => ({
+        AccessibilityRunner: jest.fn().mockImplementation(() => ({
+          run: jest.fn().mockResolvedValue({
+            ...passingResult,
+            summary: { ...passingResult.summary, totalViolations: 2, passed: false },
+          }),
+        })),
+      }));
+
+      jest.resetModules();
+      const { runCli } = await import('../src/cli');
+
+      try {
+        await runCli(['node', 'iris', 'a11y']);
+      } catch {
+        // process.exit is mocked to throw
+      }
+
+      expect(recordA11yRun).toHaveBeenCalledTimes(1);
+      expect(recordA11yRun.mock.calls[0][0].summary.totalViolations).toBe(2);
     });
   });
 
