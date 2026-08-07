@@ -62,6 +62,22 @@ describe('launchBrowser with missing Playwright browsers (issue #79)', () => {
     await expect(launchBrowser()).rejects.not.toThrow(/npx playwright install/);
   });
 
+  // The executor is the only non-test caller, so its wrapper is the path every
+  // `iris run` / `watch` / `connect` user actually travels. It rebuilds the error
+  // from `.message` alone, which silently dropped everything below.
+  it('surfaces the guidance and the original path through ActionExecutor', async () => {
+    const original = missingExecutableError();
+    mockLaunch.mockRejectedValue(original);
+
+    const { ActionExecutor } = await import('../src/executor');
+    const executor = new ActionExecutor();
+
+    await expect(executor.launchBrowser()).rejects.toThrow(/npx playwright install chromium/);
+    // Without propagation the resolved cache path — the thing you need when
+    // PLAYWRIGHT_BROWSERS_PATH points somewhere unexpected — dies in the wrapper.
+    await expect(executor.launchBrowser()).rejects.toMatchObject({ cause: original });
+  });
+
   it('still returns the browser on the happy path', async () => {
     const browser = { close: jest.fn() };
     mockLaunch.mockResolvedValue(browser);
