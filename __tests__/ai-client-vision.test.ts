@@ -45,6 +45,21 @@ const parsed = {
   suggestions: ['Check flexbox'],
 };
 
+/**
+ * Real encoded bytes, so the declared MIME type is checked against what an
+ * actual encoder produces rather than against a hand-written magic-number
+ * fixture that could be wrong in the same direction as the code (issue #162).
+ */
+const encode = async (format: 'jpeg' | 'png' | 'webp'): Promise<Buffer> => {
+  const sharp = (await import('sharp')).default;
+  const pipeline = sharp({
+    create: { width: 8, height: 8, channels: 4, background: { r: 1, g: 2, b: 3, alpha: 1 } },
+  });
+  if (format === 'jpeg') return pipeline.jpeg().toBuffer();
+  if (format === 'png') return pipeline.png().toBuffer();
+  return pipeline.webp().toBuffer();
+};
+
 describe('vision clients', () => {
   beforeEach(() => jest.clearAllMocks());
 
@@ -269,6 +284,113 @@ describe('vision clients', () => {
           model: 'claude-2',
         }).supportsVision(),
       ).toBe(false);
+    });
+  });
+
+  // Issue #162: every provider image was labelled image/png while the default
+  // preprocessor encodes JPEG. OpenAI sniffs the data URL and tolerated it;
+  // Anthropic validates media_type against the bytes, so its vision path failed
+  // inside analyzeVisualDiff's try/catch and surfaced only as a generic
+  // "all providers failed" after the fallback chain gave up.
+  describe('declared MIME type matches the actual bytes (issue #162)', () => {
+    const openaiConfig: IrisConfig['ai'] = {
+      provider: 'openai',
+      apiKey: 'sk-test',
+      model: 'gpt-4o',
+    };
+    const anthropicConfig: IrisConfig['ai'] = {
+      provider: 'anthropic',
+      apiKey: 'sk-ant',
+      model: 'claude-3-5-sonnet-20241022',
+    };
+
+    beforeEach(() => {
+      mockOpenAICreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify(parsed) } }],
+      });
+      mockAnthropicCreate.mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify(parsed) }],
+      });
+    });
+
+    it.each([
+      ['jpeg', 'image/jpeg'],
+      ['png', 'image/png'],
+      ['webp', 'image/webp'],
+    ] as const)('labels %s bytes as %s for OpenAI', async (format, expected) => {
+      const bytes = await encode(format);
+
+      await new OpenAIVisionClient(openaiConfig).analyzeVisualDiff({
+        baseline: bytes,
+        current: bytes,
+      });
+
+      const userContent = mockOpenAICreate.mock.calls[0][0].messages.find(
+        (m: { role: string }) => m.role === 'user',
+      ).content;
+      const imageParts = userContent.filter((p: { type: string }) => p.type === 'image_url');
+      expect(imageParts).toHaveLength(2);
+      for (const part of imageParts) {
+        expect(part.image_url.url.startsWith(`data:${expected};base64,`)).toBe(true);
+      }
+    });
+
+    it.each([
+      ['jpeg', 'image/jpeg'],
+      ['png', 'image/png'],
+      ['webp', 'image/webp'],
+    ] as const)('labels %s bytes as %s for Anthropic', async (format, expected) => {
+      const bytes = await encode(format);
+
+      await new AnthropicVisionClient(anthropicConfig).analyzeVisualDiff({
+        baseline: bytes,
+        current: bytes,
+      });
+
+      const content = mockAnthropicCreate.mock.calls[0][0].messages[0].content;
+      const images = content.filter((p: { type: string }) => p.type === 'image');
+      expect(images).toHaveLength(2);
+      for (const image of images) {
+        expect(image.source.media_type).toBe(expected);
+      }
+    });
+
+    it('labels each image independently, so a PNG diff mask beside JPEG screenshots is honest', async () => {
+      // This is the real shipped combination: SmartAIVisionClient preprocesses
+      // screenshots to JPEG but the diff mask to PNG (alpha preservation, #124).
+      // A single per-request MIME type would have to be wrong for one of them.
+      const jpeg = await encode('jpeg');
+      const png = await encode('png');
+
+      await new AnthropicVisionClient(anthropicConfig).analyzeVisualDiff({
+        baseline: jpeg,
+        current: jpeg,
+        diff: png,
+      });
+
+      const content = mockAnthropicCreate.mock.calls[0][0].messages[0].content;
+      const images = content.filter((p: { type: string }) => p.type === 'image');
+      expect(images.map((i: { source: { media_type: string } }) => i.source.media_type)).toEqual([
+        'image/jpeg',
+        'image/jpeg',
+        'image/png',
+      ]);
+    });
+
+    it('falls back to image/png for bytes it cannot identify', async () => {
+      // Never throw on an unrecognised buffer: a wrong-but-plausible label is
+      // still better than turning an analysis into an error, and PNG is what
+      // this code claimed for years.
+      await new OpenAIVisionClient(openaiConfig).analyzeVisualDiff({
+        baseline: Buffer.from('not-an-image'),
+        current: Buffer.from('not-an-image'),
+      });
+
+      const userContent = mockOpenAICreate.mock.calls[0][0].messages.find(
+        (m: { role: string }) => m.role === 'user',
+      ).content;
+      const imageParts = userContent.filter((p: { type: string }) => p.type === 'image_url');
+      expect(imageParts[0].image_url.url.startsWith('data:image/png;base64,')).toBe(true);
     });
   });
 
