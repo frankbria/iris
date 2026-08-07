@@ -5,6 +5,7 @@ import * as protocolModule from '../src/protocol';
 import * as translatorModule from '../src/translator';
 import * as executorModule from '../src/executor';
 import * as agentLoopModule from '../src/agent-loop';
+import * as watcherModule from '../src/watcher';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -382,29 +383,33 @@ describe('CLI Commands', () => {
   });
 
   describe('watch command browser visibility (--no-headless)', () => {
-    test('passes headless:false through to the watcher', async () => {
-      const watchFiles = jest.fn().mockResolvedValue(undefined);
-      jest.doMock('../src/watcher', () => ({ watchFiles }));
+    /**
+     * Spy on the module object rather than jest.doMock + resetModules. Resetting
+     * the registry here swaps ActionExecutor out from under the prototype spies
+     * the rest of this file installs, and the CLI then launches a real browser
+     * (see the note in the agent-mode suite below). cli.ts reaches watchFiles
+     * through `await import('./watcher')`, which resolves to this same object.
+     */
+    const stubWatchFiles = () =>
+      jest.spyOn(watcherModule, 'watchFiles').mockResolvedValue(undefined as never);
 
-      jest.resetModules();
-      const { runCli: freshRunCli } = await import('../src/cli');
-      await freshRunCli(['node', 'iris', 'watch', '.', '--execute', '--no-headless']);
+    test('passes headless:false through to the watcher', async () => {
+      const watchFiles = stubWatchFiles();
+
+      await runCli(['node', 'iris', 'watch', '.', '--execute', '--no-headless']);
 
       expect(watchFiles).toHaveBeenCalled();
-      expect(watchFiles.mock.calls[0][2].headless).toBe(false);
+      expect(watchFiles.mock.calls[0][2]?.headless).toBe(false);
     });
 
     test('leaves headless at the watcher default when the flag is absent', async () => {
-      const watchFiles = jest.fn().mockResolvedValue(undefined);
-      jest.doMock('../src/watcher', () => ({ watchFiles }));
+      const watchFiles = stubWatchFiles();
 
-      jest.resetModules();
-      const { runCli: freshRunCli } = await import('../src/cli');
-      await freshRunCli(['node', 'iris', 'watch', '.', '--execute']);
+      await runCli(['node', 'iris', 'watch', '.', '--execute']);
 
       // Undefined, not false — watcher.ts applies `?? true`, and forcing `true`
       // here would silently override any future config-level default.
-      expect(watchFiles.mock.calls[0][2].headless).toBeUndefined();
+      expect(watchFiles.mock.calls[0][2]?.headless).toBeUndefined();
     });
   });
 
