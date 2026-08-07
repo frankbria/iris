@@ -25,6 +25,52 @@ const DIFF_IMAGE_PROMPT =
   'The third image highlights the changed regions (diff mask) — use it to localize what changed.';
 
 /**
+ * Identify an image's MIME type from its magic bytes.
+ *
+ * These call sites used to hardcode `image/png` while the default preprocessor
+ * encodes JPEG, so every screenshot went out mislabelled (issue #162).
+ * Anthropic validates `media_type` against the actual bytes and rejects a
+ * mismatch; because that rejection happens inside `analyzeVisualDiff`'s
+ * try/catch, `SmartAIVisionClient` just moved to the next provider and the user
+ * saw a generic "all providers failed" instead of the real cause.
+ *
+ * Sniffing the buffer rather than threading a format flag down from the
+ * preprocessor is deliberate: the bytes are the single source of truth, so the
+ * label cannot drift from them no matter who builds the request or with which
+ * `PreprocessorConfig`. It also stays correct for direct library callers, who
+ * pass their own buffers and never touch the preprocessor. It matters per-image
+ * rather than per-request because the shipped pipeline mixes formats — JPEG
+ * screenshots alongside a PNG diff mask (#124).
+ *
+ * Falls back to `image/png` for anything unrecognised: a wrong-but-plausible
+ * label beats turning an analysis into an error, and PNG is what this code
+ * claimed for years.
+ */
+function detectImageMimeType(buffer: Buffer): 'image/jpeg' | 'image/png' | 'image/webp' {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return 'image/png';
+  }
+  // RIFF....WEBP — the four-byte size field sits between the two markers.
+  if (
+    buffer.length >= 12 &&
+    buffer.toString('ascii', 0, 4) === 'RIFF' &&
+    buffer.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return 'image/png';
+}
+
+/**
  * OpenAI GPT-4V/GPT-4o vision client for visual diff analysis
  */
 export class OpenAIVisionClient extends BaseAIVisionClient {
@@ -55,6 +101,11 @@ export class OpenAIVisionClient extends BaseAIVisionClient {
       const baselineBase64 = request.baseline.toString('base64');
       const currentBase64 = request.current.toString('base64');
       const diffBase64 = request.diff?.toString('base64');
+      // Per image: the shipped pipeline mixes JPEG screenshots with a PNG diff
+      // mask, so a single per-request type would have to be wrong for one.
+      const baselineType = detectImageMimeType(request.baseline);
+      const currentType = detectImageMimeType(request.current);
+      const diffType = request.diff ? detectImageMimeType(request.diff) : undefined;
 
       const systemPrompt = `You are an expert at analyzing visual differences in web UIs for regression testing.
 
@@ -114,14 +165,14 @@ Compare the baseline (first image) with the current (second image) and identify 
                   {
                     type: 'image_url',
                     image_url: {
-                      url: `data:image/png;base64,${baselineBase64}`,
+                      url: `data:${baselineType};base64,${baselineBase64}`,
                       detail: 'high',
                     },
                   },
                   {
                     type: 'image_url',
                     image_url: {
-                      url: `data:image/png;base64,${currentBase64}`,
+                      url: `data:${currentType};base64,${currentBase64}`,
                       detail: 'high',
                     },
                   },
@@ -130,7 +181,7 @@ Compare the baseline (first image) with the current (second image) and identify 
                         {
                           type: 'image_url' as const,
                           image_url: {
-                            url: `data:image/png;base64,${diffBase64}`,
+                            url: `data:${diffType};base64,${diffBase64}`,
                             detail: 'high' as const,
                           },
                         },
@@ -211,6 +262,11 @@ export class AnthropicVisionClient extends BaseAIVisionClient {
       const baselineBase64 = request.baseline.toString('base64');
       const currentBase64 = request.current.toString('base64');
       const diffBase64 = request.diff?.toString('base64');
+      // Per image: the shipped pipeline mixes JPEG screenshots with a PNG diff
+      // mask, so a single per-request type would have to be wrong for one.
+      const baselineType = detectImageMimeType(request.baseline);
+      const currentType = detectImageMimeType(request.current);
+      const diffType = request.diff ? detectImageMimeType(request.diff) : undefined;
 
       const systemPrompt = `You are an expert at analyzing visual differences in web UIs for regression testing.
 
@@ -260,7 +316,7 @@ Respond with JSON:
                     type: 'image',
                     source: {
                       type: 'base64',
-                      media_type: 'image/png',
+                      media_type: baselineType,
                       data: baselineBase64,
                     },
                   },
@@ -268,7 +324,7 @@ Respond with JSON:
                     type: 'image',
                     source: {
                       type: 'base64',
-                      media_type: 'image/png',
+                      media_type: currentType,
                       data: currentBase64,
                     },
                   },
@@ -278,7 +334,7 @@ Respond with JSON:
                           type: 'image' as const,
                           source: {
                             type: 'base64' as const,
-                            media_type: 'image/png' as const,
+                            media_type: diffType!,
                             data: diffBase64,
                           },
                         },
