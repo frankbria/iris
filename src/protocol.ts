@@ -100,6 +100,8 @@ export function startServer(
   const wss = new WebSocketServer({ port, host });
   const sessions = new Map<WebSocket, BrowserSession>();
   const sessionTimeout = options?.sessionTimeout || 30 * 60 * 1000; // 30 minutes default
+  /** Server start, so `getStatus` can report real uptime rather than a constant (issue #80). */
+  const startedAt = Date.now();
 
   // Cleanup inactive sessions periodically
   const cleanupInterval = setInterval(
@@ -230,14 +232,27 @@ export function startServer(
           }
 
           case 'getStatus': {
-            res.result = { status: 'ready' };
+            // Real state, not a constant. `status` stays 'ready' because
+            // answering at all means the server is serving — the fields beside
+            // it are what make that claim checkable (issue #80).
+            res.result = {
+              status: 'ready',
+              uptimeMs: Date.now() - startedAt,
+              activeSessions: sessions.size,
+              // Server-wide vs. this connection: a client asking "do I have a
+              // browser?" was previously indistinguishable from "is anything alive?"
+              hasSession: sessions.has(ws),
+            };
             break;
           }
 
-          case 'streamLogs': {
-            res.result = ['log1', 'log2'];
-            break;
-          }
+          // `streamLogs` is deliberately absent and falls through to -32601.
+          // It used to answer a hardcoded ['log1','log2'] — fabricated data a
+          // client cannot tell from real logs. Real streaming would mean a log
+          // buffer and a subscription mechanism, and this server is frozen
+          // legacy-experimental (docs/integration-surfaces.md), so that is the
+          // wrong place to build one. An honest "method not found" is the fix
+          // that decision calls for (issue #80).
 
           default:
             throw { code: -32601, message: 'Method not found' };

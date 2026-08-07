@@ -90,18 +90,89 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       expect(res.error).toBeUndefined();
     });
 
-    test('getStatus returns ready status', async () => {
-      const req = { jsonrpc: '2.0', id: 2, method: 'getStatus' };
-      const res = await sendRequest(req);
-      expect(res.id).toBe(2);
-      expect(res.result).toEqual({ status: 'ready' });
+    // Issue #80: getStatus answered a hardcoded { status: 'ready' } and
+    // streamLogs a hardcoded ['log1','log2'] — fabricated data indistinguishable
+    // from a working response, so the health check could never report anything
+    // but healthy.
+    describe('getStatus reports real server state (issue #80)', () => {
+      test('reports uptime and the live session count', async () => {
+        const res = await sendRequest({ jsonrpc: '2.0', id: 2, method: 'getStatus' });
+
+        expect(res.id).toBe(2);
+        expect(res.error).toBeUndefined();
+        // Still 'ready': answering at all means the server is serving. The
+        // fields below are what make that claim checkable rather than a constant.
+        expect(res.result.status).toBe('ready');
+        expect(typeof res.result.uptimeMs).toBe('number');
+        expect(res.result.uptimeMs).toBeGreaterThanOrEqual(0);
+        expect(res.result.activeSessions).toBe(0);
+        expect(res.result.hasSession).toBe(false);
+      });
+
+      test('activeSessions tracks a real browser session appearing and going away', async () => {
+        const ws = await createPersistentConnection();
+        try {
+          const before = await sendRequestViaConnection(ws, {
+            jsonrpc: '2.0',
+            id: 3,
+            method: 'getStatus',
+          });
+          expect(before.result.activeSessions).toBe(0);
+          expect(before.result.hasSession).toBe(false);
+
+          await sendRequestViaConnection(ws, {
+            jsonrpc: '2.0',
+            id: 4,
+            method: 'launchBrowser',
+            params: {},
+          });
+
+          const during = await sendRequestViaConnection(ws, {
+            jsonrpc: '2.0',
+            id: 5,
+            method: 'getStatus',
+          });
+          expect(during.result.activeSessions).toBe(1);
+          // Distinguishes "the server has sessions" from "this connection has one".
+          expect(during.result.hasSession).toBe(true);
+
+          await sendRequestViaConnection(ws, {
+            jsonrpc: '2.0',
+            id: 6,
+            method: 'closeBrowser',
+          });
+
+          const after = await sendRequestViaConnection(ws, {
+            jsonrpc: '2.0',
+            id: 7,
+            method: 'getStatus',
+          });
+          expect(after.result.activeSessions).toBe(0);
+          expect(after.result.hasSession).toBe(false);
+        } finally {
+          ws.close();
+        }
+      }, 30000);
+
+      test('uptime advances between calls rather than being a constant', async () => {
+        const first = await sendRequest({ jsonrpc: '2.0', id: 8, method: 'getStatus' });
+        await new Promise((r) => setTimeout(r, 25));
+        const second = await sendRequest({ jsonrpc: '2.0', id: 9, method: 'getStatus' });
+
+        expect(second.result.uptimeMs).toBeGreaterThan(first.result.uptimeMs);
+      });
     });
 
-    test('streamLogs returns an array of logs', async () => {
-      const req = { jsonrpc: '2.0', id: 3, method: 'streamLogs' };
-      const res = await sendRequest(req);
-      expect(res.id).toBe(3);
-      expect(res.result).toEqual(['log1', 'log2']);
+    test('streamLogs reports itself as unavailable rather than inventing logs', async () => {
+      // Removed, not implemented: the JSON-RPC server is frozen legacy-experimental
+      // (docs/integration-surfaces.md), so building a log-streaming subsystem into
+      // it is the wrong investment. An honest "method not found" beats two fake
+      // log lines a client cannot tell from real ones.
+      const res = await sendRequest({ jsonrpc: '2.0', id: 10, method: 'streamLogs' });
+
+      expect(res.result).toBeUndefined();
+      expect(res.error?.code).toBe(-32601);
+      expect(res.error?.message).toMatch(/method not found/i);
     });
   });
 
@@ -361,7 +432,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           });
           ws.on('error', reject);
         });
-        expect(res.result).toEqual({ status: 'ready' });
+        expect(res.result).toMatchObject({ status: 'ready' });
         expect(res.error).toBeUndefined();
       } finally {
         await new Promise<void>((resolve) => allowWss.close(() => resolve()));
@@ -422,7 +493,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           });
           ws.on('error', reject);
         });
-        expect(res.result).toEqual({ status: 'ready' });
+        expect(res.result).toMatchObject({ status: 'ready' });
         expect(res.error).toBeUndefined();
       });
     });
@@ -565,7 +636,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         const validReq = { jsonrpc: '2.0', id: 51, method: 'getStatus' };
         const res = await sendRequestViaConnection(ws, validReq);
         expect(res.id).toBe(51);
-        expect(res.result).toEqual({ status: 'ready' });
+        expect(res.result).toMatchObject({ status: 'ready' });
       } finally {
         ws.close();
       }
