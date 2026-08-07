@@ -365,9 +365,10 @@ export class CostTracker {
    * @returns Total cost in USD
    */
   getCostForPeriod(startTime: number, endTime: number): number {
-    // Upper bound is inclusive: getDailyCost/getMonthlyCost pass Date.now(), and
-    // an exclusive bound would drop spend recorded in the same millisecond as
-    // the check — undercounting the budget this tracker is meant to enforce.
+    // Both bounds inclusive. The budget getters no longer pass a clock-derived
+    // upper bound at all (issue #132) — this stays bounded for genuine range
+    // and reporting queries, where excluding what falls outside the range is
+    // the entire point.
     const stmt = this.db.prepare(
       'SELECT SUM(cost) as total FROM cost_tracking WHERE timestamp >= ? AND timestamp <= ?',
     );
@@ -378,21 +379,32 @@ export class CostTracker {
   /**
    * Get daily cost (current day)
    *
+   * Deliberately unbounded above. Bounding at `Date.now()` looks natural, but a
+   * backward clock movement — NTP correction, VM or WSL suspend-resume, host
+   * time sync — makes every row written before the jump future-dated, drops it
+   * from the sum, and silently disarms the circuit breaker while real spend
+   * continues. Observed in practice, not theoretical (issue #132).
+   *
+   * Spend already recorded is spend, whatever its timestamp says. Overcounting
+   * slightly (a row from just after a backward jump across midnight) fails
+   * safe; undercounting allows unbounded overspend. `getCostForPeriod` remains
+   * bounded for genuine range and reporting queries.
+   *
    * @returns Total cost today in USD
    */
   getDailyCost(): number {
-    const startOfDay = this.getStartOfDay(Date.now());
-    return this.getCostForPeriod(startOfDay, Date.now());
+    return this.getCostForPeriod(this.getStartOfDay(Date.now()), Number.MAX_SAFE_INTEGER);
   }
 
   /**
    * Get monthly cost (current month)
    *
+   * Unbounded above for the same reason as {@link getDailyCost} (issue #132).
+   *
    * @returns Total cost this month in USD
    */
   getMonthlyCost(): number {
-    const startOfMonth = this.getStartOfMonth(Date.now());
-    return this.getCostForPeriod(startOfMonth, Date.now());
+    return this.getCostForPeriod(this.getStartOfMonth(Date.now()), Number.MAX_SAFE_INTEGER);
   }
 
   /**
