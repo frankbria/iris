@@ -194,12 +194,15 @@ export class SmartAIVisionClient {
           continue;
         }
 
-        // Check budget before making API call — paid providers only (issue
-        // #68): free providers (Ollama, pricing 0) proceed regardless.
-        // "Paid" means a flat per-image price > 0: custom models must be
-        // registered via setPricing with costPerImage > 0 to be budget-gated
-        // here (token rates alone don't count — usage isn't known pre-call).
-        if (this.costTracker && this.costTracker.getPricing(providerName, model) > 0) {
+        // Check budget before making API call — billable operations only (issue
+        // #68): free providers (Ollama, registered at 0) proceed regardless.
+        //
+        // `isBudgetGated` rather than `getPricing() > 0` (issue #126): the
+        // latter treats a model nobody priced as free, which is the one case
+        // where guessing wrong costs real money. Token-rate-only registrations
+        // now count as billable too — the per-call price is unknown before the
+        // call, but the model is still paid.
+        if (this.costTracker && this.costTracker.isBudgetGated(providerName, model)) {
           const budgetStatus = this.costTracker.getBudgetStatus();
           if (budgetStatus.circuitBreakerTriggered) {
             throw new Error('Budget limit exceeded - circuit breaker activated');
