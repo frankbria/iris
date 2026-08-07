@@ -45,6 +45,38 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
   });
 
   describe('Schema and Migration', () => {
+    // Issue #164: schema setup ran ~12 DDL statements in autocommit, so it paid
+    // ~12 fsyncs to build a schema once — 2430ms measured on ordinary ext4,
+    // which made every DB-touching suite I/O-bound. Now one transaction.
+    test('schema setup is atomic, so a failed migration leaves nothing behind', () => {
+      const partialPath = path.join(__dirname, 'test-partial.db');
+      if (fs.existsSync(partialPath)) fs.unlinkSync(partialPath);
+
+      // Force the migration to fail partway by pre-creating one of its tables
+      // with an incompatible shape. CREATE TABLE IF NOT EXISTS tolerates that,
+      // so provoke the failure with a name that collides as an index instead.
+      const pre = new (require('better-sqlite3'))(partialPath);
+      pre.exec('CREATE TABLE idx_visual_page (oops INTEGER)');
+      pre.close();
+
+      expect(() => initializeDatabase(partialPath)).toThrow();
+
+      // The half-built schema must not survive. Before the transaction, the
+      // tables created before the failing statement stayed on disk, and the
+      // next run read schema_version as absent but the tables as present.
+      const check = new (require('better-sqlite3'))(partialPath);
+      const tables = check
+        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        .all()
+        .map((r: { name: string }) => r.name);
+      check.close();
+
+      expect(tables).not.toContain('test_results');
+      expect(tables).not.toContain('visual_test_results');
+
+      fs.unlinkSync(partialPath);
+    });
+
     test('initializeDatabase creates all required tables', () => {
       // Verify visual_test_results table
       const visualTableInfo = db
