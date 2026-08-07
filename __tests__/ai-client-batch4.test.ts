@@ -326,6 +326,86 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       expect(status.circuitBreakerTriggered).toBe(true);
     });
 
+    // Regression tests for issue #126: a provider:model pair absent from the
+    // pricing map resolved to cost 0, which the breaker read as "free". So a
+    // real paid model nobody had priced was recorded at $0 AND exempted from
+    // enforcement — the budget silently failing open, same family as #132.
+    describe('unpriced models (issue #126)', () => {
+      it('treats an unknown provider:model as paid, not free', () => {
+        // "I have no price for this" and "this is free" are different answers.
+        // Only one of them is safe to assume.
+        expect(tracker.isBudgetGated('openai', 'some-unreleased-model')).toBe(true);
+      });
+
+      it('treats an explicitly zero-priced pair as free', () => {
+        // Ollama runs locally. Registered at 0 on purpose, so it must stay exempt
+        // (issue #68) — that is what distinguishes it from merely-unknown.
+        expect(tracker.isBudgetGated('ollama', 'llava')).toBe(false);
+      });
+
+      it('treats a token-rate-only registration as paid', () => {
+        // costPerImage 0 with real token rates is a paid model whose per-call
+        // price simply is not known before the call.
+        tracker.setPricing('custom', 'metered', 0, 1e-6, 2e-6);
+        expect(tracker.isBudgetGated('custom', 'metered')).toBe(true);
+      });
+
+      it('blocks an unpriced paid model once the breaker has tripped', () => {
+        expect(() => {
+          for (let i = 0; i < 3000; i++) tracker.trackOperation('openai', 'gpt-4o', false);
+        }).toThrow(/circuit breaker/i);
+
+        // The bug: this used to sail through, because its computed cost was 0.
+        expect(() => tracker.trackOperation('openai', 'some-unreleased-model', false)).toThrow(
+          /Budget limit exceeded/,
+        );
+      });
+
+      it('still lets cache hits and free providers through after tripping', () => {
+        expect(() => {
+          for (let i = 0; i < 3000; i++) tracker.trackOperation('openai', 'gpt-4o', false);
+        }).toThrow(/circuit breaker/i);
+
+        // Issue #68 must survive this change: neither of these costs anything.
+        expect(tracker.trackOperation('openai', 'some-unreleased-model', true)).toBe(0);
+        expect(tracker.trackOperation('ollama', 'llava', false)).toBe(0);
+      });
+
+      it('warns once per pair when a billable operation records $0', () => {
+        const warn = jest.spyOn(console, 'warn').mockImplementation();
+
+        tracker.trackOperation('openai', 'some-unreleased-model', false);
+        tracker.trackOperation('openai', 'some-unreleased-model', false);
+        tracker.trackOperation('openai', 'another-unpriced-model', false);
+
+        // Once per pair, not once per call: a hot loop must not bury the warning
+        // it is trying to surface.
+        const messages = warn.mock.calls.map((c) => String(c[0]));
+        expect(messages.filter((m) => m.includes('some-unreleased-model'))).toHaveLength(1);
+        expect(messages.filter((m) => m.includes('another-unpriced-model'))).toHaveLength(1);
+        expect(messages[0]).toMatch(/no pricing/i);
+
+        warn.mockRestore();
+      });
+
+      it('does not warn for free providers or cache hits', () => {
+        const warn = jest.spyOn(console, 'warn').mockImplementation();
+
+        tracker.trackOperation('ollama', 'llava', false);
+        tracker.trackOperation('openai', 'gpt-4o', true);
+
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+      });
+
+      it('prices gpt-4o-mini, which is the configured default model', () => {
+        // config.ts defaults ai.model to gpt-4o-mini, so the out-of-the-box
+        // model was the one going unpriced.
+        expect(tracker.getPricing('openai', 'gpt-4o-mini')).toBeGreaterThan(0);
+        expect(tracker.isBudgetGated('openai', 'gpt-4o-mini')).toBe(true);
+      });
+    });
+
     // Regression tests for issue #132: the budget getters bounded their sum at
     // Date.now(). A backward clock jump (NTP correction, VM/WSL suspend-resume)
     // makes every already-written row future-dated, so recorded spend vanishes

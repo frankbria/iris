@@ -128,6 +128,16 @@ const DEFAULT_PRICING: ProviderPricing[] = [
     costPerInputToken: 2.5e-6,
     costPerOutputToken: 1e-5,
   },
+  // gpt-4o-mini is what config.ts defaults `ai.model` to, so the out-of-the-box
+  // model was the one going unpriced and ungated (issue #126).
+  // $0.15/1M input, $0.60/1M output (2025 published rates).
+  {
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    costPerImage: 0.0002,
+    costPerInputToken: 1.5e-7,
+    costPerOutputToken: 6e-7,
+  },
   { provider: 'openai', model: 'gpt-4-vision-preview', costPerImage: 0.003 },
 
   // Anthropic Claude 3.5 Sonnet: $3/1M input tokens, $15/1M output tokens.
@@ -167,6 +177,8 @@ export class CostTracker {
   private budget: Required<BudgetConfig>;
   private pricing: Map<string, number>;
   private tokenPricing: Map<string, TokenRates>;
+  /** provider:model pairs already warned about, so a hot loop warns once (issue #126). */
+  private unpricedWarned: Set<string> = new Set();
 
   constructor(dbPath: string = ':memory:', budget: BudgetConfig = {}) {
     ensureDatabaseDir(dbPath);
@@ -265,6 +277,33 @@ export class CostTracker {
   }
 
   /**
+   * Should this operation be subject to the budget?
+   *
+   * `getPricing` answers 0 both for "registered as free" and for "never
+   * registered", and the breaker used to read the second as the first — so a
+   * real paid model that nobody had priced was recorded at $0 and exempted
+   * from enforcement (issue #126).
+   *
+   * The two are different claims and only one is safe to assume. An unknown
+   * price is treated as billable: over-gating costs a user one explicit
+   * `setPricing` call, while under-gating costs them money.
+   */
+  isBudgetGated(provider: string, model: string): boolean {
+    const key = `${provider}:${model}`;
+    // Metered pricing: per-call cost is unknown before the call, but it is paid.
+    if (this.tokenPricing.has(key)) {
+      return true;
+    }
+    const flat = this.pricing.get(key);
+    // Registered at exactly 0 is a deliberate "this is free" — Ollama runs
+    // locally, and #68 requires it to proceed even with the breaker tripped.
+    if (flat !== undefined) {
+      return flat > 0;
+    }
+    return true; // never registered: assume billable
+  }
+
+  /**
    * Track a vision analysis operation
    *
    * Cost is computed from real token usage when both usage and per-token rates
@@ -287,14 +326,35 @@ export class CostTracker {
   ): number {
     const cost = this.computeCost(provider, model, cached, usage);
 
-    // Circuit breaker blocks only paid operations (issue #68): cache hits and
+    // Circuit breaker blocks billable operations (issue #68): cache hits and
     // free providers (Ollama) cost $0 and must always proceed. Checked before
     // recording, so paid enforcement is not bypassed.
-    if (cost > 0 && this.budget.enableCircuitBreaker) {
+    //
+    // Gated on `isBudgetGated`, not on `cost > 0` (issue #126). A paid model
+    // that nobody priced computes a cost of 0, so the old test read it as free
+    // and waved it through a tripped breaker — exactly the operation the
+    // breaker exists to stop.
+    const billable = !cached && this.isBudgetGated(provider, model);
+
+    if (billable && this.budget.enableCircuitBreaker) {
       const status = this.getBudgetStatus();
       if (status.circuitBreakerTriggered) {
         throw new Error(
           'Budget limit exceeded - circuit breaker activated. No further API calls allowed.',
+        );
+      }
+    }
+
+    // Surface the accounting gap rather than silently under-reporting: this
+    // operation will be billed by the provider and recorded here as $0. Once
+    // per pair, so a hot loop cannot bury the warning it is trying to raise.
+    if (billable && cost === 0) {
+      const key = `${provider}:${model}`;
+      if (!this.unpricedWarned.has(key)) {
+        this.unpricedWarned.add(key);
+        console.warn(
+          `⚠️  No pricing registered for ${key}; its cost is recorded as $0 and will not count ` +
+            `against the budget. Register it with setPricing() for accurate accounting.`,
         );
       }
     }
