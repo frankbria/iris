@@ -26,7 +26,11 @@ jest.mock('../src/translator', () => ({
 jest.mock('../src/config', () => ({
   loadConfig: jest.fn().mockReturnValue({
     watch: {
-      patterns: ['**/*.{ts,tsx,js,jsx}'],
+      // Mirrors the real default in config.ts. It previously omitted html/css,
+      // which only went unnoticed because nothing filtered by pattern — the
+      // feedback tests fire 'src/app.css', exactly what a visual watcher should
+      // react to (issue #172).
+      patterns: ['**/*.{ts,tsx,js,jsx,html,css}'],
       ignore: ['node_modules/**'],
       debounceMs: 100,
     },
@@ -94,7 +98,7 @@ describe('FileWatcher', () => {
       const status = watcher.getStatus();
 
       expect(status.isRunning).toBe(false);
-      expect(status.options.patterns).toEqual(['**/*.{ts,tsx,js,jsx}']);
+      expect(status.options.patterns).toEqual(['**/*.{ts,tsx,js,jsx,html,css}']);
       expect(status.options.debounceMs).toBe(100);
     });
 
@@ -136,10 +140,14 @@ describe('FileWatcher', () => {
 
       await startPromise;
 
+      // chokidar 4 removed glob support, so the watch target is the DIRECTORY
+      // and pattern matching moved into an `ignored` predicate (issue #172).
+      // Passing a glob here would not throw — chokidar would watch a literal
+      // path that does not exist and silently never fire.
       expect(chokidar.watch).toHaveBeenCalledWith(
-        ['**/*.{ts,tsx,js,jsx}'],
+        process.cwd(),
         expect.objectContaining({
-          ignored: ['node_modules/**'],
+          ignored: expect.any(Function),
           cwd: process.cwd(),
           persistent: true,
           ignoreInitial: true,
@@ -791,12 +799,21 @@ describe('watchFiles entry point', () => {
   });
 
   it('treats a glob target as a watch pattern', async () => {
+    // chokidar 5 takes no globs, so the target reaches the ignore filter rather
+    // than watch()'s first argument (issue #172). Asserting the filter's
+    // *behaviour* is what proves the target still scopes the watch — asserting
+    // the argument shape would pass even if the pattern were dropped entirely.
     await startWatchFiles('src/**/*.ts');
 
-    expect(chokidar.watch).toHaveBeenCalledWith(
-      ['src/**/*.ts'],
-      expect.objectContaining({ ignoreInitial: true }),
-    );
+    const calls = (chokidar.watch as jest.Mock).mock.calls;
+    const [target, options] = calls[calls.length - 1];
+    expect(target).not.toContain('*');
+    expect(options.ignoreInitial).toBe(true);
+
+    const ignored = options.ignored as (p: string, s?: { isDirectory(): boolean }) => boolean;
+    const file = { isDirectory: () => false };
+    expect(ignored(path.join(options.cwd, 'src/deep/a.ts'), file)).toBe(false);
+    expect(ignored(path.join(options.cwd, 'other/a.ts'), file)).toBe(true);
   });
 
   it('uses a directory target as the working directory', async () => {
@@ -819,10 +836,22 @@ describe('watchFiles entry point', () => {
 
     await startWatchFiles(file);
 
-    expect(chokidar.watch).toHaveBeenCalledWith(
-      [file],
-      expect.objectContaining({ ignoreInitial: true }),
-    );
+    const calls = (chokidar.watch as jest.Mock).mock.calls;
+    const [target, options] = calls[calls.length - 1];
+    expect(options.ignoreInitial).toBe(true);
+
+    // cwd must move to the file's directory. chokidar 5 watches cwd and
+    // filters, so leaving it at process.cwd() would put a file elsewhere
+    // outside the watched root entirely — `iris watch /elsewhere/page.html`
+    // would silently watch nothing (caught in review of #182).
+    expect(options.cwd).toBe(dir);
+    expect(target).toBe(dir);
+
+    // The single named file is admitted; a sibling is not.
+    const ignored = options.ignored as (p: string, s?: { isDirectory(): boolean }) => boolean;
+    const stat = { isDirectory: () => false };
+    expect(ignored(file, stat)).toBe(false);
+    expect(ignored(path.join(dir, 'other.html'), stat)).toBe(true);
   });
 
   it('registers SIGINT and SIGTERM shutdown handlers', async () => {
@@ -1172,6 +1201,91 @@ describe('FileWatcher AI feedback mode', () => {
   // Issue #81: FileWatcher is an exported class, so anyone embedding it inherited
   // ~59 emoji console.* calls straight onto their own stdout with no way to turn
   // them off.
+  // Issue #172: chokidar 4 removed glob support. Passing a glob to chokidar 5
+  // does not throw — it watches a literal path that does not exist, and the
+  // watcher silently never fires again. These pin the replacement filter, which
+  // is the only thing standing between that and a dead watcher.
+  describe('chokidar 5 ignore filter (issue #172)', () => {
+    /** Pull the `ignored` predicate back out of the mocked watch() call. */
+    const captureFilter = async (options: Record<string, unknown> = {}) => {
+      const watcher = new FileWatcher({
+        patterns: ['**/*.{ts,tsx}'],
+        ignore: ['node_modules/**', 'dist/**'],
+        cwd: '/repo',
+        ...options,
+      });
+      let ready: (() => void) | undefined;
+      mockWatcher.on.mockImplementation((event: string, cb: () => void) => {
+        if (event === 'ready') ready = cb;
+        return mockWatcher;
+      });
+      const started = watcher.start();
+      ready?.();
+      await started;
+      // Not `.at(-1)`: tsconfig targets ES2020, whose lib has no Array#at.
+      const calls = (chokidar.watch as jest.Mock).mock.calls;
+      const call = calls[calls.length - 1];
+      return {
+        target: call[0] as string,
+        ignored: call[1].ignored as (p: string, s?: { isDirectory(): boolean }) => boolean,
+        watcher,
+      };
+    };
+
+    const dir = { isDirectory: () => true };
+    const file = { isDirectory: () => false };
+
+    it('watches the directory, never a glob', async () => {
+      const { target } = await captureFilter();
+      expect(target).toBe('/repo');
+      expect(target).not.toContain('*');
+    });
+
+    it('keeps directories traversable, or the whole tree is pruned', async () => {
+      const { ignored } = await captureFilter();
+      // `src` matches no include pattern. Ignoring it would stop chokidar
+      // descending, and nothing below it would ever be watched — the subtlest
+      // way to end up with a silent no-op watcher.
+      expect(ignored('/repo/src', dir)).toBe(false);
+      expect(ignored('/repo/src/visual', dir)).toBe(false);
+    });
+
+    it('still prunes explicitly ignored directories', async () => {
+      const { ignored } = await captureFilter();
+      expect(ignored('/repo/node_modules', dir)).toBe(true);
+      expect(ignored('/repo/dist', dir)).toBe(true);
+    });
+
+    it('admits matching files and rejects non-matching ones', async () => {
+      const { ignored } = await captureFilter();
+      expect(ignored('/repo/src/index.ts', file)).toBe(false);
+      expect(ignored('/repo/src/app.tsx', file)).toBe(false);
+      expect(ignored('/repo/README.md', file)).toBe(true);
+      expect(ignored('/repo/src/data.json', file)).toBe(true);
+    });
+
+    it('never ignores the watch root itself', async () => {
+      const { ignored } = await captureFilter();
+      expect(ignored('/repo', dir)).toBe(false);
+    });
+
+    it('falls back to ignore-patterns only when chokidar supplies no stats', async () => {
+      const { ignored } = await captureFilter();
+      // Without stats we cannot tell a file from a directory, so we must not
+      // guess — handleFileEvent applies the include filter again.
+      expect(ignored('/repo/README.md')).toBe(false);
+      expect(ignored('/repo/node_modules')).toBe(true);
+    });
+
+    it('normalises absolute patterns against cwd', async () => {
+      // `iris watch <file>` puts an absolute path in patterns, while chokidar
+      // reports relative ones. Comparing them unnormalised matches nothing.
+      const { ignored } = await captureFilter({ patterns: ['/repo/src/only.ts'] });
+      expect(ignored('/repo/src/only.ts', file)).toBe(false);
+      expect(ignored('/repo/src/other.ts', file)).toBe(true);
+    });
+  });
+
   describe('injectable logging (issue #81)', () => {
     const collectLogger = () => {
       const lines: string[] = [];
