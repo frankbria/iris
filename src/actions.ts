@@ -99,7 +99,16 @@ export function describeAction(action: Action): string {
     case 'click':
       return `click ${action.selector}`;
     case 'fill':
-      return `fill ${action.selector} = "${action.text}"`;
+      // Never the value. This string is narration the CLI and watcher print to
+      // stdout for every executed step, and what a `fill` types is exactly the
+      // class of data that must not reach a log or a CI transcript: passwords,
+      // tokens, card numbers (issue #81).
+      //
+      // Redacted unconditionally — no "looks harmless" exception. A rule based
+      // on length or content would leak precisely the short secrets (PINs,
+      // OTPs) it was meant to protect. The selector still says which field ran,
+      // which is the half that helps you debug.
+      return `fill ${action.selector} = <redacted>`;
     case 'assert':
       return `assert ${action.kind} ${action.target}`;
   }

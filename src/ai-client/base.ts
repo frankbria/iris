@@ -220,30 +220,6 @@ export abstract class BaseAIClient implements AIClient {
    * Must be implemented by concrete clients
    */
   abstract isAvailable(): Promise<boolean>;
-
-  /**
-   * Helper method to handle errors consistently
-   */
-  protected handleError(error: unknown, operation: string): AITranslationResponse {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`${operation} error:`, formatError(error));
-    return {
-      actions: [],
-      confidence: 0,
-      reasoning: `Failed to ${operation}: ${message}`,
-    };
-  }
-
-  /**
-   * Helper method to validate configuration
-   */
-  protected validateConfig(requiredFields: string[]): void {
-    for (const field of requiredFields) {
-      if (!(field in this.config) || !this.config[field as keyof typeof this.config]) {
-        throw new Error(`${field} not configured for AI provider`);
-      }
-    }
-  }
 }
 
 /**

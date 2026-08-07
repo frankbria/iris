@@ -275,12 +275,40 @@ describe('assertion vocabulary (issue #116)', () => {
 
   it('describeAction covers every union member', () => {
     expect(describeAction({ type: 'click', selector: '#a' })).toBe('click #a');
-    expect(describeAction({ type: 'fill', selector: '#a', text: 'b' })).toBe('fill #a = "b"');
     expect(describeAction({ type: 'navigate', url: 'https://a.test' })).toBe(
       'navigate https://a.test',
     );
     expect(describeAction({ type: 'assert', kind: 'url_matches', target: '/x' })).toBe(
       'assert url_matches /x',
     );
+  });
+
+  // Issue #81: this string is narration — the CLI and watcher print it to
+  // stdout on every executed step. Whatever a `fill` types is exactly the class
+  // of value you must not log: passwords, tokens, card numbers.
+  describe('describeAction redacts filled values', () => {
+    it('never prints what was typed', () => {
+      const described = describeAction({ type: 'fill', selector: '#password', text: 'hunter2' });
+
+      expect(described).not.toContain('hunter2');
+      expect(described).toBe('fill #password = <redacted>');
+    });
+
+    it('redacts regardless of the value, including empty', () => {
+      // No "looks harmless" exception: a length- or content-based rule leaks
+      // the very short secrets (PINs, OTPs) it would be trying to protect.
+      expect(describeAction({ type: 'fill', selector: '#a', text: '' })).toBe(
+        'fill #a = <redacted>',
+      );
+      expect(describeAction({ type: 'fill', selector: '#a', text: 'plain text' })).toBe(
+        'fill #a = <redacted>',
+      );
+    });
+
+    it('still identifies which field was filled', () => {
+      // The selector is the actionable half — it tells you what ran without
+      // telling you the secret.
+      expect(describeAction({ type: 'fill', selector: '#email', text: 'x' })).toContain('#email');
+    });
   });
 });
