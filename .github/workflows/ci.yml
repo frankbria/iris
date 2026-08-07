@@ -13,6 +13,8 @@ jobs:
         with:
           # Read from .nvmrc so CI and local environments cannot drift apart —
           # that drift is what hid the engines mismatch in issue #138.
+          # Pinned to 24: better-sqlite3 13 requires >=22, and 24 is the current
+          # LTS line, so CI exercises what most contributors will actually run.
           node-version-file: '.nvmrc'
           cache: 'npm'
       - run: npm ci
