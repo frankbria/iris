@@ -156,6 +156,16 @@ const DEFAULT_PRICING: ProviderPricing[] = [
 ];
 
 /**
+ * Providers with no per-call cost at all, whatever model is used.
+ *
+ * Ollama runs locally, so `ollama:moondream` is exactly as free as
+ * `ollama:llava` — the exemption issue #68 won is about the PROVIDER, not about
+ * which of its models we happened to pre-register. Gating per model would
+ * re-block every local model missing from DEFAULT_PRICING.
+ */
+const FREE_PROVIDERS = new Set(['ollama']);
+
+/**
  * Default budget configuration
  */
 const DEFAULT_BUDGET: Required<BudgetConfig> = {
@@ -289,6 +299,12 @@ export class CostTracker {
    * `setPricing` call, while under-gating costs them money.
    */
   isBudgetGated(provider: string, model: string): boolean {
+    // Provider-level first. A local provider is free for every model it runs,
+    // including ones we never registered — checking the model map first would
+    // re-gate exactly the operations #68 exempted.
+    if (FREE_PROVIDERS.has(provider.toLowerCase())) {
+      return false;
+    }
     const key = `${provider}:${model}`;
     // Metered pricing: per-call cost is unknown before the call, but it is paid.
     if (this.tokenPricing.has(key)) {
@@ -348,8 +364,13 @@ export class CostTracker {
     // Surface the accounting gap rather than silently under-reporting: this
     // operation will be billed by the provider and recorded here as $0. Once
     // per pair, so a hot loop cannot bury the warning it is trying to raise.
-    if (billable && cost === 0) {
-      const key = `${provider}:${model}`;
+    // Only when the pair is genuinely unregistered. A model registered with
+    // token rates but called without usage also lands at $0, but there the
+    // advice to "register it with setPricing()" is simply wrong — it IS
+    // registered; the gap is the provider not reporting usage.
+    const key = `${provider}:${model}`;
+    const registered = this.tokenPricing.has(key) || this.pricing.has(key);
+    if (billable && cost === 0 && !registered) {
       if (!this.unpricedWarned.has(key)) {
         this.unpricedWarned.add(key);
         console.warn(

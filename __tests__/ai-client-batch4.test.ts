@@ -398,6 +398,43 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         warn.mockRestore();
       });
 
+      // Review of PR #177 caught that gating per model re-blocked local models
+      // that simply were not in DEFAULT_PRICING. #68's exemption is about the
+      // PROVIDER: Ollama runs locally, so every model on it is free.
+      it('exempts any model on a free provider, not just the pre-registered ones', () => {
+        expect(tracker.isBudgetGated('ollama', 'moondream')).toBe(false);
+        expect(tracker.isBudgetGated('ollama', 'llava')).toBe(false);
+        expect(tracker.isBudgetGated('OLLAMA', 'anything-at-all')).toBe(false);
+      });
+
+      it('lets an unregistered local model through after the breaker has tripped', () => {
+        expect(() => {
+          for (let i = 0; i < 3000; i++) tracker.trackOperation('openai', 'gpt-4o', false);
+        }).toThrow(/circuit breaker/i);
+
+        // Would have been blocked by the first version of this fix.
+        expect(tracker.trackOperation('ollama', 'moondream', false)).toBe(0);
+      });
+
+      it('does not warn about a local model on a free provider', () => {
+        const warn = jest.spyOn(console, 'warn').mockImplementation();
+        tracker.trackOperation('ollama', 'moondream', false);
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+      });
+
+      it('does not claim "no pricing" for a token-rate model called without usage', () => {
+        // It IS registered. The $0 here comes from the provider not reporting
+        // usage, so telling the user to call setPricing() would misdiagnose it.
+        tracker.setPricing('custom', 'metered', 0, 1e-6, 2e-6);
+        const warn = jest.spyOn(console, 'warn').mockImplementation();
+
+        tracker.trackOperation('custom', 'metered', false); // no usage supplied
+
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+      });
+
       it('prices gpt-4o-mini, which is the configured default model', () => {
         // config.ts defaults ai.model to gpt-4o-mini, so the out-of-the-box
         // model was the one going unpriced.
