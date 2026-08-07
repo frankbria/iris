@@ -160,6 +160,10 @@ iris run "find the blue button next to the search box and click it" --url https:
 # Machine-readable output for scripts and AI assistants
 iris run --json --url https://example.com "click #submit-button"
 
+# Watch it happen: --no-headless opens a visible browser with devtools, which is
+# the fastest way to see why a selector isn't matching. Also works on `watch`.
+iris run "click #submit-button" --url https://example.com --no-headless
+
 # Goal-directed: re-plan against the live page each turn instead of guessing once
 iris run --agent --url http://localhost:3000 --max-turns 6 \
   "make sure a signed-out visitor can reach the pricing page"

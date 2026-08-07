@@ -17,6 +17,12 @@ program
   .description('Run a natural language instruction')
   .option('--dry-run', 'Only translate without executing actions')
   .option('--headless', 'Run browser in headless mode (default: true)')
+  // Declared alongside --headless rather than replacing it. A lone boolean flag
+  // can only ever yield `true` or `undefined`, so the `=== false` branches that
+  // open a visible browser with devtools were unreachable (issue #78). Keeping
+  // --headless declared first preserves it as an accepted no-op, so command
+  // lines already passing it still work.
+  .option('--no-headless', 'Run browser visibly with devtools open, for debugging')
   .option('--url <url>', 'Starting page URL (or set IRIS_BASE_URL)')
   .option('--json', 'Emit a single machine-readable JSON result on stdout', false)
   .option(
@@ -431,6 +437,8 @@ program
   .option('-i, --instruction <instruction>', 'Instruction to run when files change', 'click submit')
   .option('--execute', 'Enable browser execution (default: translation only)')
   .option('--headless', 'Run browser in headless mode (default: true when executing)')
+  // Same unreachable-branch fix as `run` — see the note there (issue #78).
+  .option('--no-headless', 'Run browser visibly with devtools open, for debugging')
   .option(
     '--browser-timeout <ms>',
     'Browser operation timeout in milliseconds',

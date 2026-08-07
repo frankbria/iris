@@ -315,6 +315,99 @@ describe('CLI Commands', () => {
     });
   });
 
+  // Issue #78: `--headless` was declared as a plain boolean flag, so commander
+  // could only ever produce `true` or `undefined` — never `false`. The
+  // `=== false` branches that launch a visible browser with devtools were
+  // therefore unreachable, and there was no way to watch a failing selector.
+  describe('run command browser visibility (--no-headless)', () => {
+    /**
+     * Capture what the executor was actually constructed with. `browserOptions`
+     * is stored on the instance, so reading `this.options` from inside a stubbed
+     * lifecycle method is the honest seam — asserting on the CLI's local
+     * variable would pass even if it never reached the executor.
+     */
+    const captureBrowserOptions = () => {
+      const seen: Array<{ headless?: boolean; devtools?: boolean }> = [];
+      jest
+        .spyOn(executorModule.ActionExecutor.prototype, 'launchBrowser')
+        .mockImplementation(async function (this: { options: { browserOptions: never } }) {
+          seen.push(this.options.browserOptions);
+          return {} as never;
+        });
+      jest.spyOn(executorModule.ActionExecutor.prototype, 'createPage').mockResolvedValue({
+        page: true,
+      } as never);
+      jest.spyOn(executorModule.ActionExecutor.prototype, 'cleanup').mockResolvedValue();
+      jest
+        .spyOn(executorModule.ActionExecutor.prototype, 'executeAction')
+        .mockResolvedValue({ success: true, duration: 1 } as never);
+      return seen;
+    };
+
+    beforeEach(() => {
+      jest.spyOn(dbModule, 'initializeDatabase').mockReturnValue({ close: jest.fn() } as never);
+      jest.spyOn(dbModule, 'insertTestRun').mockImplementation(() => undefined as never);
+      delete process.env.IRIS_BASE_URL;
+    });
+
+    test('--no-headless launches a visible browser with devtools open', async () => {
+      const seen = captureBrowserOptions();
+
+      await runCli(['node', 'iris', 'run', 'click #btn', '--no-headless']);
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0].headless).toBe(false);
+      expect(seen[0].devtools).toBe(true);
+    });
+
+    test('defaults to headless with no devtools when neither flag is given', async () => {
+      const seen = captureBrowserOptions();
+
+      await runCli(['node', 'iris', 'run', 'click #btn']);
+
+      expect(seen[0].headless).toBe(true);
+      expect(seen[0].devtools).toBe(false);
+    });
+
+    test('still accepts an explicit --headless', async () => {
+      // The flag already worked (as a no-op that matched the default) and is in
+      // published examples, so removing it would break working command lines.
+      const seen = captureBrowserOptions();
+
+      await runCli(['node', 'iris', 'run', 'click #btn', '--headless']);
+
+      expect(seen[0].headless).toBe(true);
+      expect(seen[0].devtools).toBe(false);
+    });
+  });
+
+  describe('watch command browser visibility (--no-headless)', () => {
+    test('passes headless:false through to the watcher', async () => {
+      const watchFiles = jest.fn().mockResolvedValue(undefined);
+      jest.doMock('../src/watcher', () => ({ watchFiles }));
+
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+      await freshRunCli(['node', 'iris', 'watch', '.', '--execute', '--no-headless']);
+
+      expect(watchFiles).toHaveBeenCalled();
+      expect(watchFiles.mock.calls[0][2].headless).toBe(false);
+    });
+
+    test('leaves headless at the watcher default when the flag is absent', async () => {
+      const watchFiles = jest.fn().mockResolvedValue(undefined);
+      jest.doMock('../src/watcher', () => ({ watchFiles }));
+
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+      await freshRunCli(['node', 'iris', 'watch', '.', '--execute']);
+
+      // Undefined, not false — watcher.ts applies `?? true`, and forcing `true`
+      // here would silently override any future config-level default.
+      expect(watchFiles.mock.calls[0][2].headless).toBeUndefined();
+    });
+  });
+
   // Issue #113: `run` emitted only emoji-decorated human text, so no AI assistant
   // could consume it. --json makes stdout a machine-readable contract. The central
   // invariant these cover: in JSON mode stdout carries EXACTLY one parseable object
