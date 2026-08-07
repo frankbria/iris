@@ -100,9 +100,18 @@ _Test counts verified 2026-08-01; coverage figures last measured 2026-06-26._
 git clone https://github.com/frankbria/iris.git
 cd iris
 npm install
+npx playwright install chromium   # see note below
 npm run build
 npm link
 ```
+
+**About `npx playwright install chromium`:** IRIS drives a real browser, and
+Playwright downloads that binary from a postinstall script rather than shipping
+it in the package. `npm install` usually runs that script for you — but pnpm
+skips postinstall scripts by default, and so do `--ignore-scripts` and many
+hardened CI images. Running it explicitly is harmless if the browser is already
+there, and it is the one step between a successful install and a working
+`iris run`.
 
 ### Verify Installation
 

@@ -83,9 +83,16 @@ export class ActionExecutor {
       this.browser = await launchBrowser(this.options.browserOptions);
       return this.browser;
     } catch (error) {
-      throw new Error(
+      const wrapped = new Error(
         `Browser launch failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       );
+      // Carry the original through. This wrapper keeps only `.message`, so
+      // anything the underlying error attached — notably the missing-browser
+      // error's `cause`, which holds Playwright's resolved cache path (issue
+      // #79) — would otherwise be dropped before it ever reached a CLI user.
+      (wrapped as Error & { cause?: unknown }).cause =
+        (error as { cause?: unknown })?.cause ?? error;
+      throw wrapped;
     }
   }
 
