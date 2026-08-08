@@ -661,7 +661,10 @@ describe('Visual Diff CLI E2E Tests', () => {
   });
 
   describe('Concurrency and Performance', () => {
-    it('should handle concurrent comparisons efficiently', async () => {
+    // Renamed from "...efficiently" with #142: the word described the deleted
+    // wall-clock bound, and a name that promises something the body no longer
+    // checks is how a test quietly stops meaning anything.
+    it('processes every page when comparisons run concurrently', async () => {
       const pages = Array.from(
         { length: 5 },
         (_, i) =>
@@ -695,15 +698,46 @@ describe('Visual Diff CLI E2E Tests', () => {
         updateBaseline: true,
       };
 
-      const startTime = Date.now();
-      const runner = new VisualTestRunner(config);
-      const result = await runner.run();
-      const duration = Date.now() - startTime;
+      // Issue #142: this used to assert `duration < 30000`, the named example in
+      // that issue. Five real page captures against a fixed wall-clock ceiling
+      // breaks whenever the machine is busy, and load only ever pushes elapsed
+      // time up — so the bound could fail but never catch a regression.
+      //
+      // Removing it dropped the concurrency signal, though, so observe overlap
+      // directly instead: wrap the per-task seam and record how many runs are in
+      // flight at once. That asserts what the timing bound was only ever a proxy
+      // for, and it cannot be broken by a slow machine — a serial runner peaks at
+      // 1 whether the box is fast or loaded.
+      type Seam = { testPage(page: string, device: string): Promise<unknown> };
+      const original = (VisualTestRunner.prototype as unknown as Seam).testPage;
+      let inFlight = 0;
+      let peakInFlight = 0;
+      const seamSpy = jest
+        .spyOn(VisualTestRunner.prototype as unknown as Seam, 'testPage')
+        .mockImplementation(async function (this: Seam, ...args: [string, string]) {
+          inFlight++;
+          peakInFlight = Math.max(peakInFlight, inFlight);
+          try {
+            return await original.apply(this, args);
+          } finally {
+            inFlight--;
+          }
+        });
+
+      let result;
+      try {
+        const runner = new VisualTestRunner(config);
+        result = await runner.run();
+      } finally {
+        seamSpy.mockRestore();
+      }
 
       // 5 pages × 1 default device.
       expect(result.summary.totalComparisons).toBe(5);
-      expect(duration).toBeLessThan(30000); // Should complete within 30 seconds
       expect(result.results).toHaveLength(5);
+      // Work genuinely overlapped, and never beyond the configured cap of 3.
+      expect(peakInFlight).toBeGreaterThan(1);
+      expect(peakInFlight).toBeLessThanOrEqual(3);
     });
   });
 

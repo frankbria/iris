@@ -122,7 +122,15 @@ describe('assert action execution', () => {
   // answer, so retrying only burns the timeout again (the lesson of #75).
   it('does not retry a failing assertion', async () => {
     const retrying = new ActionExecutor({ timeout: 500, retryAttempts: 3, trackContext: false });
-    const started = Date.now();
+
+    // Issue #142: this inferred "did not retry" from `elapsed < 1500`, an upper
+    // bound that a loaded machine breaks on its own. The retry path waits via
+    // ActionExecutor#delay, so asserting that seam was never reached says the
+    // same thing directly and cannot be broken by a slow box.
+    const delaySpy = jest.spyOn(
+      retrying as unknown as { delay(ms: number): Promise<void> },
+      'delay',
+    );
 
     const r = await retrying.executeAction(
       { type: 'assert', kind: 'text_visible', target: 'Nope' },
@@ -130,7 +138,7 @@ describe('assert action execution', () => {
     );
 
     expect(r.success).toBe(false);
-    // Four attempts at a 500ms wait would exceed 1.5s; one attempt stays well under.
-    expect(Date.now() - started).toBeLessThan(1500);
+    expect(delaySpy).not.toHaveBeenCalled();
+    delaySpy.mockRestore();
   });
 });

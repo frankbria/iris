@@ -110,8 +110,7 @@ export class VisualDiffEngine {
             threshold: options.threshold,
             diffBuffer: Buffer.alloc(0), // Don't generate diff for obviously different images
             earlyExit: true,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          } as any;
+          };
         }
       }
 

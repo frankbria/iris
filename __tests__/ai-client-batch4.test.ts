@@ -176,17 +176,30 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         categories: [],
       };
 
-      // Short TTL + a generous sleep (20x margin) keeps these deterministic
-      // even on a loaded CI runner.
+      // A short TTL plus a 20x sleep margin was described here as keeping these
+      // deterministic on a loaded runner. It does — against *load*, which only
+      // ever makes the sleep longer. It does not protect against the other
+      // mechanism in #142: the WSL2 clock stepping backward, which shrinks the
+      // apparent gap no matter how generous the margin. Prefer a negative TTL,
+      // which needs no elapsed time at all; the constants below remain only for
+      // the throttle test, which genuinely needs one row older than another.
       const TTL = 10;
       const EXPIRE_WAIT = 200;
 
-      it('removes expired entries when pruneExpired() is called manually', async () => {
-        const c = createCache({ ttlMs: TTL });
+      /**
+       * Expire everything already written, without waiting.
+       *
+       * `pruneExpired()` deletes rows with `timestamp < Date.now() - ttlMs`, so a
+       * negative TTL puts the cutoff in the future and makes any existing row
+       * unambiguously stale. Same prune path and same SQL as a real expiry.
+       */
+      const ALREADY_EXPIRED = -60_000;
+
+      it('removes expired entries when pruneExpired() is called manually', () => {
+        const c = createCache({ ttlMs: ALREADY_EXPIRED });
         c.set(c.generateKey('a', 'a', 'p', 'm'), value, 'p', 'm');
         expect(c.getStats().persistentSize).toBe(1);
 
-        await sleep(EXPIRE_WAIT);
         const removed = c.pruneExpired();
 
         expect(removed).toBe(1);
@@ -210,7 +223,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         c.close();
       });
 
-      it('prunes expired entries on construction', async () => {
+      it('prunes expired entries on construction', () => {
         const dbPath = path.join(os.tmpdir(), `iris-cache-prune-${process.pid}-${Date.now()}.db`);
         let second: AIVisionCache | undefined;
         try {
@@ -219,10 +232,10 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
           expect(first.getStats().persistentSize).toBe(1);
           first.close();
 
-          await sleep(EXPIRE_WAIT); // entry is now expired
-
-          // Reopening the same DB should reclaim the expired row on construction
-          second = createCache({ ttlMs: TTL, dbPath });
+          // Issue #142: this used to `await sleep(200)` against a 10ms TTL. Load
+          // cannot erode 20x of headroom — but the WSL2 clock stepping backward
+          // can, and this test was observed failing (#189).
+          second = createCache({ ttlMs: ALREADY_EXPIRED, dbPath });
           expect(second.getStats().persistentSize).toBe(0);
         } finally {
           second?.close();

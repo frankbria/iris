@@ -419,7 +419,10 @@ describe('ActionExecutor', () => {
       // below the nominal delay — the point is that duration reflects the ~100ms
       // wait, not that it lands on exactly 100. See CI flake: measured 99.
       expect(result.duration).toBeGreaterThanOrEqual(90);
-      expect(result.duration).toBeLessThan(200); // Should complete quickly
+      // The companion `toBeLessThan(200)` was dropped for #142. A loaded machine
+      // pushes a 100ms wait past 200ms with nothing wrong, and the bound guarded
+      // nothing the lower bound does not — "duration tracks the delay" is the
+      // property; "and finishes quickly" is a statement about the host.
     });
   });
 
@@ -577,12 +580,26 @@ describe('ActionExecutor', () => {
 
       (click as jest.Mock).mockRejectedValue(new Error('Always fails'));
 
-      const startTime = Date.now();
-      await executor.executeAction(action, page);
-      const endTime = Date.now();
+      // Issue #142: this measured `endTime - startTime >= 300`. Load cannot
+      // break a lower bound — it only makes elapsed time larger — yet the test
+      // was observed failing, which is what pointed at the other mechanism this
+      // issue documents: the WSL2 system clock stepping backward mid-test.
+      //
+      // Asserting on the delay seam instead is immune to the clock and strictly
+      // stronger: elapsed >= 300 could not tell three 100ms waits apart from one
+      // 300ms stall, which is the thing that would actually be a bug.
+      const delaySpy = jest.spyOn(
+        executor as unknown as { delay(ms: number): Promise<void> },
+        'delay',
+      );
 
-      // Should have waited at least 3 * 100ms = 300ms for retries
-      expect(endTime - startTime).toBeGreaterThanOrEqual(300);
+      await executor.executeAction(action, page);
+
+      // Every gap, not just one: `toHaveBeenCalledWith(100)` would accept a
+      // regression that waited [100, 0, 0], which is exactly the bug this test
+      // exists to catch.
+      expect(delaySpy.mock.calls).toEqual([[100], [100], [100]]);
+      delaySpy.mockRestore();
     });
 
     it('should not retry on certain error types', async () => {
@@ -733,11 +750,23 @@ describe('ActionExecutor', () => {
       mockPage.url.mockReturnValue('https://example.com/page');
       mockPage.title.mockResolvedValue('Example Page');
 
-      const context = await executor.getPageContext(page);
+      // Pin the clock instead of comparing against a moving one (#142). A
+      // before/after bracket was the first attempt, but review pointed out it
+      // still assumes wall-clock monotonicity — a backward step between `before`
+      // and the internal stamp fails it while the code is correct. Freezing
+      // Date.now() removes the assumption entirely and asserts the exact
+      // property: the stamp is taken from the clock during this call.
+      const NOW = 1_700_000_000_000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        const context = await executor.getPageContext(page);
 
-      expect(context.url).toBe('https://example.com/page');
-      expect(context.title).toBe('Example Page');
-      expect(context.timestamp).toBeCloseTo(Date.now(), -2); // Within 100ms
+        expect(context.url).toBe('https://example.com/page');
+        expect(context.title).toBe('Example Page');
+        expect(context.timestamp).toBe(NOW);
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
 
     it('should handle page context retrieval failure', async () => {

@@ -181,6 +181,16 @@ export interface DiffResult {
   ssim?: number;
   /** Mean contrast similarity, companion to `ssim`. Same presence rules. */
   mcs?: number;
+  /**
+   * True when the comparison short-circuited on a sampled subset instead of
+   * running the full pixel diff, which large and obviously-different images do.
+   * `diffBuffer` is empty in that case — no mask is generated.
+   *
+   * Declared here rather than cast through `as any` at the return site (#142):
+   * it is the observable that says the early-exit path ran, and a test asserting
+   * on it is the load-independent replacement for timing the comparison.
+   */
+  earlyExit?: boolean;
   error?: string;
 }
 
