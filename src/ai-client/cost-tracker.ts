@@ -155,6 +155,21 @@ const DEFAULT_PRICING: ProviderPricing[] = [
     costPerInputToken: 3e-6,
     costPerOutputToken: 1.5e-5,
   },
+  // Claude Haiku 4.5: $1/1M input, $5/1M output. This is what config.ts:176
+  // selects on the ANTHROPIC_API_KEY env path, and `resolveModel` prefers the
+  // configured model over the per-provider default — so it is the model the
+  // out-of-the-box Anthropic user actually requests. Left unpriced it computes
+  // a $0 cost and never accrues against the budget, which is the #126 failure
+  // mode on the highest-traffic path (the call is still *gated* — unregistered
+  // models fall through to `return true` in isBudgetGated — but spend on it
+  // could never trip the breaker in the first place).
+  {
+    provider: 'anthropic',
+    model: 'claude-haiku-4-5',
+    costPerImage: 0.0005,
+    costPerInputToken: 1e-6,
+    costPerOutputToken: 5e-6,
+  },
   // Claude Opus 5: $5/1M input, $25/1M output. Not a default anywhere — priced
   // so a user who configures it is gated rather than treated as free (#126).
   {

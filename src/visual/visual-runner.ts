@@ -156,7 +156,7 @@ export class VisualTestRunner {
         apiKey: config.diff.apiKey,
         // Deliberately pass through undefined when no override is configured:
         // AIVisualClassifier already resolves a current default per provider
-        // (gpt-4o / claude-3-5-sonnet / llava). Pinning models here is what left
+        // (gpt-4o / claude-sonnet-5 / llava). Pinning models here is what left
         // the runner requesting retired ones (issue #111).
         model: config.diff.aiModel,
         baseURL: config.diff.aiEndpoint,

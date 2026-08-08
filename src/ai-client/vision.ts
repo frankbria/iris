@@ -1,6 +1,7 @@
 import { IrisConfig } from '../config';
 import {
   BaseAIVisionClient,
+  parseModelJson,
   AITranslationRequest,
   AITranslationResponse,
   AIVisionRequest,
@@ -203,7 +204,7 @@ Compare the baseline (first image) with the current (second image) and identify 
 
       // Validate before use: invalid/empty severity throws (surfacing through
       // handleVisionError) rather than silently degrading to severity:'none'.
-      const parsed = AIVisionResponseSchema.parse(JSON.parse(content));
+      const parsed = AIVisionResponseSchema.parse(parseModelJson(content));
 
       // Attach token usage (defensive: may be absent) so downstream cost
       // tracking reflects real high-detail token consumption, not a flat rate.
@@ -226,14 +227,21 @@ Compare the baseline (first image) with the current (second image) and identify 
   }
 
   supportsVision(): boolean {
-    // GPT-4V and GPT-4o support vision
+    // Kept as a name match, unlike the Anthropic client (see issue #183): OpenAI
+    // genuinely still serves non-vision models — gpt-3.5-turbo is live, and
+    // o1-mini has no vision — so discriminating here means something. It shares
+    // the same rot risk (a future vision model whose ID drops `gpt-4` would be
+    // skipped), which is what #184's provider-driven resolution is for.
+    //
+    // The `|| includes('gpt-4o')` arm this used to carry was dead: every string
+    // containing `gpt-4o` already contains `gpt-4`.
     const model = this.config.model || '';
-    return model.includes('gpt-4') || model.includes('gpt-4o');
+    return model.includes('gpt-4');
   }
 }
 
 /**
- * Anthropic Claude 3.5 Sonnet vision client for visual diff analysis
+ * Anthropic Claude vision client for visual diff analysis
  */
 export class AnthropicVisionClient extends BaseAIVisionClient {
   constructor(config: IrisConfig['ai']) {
@@ -353,7 +361,7 @@ Respond with JSON:
       }
 
       // Validate before use (see OpenAI path): invalid severity throws.
-      const parsed = AIVisionResponseSchema.parse(JSON.parse(content.text));
+      const parsed = AIVisionResponseSchema.parse(parseModelJson(content.text));
 
       // Attach token usage (defensive: may be absent) for real cost accounting.
       const usage = response.usage
@@ -470,7 +478,7 @@ Respond with JSON only:
       }, this.config.retryConfig ?? DEFAULT_RETRY_CONFIG);
 
       // Validate before use (see OpenAI path): invalid severity throws.
-      const parsed = AIVisionResponseSchema.parse(JSON.parse(data.response));
+      const parsed = AIVisionResponseSchema.parse(parseModelJson(data.response));
 
       // Ollama reports token counts via prompt_eval_count/eval_count when
       // present. If absent, leave usage undefined — the cost tracker falls back

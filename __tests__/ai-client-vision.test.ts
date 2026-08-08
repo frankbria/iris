@@ -286,8 +286,13 @@ describe('vision clients', () => {
     // and configuring a *current* model made it fail harder, not less.
     //
     // Every Anthropic model in the current lineup is multimodal, so the honest
-    // predicate is "this is an Anthropic vision client", not a name match. The
-    // list below is deliberately current names rather than a substring.
+    // predicate is "this is an Anthropic vision client", not a name match.
+    //
+    // With the override gone this is necessarily true for *any* string, so the
+    // cases below assert no per-model discrimination — they exist as a
+    // regression guard: reintroducing a name match (or a hardcoded allow-list
+    // that misses a name) fails here rather than silently dropping the provider
+    // from the fallback chain, which is how #183 stayed invisible.
     it.each(['claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5', 'claude-opus-4-8'])(
       'reports vision support for %s',
       (model) => {
@@ -311,17 +316,20 @@ describe('vision clients', () => {
       ).toBe(true);
     });
 
-    it('is available whenever an API key is present', () => {
-      expect(
-        new AnthropicVisionClient({ provider: 'anthropic', apiKey: 'k', model: 'claude-sonnet-5' }),
-      ).toBeDefined();
-      return expect(
+    it.each([
+      ['k', true],
+      [undefined, false],
+    ])('availability with apiKey=%s is %s', async (apiKey, expected) => {
+      // The key is now the only gate — `supportsVision()` no longer votes.
+      // Both branches asserted so "whenever a key is present" is actually
+      // verified rather than half-checked.
+      await expect(
         new AnthropicVisionClient({
           provider: 'anthropic',
-          apiKey: 'k',
+          apiKey: apiKey as string | undefined,
           model: 'claude-sonnet-5',
         }).isAvailable(),
-      ).resolves.toBe(true);
+      ).resolves.toBe(expected);
     });
   });
 
@@ -532,6 +540,66 @@ describe('vision clients', () => {
         json: async () => ({ models: [{ name: 'mistral' }] }),
       });
       expect(await new OllamaVisionClient(config).isAvailable()).toBe(false);
+    });
+  });
+
+  // Found by the live demo on #183: with the model pin fixed, Anthropic
+  // answered and *then* the analysis failed on
+  // `Unexpected token '`', "```json{"... is not valid JSON`.
+  //
+  // `parseModelJson` (base.ts) already exists for exactly this and is wired
+  // into the text clients, but all three vision clients called bare
+  // `JSON.parse`. Current models fence their JSON as a matter of course, so
+  // this made the fixed vision path fail one stage later than #183 did.
+  describe('vision clients tolerate a markdown-fenced reply', () => {
+    const fenced = '```json\n' + JSON.stringify(parsed) + '\n```';
+
+    it('OpenAI parses a fenced response', async () => {
+      mockOpenAICreate.mockResolvedValue({ choices: [{ message: { content: fenced } }] });
+      const result = await new OpenAIVisionClient({
+        provider: 'openai',
+        apiKey: 'sk-test',
+        model: 'gpt-4o',
+      }).analyzeVisualDiff(request);
+      expect(result.severity).toBe('moderate');
+      expect(result.categories).toEqual(['layout']);
+    });
+
+    it('Anthropic parses a fenced response', async () => {
+      mockAnthropicCreate.mockResolvedValue({ content: [{ type: 'text', text: fenced }] });
+      const result = await new AnthropicVisionClient({
+        provider: 'anthropic',
+        apiKey: 'sk-ant',
+        model: 'claude-sonnet-5',
+      }).analyzeVisualDiff(request);
+      expect(result.severity).toBe('moderate');
+      expect(result.categories).toEqual(['layout']);
+    });
+
+    it('Ollama parses a fenced response', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ response: fenced }),
+      });
+      const result = await new OllamaVisionClient({
+        provider: 'ollama',
+        endpoint: 'http://localhost:11434',
+        model: 'llava',
+      }).analyzeVisualDiff(request);
+      expect(result.severity).toBe('moderate');
+    });
+
+    it('still rejects a reply with no JSON object at all', async () => {
+      mockAnthropicCreate.mockResolvedValue({
+        content: [{ type: 'text', text: 'I cannot analyze these images.' }],
+      });
+      await expect(
+        new AnthropicVisionClient({
+          provider: 'anthropic',
+          apiKey: 'sk-ant',
+          model: 'claude-sonnet-5',
+        }).analyzeVisualDiff(request),
+      ).rejects.toThrow(/did not return a JSON object/i);
     });
   });
 
