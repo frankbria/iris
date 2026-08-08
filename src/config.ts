@@ -62,10 +62,27 @@ const DEFAULT_CONFIG: IrisConfig = {
  * values. Existing `process.env` values always win, so real shell-exported
  * variables take precedence over the file. A missing `.env` is a silent no-op.
  *
+ * `cwd` defaults to `IRIS_DOTENV_DIR` when set, else the process working
+ * directory — so the `.env` IRIS reads can be aimed somewhere other than
+ * wherever the command happened to be invoked from. `||` rather than `??`, so
+ * an empty `IRIS_DOTENV_DIR=` reads as "unset" instead of as a directory: with
+ * `??` it would survive as `''`, and `path.join('', '.env')` is `'.env'` — the
+ * working directory again, but arrived at by accident rather than by rule.
+ *
+ * That override is what makes the test suite hermetic (issue #185). `runCli()`
+ * calls this with no argument, so under Jest — where the working directory is
+ * the repo root — a developer's real `.env` was injected into `process.env`
+ * mid-test, flipping the CLI onto its live-AI branch: four `cli.test.ts` tests
+ * failed only on machines that had the file, and the run could bill real API
+ * calls. A `beforeEach` scrub cannot fix that (this runs *during* the test,
+ * after any scrub), and a per-test-file stub only protects the files that
+ * remember it. One guard here covers every caller; `jest.setup.ts` points the
+ * variable at an empty directory.
+ *
  * ponytail: minimal parser, not full POSIX shell quoting — swap for the `dotenv`
  * package if multiline values or `${VAR}` expansion are ever needed.
  */
-export function loadDotenv(cwd: string = process.cwd()): void {
+export function loadDotenv(cwd: string = process.env.IRIS_DOTENV_DIR || process.cwd()): void {
   let content: string;
   try {
     content = fs.readFileSync(path.join(cwd, '.env'), 'utf8');

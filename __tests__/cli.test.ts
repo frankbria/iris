@@ -1113,4 +1113,53 @@ describe('CLI Commands', () => {
       ]);
     });
   });
+  // ==========================================================================
+  // Issue #185: a developer's repo-root .env must not reach a CLI run.
+  //
+  // `runCli()` calls `loadDotenv()`, which read `.env` from the working
+  // directory — the repo root under Jest. A real OPENAI_API_KEY/ANTHROPIC_API_KEY
+  // landing in process.env mid-test sent `iris run` down its live-AI branch:
+  // the four tests above failed only on machines that had the file, and the run
+  // could bill real API calls. These assert the leak is closed at its source.
+  // ==========================================================================
+  describe('environment hermeticity (issue #185)', () => {
+    // Named for what it checks: the state at file load, before any runCli().
+    // (It deliberately does not call the CLI — the run-time case is below.)
+    it('starts with no provider credential in process.env', () => {
+      expect(process.env.OPENAI_API_KEY).toBeUndefined();
+      expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+    });
+
+    it('does not pick up a repo-root .env during runCli()', async () => {
+      // A sentinel .env is planted at the real repo root, because that is the
+      // only way to reproduce the defect deterministically — asserting against
+      // whatever happens to be on the machine passes trivially in CI, where a
+      // fresh checkout has no .env at all.
+      //
+      // Safe to plant precisely BECAUSE the guard works: no suite reads the repo
+      // root any more. If the guard regresses this test fails, which is the point.
+      const repoEnv = path.join(process.cwd(), '.env');
+      const saved = fs.existsSync(repoEnv) ? fs.readFileSync(repoEnv) : null;
+      fs.writeFileSync(repoEnv, 'OPENAI_API_KEY=sk-sentinel-must-not-be-read\n');
+
+      try {
+        // loadDotenv() runs *inside* this call — which is why a beforeEach
+        // scrub could never have fixed the leak.
+        await runCli(['node', 'iris', 'run', 'click #btn', '--dry-run']);
+
+        expect(process.env.OPENAI_API_KEY).toBeUndefined();
+        expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+        expect(process.env.OLLAMA_ENDPOINT).toBeUndefined();
+      } finally {
+        // Never clobber the developer's own file.
+        if (saved === null) fs.rmSync(repoEnv, { force: true });
+        else fs.writeFileSync(repoEnv, saved);
+      }
+    });
+
+    // No "translate() used the pattern path" assertion here: `click #btn` is
+    // matched by the pattern grammar before AI is ever consulted, so it reports
+    // 'pattern' with or without a credential present. Verified by disabling the
+    // harness guard — the two tests above fail, that one did not.
+  });
 });

@@ -161,6 +161,31 @@ plans/
   - `SmartAIVisionClient` rethrows `ModelUnavailableError` instead of stepping to the next vendor — that swallow is what made a retired model read as "all providers failed". Text clients resolve via `createResolvedAIClient()`; `loadConfig()` stays synchronous
   - Caveat: `CostTracker` prices by exact model ID, so a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) has no pricing row and falls into the #126 "unknown price is billable" path — budget-safe, but unpriced until a row is added
 
+### Test Hermeticity (issue #185)
+
+`jest.setup.ts` is where the suite is insulated from the developer's machine.
+Three guards live there, all for the same reason — a test must not behave
+differently because of an untracked file or an exported shell variable:
+
+- `IRIS_DB_PATH` -> a per-worker temp DB, so runs never write to `~/.iris/iris.db`
+- `IRIS_MODEL_PROBE=0` -> no provider model-list lookups (#184)
+- `IRIS_DOTENV_DIR` -> a per-worker temp directory, created 0700 and swept of any stray
+  `.env`, so `loadDotenv()` finds nothing (#185). Assigned **unconditionally** — unlike
+  the two above, an ambient value here is the hazard, not a preference —
+  plus a one-time scrub of `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OLLAMA_ENDPOINT` /
+  `*_MODEL` / `IRIS_BASE_URL` for the shell-export route
+
+`runCli()` calls `loadDotenv()` **during** the test body, so a `beforeEach`
+scrub cannot close the `.env` hole — the guard has to stop the read itself. And
+it belongs in `jest.setup.ts`, not per file: `visual-cli.test.ts` had a local
+`loadDotenv` stub while `cli.test.ts` and `a11y-cli.test.ts` did not, which is
+exactly how #185 shipped. The scrub is deliberately once per file, never in a
+`beforeEach` — `visual-cli.test.ts` assigns those vars inside test bodies to
+exercise provider resolution.
+
+Adding a new variable that IRIS reads from the environment? Add it to the scrub
+list too, or the suite silently becomes machine-dependent again.
+
 ### Configuration Layering (issue #184)
 
 `loadConfig()` merges four layers, most explicit last — it no longer returns
@@ -253,7 +278,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1229/1230 passing, 1 skipped, 0 failing)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1239/1240 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation
