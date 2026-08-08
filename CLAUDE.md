@@ -54,7 +54,7 @@ src/
 ├── ai-client/              # AI client modules (Phase 2)
 │   ├── base.ts            # Abstract base classes for text + vision
 │   ├── text.ts            # Text-based AI clients (Phase 1)
-│   ├── vision.ts          # Vision AI clients (GPT-4o, Claude 3.5, Ollama)
+│   ├── vision.ts          # Vision AI clients (GPT-4o, Claude Sonnet 5, Ollama)
 │   ├── preprocessor.ts    # Image preprocessing pipeline
 │   ├── cache.ts           # LRU + SQLite caching system
 │   ├── cost-tracker.ts    # Budget management and cost tracking
@@ -111,7 +111,7 @@ plans/
 
 **Completed: Sub-Phase 2A - AI Vision Foundation (Week 1-4)**
 1. ✅ Multimodal AI client architecture (text + vision capabilities)
-2. ✅ Vision provider integrations (OpenAI GPT-4o, Anthropic Claude 3.5, Ollama llava)
+2. ✅ Vision provider integrations (OpenAI GPT-4o, Anthropic Claude Sonnet 5, Ollama llava)
 3. ✅ Image preprocessing pipeline (resize, optimize, hash for caching)
 4. ✅ AI vision result caching (LRU memory + SQLite persistence, 30-day TTL)
 5. ✅ Cost tracking with budget management (daily/monthly limits, circuit breaker)
@@ -148,8 +148,12 @@ plans/
 **Pricing (default, configurable):**
 - Cost is computed from provider-returned token usage when available; the flat per-image rate below is the fallback (cache hits, Ollama, missing usage)
 - GPT-4o: $2.50/1M input + $10/1M output tokens (fallback $0.002/image)
-- Claude 3.5 Sonnet: $3/1M input + $15/1M output tokens (fallback $0.0015/image)
+- Claude Sonnet 5: $3/1M input + $15/1M output tokens (fallback $0.0015/image) — the vision default
+- Claude Haiku 4.5: $1/1M input + $5/1M output tokens (fallback $0.0005/image) — what the `ANTHROPIC_API_KEY` env path selects, so it is the model an out-of-the-box Anthropic user actually requests
+- Claude Opus 5: $5/1M input + $25/1M output tokens (fallback $0.004/image)
 - Ollama (local): $0.00
+- Anthropic rows use the standard rate, not Sonnet 5's introductory $2/$10 (expires 2026-08-31): this table gates a budget circuit breaker, and over-reporting trips it early while under-reporting lets real spend outrun the tracked total
+- **Model IDs rot.** The whole `claude-3` family was retired while still pinned in five places, and the vision path was dead until #183. A guard test fails on any re-added quoted `claude-3-*` ID in `src/`; resolving defaults from the provider's live model list instead of pinning them is issue #184
 
 ### Phase 1 - Foundations (Complete)
 1. ✅ CLI command scaffolding with commander.js
