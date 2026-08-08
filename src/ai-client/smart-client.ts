@@ -4,6 +4,7 @@ import { AIClientFactory } from './factory';
 import { AIVisionCache } from './cache';
 import { CostTracker } from './cost-tracker';
 import { ImagePreprocessor } from './preprocessor';
+import { DEFAULT_MODELS, ModelProvider, ModelUnavailableError, resolveModel } from './models';
 
 /**
  * Smart client configuration
@@ -158,7 +159,19 @@ export class SmartAIVisionClient {
     for (const providerName of providers) {
       // Resolve the provider+model pair once per attempt so cache read, cache
       // write, and cost tracking all key on the exact same value.
-      const model = this.resolveModel(providerName);
+      //
+      // Async since #184: this consults the provider's live model list (one
+      // memoized call per provider per process) so a pin the vendor retired is
+      // replaced rather than requested. A ModelUnavailableError means the user
+      // named a model that does not exist — see the catch below.
+      let model: string;
+      try {
+        model = await this.resolveModel(providerName);
+      } catch (error) {
+        if (error instanceof ModelUnavailableError) throw error;
+        lastError = error instanceof Error ? error : new Error(String(error));
+        continue;
+      }
 
       // Derive the key ONCE per attempt too. Two separate derivations for the
       // read and the write is how they silently drifted apart in issue #60 —
@@ -186,7 +199,7 @@ export class SmartAIVisionClient {
 
       try {
         // Get or create client for this provider
-        const client = this.getClient(providerName);
+        const client = this.getClient(providerName, model);
 
         // Check if provider is available
         const available = await client.isAvailable();
@@ -230,6 +243,10 @@ export class SmartAIVisionClient {
 
         return result;
       } catch (error) {
+        // "That model does not exist" is the user's to fix, and stepping to the
+        // next vendor only reprints it as "all providers failed" (#184). Keep
+        // the guard here at the swallow site, not only where it is thrown.
+        if (error instanceof ModelUnavailableError) throw error;
         lastError = error instanceof Error ? error : new Error(String(error));
         // Continue to next provider in fallback chain
         continue;
@@ -243,7 +260,7 @@ export class SmartAIVisionClient {
   /**
    * Get or create client for provider
    */
-  private getClient(providerName: string): AIVisionClient {
+  private getClient(providerName: string, model: string): AIVisionClient {
     let client = this.clients.get(providerName);
 
     if (!client) {
@@ -251,17 +268,10 @@ export class SmartAIVisionClient {
       // Spreading `...this.irisConfig.ai` wholesale would attach the configured
       // provider's key to every other provider's client — e.g. an Anthropic user
       // falling back through OpenAI would send `Authorization: Bearer sk-ant-...`
-      // to api.openai.com. Scope the credential (and endpoint) to the provider it
-      // was configured for; without a key `isAvailable()` is false, so the
-      // mismatched provider is skipped rather than contacted. See #74.
-      const isConfiguredProvider = providerName === this.irisConfig.ai.provider;
-
-      // A per-provider credential, when supplied, is the authoritative one for
-      // that vendor — it is the only thing that lets the chain reach a provider
-      // other than the configured one. Absent an entry, fall back to the
-      // top-level credential but ONLY for the provider it was configured for.
-      const scoped =
-        this.irisConfig.ai.credentials?.[providerName as keyof ProviderCredentials] ?? {};
+      // to api.openai.com. `credentialsFor` scopes the credential (and endpoint)
+      // to the provider it was configured for; without a key `isAvailable()` is
+      // false, so the mismatched provider is skipped rather than contacted (#74).
+      const scoped = this.credentialsFor(providerName);
 
       // Create config for this provider
       const providerConfig: IrisConfig = {
@@ -269,10 +279,11 @@ export class SmartAIVisionClient {
         ai: {
           ...this.irisConfig.ai,
           provider: providerName as 'openai' | 'anthropic' | 'ollama',
-          model: this.resolveModel(providerName),
-          apiKey: scoped.apiKey ?? (isConfiguredProvider ? this.irisConfig.ai.apiKey : undefined),
-          endpoint:
-            scoped.endpoint ?? (isConfiguredProvider ? this.irisConfig.ai.endpoint : undefined),
+          // The already-resolved model, passed in rather than re-derived, so the
+          // request body cannot drift from the cache key and cost row.
+          model,
+          apiKey: scoped.apiKey,
+          endpoint: scoped.endpoint,
         },
       };
 
@@ -284,31 +295,47 @@ export class SmartAIVisionClient {
   }
 
   /**
-   * Resolve the model to use for a provider. Honors the configured
-   * `irisConfig.ai.model` when the provider matches the configured provider;
-   * otherwise falls back to the provider's default model.
+   * Resolve the model to use for a provider.
+   *
+   * Honors the configured `irisConfig.ai.model` when the provider matches the
+   * configured provider; otherwise starts from that provider's vision pin. The
+   * result is then checked against the provider's live model list (#184), which
+   * is where a retired pin gets replaced and a nonexistent user model becomes a
+   * {@link ModelUnavailableError} instead of a silent hop to the next vendor.
+   *
+   * @throws {ModelUnavailableError} for a configured model the provider does not serve.
    */
-  private resolveModel(providerName: string): string {
-    if (providerName === this.irisConfig.ai.provider && this.irisConfig.ai.model) {
-      return this.irisConfig.ai.model;
-    }
-    return this.getModelForProvider(providerName);
+  private async resolveModel(providerName: string): Promise<string> {
+    const provider = providerName as ModelProvider;
+    const configured =
+      providerName === this.irisConfig.ai.provider && this.irisConfig.ai.model
+        ? this.irisConfig.ai.model
+        : undefined;
+    const model = configured ?? DEFAULT_MODELS.vision[provider] ?? '';
+    if (!model) return '';
+
+    return resolveModel({
+      provider,
+      kind: 'vision',
+      model,
+      creds: this.credentialsFor(providerName),
+    });
   }
 
   /**
-   * Get default model for provider
+   * The credential the probe (and the client) should use for a provider —
+   * per-vendor entry first, then the top-level one but only for the provider it
+   * was configured for. Same scoping rule as {@link getClient}: a key must never
+   * be sent to a vendor it does not belong to (#74).
    */
-  private getModelForProvider(providerName: string): string {
-    switch (providerName) {
-      case 'openai':
-        return 'gpt-4o';
-      case 'anthropic':
-        return 'claude-sonnet-5';
-      case 'ollama':
-        return 'llava';
-      default:
-        return '';
-    }
+  private credentialsFor(providerName: string): { apiKey?: string; endpoint?: string } {
+    const isConfiguredProvider = providerName === this.irisConfig.ai.provider;
+    const scoped =
+      this.irisConfig.ai.credentials?.[providerName as keyof ProviderCredentials] ?? {};
+    return {
+      apiKey: scoped.apiKey ?? (isConfiguredProvider ? this.irisConfig.ai.apiKey : undefined),
+      endpoint: scoped.endpoint ?? (isConfiguredProvider ? this.irisConfig.ai.endpoint : undefined),
+    };
   }
 
   /**

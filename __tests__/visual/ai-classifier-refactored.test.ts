@@ -10,8 +10,10 @@
  *
  * Assertions reflect PRODUCTION behavior, notably:
  *   - analyzeChange() passes RAW buffers to the smart client (preprocessing
- *     happens inside the smart client, not here) and NEVER throws — on error it
- *     returns a fallback response.
+ *     happens inside the smart client, not here) and returns a fallback
+ *     response on error — except ModelUnavailableError (#184), a config fault
+ *     that must reach the caller rather than be reported as a vague analysis
+ *     failure.
  *   - severity map: none/minor→low(+intentional), moderate→medium, breaking→critical.
  *   - category map: layout/spacing→layout, text→typography, color→color, content→content.
  *   - classification: none→'no-change', else intentional?'intentional':'regression'.
@@ -32,6 +34,7 @@ import { AIVisualClassifier, AIAnalysisRequest } from '../../src/visual/ai-class
 import { SmartAIVisionClient } from '../../src/ai-client/smart-client';
 import { ImagePreprocessor } from '../../src/ai-client/preprocessor';
 import { AIVisionResponse } from '../../src/ai-client/base';
+import { ModelUnavailableError } from '../../src/ai-client/models';
 
 const MockSmartAIVisionClient = SmartAIVisionClient as jest.MockedClass<typeof SmartAIVisionClient>;
 const MockImagePreprocessor = ImagePreprocessor as jest.MockedClass<typeof ImagePreprocessor>;
@@ -283,6 +286,26 @@ describe('AIVisualClassifier (real, backed by Phase 2A infrastructure)', () => {
 
       expect(result.classification).toBe('unknown');
       expect(result.description).toContain('Budget limit exceeded');
+    });
+
+    // Issue #184, review finding (Major): the fallback response is the right
+    // answer for a rate limit or a tripped breaker — a transient or budgetary
+    // failure of the analysis. A model the provider does not serve is neither;
+    // it is a config fault, and reporting it as severity:'medium' /
+    // changeType:'unknown' reproduces one layer up exactly the masking that
+    // #184 removed from SmartAIVisionClient's fallback loop.
+    it('lets ModelUnavailableError through instead of burying it in the fallback', async () => {
+      mockSmartClient.analyzeVisualDiff.mockRejectedValue(
+        new ModelUnavailableError('anthropic', 'claude-3-opus-20240229', ['claude-sonnet-5']),
+      );
+
+      const promise = classifier.analyzeChange({
+        baselineImage: mockBaselineBuffer,
+        currentImage: mockCurrentBuffer,
+      });
+
+      await expect(promise).rejects.toBeInstanceOf(ModelUnavailableError);
+      await expect(promise).rejects.toThrow(/claude-3-opus-20240229/);
     });
   });
 

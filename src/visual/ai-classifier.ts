@@ -15,6 +15,7 @@ import { IrisConfig, ProviderCredentials } from '../config';
 import { SmartAIVisionClient, SmartClientConfig } from '../ai-client/smart-client';
 import { ImagePreprocessor } from '../ai-client/preprocessor';
 import { AIVisionRequest, AIVisionResponse } from '../ai-client/base';
+import { DEFAULT_MODELS, ModelUnavailableError } from '../ai-client/models';
 import { AIVisualAnalysis } from './types';
 
 /**
@@ -177,21 +178,10 @@ export class AIVisualClassifier {
       provider = config.provider as 'openai' | 'anthropic' | 'ollama';
     }
 
-    // Determine default model based on provider
-    let model = config.model;
-    if (!model) {
-      switch (provider) {
-        case 'openai':
-          model = 'gpt-4o';
-          break;
-        case 'anthropic':
-          model = 'claude-sonnet-5';
-          break;
-        case 'ollama':
-          model = 'llava';
-          break;
-      }
-    }
+    // Determine default model based on provider. The pin lives in one place
+    // (#184) — SmartAIVisionClient still checks it against the provider's live
+    // model list, so a retired name here is repaired rather than requested.
+    const model = config.model || DEFAULT_MODELS.vision[provider];
 
     return {
       ai: {
@@ -275,6 +265,12 @@ export class AIVisualClassifier {
       // Map Phase 2A response to legacy response format (adapter pattern)
       return this.mapVisionResponseToAnalysisResponse(visionResponse, request.context);
     } catch (error) {
+      // A model the provider does not serve is a configuration fault, not a
+      // failed analysis. Folding it into the fallback response reports
+      // severity:'medium', changeType:'unknown' — the same vague verdict a
+      // network blip produces — which is exactly the masking #184 set out to
+      // remove one layer down in SmartAIVisionClient. Let it through.
+      if (error instanceof ModelUnavailableError) throw error;
       // Return fallback response on error
       return this.createFallbackResponse(error);
     }

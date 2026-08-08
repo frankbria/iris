@@ -1,5 +1,5 @@
 import { loadConfig, validateConfig } from './config';
-import { createAIClient, AITranslationRequest } from './ai-client';
+import { createResolvedAIClient, AITranslationRequest } from './ai-client';
 
 // The action vocabulary lives in its own leaf module so the AI client can share
 // the schema without creating an import cycle (translator -> ai-client -> here).
@@ -177,7 +177,9 @@ async function translateWithAI(
       };
     }
 
-    const aiClient = createAIClient(config);
+    // Resolved, not just constructed: a retired pin or a typo'd model is
+    // caught here and reported by name instead of returning an opaque 404 (#184).
+    const aiClient = await createResolvedAIClient(config);
     const isAvailable = await aiClient.isAvailable();
 
     if (!isAvailable) {

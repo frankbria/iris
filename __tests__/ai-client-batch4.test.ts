@@ -7,8 +7,10 @@ import {
   createCache,
   createCostTracker,
   createSmartClient,
+  SmartAIVisionClient,
 } from '../src/ai-client';
 import { AIClientFactory } from '../src/ai-client/factory';
+import { DEFAULT_MODELS, ModelUnavailableError } from '../src/ai-client/models';
 import { ImagePreprocessor } from '../src/ai-client/preprocessor';
 import { IrisConfig } from '../src/config';
 
@@ -699,6 +701,121 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       client.close();
     });
 
+    // Issue #184: the fallback loop catches every provider error and steps to
+    // the next vendor. That is right for an outage and wrong for "this model
+    // does not exist" — the user's typo or a retired pin came back as the
+    // generic "all providers failed", which is what made #162 and #183 hard to
+    // diagnose. The probe itself is covered in ai-client-models.test.ts; these
+    // pin the smart client's handling of its verdict.
+    describe('model resolution (issue #184)', () => {
+      /** Real resolveModel is bypassed: this suite is about what happens next. */
+      const stubResolution = (impl: (provider: string) => Promise<string>) =>
+        jest
+          .spyOn(
+            SmartAIVisionClient.prototype as unknown as {
+              resolveModel(p: string): Promise<string>;
+            },
+            'resolveModel',
+          )
+          .mockImplementation(impl);
+
+      const request = { baseline: Buffer.from('base'), current: Buffer.from('curr') };
+      const smartOpts = { enableCache: false, enableCostTracking: false };
+
+      beforeEach(() => {
+        // These fixtures are plain byte strings, not encoded images; sharp would
+        // reject them long before resolution runs. Resolution is what is under
+        // test, so the image pipeline is stubbed out entirely.
+        jest.spyOn(ImagePreprocessor.prototype, 'preprocess').mockImplementation(
+          async (input) =>
+            ({
+              buffer: Buffer.isBuffer(input) ? input : Buffer.from(String(input)),
+              hash: Buffer.isBuffer(input) ? input.toString('hex') : String(input),
+              base64: '',
+              format: 'jpeg',
+              width: 1,
+              height: 1,
+              originalSize: 1,
+              processedSize: 1,
+            }) as never,
+        );
+      });
+
+      afterEach(() => jest.restoreAllMocks());
+
+      it('surfaces ModelUnavailableError instead of hopping to the next provider', async () => {
+        const factorySpy = jest.spyOn(AIClientFactory, 'create');
+        stubResolution(async () => {
+          throw new ModelUnavailableError('anthropic', 'claude-3-opus-20240229', [
+            'claude-sonnet-5',
+          ]);
+        });
+
+        const client = createSmartClient(mockConfig, smartOpts);
+
+        await expect(client.analyzeVisualDiff(request)).rejects.toBeInstanceOf(
+          ModelUnavailableError,
+        );
+        // The distinguishing symptom: NOT reworded as a provider outage.
+        await expect(client.analyzeVisualDiff(request)).rejects.not.toThrow(
+          /all providers failed/i,
+        );
+        // And no vendor was contacted on the strength of a bad model name.
+        expect(factorySpy).not.toHaveBeenCalled();
+
+        client.close();
+      });
+
+      it('still falls through to the next provider on an ordinary resolution failure', async () => {
+        // Only ModelUnavailableError is special; a network blip must not become
+        // a hard stop that skips the remaining providers.
+        const analyze = jest.fn().mockResolvedValue({
+          severity: 'minor',
+          confidence: 0.8,
+          reasoning: 'ok',
+          categories: ['color'],
+        });
+        jest
+          .spyOn(AIClientFactory, 'create')
+          .mockReturnValue({ analyzeVisualDiff: analyze, isAvailable: async () => true } as never);
+        stubResolution(async (provider) => {
+          if (provider === 'ollama') throw new Error('probe exploded');
+          return DEFAULT_MODELS.vision[provider as 'openai' | 'anthropic'];
+        });
+
+        const client = createSmartClient(mockConfig, smartOpts);
+
+        await expect(client.analyzeVisualDiff(request)).resolves.toMatchObject({
+          severity: 'minor',
+        });
+        expect(analyze).toHaveBeenCalledTimes(1);
+
+        client.close();
+      });
+
+      it('sends the resolved model, not the retired pin it started from', async () => {
+        // The whole point of the rescue: a config still naming the old default
+        // must reach the provider as the live successor.
+        const analyze = jest.fn().mockResolvedValue({
+          severity: 'none',
+          confidence: 1,
+          reasoning: 'ok',
+          categories: [],
+        });
+        const factorySpy = jest
+          .spyOn(AIClientFactory, 'create')
+          .mockReturnValue({ analyzeVisualDiff: analyze, isAvailable: async () => true } as never);
+        stubResolution(async () => 'claude-sonnet-5-20260514');
+
+        const client = createSmartClient(mockConfig, { ...smartOpts, enableFallback: false });
+        await client.analyzeVisualDiff(request);
+
+        expect(factorySpy.mock.calls[0][0].ai.model).toBe('claude-sonnet-5-20260514');
+
+        client.close();
+      });
+    });
+
     it('should create with custom configuration', () => {
       const client = createSmartClient(mockConfig, {
         enableCache: true,
@@ -1153,10 +1270,19 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
     // getClient is private; exercised directly because the leak happens at client
     // construction, before any request is issued.
-    const clientFor = (smart: unknown, provider: string) =>
-      (smart as { getClient(p: string): { config: { apiKey?: string; endpoint?: string } } })[
-        'getClient'
-      ](provider);
+    // Since #184 getClient takes the already-resolved model, so the request body
+    // cannot drift from the cache key; pass the provider's vision pin, which is
+    // what resolveModel returns for these configs.
+    const clientFor = (
+      smart: unknown,
+      provider: 'openai' | 'anthropic' | 'ollama',
+      model: string = DEFAULT_MODELS.vision[provider],
+    ) =>
+      (
+        smart as {
+          getClient(p: string, m: string): { config: { apiKey?: string; endpoint?: string } };
+        }
+      )['getClient'](provider, model);
 
     it('never forwards the configured key to a different provider', () => {
       const smart = createSmartClient(irisConfig, smartOpts);

@@ -108,8 +108,8 @@ describe('agent loop', () => {
       // Anything past the script: no actions.
       translateInstruction.mockResolvedValue({ actions: [], confidence: 0 });
       jest
-        .spyOn(aiClient, 'createAIClient')
-        .mockReturnValue({ translateInstruction, isAvailable: async () => true } as never);
+        .spyOn(aiClient, 'createResolvedAIClient')
+        .mockResolvedValue({ translateInstruction, isAvailable: async () => true } as never);
       return translateInstruction;
     };
 
@@ -504,7 +504,7 @@ describe('agent loop', () => {
     });
 
     it('returns error instead of rejecting when the AI client cannot be built', async () => {
-      jest.spyOn(aiClient, 'createAIClient').mockImplementation(() => {
+      jest.spyOn(aiClient, 'createResolvedAIClient').mockImplementation(() => {
         throw new Error('unsupported provider');
       });
 
@@ -515,7 +515,7 @@ describe('agent loop', () => {
     });
 
     it('returns error rather than throwing when translation fails', async () => {
-      jest.spyOn(aiClient, 'createAIClient').mockReturnValue({
+      jest.spyOn(aiClient, 'createResolvedAIClient').mockResolvedValue({
         translateInstruction: jest.fn().mockRejectedValue(new Error('provider down')),
         isAvailable: async () => true,
       } as never);

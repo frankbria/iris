@@ -51,7 +51,22 @@ export {
 export { SmartAIVisionClient, SmartClientConfig, createSmartClient } from './smart-client';
 
 // Factory
-export { AIClientFactory, ClientType, createAIClient } from './factory';
+export { AIClientFactory, ClientType, createAIClient, createResolvedAIClient } from './factory';
+
+// Model identity: the built-in pins plus the runtime probe that repairs them (#184).
+export {
+  DEFAULT_MODELS,
+  ModelUnavailableError,
+  listModels,
+  resolveModel,
+  resetModelProbeCache,
+} from './models';
+export type {
+  ModelProvider,
+  ModelKind,
+  ModelProbeCredentials,
+  ResolveModelOptions,
+} from './models';
 
 // Zod schemas
 export { AIVisionResponseSchema, VISION_CATEGORIES } from './types';
