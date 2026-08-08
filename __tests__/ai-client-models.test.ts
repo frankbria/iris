@@ -182,17 +182,49 @@ describe('resolveModel', () => {
   });
 
   it('breaks a prefix tie by recency, since the list arrives newest-first', async () => {
-    // Both share only "claude-" with the retired pin; the newer one wins.
-    mockFetch.mockResolvedValue(anthropicList('claude-opus-6', 'claude-opus-5'));
+    // Both match past the family root; the newer one wins.
+    mockFetch.mockResolvedValue(
+      anthropicList('claude-sonnet-6', 'claude-sonnet-5-20260101', 'claude-opus-5'),
+    );
 
     const model = await resolveModel({
       provider: 'anthropic',
       kind: 'vision',
-      model: DEFAULT_MODELS.vision.anthropic,
+      model: DEFAULT_MODELS.vision.anthropic, // 'claude-sonnet-5'
       creds,
     });
 
-    expect(model).toBe('claude-opus-6');
+    expect(model).toBe('claude-sonnet-5-20260101'); // longer shared prefix than -6
+  });
+
+  // Review finding (Major): matching only the family root is not evidence of a
+  // successor. Substituting Opus for a retired Haiku default is 5x the price
+  // for a model the user never chose.
+  it('refuses to jump model lines when only the family root matches', async () => {
+    mockFetch.mockResolvedValue(anthropicList('claude-opus-5', 'claude-sonnet-5'));
+
+    const model = await resolveModel({
+      provider: 'anthropic',
+      kind: 'text',
+      model: DEFAULT_MODELS.text.anthropic, // 'claude-haiku-4-5' — no haiku listed
+      creds,
+    });
+
+    expect(model).toBe(DEFAULT_MODELS.text.anthropic);
+  });
+
+  it('rescues a bare-root Ollama pin to its tagged form', async () => {
+    // `llava` IS the root, so matching it is the strongest signal available.
+    mockFetch.mockResolvedValue(ollamaList('llava:13b', 'llama2:latest'));
+
+    const model = await resolveModel({
+      provider: 'ollama',
+      kind: 'vision',
+      model: DEFAULT_MODELS.vision.ollama, // 'llava'
+      creds: { endpoint: 'http://localhost:11434' },
+    });
+
+    expect(model).toBe('llava:13b');
   });
 
   it('keeps the pin when nothing in the list shares its family', async () => {
@@ -279,10 +311,20 @@ describe('resolveModel', () => {
 });
 
 describe('malformed provider payloads', () => {
-  // A provider that answers 200 with an unexpected body must degrade to an
-  // empty/partial list, never throw out of a pre-flight check.
-  it('tolerates a response with no list at all', async () => {
+  // A provider that answers 200 with an unexpected body must degrade safely,
+  // never throw out of a pre-flight check.
+  it('treats a response with no list container as "could not check", not "no models"', async () => {
+    // An OpenAI-compatible proxy answering `{}`. Reading that as an empty list
+    // would let resolveModel reject the user's model on the strength of a
+    // response that listed nothing at all.
     mockFetch.mockResolvedValue(jsonResponse({}));
+    expect(await listModels('anthropic', { apiKey: 'sk-ant' })).toBeNull();
+  });
+
+  it('keeps a present-but-empty list as a real answer', async () => {
+    // Distinct from the case above: the provider authenticated and told us it
+    // serves nothing. That is information, not a failed check.
+    mockFetch.mockResolvedValue(jsonResponse({ data: [] }));
     expect(await listModels('anthropic', { apiKey: 'sk-ant' })).toEqual([]);
   });
 

@@ -82,7 +82,7 @@ __tests__/
 ├── ai-client-vision.test.ts       # Vision AI client tests (17 tests)
 ├── ai-client-preprocessor.test.ts # Preprocessor tests (24 tests)
 ├── ai-client-batch4.test.ts       # Cache + cost tracker tests (19 tests)
-├── ai-client-models.test.ts       # Model pins, provider probe, resolution (22 tests)
+├── ai-client-models.test.ts       # Model pins, provider probe, resolution (26 tests)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
 │   ├── diff.test.ts
@@ -253,7 +253,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1216/1217 passing, 1 skipped, 0 failing)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1229/1230 passing, 1 skipped, 0 failing)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

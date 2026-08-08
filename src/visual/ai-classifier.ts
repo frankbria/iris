@@ -15,7 +15,7 @@ import { IrisConfig, ProviderCredentials } from '../config';
 import { SmartAIVisionClient, SmartClientConfig } from '../ai-client/smart-client';
 import { ImagePreprocessor } from '../ai-client/preprocessor';
 import { AIVisionRequest, AIVisionResponse } from '../ai-client/base';
-import { DEFAULT_MODELS } from '../ai-client/models';
+import { DEFAULT_MODELS, ModelUnavailableError } from '../ai-client/models';
 import { AIVisualAnalysis } from './types';
 
 /**
@@ -265,6 +265,12 @@ export class AIVisualClassifier {
       // Map Phase 2A response to legacy response format (adapter pattern)
       return this.mapVisionResponseToAnalysisResponse(visionResponse, request.context);
     } catch (error) {
+      // A model the provider does not serve is a configuration fault, not a
+      // failed analysis. Folding it into the fallback response reports
+      // severity:'medium', changeType:'unknown' — the same vague verdict a
+      // network blip produces — which is exactly the masking #184 set out to
+      // remove one layer down in SmartAIVisionClient. Let it through.
+      if (error instanceof ModelUnavailableError) throw error;
       // Return fallback response on error
       return this.createFallbackResponse(error);
     }

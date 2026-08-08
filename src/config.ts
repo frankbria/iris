@@ -134,13 +134,30 @@ export function loadConfig(): IrisConfig {
   const provider = file.ai?.provider ?? env.provider ?? DEFAULT_CONFIG.ai.provider;
 
   // Credentials: every vendor's, so the fallback chain can cross clouds (#74).
-  // File entries win per provider; the environment fills the rest.
-  const credentials: ProviderCredentials = { ...env.credentials, ...file.ai?.credentials };
+  // Merged per *field*, not per provider — spreading one level shallower would
+  // let a file entry that names only `apiKey` drop an `OLLAMA_ENDPOINT` the
+  // environment supplied for the same vendor, leaving the client with no
+  // endpoint at all. The file still wins field by field.
+  const credentials: ProviderCredentials = {};
+  for (const vendor of ['openai', 'anthropic', 'ollama'] as const) {
+    const merged = { ...env.credentials[vendor], ...file.ai?.credentials?.[vendor] };
+    if (Object.keys(merged).length > 0) credentials[vendor] = merged;
+  }
   const forProvider = credentials[provider] ?? {};
 
   // A `<PROVIDER>_MODEL` var applies only while that provider is active, so
   // exporting OPENAI_MODEL can never leak into an Anthropic session.
   const model = env.models[provider] ?? file.ai?.model ?? DEFAULT_MODELS.text[provider];
+
+  // The file's TOP-LEVEL apiKey/endpoint describe one vendor — the one the file
+  // itself is about — exactly like an entry in the credentials map does. Using
+  // them for whichever provider happens to win resolution is how a config
+  // holding `{"ai":{"apiKey":"sk-openai-…"}}` would send that key to Anthropic
+  // when only ANTHROPIC_API_KEY is exported. Scope them to the file's own
+  // provider (its `ai.provider`, or the built-in default when it names none)
+  // and fall back to the per-vendor credential otherwise. Same rule as #74.
+  const fileProvider = file.ai?.provider ?? DEFAULT_CONFIG.ai.provider;
+  const fileCredential = provider === fileProvider ? file.ai : undefined;
 
   return {
     ai: {
@@ -148,8 +165,8 @@ export function loadConfig(): IrisConfig {
       ...file.ai,
       provider,
       model,
-      apiKey: file.ai?.apiKey ?? forProvider.apiKey,
-      endpoint: file.ai?.endpoint ?? forProvider.endpoint,
+      apiKey: fileCredential?.apiKey ?? forProvider.apiKey,
+      endpoint: fileCredential?.endpoint ?? forProvider.endpoint,
       ...(Object.keys(credentials).length > 0 ? { credentials } : {}),
     },
     watch: { ...DEFAULT_CONFIG.watch, ...file.watch },
@@ -158,22 +175,32 @@ export function loadConfig(): IrisConfig {
 }
 
 /**
- * Read `~/.iris/config.json`, or `{}` when it is absent or unreadable.
+ * Read `~/.iris/config.json`, or `{}` when it is absent, unreadable, or not a
+ * JSON object.
  *
- * An unparseable file degrades to "no file layer" rather than discarding the
+ * An unusable file degrades to "no file layer" rather than discarding the
  * environment as well — a typo in the config should not also take away the
- * user's exported API key.
+ * user's exported API key. The shape check is not redundant with the `try`:
+ * a file containing bare `null` parses successfully, and every `file.ai?.…`
+ * read below would then throw on it.
  */
 function loadConfigFile(): Partial<IrisConfig> {
   const configPath = getConfigPath();
   if (!fs.existsSync(configPath)) return {};
 
+  let parsed: unknown;
   try {
-    return JSON.parse(fs.readFileSync(configPath, 'utf8')) as Partial<IrisConfig>;
+    parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   } catch (error) {
     console.warn(`Warning: Failed to load config from ${configPath}, ignoring it:`, error);
     return {};
   }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    console.warn(`Warning: Config at ${configPath} is not a JSON object, ignoring it`);
+    return {};
+  }
+  return parsed as Partial<IrisConfig>;
 }
 
 export function saveConfig(config: IrisConfig): void {

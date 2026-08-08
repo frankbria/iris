@@ -201,6 +201,37 @@ describe('Config System', () => {
         expect(config.ai.apiKey).toBe('ant-from-env'); // key matches the chosen provider
       });
 
+      // Review finding (Critical): the file's top-level apiKey describes ONE
+      // vendor. Handing it to whichever provider won resolution sent an OpenAI
+      // key to Anthropic — the credential-crossing-vendors class of #74.
+      it('never hands the file top-level apiKey to a provider it was not written for', () => {
+        process.env.ANTHROPIC_API_KEY = 'sk-ant-new';
+        withConfigFile({ ai: { apiKey: 'sk-openai-old' } }); // no provider named
+
+        const config = loadConfig();
+
+        expect(config.ai.provider).toBe('anthropic');
+        expect(config.ai.apiKey).toBe('sk-ant-new');
+        expect(config.ai.apiKey).not.toBe('sk-openai-old');
+      });
+
+      it('still uses the file top-level apiKey for the provider the file describes', () => {
+        // No provider named + no env credential -> the file describes the
+        // default provider, which is the classic single-provider config.
+        withConfigFile({ ai: { apiKey: 'sk-openai-mine' } });
+
+        const config = loadConfig();
+        expect(config.ai.provider).toBe('openai');
+        expect(config.ai.apiKey).toBe('sk-openai-mine');
+      });
+
+      it('does not hand the file top-level endpoint to another provider either', () => {
+        process.env.ANTHROPIC_API_KEY = 'sk-ant-new';
+        withConfigFile({ ai: { endpoint: 'http://my-openai-proxy' } });
+
+        expect(loadConfig().ai.endpoint).toBeUndefined();
+      });
+
       it('prefers a file apiKey over the environment for the configured provider', () => {
         process.env.ANTHROPIC_API_KEY = 'ant-from-env';
         withConfigFile({ ai: { provider: 'anthropic', apiKey: 'ant-from-file' } });
@@ -222,6 +253,47 @@ describe('Config System', () => {
         const config = loadConfig();
         expect(config.ai.provider).toBe('openai');
         expect(config.ai.model).toBe('gpt-4');
+      });
+
+      // Review finding: merging the credentials map one level too shallow let a
+      // file entry replace a whole vendor's credential object rather than its
+      // fields, silently dropping the other half.
+      it('merges credentials per field, not per provider', () => {
+        process.env.OLLAMA_ENDPOINT = 'http://localhost:11434';
+        withConfigFile({ ai: { credentials: { ollama: { apiKey: 'proxy-token' } } } });
+
+        expect(loadConfig().ai.credentials?.ollama).toEqual({
+          endpoint: 'http://localhost:11434', // from env — must survive
+          apiKey: 'proxy-token', // from file
+        });
+      });
+
+      it('keeps a mixed-source credential usable for the active provider', () => {
+        process.env.OLLAMA_ENDPOINT = 'http://localhost:11434';
+        withConfigFile({
+          ai: { provider: 'ollama', credentials: { ollama: { apiKey: 'proxy-token' } } },
+        });
+
+        const config = loadConfig();
+        // Previously undefined, which surfaced as "Ollama endpoint not configured".
+        expect(config.ai.endpoint).toBe('http://localhost:11434');
+        expect(config.ai.apiKey).toBe('proxy-token');
+      });
+
+      it.each([
+        ['null', 'null'],
+        ['an array', '[1, 2]'],
+        ['a bare string', '"nope"'],
+      ])('ignores a config file containing %s', (_label, contents) => {
+        // `null` parses fine, so only a shape check stops `file.ai` throwing.
+        process.env.ANTHROPIC_API_KEY = 'ant-from-env';
+        mockOs.homedir.mockReturnValue('/home/test');
+        mockFs.existsSync.mockReturnValue(true);
+        mockFs.readFileSync.mockReturnValue(contents);
+
+        const config = loadConfig();
+        expect(config.ai.provider).toBe('anthropic');
+        expect(config.ai.apiKey).toBe('ant-from-env');
       });
 
       it('keeps the environment usable when the config file is unparseable', () => {

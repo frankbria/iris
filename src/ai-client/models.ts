@@ -167,16 +167,20 @@ async function probe(
           'x-api-key': creds.apiKey,
           'anthropic-version': ANTHROPIC_VERSION,
         });
+        const entries = container(data?.data);
+        if (!entries) return null;
         // Anthropic already returns newest-first.
-        return idsOf(data);
+        return entries
+          .map((m) => (m as { id?: string }).id)
+          .filter((id): id is string => typeof id === 'string');
       }
       case 'openai': {
         if (!creds.apiKey) return null;
         const data = await getJson('https://api.openai.com/v1/models', {
           Authorization: `Bearer ${creds.apiKey}`,
         });
-        if (!data) return null;
-        const entries = (data.data ?? []) as Array<{ id?: string; created?: number }>;
+        const entries = container(data?.data) as Array<{ id?: string; created?: number }> | null;
+        if (!entries) return null;
         return entries
           .filter((m): m is { id: string; created?: number } => typeof m.id === 'string')
           .sort((a, b) => (b.created ?? 0) - (a.created ?? 0))
@@ -185,9 +189,11 @@ async function probe(
       case 'ollama': {
         if (!creds.endpoint) return null;
         const data = await getJson(`${creds.endpoint.replace(/\/$/, '')}/api/tags`, {});
-        if (!data) return null;
-        const entries = (data.models ?? []) as Array<{ name?: string }>;
-        return entries.map((m) => m.name).filter((n): n is string => typeof n === 'string');
+        const entries = container(data?.models);
+        if (!entries) return null;
+        return entries
+          .map((m) => (m as { name?: string }).name)
+          .filter((n): n is string => typeof n === 'string');
       }
     }
   } catch {
@@ -206,11 +212,17 @@ async function getJson(
   return (await response.json()) as { data?: unknown[]; models?: unknown[] };
 }
 
-function idsOf(data: { data?: unknown[] } | null): string[] | null {
-  if (!data) return null;
-  return (data.data ?? [])
-    .map((m) => (m as { id?: string }).id)
-    .filter((id): id is string => typeof id === 'string');
+/**
+ * The list a provider's response is supposed to carry, or `null` if it has none.
+ *
+ * A 200 whose body lacks the container entirely (an OpenAI-compatible proxy
+ * answering `{}`) means the same thing as a 401: we could not check. Reading it
+ * as an empty list would let `resolveModel` tell the user their model does not
+ * exist on the strength of a response that listed nothing at all. A container
+ * that is *present but empty* is a real answer and stays `[]`.
+ */
+function container(value: unknown): unknown[] | null {
+  return Array.isArray(value) ? value : null;
 }
 
 /**
@@ -238,30 +250,42 @@ function commonPrefixLength(a: string, b: string): number {
  *
  * Deliberately a prefix match and not a capability table: the failure being
  * fixed is "the pin was retired", and `claude-sonnet-5` -> `claude-sonnet-5-20260514`
- * handles that without anyone maintaining a list of which models can see. The
- * family root (text before the first `-`) is required, so a retired Claude pin
- * can never resolve to a GPT model. `listed` arrives newest-first, so the `>`
- * comparison leaves ties on the newest candidate.
+ * handles that without anyone maintaining a list of which models can see.
+ *
+ * A candidate must agree with the pin **past the family root**. Sharing only
+ * `claude-` is not evidence of a successor, and accepting it would let a
+ * retired `claude-haiku-4-5` text default resolve to `claude-opus-5` — five
+ * times the price for a model the user never chose. Rescuing within a model
+ * line (dated snapshots, point revisions) is defensible; jumping lines is a
+ * guess with a bill attached, so the pin is kept and the provider gets to
+ * reject it with its own message. A bare-root pin like Ollama's `llava` is the
+ * exception: the root is the whole name, so matching it is the strongest
+ * signal available and any tagged form counts.
+ *
+ * `listed` arrives newest-first and the comparison is strict, so ties settle on
+ * the newest candidate.
  *
  * ponytail: heuristic with a known ceiling — it cannot tell a vision model from
  * a text one. Swap for a capability lookup if a provider ever exposes one.
  */
 function pickClosest(listed: string[], pinned: string): string {
   const root = pinned.split(/[-:]/)[0];
+  // Root + separator + at least one character, unless the pin IS the root.
+  const required = pinned === root ? root.length : root.length + 2;
+
   let best: string | undefined;
   let bestLength = 0;
 
   for (const candidate of listed) {
-    if (!candidate.startsWith(root)) continue;
     const length = commonPrefixLength(candidate, pinned);
-    if (length > bestLength) {
+    if (length >= required && length > bestLength) {
       bestLength = length;
       best = candidate;
     }
   }
 
-  // Nothing in the same family: keep the pin and let the provider reject it with
-  // its own message rather than substituting something unrelated.
+  // Nothing close enough: keep the pin rather than substituting a model the
+  // user never asked for and may not want to pay for.
   return best ?? pinned;
 }
 

@@ -627,8 +627,10 @@ describe('vision clients', () => {
 // #162's diagnosis surfaced this one): a model ID that was correct when written
 // and expired on the vendor's schedule. This scans for the retired family by
 // name so a re-added pin fails here rather than at runtime, where the fallback
-// chain swallows it. It cannot catch a *future* retirement — resolving defaults
-// from the provider's model list is issue #184.
+// chain swallows it. It cannot catch a *future* retirement, which is what #184
+// added `resolveModel()` for: this guard is the static half (a known-dead name
+// never comes back), the probe is the dynamic half (a live pin that dies later
+// is replaced at runtime). Both still earn their place.
 describe('no retired claude-3 model IDs remain in src/ (issue #183)', () => {
   it('finds no quoted claude-3-* model ID', () => {
     const walk = (dir: string): string[] =>
