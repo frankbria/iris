@@ -185,7 +185,7 @@ export class AIVisualClassifier {
           model = 'gpt-4o';
           break;
         case 'anthropic':
-          model = 'claude-3-5-sonnet-20241022';
+          model = 'claude-sonnet-5';
           break;
         case 'ollama':
           model = 'llava';

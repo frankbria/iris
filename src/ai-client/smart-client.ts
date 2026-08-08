@@ -303,7 +303,7 @@ export class SmartAIVisionClient {
       case 'openai':
         return 'gpt-4o';
       case 'anthropic':
-        return 'claude-3-5-sonnet-20241022';
+        return 'claude-sonnet-5';
       case 'ollama':
         return 'llava';
       default:

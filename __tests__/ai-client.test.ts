@@ -108,7 +108,7 @@ describe('AI Client', () => {
       ai: {
         provider: 'anthropic',
         apiKey: 'ant-test-key',
-        model: 'claude-3-haiku-20240307',
+        model: 'claude-haiku-4-5',
       },
       watch: { patterns: [], debounceMs: 1000, ignore: [] },
       browser: { headless: true, timeout: 30000 },

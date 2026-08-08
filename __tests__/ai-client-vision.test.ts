@@ -7,6 +7,9 @@
  * is the real client.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
+
 import type { IrisConfig } from '../src/config';
 import {
   OpenAIVisionClient,
@@ -195,11 +198,11 @@ describe('vision clients', () => {
     const config: IrisConfig['ai'] = {
       provider: 'anthropic',
       apiKey: 'sk-ant',
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-5',
     };
 
     it('throws when the apiKey is missing', async () => {
-      const client = new AnthropicVisionClient({ provider: 'anthropic', model: 'claude-3-5' });
+      const client = new AnthropicVisionClient({ provider: 'anthropic', model: 'claude-sonnet-5' });
       await expect(client.analyzeVisualDiff(request)).rejects.toThrow(/Anthropic API key/i);
     });
 
@@ -215,7 +218,7 @@ describe('vision clients', () => {
       expect(result.categories).toEqual(['layout']);
 
       const payload = mockAnthropicCreate.mock.calls[0][0];
-      expect(payload.model).toBe('claude-3-5-sonnet-20241022');
+      expect(payload.model).toBe('claude-sonnet-5');
       const imageBlocks = payload.messages[0].content.filter(
         (b: { type: string }) => b.type === 'image',
       );
@@ -275,15 +278,58 @@ describe('vision clients', () => {
       await expect(client.analyzeVisualDiff(request)).rejects.toThrow(/Unexpected response type/i);
     });
 
-    it('reports vision support only for claude-3 models', () => {
-      expect(new AnthropicVisionClient(config).supportsVision()).toBe(true);
+    // Issue #183: this used to assert `model.includes('claude-3')`, which was
+    // true for everything Anthropic served in 2024 and is false for everything
+    // it serves now — the whole claude-3 family is retired. Because
+    // `isAvailable()` gates on `supportsVision()`, that substring test dropped
+    // the Anthropic client from the fallback chain before it sent a request,
+    // and configuring a *current* model made it fail harder, not less.
+    //
+    // Every Anthropic model in the current lineup is multimodal, so the honest
+    // predicate is "this is an Anthropic vision client", not a name match.
+    //
+    // With the override gone this is necessarily true for *any* string, so the
+    // cases below assert no per-model discrimination — they exist as a
+    // regression guard: reintroducing a name match (or a hardcoded allow-list
+    // that misses a name) fails here rather than silently dropping the provider
+    // from the fallback chain, which is how #183 stayed invisible.
+    it.each(['claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5', 'claude-opus-4-8'])(
+      'reports vision support for %s',
+      (model) => {
+        expect(
+          new AnthropicVisionClient({ provider: 'anthropic', apiKey: 'k', model }).supportsVision(),
+        ).toBe(true);
+      },
+    );
+
+    it('reports vision support when no model is configured', () => {
+      // `model` is a required field, so "unconfigured" reaches the client as an
+      // empty string — the case every `this.config.model || '<default>'` guards.
+      // vision.ts then requests its default model, so claiming "no vision" here
+      // contradicted the request the very same client goes on to make.
       expect(
         new AnthropicVisionClient({
           provider: 'anthropic',
           apiKey: 'k',
-          model: 'claude-2',
+          model: '',
         }).supportsVision(),
-      ).toBe(false);
+      ).toBe(true);
+    });
+
+    it.each([
+      ['k', true],
+      [undefined, false],
+    ])('availability with apiKey=%s is %s', async (apiKey, expected) => {
+      // The key is now the only gate — `supportsVision()` no longer votes.
+      // Both branches asserted so "whenever a key is present" is actually
+      // verified rather than half-checked.
+      await expect(
+        new AnthropicVisionClient({
+          provider: 'anthropic',
+          apiKey: apiKey as string | undefined,
+          model: 'claude-sonnet-5',
+        }).isAvailable(),
+      ).resolves.toBe(expected);
     });
   });
 
@@ -301,7 +347,7 @@ describe('vision clients', () => {
     const anthropicConfig: IrisConfig['ai'] = {
       provider: 'anthropic',
       apiKey: 'sk-ant',
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-5',
     };
 
     beforeEach(() => {
@@ -495,5 +541,114 @@ describe('vision clients', () => {
       });
       expect(await new OllamaVisionClient(config).isAvailable()).toBe(false);
     });
+  });
+
+  // Found by the live demo on #183: with the model pin fixed, Anthropic
+  // answered and *then* the analysis failed on
+  // `Unexpected token '`', "```json{"... is not valid JSON`.
+  //
+  // `parseModelJson` (base.ts) already exists for exactly this and is wired
+  // into the text clients, but all three vision clients called bare
+  // `JSON.parse`. Current models fence their JSON as a matter of course, so
+  // this made the fixed vision path fail one stage later than #183 did.
+  describe('vision clients tolerate a markdown-fenced reply', () => {
+    const fenced = '```json\n' + JSON.stringify(parsed) + '\n```';
+
+    it('OpenAI parses a fenced response', async () => {
+      mockOpenAICreate.mockResolvedValue({ choices: [{ message: { content: fenced } }] });
+      const result = await new OpenAIVisionClient({
+        provider: 'openai',
+        apiKey: 'sk-test',
+        model: 'gpt-4o',
+      }).analyzeVisualDiff(request);
+      expect(result.severity).toBe('moderate');
+      expect(result.categories).toEqual(['layout']);
+    });
+
+    it('Anthropic parses a fenced response', async () => {
+      mockAnthropicCreate.mockResolvedValue({ content: [{ type: 'text', text: fenced }] });
+      const result = await new AnthropicVisionClient({
+        provider: 'anthropic',
+        apiKey: 'sk-ant',
+        model: 'claude-sonnet-5',
+      }).analyzeVisualDiff(request);
+      expect(result.severity).toBe('moderate');
+      expect(result.categories).toEqual(['layout']);
+    });
+
+    it('Ollama parses a fenced response', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ response: fenced }),
+      });
+      const result = await new OllamaVisionClient({
+        provider: 'ollama',
+        endpoint: 'http://localhost:11434',
+        model: 'llava',
+      }).analyzeVisualDiff(request);
+      expect(result.severity).toBe('moderate');
+    });
+
+    it('still rejects a reply with no JSON object at all', async () => {
+      mockAnthropicCreate.mockResolvedValue({
+        content: [{ type: 'text', text: 'I cannot analyze these images.' }],
+      });
+      await expect(
+        new AnthropicVisionClient({
+          provider: 'anthropic',
+          apiKey: 'sk-ant',
+          model: 'claude-sonnet-5',
+        }).analyzeVisualDiff(request),
+      ).rejects.toThrow(/did not return a JSON object/i);
+    });
+  });
+
+  // Issue #183: the default was claude-3-5-sonnet-20241022, which 404s — the
+  // whole claude-3 family is retired. Assert the request carries a model the
+  // account can actually reach when the user configures none.
+  describe('default model when none is configured (issue #183)', () => {
+    it('requests a current Anthropic model', async () => {
+      mockAnthropicCreate.mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify(parsed) }],
+      });
+
+      await new AnthropicVisionClient({
+        provider: 'anthropic',
+        apiKey: 'sk-ant',
+        model: '',
+      }).analyzeVisualDiff(request);
+
+      expect(mockAnthropicCreate.mock.calls[0][0].model).toBe('claude-sonnet-5');
+    });
+  });
+});
+
+// Issue #183 is the third recurrence of the same failure (#111 was the first,
+// #162's diagnosis surfaced this one): a model ID that was correct when written
+// and expired on the vendor's schedule. This scans for the retired family by
+// name so a re-added pin fails here rather than at runtime, where the fallback
+// chain swallows it. It cannot catch a *future* retirement — resolving defaults
+// from the provider's model list is issue #184.
+describe('no retired claude-3 model IDs remain in src/ (issue #183)', () => {
+  it('finds no quoted claude-3-* model ID', () => {
+    const walk = (dir: string): string[] =>
+      fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) return walk(full);
+        return entry.isFile() && full.endsWith('.ts') ? [full] : [];
+      });
+
+    // Comments are stripped first: prose explaining *why* the old pin was wrong
+    // quotes the retired name, and documentation is not a live pin. Without
+    // this, the fix's own explanatory comment fails the test that guards it.
+    const stripComments = (src: string): string =>
+      src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+    const pin = /['"`]claude-3[^'"`]*['"`]/;
+    const offenders = walk(path.join(__dirname, '..', 'src'))
+      .filter((file) => pin.test(stripComments(fs.readFileSync(file, 'utf8'))))
+      .map((file) => path.relative(path.join(__dirname, '..'), file));
+
+    expect(offenders).toEqual([]);
   });
 });

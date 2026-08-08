@@ -59,7 +59,7 @@ JSON-RPC server and MCP stand.
 - ✅ Complete TypeScript/Zod type system
 
 **AI Vision Integration:**
-- ✅ AI-powered semantic analysis (OpenAI GPT-4o, Claude 3.5 Sonnet, Ollama)
+- ✅ AI-powered semantic analysis (OpenAI GPT-4o, Claude Sonnet 5, Ollama)
 - ✅ Multimodal AI client architecture (src/ai-client/ - reusable for future AI vision tasks)
 - ✅ Image preprocessing pipeline (resize, optimize, base64 encoding)
 - ✅ AI vision result caching (LRU memory + SQLite persistence)
@@ -695,7 +695,7 @@ Create `.irisrc` in your project root:
 
 **AI Semantic Analysis:**
 - OpenAI GPT-4 Vision integration
-- Anthropic Claude 3.5 Sonnet support
+- Anthropic Claude Sonnet 5 support
 - Ollama local model support
 - Semantic change understanding (intentional vs regression)
 - Severity classification (breaking, moderate, minor)

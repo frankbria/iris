@@ -173,7 +173,7 @@ function loadFromEnvironment(): IrisConfig {
   } else if (process.env.ANTHROPIC_API_KEY) {
     config.ai.provider = 'anthropic';
     config.ai.apiKey = process.env.ANTHROPIC_API_KEY;
-    config.ai.model = 'claude-3-haiku-20240307';
+    config.ai.model = 'claude-haiku-4-5';
   } else if (process.env.OLLAMA_ENDPOINT) {
     config.ai.provider = 'ollama';
     config.ai.endpoint = process.env.OLLAMA_ENDPOINT;
