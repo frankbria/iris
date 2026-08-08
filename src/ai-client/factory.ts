@@ -2,6 +2,7 @@ import { IrisConfig } from '../config';
 import { AIClient, AIVisionClient } from './base';
 import { OpenAITextClient, AnthropicTextClient, OllamaTextClient } from './text';
 import { OpenAIVisionClient, AnthropicVisionClient, OllamaVisionClient } from './vision';
+import { resolveModel } from './models';
 
 /**
  * Client type - text for instruction translation, vision for visual analysis
@@ -74,4 +75,28 @@ export class AIClientFactory {
  */
 export function createAIClient(config: IrisConfig): AIClient {
   return AIClientFactory.create(config, 'text');
+}
+
+/**
+ * Create a text client whose model has been checked against the provider's live
+ * model list (#184).
+ *
+ * The synchronous {@link createAIClient} trusts `config.ai.model` verbatim,
+ * which is how a pin the vendor retired reaches the wire and comes back as an
+ * opaque 404. This variant resolves first — one memoized probe per provider per
+ * process — replacing a rotted built-in pin and rejecting a user-named model
+ * that does not exist. `loadConfig()` stays synchronous; only the two async
+ * call sites that build a client pay for the check.
+ *
+ * @throws {ModelUnavailableError} when the configured model is not served.
+ */
+export async function createResolvedAIClient(config: IrisConfig): Promise<AIClient> {
+  const model = await resolveModel({
+    provider: config.ai.provider,
+    kind: 'text',
+    model: config.ai.model,
+    creds: { apiKey: config.ai.apiKey, endpoint: config.ai.endpoint },
+  });
+
+  return AIClientFactory.create({ ...config, ai: { ...config.ai, model } }, 'text');
 }

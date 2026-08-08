@@ -590,6 +590,47 @@ export OLLAMA_ENDPOINT=http://localhost:11434
 export OLLAMA_MODEL=llava:latest
 ```
 
+#### Choosing a model
+
+Each provider takes a `<PROVIDER>_MODEL` override, or an `ai.model` entry in the
+config file. You never have to edit source to pick a model.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-your-key
+export ANTHROPIC_MODEL=claude-opus-5     # or OPENAI_MODEL / OLLAMA_MODEL
+```
+
+Settings are **layered**, most explicit last:
+
+| | Source |
+|---|---|
+| 1 | built-in defaults |
+| 2 | environment auto-detection (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OLLAMA_ENDPOINT`) |
+| 3 | `~/.iris/config.json` |
+| 4 | `OPENAI_MODEL` / `ANTHROPIC_MODEL` / `OLLAMA_MODEL` |
+
+So a key in the environment and a model in the config file work together, and a
+`<PROVIDER>_MODEL` variable overrides both for a single run. A model variable
+applies only while its own provider is active — exporting `OPENAI_MODEL` cannot
+leak into an Anthropic session.
+
+#### Model availability is checked, not assumed
+
+Before a request goes out, IRIS asks the provider which models it currently
+serves (`/v1/models`, or `/api/tags` for Ollama) — one cached lookup per
+provider per run.
+
+- A built-in default the vendor has since retired is replaced with its closest
+  live successor, so an expired pin does not become an outage.
+- A model **you** named that the provider does not serve fails immediately with
+  that model's name and the available ones — it is not silently retried against
+  a different vendor.
+- If the lookup cannot run (offline, no key, provider down), the configured
+  model is used as-is. Being offline never blocks a run.
+
+Set `IRIS_MODEL_PROBE=0` to skip the lookup entirely and trust the configured
+model verbatim.
+
 #### Automatic fallback across providers
 
 The vision client tries providers in order (`ollama` → `openai` → `anthropic`),
@@ -597,10 +638,9 @@ moving on when one is unavailable or errors. **Set more than one credential and 
 chain can actually cross vendors** — every key you export is retained, not just the
 one that wins primary selection.
 
-> **If `~/.iris/config.json` exists, the environment is not consulted at all.**
-> `loadConfig()` reads environment variables only when no config file is present, so
-> with a config file you must declare the `credentials` map in the file itself (see
-> below) — exporting a second vendor's key will not enable fallback on its own.
+Exported keys and a config file coexist: the file no longer switches the
+environment off, so a `credentials` map in the file and keys in the environment
+merge, with the file winning per provider.
 
 ```bash
 export OLLAMA_ENDPOINT=http://localhost:11434   # tried first, free

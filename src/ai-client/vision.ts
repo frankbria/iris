@@ -8,6 +8,7 @@ import {
   AIVisionResponse,
 } from './base';
 import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
+import { DEFAULT_MODELS } from './models';
 import { AIVisionResponseSchema } from './types';
 
 /**
@@ -156,7 +157,7 @@ Compare the baseline (first image) with the current (second image) and identify 
       const response = await withRetry(
         () =>
           openai.chat.completions.create({
-            model: this.config.model || 'gpt-4o',
+            model: this.config.model || DEFAULT_MODELS.vision.openai,
             messages: [
               { role: 'system', content: systemPrompt },
               {
@@ -312,7 +313,7 @@ Respond with JSON:
       const response = await withRetry(
         () =>
           anthropic.messages.create({
-            model: this.config.model || 'claude-sonnet-5',
+            model: this.config.model || DEFAULT_MODELS.vision.anthropic,
             max_tokens: 1000,
             messages: [
               {
@@ -453,7 +454,7 @@ Respond with JSON only:
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              model: this.config.model || 'llava',
+              model: this.config.model || DEFAULT_MODELS.vision.ollama,
               prompt,
               images: diffBase64
                 ? [baselineBase64, currentBase64, diffBase64]

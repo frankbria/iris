@@ -13,7 +13,7 @@ import type { Page } from 'playwright';
 import type { Action } from './actions';
 import type { ActionExecutor, ExecutionResult } from './executor';
 import { loadConfig } from './config';
-import { createAIClient } from './ai-client';
+import { createResolvedAIClient } from './ai-client';
 import { checkAction, originOf } from './agent-policy';
 import type { AgentPolicy } from './agent-policy';
 import { installUrlPolicyGuard } from './url-policy-guard';
@@ -164,7 +164,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
 
   let client;
   try {
-    client = createAIClient(loadConfig());
+    client = await createResolvedAIClient(loadConfig());
   } catch (error) {
     // An unsupported provider or unreadable config is a reportable outcome, not
     // a rejected promise — every other failure mode here returns a result.

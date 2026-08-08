@@ -1,4 +1,5 @@
 import { loadConfig, validateConfig, saveConfig, loadDotenv } from '../src/config';
+import { DEFAULT_MODELS } from '../src/ai-client/models';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -18,6 +19,8 @@ describe('Config System', () => {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.OLLAMA_ENDPOINT;
     delete process.env.OLLAMA_MODEL;
+    delete process.env.OPENAI_MODEL;
+    delete process.env.ANTHROPIC_MODEL;
   });
 
   afterEach(() => {
@@ -26,6 +29,8 @@ describe('Config System', () => {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.OLLAMA_ENDPOINT;
     delete process.env.OLLAMA_MODEL;
+    delete process.env.OPENAI_MODEL;
+    delete process.env.ANTHROPIC_MODEL;
   });
 
   describe('loadConfig', () => {
@@ -143,6 +148,137 @@ describe('Config System', () => {
       // Clean up immediately after this test
       delete process.env.OLLAMA_ENDPOINT;
       delete process.env.OLLAMA_MODEL;
+    });
+
+    // --- Issue #184: the file and environment layers used to be mutually
+    // exclusive (`if (!exists) return loadFromEnvironment()`), which left no way
+    // to express "key from the environment, model from the file" and silently
+    // disabled every *_API_KEY the moment a config.json appeared.
+    describe('layering (issue #184)', () => {
+      /** Point loadConfig at a config.json with the given `ai` block. */
+      const withConfigFile = (contents: object) => {
+        mockOs.homedir.mockReturnValue('/home/test');
+        mockFs.existsSync.mockReturnValue(true);
+        mockFs.readFileSync.mockReturnValue(JSON.stringify(contents));
+      };
+
+      it('honours ai.model from the file while the API key comes from the environment', () => {
+        process.env.ANTHROPIC_API_KEY = 'ant-from-env';
+        withConfigFile({ ai: { provider: 'anthropic', model: 'claude-opus-5' } });
+
+        const config = loadConfig();
+
+        expect(config.ai.provider).toBe('anthropic');
+        expect(config.ai.model).toBe('claude-opus-5');
+        expect(config.ai.apiKey).toBe('ant-from-env');
+      });
+
+      it('no longer disables environment credentials just because a config file exists', () => {
+        process.env.OPENAI_API_KEY = 'sk-from-env';
+        process.env.ANTHROPIC_API_KEY = 'ant-from-env';
+        withConfigFile({ watch: { debounceMs: 2000 } });
+
+        const config = loadConfig();
+
+        expect(config.ai.apiKey).toBe('sk-from-env');
+        expect(config.ai.credentials).toEqual({
+          openai: { apiKey: 'sk-from-env' },
+          anthropic: { apiKey: 'ant-from-env' },
+        });
+        expect(config.watch.debounceMs).toBe(2000); // file values still apply
+      });
+
+      it('lets an explicit file provider outrank environment auto-detection', () => {
+        // Auto-detection is a guess from credential presence; `ai.provider` in
+        // the file is the user saying it outright, so the file wins.
+        process.env.OPENAI_API_KEY = 'sk-from-env';
+        process.env.ANTHROPIC_API_KEY = 'ant-from-env';
+        withConfigFile({ ai: { provider: 'anthropic' } });
+
+        const config = loadConfig();
+
+        expect(config.ai.provider).toBe('anthropic');
+        expect(config.ai.apiKey).toBe('ant-from-env'); // key matches the chosen provider
+      });
+
+      it('prefers a file apiKey over the environment for the configured provider', () => {
+        process.env.ANTHROPIC_API_KEY = 'ant-from-env';
+        withConfigFile({ ai: { provider: 'anthropic', apiKey: 'ant-from-file' } });
+
+        expect(loadConfig().ai.apiKey).toBe('ant-from-file');
+      });
+
+      it('applies the built-in default for the RESOLVED provider, not for openai', () => {
+        // The old env branch hardcoded the model inline; a file that names only
+        // the provider must still get that provider's pin, never gpt-4o-mini.
+        withConfigFile({ ai: { provider: 'anthropic' } });
+
+        expect(loadConfig().ai.model).toBe(DEFAULT_MODELS.text.anthropic);
+      });
+
+      it('falls back to the file layer when the environment names no provider', () => {
+        withConfigFile({ ai: { model: 'gpt-4' }, watch: { debounceMs: 2000 } });
+
+        const config = loadConfig();
+        expect(config.ai.provider).toBe('openai');
+        expect(config.ai.model).toBe('gpt-4');
+      });
+
+      it('keeps the environment usable when the config file is unparseable', () => {
+        // Previously a bad file fell back to loadFromEnvironment(), discarding
+        // the file entirely; now the environment layer survives on its own.
+        process.env.ANTHROPIC_API_KEY = 'ant-from-env';
+        mockOs.homedir.mockReturnValue('/home/test');
+        mockFs.existsSync.mockReturnValue(true);
+        mockFs.readFileSync.mockReturnValue('{ not json');
+
+        const config = loadConfig();
+
+        expect(config.ai.provider).toBe('anthropic');
+        expect(config.ai.apiKey).toBe('ant-from-env');
+      });
+    });
+
+    describe('<PROVIDER>_MODEL overrides (issue #184)', () => {
+      it('honours ANTHROPIC_MODEL over the built-in default', () => {
+        process.env.ANTHROPIC_API_KEY = 'ant-test-key';
+        process.env.ANTHROPIC_MODEL = 'claude-opus-5';
+        mockOs.homedir.mockReturnValue('/home/test');
+        mockFs.existsSync.mockReturnValue(false);
+
+        expect(loadConfig().ai.model).toBe('claude-opus-5');
+      });
+
+      it('honours OPENAI_MODEL over the built-in default', () => {
+        process.env.OPENAI_API_KEY = 'sk-test-key';
+        process.env.OPENAI_MODEL = 'gpt-4o';
+        mockOs.homedir.mockReturnValue('/home/test');
+        mockFs.existsSync.mockReturnValue(false);
+
+        expect(loadConfig().ai.model).toBe('gpt-4o');
+      });
+
+      it('lets the env model override the file model (env is the outer layer)', () => {
+        process.env.ANTHROPIC_API_KEY = 'ant-test-key';
+        process.env.ANTHROPIC_MODEL = 'claude-opus-5';
+        mockOs.homedir.mockReturnValue('/home/test');
+        mockFs.existsSync.mockReturnValue(true);
+        mockFs.readFileSync.mockReturnValue(
+          JSON.stringify({ ai: { provider: 'anthropic', model: 'claude-haiku-4-5' } }),
+        );
+
+        expect(loadConfig().ai.model).toBe('claude-opus-5');
+      });
+
+      it('ignores a model var belonging to a provider that is not active', () => {
+        // OPENAI_MODEL must not leak into an Anthropic session.
+        process.env.ANTHROPIC_API_KEY = 'ant-test-key';
+        process.env.OPENAI_MODEL = 'gpt-4o';
+        mockOs.homedir.mockReturnValue('/home/test');
+        mockFs.existsSync.mockReturnValue(false);
+
+        expect(loadConfig().ai.model).toBe(DEFAULT_MODELS.text.anthropic);
+      });
     });
 
     it('should not leak env-driven state into subsequent loads (issue #63)', () => {

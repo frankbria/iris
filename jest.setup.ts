@@ -32,6 +32,16 @@ process.env.IRIS_DB_PATH =
   process.env.IRIS_DB_PATH ||
   path.join(os.tmpdir(), `iris-jest-history-${process.env.JEST_WORKER_ID || '0'}.db`);
 
+// Never probe a provider's model list from the unit suite (#184).
+//
+// Model resolution asks the vendor what it actually serves before trusting a
+// pinned constant. That is right in a real run and wrong in a test: it would
+// send real requests to api.openai.com / api.anthropic.com from any suite that
+// happens to configure a key, making the suite non-hermetic and slow (the same
+// class of problem as #185). __tests__/ai-client-models.test.ts unsets this and
+// exercises the probe against a mocked fetch.
+process.env.IRIS_MODEL_PROBE = process.env.IRIS_MODEL_PROBE ?? '0';
+
 // Mock console methods to reduce noise in test output while preserving error logging
 const originalError = console.error;
 const originalWarn = console.warn;

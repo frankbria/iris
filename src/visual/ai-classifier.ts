@@ -15,6 +15,7 @@ import { IrisConfig, ProviderCredentials } from '../config';
 import { SmartAIVisionClient, SmartClientConfig } from '../ai-client/smart-client';
 import { ImagePreprocessor } from '../ai-client/preprocessor';
 import { AIVisionRequest, AIVisionResponse } from '../ai-client/base';
+import { DEFAULT_MODELS } from '../ai-client/models';
 import { AIVisualAnalysis } from './types';
 
 /**
@@ -177,21 +178,10 @@ export class AIVisualClassifier {
       provider = config.provider as 'openai' | 'anthropic' | 'ollama';
     }
 
-    // Determine default model based on provider
-    let model = config.model;
-    if (!model) {
-      switch (provider) {
-        case 'openai':
-          model = 'gpt-4o';
-          break;
-        case 'anthropic':
-          model = 'claude-sonnet-5';
-          break;
-        case 'ollama':
-          model = 'llava';
-          break;
-      }
-    }
+    // Determine default model based on provider. The pin lives in one place
+    // (#184) — SmartAIVisionClient still checks it against the provider's live
+    // model list, so a retired name here is repaired rather than requested.
+    const model = config.model || DEFAULT_MODELS.vision[provider];
 
     return {
       ai: {

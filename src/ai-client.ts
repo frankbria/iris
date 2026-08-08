@@ -13,6 +13,7 @@ export {
   AITranslationRequest,
   AITranslationResponse,
   createAIClient,
+  createResolvedAIClient,
 } from './ai-client/index';
 
 // Re-export Phase 2 types and functions (for vision capabilities)
