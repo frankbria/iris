@@ -419,7 +419,10 @@ describe('ActionExecutor', () => {
       // below the nominal delay — the point is that duration reflects the ~100ms
       // wait, not that it lands on exactly 100. See CI flake: measured 99.
       expect(result.duration).toBeGreaterThanOrEqual(90);
-      expect(result.duration).toBeLessThan(200); // Should complete quickly
+      // The companion `toBeLessThan(200)` was dropped for #142. A loaded machine
+      // pushes a 100ms wait past 200ms with nothing wrong, and the bound guarded
+      // nothing the lower bound does not — "duration tracks the delay" is the
+      // property; "and finishes quickly" is a statement about the host.
     });
   });
 
@@ -592,8 +595,10 @@ describe('ActionExecutor', () => {
 
       await executor.executeAction(action, page);
 
-      expect(delaySpy).toHaveBeenCalledTimes(3); // between 4 attempts
-      expect(delaySpy).toHaveBeenCalledWith(100);
+      // Every gap, not just one: `toHaveBeenCalledWith(100)` would accept a
+      // regression that waited [100, 0, 0], which is exactly the bug this test
+      // exists to catch.
+      expect(delaySpy.mock.calls).toEqual([[100], [100], [100]]);
       delaySpy.mockRestore();
     });
 
@@ -745,18 +750,23 @@ describe('ActionExecutor', () => {
       mockPage.url.mockReturnValue('https://example.com/page');
       mockPage.title.mockResolvedValue('Example Page');
 
-      // Bracket the call rather than comparing against a later Date.now() with a
-      // fixed 100ms tolerance (#142): the window widens with load instead of
-      // breaking, and it asserts the real property — the stamp was taken during
-      // this call.
-      const before = Date.now();
-      const context = await executor.getPageContext(page);
-      const after = Date.now();
+      // Pin the clock instead of comparing against a moving one (#142). A
+      // before/after bracket was the first attempt, but review pointed out it
+      // still assumes wall-clock monotonicity — a backward step between `before`
+      // and the internal stamp fails it while the code is correct. Freezing
+      // Date.now() removes the assumption entirely and asserts the exact
+      // property: the stamp is taken from the clock during this call.
+      const NOW = 1_700_000_000_000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        const context = await executor.getPageContext(page);
 
-      expect(context.url).toBe('https://example.com/page');
-      expect(context.title).toBe('Example Page');
-      expect(context.timestamp).toBeGreaterThanOrEqual(before);
-      expect(context.timestamp).toBeLessThanOrEqual(after);
+        expect(context.url).toBe('https://example.com/page');
+        expect(context.title).toBe('Example Page');
+        expect(context.timestamp).toBe(NOW);
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
 
     it('should handle page context retrieval failure', async () => {
