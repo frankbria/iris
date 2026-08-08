@@ -628,6 +628,25 @@ describe('loadDotenv', () => {
       }
     });
 
+    it('treats an empty IRIS_DOTENV_DIR as unset rather than as a directory', () => {
+      // Review finding: with `??`, an empty string survives as the cwd, and
+      // path.join('', '.env') is '.env' — the working directory again, but by
+      // accident. `||` makes the fallback explicit.
+      const populatedCwd = realFs.mkdtempSync(path.join(realOs.tmpdir(), 'iris-env-empty-'));
+      const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(populatedCwd);
+      try {
+        realFs.writeFileSync(path.join(populatedCwd, '.env'), 'IRIS_DOTENV_DIR_PROBE=from-cwd\n');
+        process.env.IRIS_DOTENV_DIR = '';
+
+        loadDotenv();
+
+        expect(process.env.IRIS_DOTENV_DIR_PROBE).toBe('from-cwd');
+      } finally {
+        cwdSpy.mockRestore();
+        realFs.rmSync(populatedCwd, { recursive: true, force: true });
+      }
+    });
+
     it('lets an explicit argument win over the override', () => {
       // Keeps the existing loadDotenv(tmpDir) cases above meaningful.
       const other = realFs.mkdtempSync(path.join(realOs.tmpdir(), 'iris-env-explicit-'));

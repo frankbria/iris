@@ -64,7 +64,10 @@ const DEFAULT_CONFIG: IrisConfig = {
  *
  * `cwd` defaults to `IRIS_DOTENV_DIR` when set, else the process working
  * directory — so the `.env` IRIS reads can be aimed somewhere other than
- * wherever the command happened to be invoked from.
+ * wherever the command happened to be invoked from. `||` rather than `??`, so
+ * an empty `IRIS_DOTENV_DIR=` reads as "unset" instead of as a directory: with
+ * `??` it would survive as `''`, and `path.join('', '.env')` is `'.env'` — the
+ * working directory again, but arrived at by accident rather than by rule.
  *
  * That override is what makes the test suite hermetic (issue #185). `runCli()`
  * calls this with no argument, so under Jest — where the working directory is
@@ -79,7 +82,7 @@ const DEFAULT_CONFIG: IrisConfig = {
  * ponytail: minimal parser, not full POSIX shell quoting — swap for the `dotenv`
  * package if multiline values or `${VAR}` expansion are ever needed.
  */
-export function loadDotenv(cwd: string = process.env.IRIS_DOTENV_DIR ?? process.cwd()): void {
+export function loadDotenv(cwd: string = process.env.IRIS_DOTENV_DIR || process.cwd()): void {
   let content: string;
   try {
     content = fs.readFileSync(path.join(cwd, '.env'), 'utf8');
