@@ -47,6 +47,17 @@ describe('parseModelJson', () => {
     expect(() => parseModelJson(raw)).toThrow(/did not return a JSON object/);
   });
 
+  // A single-element array wrapping the object is deliberately salvaged, not
+  // rejected: the brace-span candidate finds the inner object and the caller's
+  // schema still validates it, so the model gets the benefit of the doubt for a
+  // wrapper that carries no information. Pinned because it is easy to mistake
+  // for the `[1,2,3]` case above, and because #183 routed the vision clients
+  // through here — before that swap this shape reached the caller as an array
+  // and failed schema validation.
+  it('salvages the object from a single-element array wrapper', () => {
+    expect(parseModelJson('[{"severity":"minor"}]')).toEqual({ severity: 'minor' });
+  });
+
   it('throws with a truncated excerpt when nothing parses', () => {
     const noise = `I cannot help with that. ${'x'.repeat(500)}`;
     expect(() => parseModelJson(noise)).toThrow(/did not return a JSON object/);

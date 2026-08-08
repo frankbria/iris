@@ -252,6 +252,19 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       expect(tracker.getPricing('ollama', 'llava')).toBe(0);
     });
 
+    // Issue #183. These two rows exist for a reason that is invisible from the
+    // row itself, so pin them: claude-haiku-4-5 is what the ANTHROPIC_API_KEY
+    // env path selects (config.ts:176) and `resolveModel` prefers a configured
+    // model over the per-provider default, so it is the model an out-of-the-box
+    // user actually requests. Unpriced it computes $0, never accrues against the
+    // budget, and the breaker can never trip on the default path — the #126 hole.
+    // A later cleanup dropping either row should fail here, not in production.
+    it('prices the models the Anthropic defaults actually request (issue #183)', () => {
+      expect(tracker.getPricing('anthropic', 'claude-haiku-4-5')).toBe(0.0005);
+      expect(tracker.getPricing('anthropic', 'claude-opus-5')).toBe(0.004);
+      expect(tracker.isBudgetGated('anthropic', 'claude-haiku-4-5')).toBe(true);
+    });
+
     it('should set custom pricing', () => {
       tracker.setPricing('custom', 'model', 0.005);
       expect(tracker.getPricing('custom', 'model')).toBe(0.005);
