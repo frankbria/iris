@@ -140,15 +140,30 @@ const DEFAULT_PRICING: ProviderPricing[] = [
   },
   { provider: 'openai', model: 'gpt-4-vision-preview', costPerImage: 0.003 },
 
-  // Anthropic Claude 3.5 Sonnet: $3/1M input tokens, $15/1M output tokens.
+  // Anthropic Claude Sonnet 5: $3/1M input tokens, $15/1M output tokens — the
+  // same per-token rates Claude 3.5 Sonnet carried, so issue #183's retirement
+  // renamed this row without re-rating it.
+  //
+  // Deliberately the standard rate, not the $2/$10 introductory rate running to
+  // 2026-08-31: this table gates a budget circuit breaker, and the safe error
+  // direction is over-reporting (the breaker trips early) rather than under-
+  // reporting (real spend outruns the tracked total once the intro rate lapses).
   {
     provider: 'anthropic',
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-sonnet-5',
     costPerImage: 0.0015,
     costPerInputToken: 3e-6,
     costPerOutputToken: 1.5e-5,
   },
-  { provider: 'anthropic', model: 'claude-3-opus', costPerImage: 0.004 },
+  // Claude Opus 5: $5/1M input, $25/1M output. Not a default anywhere — priced
+  // so a user who configures it is gated rather than treated as free (#126).
+  {
+    provider: 'anthropic',
+    model: 'claude-opus-5',
+    costPerImage: 0.004,
+    costPerInputToken: 5e-6,
+    costPerOutputToken: 2.5e-5,
+  },
 
   // Ollama (local) - no cost (no token rates needed; fallback is zero)
   { provider: 'ollama', model: 'llava', costPerImage: 0 },

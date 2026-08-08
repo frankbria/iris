@@ -87,7 +87,7 @@ describe('Config System', () => {
 
       expect(config.ai.provider).toBe('anthropic');
       expect(config.ai.apiKey).toBe('ant-test-key');
-      expect(config.ai.model).toBe('claude-3-haiku-20240307');
+      expect(config.ai.model).toBe('claude-haiku-4-5');
     });
 
     // Issue #74: the else-if chain picks one primary provider, and every other
@@ -152,7 +152,7 @@ describe('Config System', () => {
       process.env.ANTHROPIC_API_KEY = 'ant-test-key';
       const first = loadConfig();
       expect(first.ai.provider).toBe('anthropic');
-      expect(first.ai.model).toBe('claude-3-haiku-20240307');
+      expect(first.ai.model).toBe('claude-haiku-4-5');
 
       delete process.env.ANTHROPIC_API_KEY;
       const second = loadConfig();
@@ -180,7 +180,7 @@ describe('Config System', () => {
 
     it('should validate Anthropic config', () => {
       const config = {
-        ai: { provider: 'anthropic' as const, model: 'claude-3-haiku-20240307' },
+        ai: { provider: 'anthropic' as const, model: 'claude-haiku-4-5' },
         watch: { patterns: ['**/*.ts'], debounceMs: 1000, ignore: ['node_modules/**'] },
         browser: { headless: true, timeout: 30000 },
       };

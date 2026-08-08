@@ -304,7 +304,7 @@ Respond with JSON:
       const response = await withRetry(
         () =>
           anthropic.messages.create({
-            model: this.config.model || 'claude-3-5-sonnet-20241022',
+            model: this.config.model || 'claude-sonnet-5',
             max_tokens: 1000,
             messages: [
               {
@@ -373,11 +373,16 @@ Respond with JSON:
     return !!this.config.apiKey && this.supportsVision();
   }
 
-  supportsVision(): boolean {
-    // Claude 3.5 Sonnet supports vision
-    const model = this.config.model || '';
-    return model.includes('claude-3');
-  }
+  // No `supportsVision()` override on purpose (issue #183). This used to be
+  // `model.includes('claude-3')` — a capability check written as a substring
+  // test, so it inverted as soon as the claude-3 family was retired: true for
+  // everything Anthropic served in 2024, false for everything it serves now.
+  // Since `isAvailable()` gates on it, that silently dropped this client from
+  // the fallback chain, and a *correctly* configured current model failed the
+  // test just as hard as a stale one. Every model in the current lineup is
+  // multimodal, so the base class's unconditional `true` is the honest answer;
+  // an unreachable model is the request's problem to report, not this method's
+  // to guess at. Don't reintroduce a name match here.
 }
 
 /**

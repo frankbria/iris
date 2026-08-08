@@ -248,7 +248,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
     it('should create tracker with default pricing', () => {
       expect(tracker.getPricing('openai', 'gpt-4o')).toBe(0.002);
-      expect(tracker.getPricing('anthropic', 'claude-3-5-sonnet-20241022')).toBe(0.0015);
+      expect(tracker.getPricing('anthropic', 'claude-sonnet-5')).toBe(0.0015);
       expect(tracker.getPricing('ollama', 'llava')).toBe(0);
     });
 
@@ -542,7 +542,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
     it('should track cost by provider and model', () => {
       tracker.trackOperation('openai', 'gpt-4o', false);
-      tracker.trackOperation('anthropic', 'claude-3-5-sonnet-20241022', false);
+      tracker.trackOperation('anthropic', 'claude-sonnet-5', false);
       tracker.trackOperation('ollama', 'llava', false);
 
       const stats = tracker.getStats();
@@ -567,8 +567,8 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       });
 
       it('should compute cost from token usage for anthropic', () => {
-        // claude-3-5-sonnet rates: $3/1M in, $15/1M out.
-        const cost = tracker.trackOperation('anthropic', 'claude-3-5-sonnet-20241022', false, {
+        // claude-sonnet-5 rates: $3/1M in, $15/1M out.
+        const cost = tracker.trackOperation('anthropic', 'claude-sonnet-5', false, {
           inputTokens: 1000,
           outputTokens: 200,
         });
@@ -1131,7 +1131,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
   // dormant until #111 made `visual-diff --semantic` reachable. See #74.
   describe('cross-provider credential isolation', () => {
     const irisConfig: IrisConfig = {
-      ai: { provider: 'anthropic', apiKey: 'sk-ant-secret', model: 'claude-3-5-sonnet-20241022' },
+      ai: { provider: 'anthropic', apiKey: 'sk-ant-secret', model: 'claude-sonnet-5' },
       watch: { patterns: [], debounceMs: 1000, ignore: [] },
       browser: { headless: true, timeout: 30000 },
     };
