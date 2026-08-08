@@ -60,6 +60,7 @@ src/
 │   ├── cost-tracker.ts    # Budget management and cost tracking
 │   ├── smart-client.ts    # Smart client with fallback logic
 │   ├── factory.ts         # Client factory with provider detection
+│   ├── models.ts          # Model pins + live provider model-list probe
 │   └── index.ts           # Module exports
 ├── visual/                # Visual testing modules
 │   ├── capture.ts         # Screenshot capture with stabilization
@@ -81,6 +82,7 @@ __tests__/
 ├── ai-client-vision.test.ts       # Vision AI client tests (17 tests)
 ├── ai-client-preprocessor.test.ts # Preprocessor tests (24 tests)
 ├── ai-client-batch4.test.ts       # Cache + cost tracker tests (19 tests)
+├── ai-client-models.test.ts       # Model pins, provider probe, resolution (22 tests)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
 │   ├── diff.test.ts
@@ -153,7 +155,27 @@ plans/
 - Claude Opus 5: $5/1M input + $25/1M output tokens (fallback $0.004/image)
 - Ollama (local): $0.00
 - Anthropic rows use the standard rate, not Sonnet 5's introductory $2/$10 (expires 2026-08-31): this table gates a budget circuit breaker, and over-reporting trips it early while under-reporting lets real spend outrun the tracked total
-- **Model IDs rot.** The whole `claude-3` family was retired while still pinned in five places, and the vision path was dead until #183. A guard test fails on any re-added quoted `claude-3-*` ID in `src/`; resolving defaults from the provider's live model list instead of pinning them is issue #184
+- **Model IDs rot, so they are no longer trusted blind (#184).** The whole `claude-3` family was retired while still pinned in five places, and the vision path was dead until #183. A guard test fails on any re-added quoted `claude-3-*` ID in `src/`. Since #184 every pin lives in `src/ai-client/models.ts` (`DEFAULT_MODELS.text` / `DEFAULT_MODELS.vision`) and is checked against the provider's live model list before use:
+  - `listModels(provider, creds)` hits `/v1/models` (OpenAI, Anthropic) or `/api/tags` (Ollama), memoized per provider per process. It returns `null` for "could not check" — never an empty list — so a 401 cannot be mistaken for "no models exist". `IRIS_MODEL_PROBE=0` disables it; `jest.setup.ts` sets that so the suite stays hermetic
+  - `resolveModel({provider, kind, model, creds})` returns a listed model as-is, rescues a **retired built-in pin** via longest-prefix match within the same family root, and throws `ModelUnavailableError` for a **user-named** model the provider does not serve. It needs no "was this explicit?" flag: a missing model that equals the pin is our rot, one that differs is the user's typo
+  - `SmartAIVisionClient` rethrows `ModelUnavailableError` instead of stepping to the next vendor — that swallow is what made a retired model read as "all providers failed". Text clients resolve via `createResolvedAIClient()`; `loadConfig()` stays synchronous
+  - Caveat: `CostTracker` prices by exact model ID, so a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) has no pricing row and falls into the #126 "unknown price is billable" path — budget-safe, but unpriced until a row is added
+
+### Configuration Layering (issue #184)
+
+`loadConfig()` merges four layers, most explicit last — it no longer returns
+*either* the file config *or* the environment one:
+
+1. built-in defaults (`DEFAULT_MODELS.text[provider]`)
+2. environment auto-detection — provider inferred from which `*_API_KEY` / `OLLAMA_ENDPOINT` is exported
+3. `~/.iris/config.json`
+4. `OPENAI_MODEL` / `ANTHROPIC_MODEL` / `OLLAMA_MODEL`
+
+Consequences worth remembering: a config file no longer disables environment
+credentials; an explicit `ai.provider` in the file outranks auto-detection
+(presence of a key is a guess, the file is a statement); a `<PROVIDER>_MODEL`
+var applies only while that provider is active; and an unparseable config file
+degrades to "no file layer" rather than also discarding the environment.
 
 ### Phase 1 - Foundations (Complete)
 1. ✅ CLI command scaffolding with commander.js
@@ -230,8 +252,8 @@ This assessment provides an objective view of project status and helps identify 
 
 ### Testing Requirements
 
-- **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~75% statements / ~57% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1077/1078 passing, 1 skipped, 0 failing)
+- **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1216/1217 passing, 1 skipped, 0 failing)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

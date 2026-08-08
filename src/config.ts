@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import type { RetryConfig } from './ai-client/retry';
+import { DEFAULT_MODELS } from './ai-client/models';
 
 /**
  * Credentials scoped to a single provider.
@@ -40,7 +41,7 @@ export interface IrisConfig {
 const DEFAULT_CONFIG: IrisConfig = {
   ai: {
     provider: 'openai',
-    model: 'gpt-4o-mini',
+    model: DEFAULT_MODELS.text.openai,
   },
   watch: {
     patterns: ['**/*.{ts,tsx,js,jsx,html,css}'],
@@ -105,19 +106,73 @@ export function getConfigPath(): string {
   return path.join(os.homedir(), '.iris', 'config.json');
 }
 
+/**
+ * Load configuration by layering, outermost layer last (issue #184).
+ *
+ *   built-in defaults  <  environment auto-detection  <  `~/.iris/config.json`  <  `<PROVIDER>_MODEL`
+ *
+ * The two middle layers used to be mutually exclusive — `loadConfig` returned
+ * *either* the environment-derived config *or* the file-merged one — which had
+ * two consequences the user could not work around:
+ *
+ * - With a key in the environment and no config file, `ai.model` was force-set
+ *   to a hardcoded (eventually retired) name with no override hook.
+ * - The moment a config file existed, every `*_API_KEY` stopped being read, so
+ *   the key had to be written into the file.
+ *
+ * Layering fixes both. The ordering reflects how explicit each layer is:
+ * credential *presence* is auto-detection and yields to an explicit
+ * `ai.provider` in the file, while a `<PROVIDER>_MODEL` variable is the user
+ * saying it outright for this run and outranks the file.
+ */
 export function loadConfig(): IrisConfig {
-  const configPath = getConfigPath();
+  const file = loadConfigFile();
+  const env = loadFromEnvironment();
 
-  if (!fs.existsSync(configPath)) {
-    return loadFromEnvironment();
-  }
+  // Provider: the file states it, the environment only infers it from which
+  // credential happens to be exported.
+  const provider = file.ai?.provider ?? env.provider ?? DEFAULT_CONFIG.ai.provider;
+
+  // Credentials: every vendor's, so the fallback chain can cross clouds (#74).
+  // File entries win per provider; the environment fills the rest.
+  const credentials: ProviderCredentials = { ...env.credentials, ...file.ai?.credentials };
+  const forProvider = credentials[provider] ?? {};
+
+  // A `<PROVIDER>_MODEL` var applies only while that provider is active, so
+  // exporting OPENAI_MODEL can never leak into an Anthropic session.
+  const model = env.models[provider] ?? file.ai?.model ?? DEFAULT_MODELS.text[provider];
+
+  return {
+    ai: {
+      ...DEFAULT_CONFIG.ai,
+      ...file.ai,
+      provider,
+      model,
+      apiKey: file.ai?.apiKey ?? forProvider.apiKey,
+      endpoint: file.ai?.endpoint ?? forProvider.endpoint,
+      ...(Object.keys(credentials).length > 0 ? { credentials } : {}),
+    },
+    watch: { ...DEFAULT_CONFIG.watch, ...file.watch },
+    browser: { ...DEFAULT_CONFIG.browser, ...file.browser },
+  };
+}
+
+/**
+ * Read `~/.iris/config.json`, or `{}` when it is absent or unreadable.
+ *
+ * An unparseable file degrades to "no file layer" rather than discarding the
+ * environment as well — a typo in the config should not also take away the
+ * user's exported API key.
+ */
+function loadConfigFile(): Partial<IrisConfig> {
+  const configPath = getConfigPath();
+  if (!fs.existsSync(configPath)) return {};
 
   try {
-    const configFile = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    return mergeConfig(DEFAULT_CONFIG, configFile);
+    return JSON.parse(fs.readFileSync(configPath, 'utf8')) as Partial<IrisConfig>;
   } catch (error) {
-    console.warn(`Warning: Failed to load config from ${configPath}, using defaults:`, error);
-    return loadFromEnvironment();
+    console.warn(`Warning: Failed to load config from ${configPath}, ignoring it:`, error);
+    return {};
   }
 }
 
@@ -139,19 +194,29 @@ export function saveConfig(config: IrisConfig): void {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
-function loadFromEnvironment(): IrisConfig {
-  // Clone nested objects too — a shallow copy would let the mutations below
-  // write through to the shared DEFAULT_CONFIG (issue #63).
-  const config: IrisConfig = {
-    ai: { ...DEFAULT_CONFIG.ai },
-    watch: { ...DEFAULT_CONFIG.watch },
-    browser: { ...DEFAULT_CONFIG.browser },
-  };
+/** What the environment actually says — never a built-in default (issue #184). */
+interface EnvironmentLayer {
+  /** Auto-detected from which credential is exported; first match wins. */
+  provider?: IrisConfig['ai']['provider'];
+  /** Every credential present, not just the detected provider's (#74). */
+  credentials: ProviderCredentials;
+  /** Explicit `<PROVIDER>_MODEL` overrides, by provider. */
+  models: Partial<Record<IrisConfig['ai']['provider'], string>>;
+}
 
-  // Collect EVERY credential present, not just the winning provider's. The
-  // else-if chain below still decides which provider is primary, but discarding
-  // the others left the fallback chain with nothing to authenticate as, so it
-  // could never step from one cloud vendor to another (#74).
+/**
+ * Read the environment layer.
+ *
+ * Crucially this no longer *invents* a model. The old version assigned a
+ * hardcoded name inline (`config.ai.model = 'claude-haiku-4-5'`), which is what
+ * made the built-in default indistinguishable from a user preference and left
+ * `ANTHROPIC_API_KEY` users with no way to choose a model at all. A pin is a
+ * default, and defaults belong in the innermost layer — see `loadConfig`.
+ */
+function loadFromEnvironment(): EnvironmentLayer {
+  // Collect EVERY credential present, not just the winning provider's.
+  // Discarding the others left the fallback chain with nothing to authenticate
+  // as, so it could never step from one cloud vendor to another (#74).
   const credentials: ProviderCredentials = {};
   if (process.env.OPENAI_API_KEY) {
     credentials.openai = { apiKey: process.env.OPENAI_API_KEY };
@@ -162,33 +227,19 @@ function loadFromEnvironment(): IrisConfig {
   if (process.env.OLLAMA_ENDPOINT) {
     credentials.ollama = { endpoint: process.env.OLLAMA_ENDPOINT };
   }
-  if (Object.keys(credentials).length > 0) {
-    config.ai.credentials = credentials;
-  }
 
-  // Primary-provider selection is unchanged: first match wins.
-  if (process.env.OPENAI_API_KEY) {
-    config.ai.provider = 'openai';
-    config.ai.apiKey = process.env.OPENAI_API_KEY;
-  } else if (process.env.ANTHROPIC_API_KEY) {
-    config.ai.provider = 'anthropic';
-    config.ai.apiKey = process.env.ANTHROPIC_API_KEY;
-    config.ai.model = 'claude-haiku-4-5';
-  } else if (process.env.OLLAMA_ENDPOINT) {
-    config.ai.provider = 'ollama';
-    config.ai.endpoint = process.env.OLLAMA_ENDPOINT;
-    config.ai.model = process.env.OLLAMA_MODEL || 'llama2';
-  }
+  const models: EnvironmentLayer['models'] = {};
+  if (process.env.OPENAI_MODEL) models.openai = process.env.OPENAI_MODEL;
+  if (process.env.ANTHROPIC_MODEL) models.anthropic = process.env.ANTHROPIC_MODEL;
+  if (process.env.OLLAMA_MODEL) models.ollama = process.env.OLLAMA_MODEL;
 
-  return config;
-}
+  // Primary-provider detection is unchanged: first match wins.
+  let provider: EnvironmentLayer['provider'];
+  if (credentials.openai) provider = 'openai';
+  else if (credentials.anthropic) provider = 'anthropic';
+  else if (credentials.ollama) provider = 'ollama';
 
-function mergeConfig(defaultConfig: IrisConfig, userConfig: Partial<IrisConfig>): IrisConfig {
-  return {
-    ai: { ...defaultConfig.ai, ...userConfig.ai },
-    watch: { ...defaultConfig.watch, ...userConfig.watch },
-    browser: { ...defaultConfig.browser, ...userConfig.browser },
-  };
+  return { provider, credentials, models };
 }
 
 export function validateConfig(config: IrisConfig): string[] {

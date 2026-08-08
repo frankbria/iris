@@ -13,7 +13,7 @@ jest.mock('../src/config', () => ({
 }));
 
 jest.mock('../src/ai-client', () => ({
-  createAIClient: jest.fn().mockReturnValue({
+  createResolvedAIClient: jest.fn().mockResolvedValue({
     isAvailable: jest.fn().mockResolvedValue(true),
     translateInstruction: jest.fn().mockResolvedValue({
       actions: [{ type: 'click', selector: '#ai-generated' }],
@@ -113,7 +113,7 @@ describe('Translator', () => {
     });
 
     it('should fall back to AI for complex instructions', async () => {
-      const { createAIClient } = await import('../src/ai-client');
+      const { createResolvedAIClient } = await import('../src/ai-client');
 
       const result = await translate('find the blue button next to the search box and click it');
 
@@ -121,16 +121,16 @@ describe('Translator', () => {
       expect(result.method).toBe('ai');
       expect(result.confidence).toBe(0.8);
       expect(result.reasoning).toBe('AI-generated action');
-      expect(createAIClient).toHaveBeenCalled();
+      expect(createResolvedAIClient).toHaveBeenCalled();
     });
 
     it('should handle AI client not available', async () => {
-      const { createAIClient } = await import('../src/ai-client');
+      const { createResolvedAIClient } = await import('../src/ai-client');
       const mockClient = {
         isAvailable: jest.fn().mockResolvedValue(false),
         translateInstruction: jest.fn(),
       };
-      (createAIClient as jest.Mock).mockReturnValue(mockClient);
+      (createResolvedAIClient as jest.Mock).mockResolvedValue(mockClient);
 
       const result = await translate('complex instruction that no pattern matches');
 
@@ -153,7 +153,7 @@ describe('Translator', () => {
     });
 
     it('should handle AI translation errors', async () => {
-      const { createAIClient } = await import('../src/ai-client');
+      const { createResolvedAIClient } = await import('../src/ai-client');
       const { validateConfig } = await import('../src/config');
 
       // Reset validation to return no errors for this test
@@ -163,7 +163,7 @@ describe('Translator', () => {
         isAvailable: jest.fn().mockResolvedValue(true),
         translateInstruction: jest.fn().mockRejectedValue(new Error('Network error')),
       };
-      (createAIClient as jest.Mock).mockReturnValue(mockClient);
+      (createResolvedAIClient as jest.Mock).mockResolvedValue(mockClient);
 
       const result = await translate('complex instruction that no pattern matches');
 
@@ -174,7 +174,7 @@ describe('Translator', () => {
     });
 
     it('should include context in AI requests', async () => {
-      const { createAIClient } = await import('../src/ai-client');
+      const { createResolvedAIClient } = await import('../src/ai-client');
       const mockClient = {
         isAvailable: jest.fn().mockResolvedValue(true),
         translateInstruction: jest.fn().mockResolvedValue({
@@ -182,7 +182,7 @@ describe('Translator', () => {
           confidence: 0.5,
         }),
       };
-      (createAIClient as jest.Mock).mockReturnValue(mockClient);
+      (createResolvedAIClient as jest.Mock).mockResolvedValue(mockClient);
 
       await translate('complex instruction', { url: 'https://example.com' });
 
