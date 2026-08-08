@@ -169,7 +169,9 @@ differently because of an untracked file or an exported shell variable:
 
 - `IRIS_DB_PATH` -> a per-worker temp DB, so runs never write to `~/.iris/iris.db`
 - `IRIS_MODEL_PROBE=0` -> no provider model-list lookups (#184)
-- `IRIS_DOTENV_DIR` -> an empty temp directory, so `loadDotenv()` finds nothing (#185),
+- `IRIS_DOTENV_DIR` -> a per-worker temp directory, created 0700 and swept of any stray
+  `.env`, so `loadDotenv()` finds nothing (#185). Assigned **unconditionally** — unlike
+  the two above, an ambient value here is the hazard, not a preference —
   plus a one-time scrub of `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OLLAMA_ENDPOINT` /
   `*_MODEL` / `IRIS_BASE_URL` for the shell-export route
 
@@ -276,7 +278,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1237/1238 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1238/1239 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

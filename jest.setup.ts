@@ -55,9 +55,22 @@ process.env.IRIS_MODEL_PROBE = process.env.IRIS_MODEL_PROBE ?? '0';
 // and a11y-cli.test.ts did not, and nothing stops the next file from forgetting.
 // A dedicated directory rather than os.tmpdir() itself — a stray /tmp/.env
 // would quietly reopen the hole.
-const dotenvFreeDir = path.join(os.tmpdir(), 'iris-jest-no-dotenv');
-fs.mkdirSync(dotenvFreeDir, { recursive: true });
-process.env.IRIS_DOTENV_DIR = process.env.IRIS_DOTENV_DIR ?? dotenvFreeDir;
+const dotenvFreeDir = path.join(os.tmpdir(), `iris-jest-no-dotenv-${process.env.JEST_WORKER_ID || '0'}`);
+fs.mkdirSync(dotenvFreeDir, { recursive: true, mode: 0o700 });
+// `mode` is ignored when the directory already exists, so tighten it explicitly:
+// a world-writable path would let anything drop a .env into the one place this
+// guard promises has none.
+fs.chmodSync(dotenvFreeDir, 0o700);
+// And do not merely trust that it is empty. A guard whose whole job is "load no
+// .env" must not be satisfiable by a file left behind from an earlier run.
+fs.rmSync(path.join(dotenvFreeDir, '.env'), { force: true });
+
+// Assigned unconditionally — NOT `?? process.env.IRIS_DOTENV_DIR`. The other
+// guards in this file honour an ambient override because tests legitimately
+// redirect them; here an exported IRIS_DOTENV_DIR aimed at a real project is
+// exactly the leak being closed, so the harness always wins. Tests needing a
+// different directory set it inside the test body, after this runs.
+process.env.IRIS_DOTENV_DIR = dotenvFreeDir;
 
 // `.env` is not the only route: `export OPENAI_API_KEY=…` in the developer's
 // shell reaches the suite the same way. Clear every variable IRIS resolves

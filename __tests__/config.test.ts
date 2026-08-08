@@ -603,15 +603,29 @@ describe('loadDotenv', () => {
     });
 
     it('does not read process.cwd() when the override points elsewhere', () => {
-      // The whole point: a `.env` sitting in the working directory (the repo
-      // root, on a developer machine) must not be consulted.
-      process.env.IRIS_DOTENV_DIR = tmpDir; // no .env written here
-      expect(realFs.existsSync(path.join(tmpDir, '.env'))).toBe(false);
+      // cwd must actually CONTAIN a .env for this to prove anything. An earlier
+      // version left cwd as the repo root and asserted no keys appeared — which
+      // passes in CI whether or not the override works, since a fresh checkout
+      // has no .env either. Stub cwd with a populated directory instead.
+      const populatedCwd = realFs.mkdtempSync(path.join(realOs.tmpdir(), 'iris-env-cwd-'));
+      const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(populatedCwd);
+      try {
+        realFs.writeFileSync(
+          path.join(populatedCwd, '.env'),
+          'IRIS_DOTENV_DIR_PROBE=from-cwd\nOPENAI_API_KEY=sk-should-not-be-read\n',
+        );
+        process.env.IRIS_DOTENV_DIR = tmpDir; // deliberately has no .env
+        expect(realFs.existsSync(path.join(tmpDir, '.env'))).toBe(false);
 
-      loadDotenv();
+        loadDotenv();
 
-      expect(process.env.OPENAI_API_KEY).toBeUndefined();
-      expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+        // Nothing from cwd's .env may appear.
+        expect(process.env.IRIS_DOTENV_DIR_PROBE).toBeUndefined();
+        expect(process.env.OPENAI_API_KEY).toBeUndefined();
+      } finally {
+        cwdSpy.mockRestore();
+        realFs.rmSync(populatedCwd, { recursive: true, force: true });
+      }
     });
 
     it('lets an explicit argument win over the override', () => {
@@ -658,16 +672,31 @@ describe('loadDotenv', () => {
 // silently restoring issue #185.
 describe('test harness hermeticity (issue #185)', () => {
   const realFs = jest.requireActual('fs') as typeof fs;
+  const realOs = jest.requireActual('os') as typeof os;
 
-  it('points loadDotenv at a directory that is not the repo root', () => {
+  it('points loadDotenv at a real directory that is not the repo root', () => {
     const dir = process.env.IRIS_DOTENV_DIR;
     expect(dir).toBeTruthy();
+    // Existence matters: a path that does not exist would also "contain no
+    // .env", so the check below would pass for a guard pointing at nothing.
+    expect(realFs.existsSync(dir as string)).toBe(true);
+    expect(realFs.statSync(dir as string).isDirectory()).toBe(true);
     expect(path.resolve(dir as string)).not.toBe(path.resolve(process.cwd()));
   });
 
   it('points loadDotenv at a directory containing no .env', () => {
     const dir = process.env.IRIS_DOTENV_DIR as string;
     expect(realFs.existsSync(path.join(dir, '.env'))).toBe(false);
+  });
+
+  // Review finding: the first version used `?? process.env.IRIS_DOTENV_DIR`,
+  // copying the idiom from the IRIS_DB_PATH guard above. Those guards honour an
+  // ambient override on purpose; this one must not — an exported
+  // IRIS_DOTENV_DIR aimed at a real project is the leak, not a preference.
+  it('uses a harness-owned directory even if one was exported into the environment', () => {
+    const dir = process.env.IRIS_DOTENV_DIR as string;
+    expect(path.dirname(dir)).toBe(realOs.tmpdir());
+    expect(path.basename(dir)).toMatch(/^iris-jest-no-dotenv-/);
   });
 
   // Deliberately NOT asserting here that process.env starts free of provider
