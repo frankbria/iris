@@ -149,7 +149,6 @@ describe('Performance Optimizations', () => {
         .png()
         .toBuffer();
 
-      const start = Date.now();
       const result = await diffEngine.compare(baselineBuffer, currentBuffer, {
         threshold: 0.9,
         includeAA: false,
@@ -157,17 +156,19 @@ describe('Performance Optimizations', () => {
         diffMask: true,
         diffColor: [255, 0, 0],
       });
-      const duration = Date.now() - start;
 
       expect(result.passed).toBe(false);
       expect(result.similarity).toBeLessThan(0.7);
-      // Early exit must skip the full pixel diff. A full diff on a 2000x1200
-      // image takes multiple seconds; 1s is a CI-safe ceiling that still catches
-      // a regression where the early-exit path is not taken, without flaking on
-      // slow/loaded shared runners.
-      // ponytail: absolute wall-clock bound; switch to a relative early-vs-full
-      // comparison if this ever flakes again.
-      expect(duration).toBeLessThan(1000);
+
+      // Issue #142. This asserted `duration < 1000` and its own comment
+      // pre-registered "switch to a relative early-vs-full comparison if this
+      // ever flakes again". A relative comparison would still be timing, and
+      // it turns out nothing timing-based is needed: the early-exit branch
+      // reports itself. `earlyExit` is the property the wall-clock bound was
+      // only ever a proxy for, and an empty diffBuffer corroborates it —
+      // skipping the full pixel diff is exactly why no mask gets generated.
+      expect(result.earlyExit).toBe(true);
+      expect(result.diffBuffer?.length).toBe(0);
     });
 
     it('should not early exit for similar large images', async () => {

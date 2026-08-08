@@ -661,7 +661,10 @@ describe('Visual Diff CLI E2E Tests', () => {
   });
 
   describe('Concurrency and Performance', () => {
-    it('should handle concurrent comparisons efficiently', async () => {
+    // Renamed from "...efficiently" with #142: the word described the deleted
+    // wall-clock bound, and a name that promises something the body no longer
+    // checks is how a test quietly stops meaning anything.
+    it('processes every page when comparisons run concurrently', async () => {
       const pages = Array.from(
         { length: 5 },
         (_, i) =>
@@ -695,14 +698,18 @@ describe('Visual Diff CLI E2E Tests', () => {
         updateBaseline: true,
       };
 
-      const startTime = Date.now();
       const runner = new VisualTestRunner(config);
       const result = await runner.run();
-      const duration = Date.now() - startTime;
 
+      // Issue #142: this used to also assert `duration < 30000`, which is the
+      // named example in that issue. Five real page captures against a fixed
+      // wall-clock ceiling fails whenever the machine is busy — and load only
+      // ever pushes elapsed time up, so the bound could break but never catch a
+      // regression it was not already catching. Jest's own timeout still stops a
+      // genuine runaway. What is actually worth asserting is that every page was
+      // processed under the concurrency cap, which is load-independent.
       // 5 pages × 1 default device.
       expect(result.summary.totalComparisons).toBe(5);
-      expect(duration).toBeLessThan(30000); // Should complete within 30 seconds
       expect(result.results).toHaveLength(5);
     });
   });

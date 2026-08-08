@@ -577,12 +577,24 @@ describe('ActionExecutor', () => {
 
       (click as jest.Mock).mockRejectedValue(new Error('Always fails'));
 
-      const startTime = Date.now();
-      await executor.executeAction(action, page);
-      const endTime = Date.now();
+      // Issue #142: this measured `endTime - startTime >= 300`. Load cannot
+      // break a lower bound — it only makes elapsed time larger — yet the test
+      // was observed failing, which is what pointed at the other mechanism this
+      // issue documents: the WSL2 system clock stepping backward mid-test.
+      //
+      // Asserting on the delay seam instead is immune to the clock and strictly
+      // stronger: elapsed >= 300 could not tell three 100ms waits apart from one
+      // 300ms stall, which is the thing that would actually be a bug.
+      const delaySpy = jest.spyOn(
+        executor as unknown as { delay(ms: number): Promise<void> },
+        'delay',
+      );
 
-      // Should have waited at least 3 * 100ms = 300ms for retries
-      expect(endTime - startTime).toBeGreaterThanOrEqual(300);
+      await executor.executeAction(action, page);
+
+      expect(delaySpy).toHaveBeenCalledTimes(3); // between 4 attempts
+      expect(delaySpy).toHaveBeenCalledWith(100);
+      delaySpy.mockRestore();
     });
 
     it('should not retry on certain error types', async () => {
@@ -733,11 +745,18 @@ describe('ActionExecutor', () => {
       mockPage.url.mockReturnValue('https://example.com/page');
       mockPage.title.mockResolvedValue('Example Page');
 
+      // Bracket the call rather than comparing against a later Date.now() with a
+      // fixed 100ms tolerance (#142): the window widens with load instead of
+      // breaking, and it asserts the real property — the stamp was taken during
+      // this call.
+      const before = Date.now();
       const context = await executor.getPageContext(page);
+      const after = Date.now();
 
       expect(context.url).toBe('https://example.com/page');
       expect(context.title).toBe('Example Page');
-      expect(context.timestamp).toBeCloseTo(Date.now(), -2); // Within 100ms
+      expect(context.timestamp).toBeGreaterThanOrEqual(before);
+      expect(context.timestamp).toBeLessThanOrEqual(after);
     });
 
     it('should handle page context retrieval failure', async () => {
