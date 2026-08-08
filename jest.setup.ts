@@ -42,6 +42,42 @@ process.env.IRIS_DB_PATH =
 // exercises the probe against a mocked fetch.
 process.env.IRIS_MODEL_PROBE = process.env.IRIS_MODEL_PROBE ?? '0';
 
+// Keep the developer's real credentials out of the suite (issue #185).
+//
+// `runCli()` calls `loadDotenv()`, which read `.env` from the working directory
+// — the repo root under Jest. A developer following `.env.example` therefore
+// had their real OPENAI_API_KEY/ANTHROPIC_API_KEY injected mid-test, which sent
+// `iris run` down its live-AI branch: four cli.test.ts tests failed on their
+// machine and passed in CI, and the run could bill real API calls.
+//
+// Aiming loadDotenv at an empty directory fixes it for every caller at once.
+// A per-test-file stub would not: visual-cli.test.ts remembered one, cli.test.ts
+// and a11y-cli.test.ts did not, and nothing stops the next file from forgetting.
+// A dedicated directory rather than os.tmpdir() itself — a stray /tmp/.env
+// would quietly reopen the hole.
+const dotenvFreeDir = path.join(os.tmpdir(), 'iris-jest-no-dotenv');
+fs.mkdirSync(dotenvFreeDir, { recursive: true });
+process.env.IRIS_DOTENV_DIR = process.env.IRIS_DOTENV_DIR ?? dotenvFreeDir;
+
+// `.env` is not the only route: `export OPENAI_API_KEY=…` in the developer's
+// shell reaches the suite the same way. Clear every variable IRIS resolves
+// provider identity from, so tests start against a known-empty environment.
+//
+// ONCE per test file, never in a beforeEach: visual-cli.test.ts assigns these
+// inside test bodies on purpose to exercise provider resolution, and a per-test
+// scrub would clobber it. IRIS_DB_PATH is excluded deliberately — set above.
+for (const key of [
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'OLLAMA_ENDPOINT',
+  'OPENAI_MODEL',
+  'ANTHROPIC_MODEL',
+  'OLLAMA_MODEL',
+  'IRIS_BASE_URL',
+]) {
+  delete process.env[key];
+}
+
 // Mock console methods to reduce noise in test output while preserving error logging
 const originalError = console.error;
 const originalWarn = console.warn;

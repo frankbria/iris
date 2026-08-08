@@ -139,6 +139,14 @@ cp .env.example .env
 Shell-exported variables take precedence over `.env`, so `export OPENAI_API_KEY=…`
 always overrides a file value.
 
+Set `IRIS_DOTENV_DIR` to read `.env` from somewhere other than the working
+directory — useful when invoking `iris` from a subdirectory of your project, or
+when you need to guarantee a stray `.env` is not picked up:
+
+```bash
+IRIS_DOTENV_DIR=/path/to/project iris run "click the login button"
+```
+
 ### Try the Demo (Fastest Way)
 
 ```bash

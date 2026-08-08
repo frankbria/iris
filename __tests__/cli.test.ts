@@ -1113,4 +1113,38 @@ describe('CLI Commands', () => {
       ]);
     });
   });
+  // ==========================================================================
+  // Issue #185: a developer's repo-root .env must not reach a CLI run.
+  //
+  // `runCli()` calls `loadDotenv()`, which read `.env` from the working
+  // directory — the repo root under Jest. A real OPENAI_API_KEY/ANTHROPIC_API_KEY
+  // landing in process.env mid-test sent `iris run` down its live-AI branch:
+  // the four tests above failed only on machines that had the file, and the run
+  // could bill real API calls. These assert the leak is closed at its source.
+  // ==========================================================================
+  describe('environment hermeticity (issue #185)', () => {
+    it('leaves no provider credential in process.env after a full CLI run', () => {
+      // The starting state the harness guarantees. If a `.env` were still being
+      // read, the keys below would be populated by the time this file loaded.
+      expect(process.env.OPENAI_API_KEY).toBeUndefined();
+      expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+    });
+
+    it('does not pick up repo-root .env credentials during runCli()', async () => {
+      // The precise regression: loadDotenv() runs *inside* this call, which is
+      // why a beforeEach scrub could never have fixed it.
+      await runCli(['node', 'iris', 'run', 'click #btn', '--dry-run']);
+
+      expect(process.env.OPENAI_API_KEY).toBeUndefined();
+      expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(process.env.OLLAMA_ENDPOINT).toBeUndefined();
+    });
+
+    // No "translate() used the pattern path" assertion here: `click #btn` is
+    // matched by the pattern grammar before AI is ever consulted, so it reports
+    // 'pattern' with or without a credential present. Verified by disabling the
+    // harness guard — the two tests above fail, that one did not. The billable
+    // -call property is covered by them plus the four --url/--json/--agent tests
+    // this issue was filed about, all of which do fail without the guard.
+  });
 });

@@ -576,4 +576,103 @@ describe('loadDotenv', () => {
     expect(() => loadDotenv(tmpDir)).not.toThrow();
     expect(process.env.OPENAI_API_KEY).toBeUndefined();
   });
+
+  // Issue #185: `runCli()` calls `loadDotenv()` with no argument, so under Jest
+  // it read the repo root and injected the developer's real keys mid-test. The
+  // override is what lets the harness aim that default somewhere empty.
+  describe('IRIS_DOTENV_DIR override (issue #185)', () => {
+    let savedOverride: string | undefined;
+
+    beforeEach(() => {
+      savedOverride = process.env.IRIS_DOTENV_DIR;
+    });
+
+    afterEach(() => {
+      if (savedOverride === undefined) delete process.env.IRIS_DOTENV_DIR;
+      else process.env.IRIS_DOTENV_DIR = savedOverride;
+      delete process.env.IRIS_DOTENV_DIR_PROBE;
+    });
+
+    it('reads from IRIS_DOTENV_DIR when called with no argument', () => {
+      writeEnv('IRIS_DOTENV_DIR_PROBE=from-override\n');
+      process.env.IRIS_DOTENV_DIR = tmpDir;
+
+      loadDotenv(); // no argument — the call shape runCli() uses
+
+      expect(process.env.IRIS_DOTENV_DIR_PROBE).toBe('from-override');
+    });
+
+    it('does not read process.cwd() when the override points elsewhere', () => {
+      // The whole point: a `.env` sitting in the working directory (the repo
+      // root, on a developer machine) must not be consulted.
+      process.env.IRIS_DOTENV_DIR = tmpDir; // no .env written here
+      expect(realFs.existsSync(path.join(tmpDir, '.env'))).toBe(false);
+
+      loadDotenv();
+
+      expect(process.env.OPENAI_API_KEY).toBeUndefined();
+      expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
+    });
+
+    it('lets an explicit argument win over the override', () => {
+      // Keeps the existing loadDotenv(tmpDir) cases above meaningful.
+      const other = realFs.mkdtempSync(path.join(realOs.tmpdir(), 'iris-env-explicit-'));
+      try {
+        realFs.writeFileSync(path.join(other, '.env'), 'IRIS_DOTENV_DIR_PROBE=from-argument\n');
+        writeEnv('IRIS_DOTENV_DIR_PROBE=from-override\n');
+        process.env.IRIS_DOTENV_DIR = tmpDir;
+
+        loadDotenv(other);
+
+        expect(process.env.IRIS_DOTENV_DIR_PROBE).toBe('from-argument');
+      } finally {
+        realFs.rmSync(other, { recursive: true, force: true });
+      }
+    });
+
+    it('falls back to process.cwd() when the override is unset', () => {
+      // cwd is stubbed rather than left as the repo root ON PURPOSE. An earlier
+      // draft of this test called loadDotenv() against the real working
+      // directory to prove the fallback — which loaded the developer's actual
+      // .env and injected a live API key into process.env, the exact defect
+      // this file is testing. Never point the fallback at the real repo root.
+      const other = realFs.mkdtempSync(path.join(realOs.tmpdir(), 'iris-env-cwd-'));
+      const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(other);
+      try {
+        realFs.writeFileSync(path.join(other, '.env'), 'IRIS_DOTENV_DIR_PROBE=from-cwd\n');
+        delete process.env.IRIS_DOTENV_DIR;
+
+        loadDotenv();
+
+        expect(process.env.IRIS_DOTENV_DIR_PROBE).toBe('from-cwd');
+      } finally {
+        cwdSpy.mockRestore();
+        realFs.rmSync(other, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+// The guard only works if the harness actually installs it. Asserting the
+// invariant here means deleting it from jest.setup.ts fails loudly rather than
+// silently restoring issue #185.
+describe('test harness hermeticity (issue #185)', () => {
+  const realFs = jest.requireActual('fs') as typeof fs;
+
+  it('points loadDotenv at a directory that is not the repo root', () => {
+    const dir = process.env.IRIS_DOTENV_DIR;
+    expect(dir).toBeTruthy();
+    expect(path.resolve(dir as string)).not.toBe(path.resolve(process.cwd()));
+  });
+
+  it('points loadDotenv at a directory containing no .env', () => {
+    const dir = process.env.IRIS_DOTENV_DIR as string;
+    expect(realFs.existsSync(path.join(dir, '.env'))).toBe(false);
+  });
+
+  // Deliberately NOT asserting here that process.env starts free of provider
+  // credentials: this file's own beforeEach already deletes them, so the
+  // assertion would pass whether or not the harness scrub exists. That property
+  // is checked in cli.test.ts, which does not scrub — verified by disabling the
+  // guard and watching it fail.
 });
