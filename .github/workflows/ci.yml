@@ -174,14 +174,32 @@ jobs:
                  "$DEPLOY_USER@$DEPLOY_HOST" true 2>/tmp/ssh-probe.err; then
             echo "::error::Cannot open a session to HOST:22 from this runner."
             echo "ssh said:"; sed 's/^/  /' /tmp/ssh-probe.err
-            echo "Most likely, in order:"
-            echo "  1. HOST is not the box's tailnet address. It must be the MagicDNS name"
-            echo "     or 100.x address - the public address is firewalled off from CI"
-            echo "     (ufw allows :22 only from the home subnet and on tailscale0)."
-            echo "     Note a trailing dot from 'tailscale status --json' is fine here but"
-            echo "     may not be what you pasted."
-            echo "  2. The tailnet ACL does not let tag:ci reach the box on port 22."
-            echo "  3. SSH_KNOWN_HOSTS is labelled with a different name than HOST."
+
+            # Evidence rather than a list of guesses. Three prior attempts were
+            # each diagnosed by inference and two of those inferences were wrong,
+            # so gather the facts that actually separate the causes.
+            #
+            # None of this prints HOST itself: it is a registered secret, and a
+            # derived boolean or a peer list is not the value.
+            echo "--- diagnosis ---"
+            case "$DEPLOY_HOST" in
+              *.ts.net|*.ts.net.|100.*) echo "HOST shape: looks like a tailnet address" ;;
+              *) echo "HOST shape: does NOT look like a tailnet address (not *.ts.net or 100.x)" ;;
+            esac
+            echo "runner tailnet state:"
+            tailscale status 2>&1 | sed 's/^/  /' | head -15 || echo "  (tailscale status unavailable)"
+            # `tailscale ping` distinguishes the two timeout-shaped causes: it
+            # reports an ACL denial explicitly, whereas an address that is not on
+            # the tailnet at all simply never resolves to a peer.
+            echo "tailscale ping:"
+            timeout 20 tailscale ping --timeout=5s --c=3 "$DEPLOY_HOST" 2>&1 | sed 's/^/  /' | head -8 \
+              || echo "  (ping failed or host is not a tailnet peer)"
+            echo "-----------------"
+            echo "Read it as:"
+            echo "  shape NOT tailnet            -> HOST is wrong; re-set it (secrets are write-only,"
+            echo "                                  so it cannot be read back to check)."
+            echo "  shape ok + ping says ACL     -> tailnet ACL must allow tag:ci -> the box on :22."
+            echo "  shape ok + no peer found     -> HOST names something not on this tailnet."
             exit 1
           fi
 
