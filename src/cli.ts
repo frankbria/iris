@@ -557,7 +557,12 @@ program
     // 127.0.0.1 bind means the service starts, looks healthy, and refuses every
     // connection (issue #192). Widen it only where something else — a published
     // port scoped to 127.0.0.1, a private network — provides the boundary.
-    const host = options.host ?? process.env.IRIS_CONNECT_HOST ?? '127.0.0.1';
+    // `||`, not `??`: an empty value means "unset", and `??` would keep `''`,
+    // which WebSocketServer treats as "bind every interface" — silently widening
+    // the boundary for an operator whose wrapper script wrote
+    // `export IRIS_CONNECT_HOST=` meaning the opposite. Same trap as #185's
+    // IRIS_DOTENV_DIR.
+    const host = options.host || process.env.IRIS_CONNECT_HOST || '127.0.0.1';
 
     // A supplied token is used verbatim so a deployed instance keeps a stable
     // credential across restarts; without one, a fresh per-session token is

@@ -41,10 +41,9 @@ services:
     #
     # It deliberately stops short of launching a browser. `getStatus` reports
     # ready without touching Chromium, so this does NOT prove the browser layer
-    # works — the deploy runs `--with-browser` once for that. Launching Chromium
-    # every 30s would burn memory on a shared box and make the probe its own
-    # stability risk. Review finding on #192; the earlier comment here claimed
-    # coverage this check does not have.
+    # works — the deploy verifies that once, with a direct
+    # `playwright.chromium.launch()`. Launching Chromium every 30s would burn
+    # memory on a shared box and make the probe its own stability risk.
     #
     # Lives in docker/healthcheck.js because compose reads `${...}` in an inline
     # script as its own interpolation syntax.

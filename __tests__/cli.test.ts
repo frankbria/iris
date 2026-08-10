@@ -122,6 +122,22 @@ describe('CLI Commands', () => {
       expect(startArgs()[1].host).toBe('0.0.0.0');
     });
 
+    // Review finding on #192, and the third instance of this shape after #185's
+    // IRIS_DOTENV_DIR: `??` only treats null/undefined as unset, so an empty
+    // string survives — and WebSocketServer reads '' as "bind every interface".
+    // A wrapper script writing `export IRIS_CONNECT_HOST=` to mean "unset" would
+    // have silently exposed a browser driver on all interfaces.
+    it('treats an empty IRIS_CONNECT_HOST as unset, not as bind-everything', async () => {
+      process.env.IRIS_CONNECT_HOST = '';
+      await runCli(['node', 'iris', 'connect']);
+      expect(startArgs()[1].host).toBe('127.0.0.1');
+    });
+
+    it('treats an empty --host as unset too', async () => {
+      await runCli(['node', 'iris', 'connect', '--host', '']);
+      expect(startArgs()[1].host).toBe('127.0.0.1');
+    });
+
     it('binds the host given by IRIS_CONNECT_HOST', async () => {
       process.env.IRIS_CONNECT_HOST = '0.0.0.0';
       await runCli(['node', 'iris', 'connect']);
