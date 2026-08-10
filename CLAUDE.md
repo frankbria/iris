@@ -161,6 +161,34 @@ plans/
   - `SmartAIVisionClient` rethrows `ModelUnavailableError` instead of stepping to the next vendor — that swallow is what made a retired model read as "all providers failed". Text clients resolve via `createResolvedAIClient()`; `loadConfig()` stays synchronous
   - Caveat: `CostTracker` prices by exact model ID, so a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) has no pricing row and falls into the #126 "unknown price is billable" path — budget-safe, but unpriced until a row is added
 
+### Container Deployment (issue #192)
+
+`Dockerfile`, `.dockerignore`, `docker-compose.staging.yml` and
+`docker/healthcheck.js` ship IRIS as a container. Four constraints are easy to
+break and expensive to rediscover:
+
+- **Base image is `mcr.microsoft.com/playwright:v<version>-noble`**, tracking the
+  `playwright` version in package.json. It carries Chromium *and* its system
+  libraries, so no `playwright install --with-deps` at build time. Verified to
+  ship Node v24.18.1, satisfying the `engines` floor. Keep the tag in step with
+  the library — they are matched pairs.
+- **Three stages, deliberately.** `better-sqlite3` has no prebuilt binary here
+  and needs node-gyp, which the Playwright image has no `make` for; the compiler
+  goes in a `deps` stage and never reaches the shipped image. That stage runs
+  `npm ci --omit=dev --ignore-scripts` then `npm rebuild better-sqlite3`, because
+  the full lifecycle fails: `"prepare": "npm run build"` needs TypeScript, which
+  `--omit=dev` has just removed.
+- **The container binds `0.0.0.0`, the host publishes on `127.0.0.1`.** Docker
+  forwards a published port to the container's network interface, not its
+  loopback, so a loopback bind inside the container refuses every connection
+  while looking healthy. The security boundary is the host-side mapping.
+- **`shm_size: 1gb`.** Chromium exhausts Docker's 64 MB default and the crash
+  reads as an opaque browser disconnect.
+
+The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
+open — the socket listens long before the browser layer is usable. It lives in a
+file because compose interprets `${...}` in an inline script as its own syntax.
+
 ### A Red Suite May Be the Machine, Not the Diff (issue #142)
 
 Before treating a local test failure as a regression, check whether the host was

@@ -87,6 +87,12 @@ for (const key of [
   'ANTHROPIC_MODEL',
   'OLLAMA_MODEL',
   'IRIS_BASE_URL',
+  // Added with #192, which taught `iris connect` to read these. Without them
+  // here an exported IRIS_CONNECT_HOST=0.0.0.0 fails the connect-default test on
+  // a developer's machine while CI stays green — #185 exactly, recurring the
+  // first time someone added an env var and forgot this list.
+  'IRIS_CONNECT_HOST',
+  'IRIS_CONNECT_TOKEN',
 ]) {
   delete process.env[key];
 }

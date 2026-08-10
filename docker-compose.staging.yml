@@ -1,0 +1,70 @@
+# Staging runtime for IRIS (issue #192).
+#
+# Committed so the port, environment, restart policy and healthcheck are
+# reviewable in a diff. That is the substantive difference from the pm2 setup it
+# replaces: pm2 captures the environment at `pm2 start` and replays boot state
+# from a `dump.pm2` snapshot someone has to remember to `pm2 save`, so what comes
+# back after a reboot is whatever was saved, whenever that was. Here the running
+# state is derived from this file, and `docker compose up -d` is idempotent.
+
+services:
+  iris:
+    image: ghcr.io/frankbria/iris:${IRIS_TAG:-staging}
+    container_name: iris-staging
+    restart: unless-stopped
+
+    # Host side is pinned to loopback ON PURPOSE. This service drives a real
+    # browser and speaks an RPC that can navigate anywhere, so anything routable
+    # that reaches it is an SSRF engine with one bearer token in front. Reach it
+    # over SSH or the tailnet; do not publish it on 0.0.0.0, and do not put it
+    # behind nginx on 443 without first deciding what authenticates.
+    #
+    # The container-side bind is 0.0.0.0 (set in the Dockerfile) because Docker
+    # forwards a published port to the container's network interface, not its
+    # loopback.
+    ports:
+      - '127.0.0.1:4000:4000'
+
+    environment:
+      # Stable across restarts, unlike the per-start random token, so clients and
+      # the healthcheck keep working after a bounce. Supply it from the host
+      # environment or a .env file beside this compose file — never commit it.
+      IRIS_CONNECT_TOKEN: ${IRIS_CONNECT_TOKEN:?IRIS_CONNECT_TOKEN must be set}
+      # Keep run history inside the named volume rather than the container layer.
+      IRIS_DB_PATH: /data/iris.db
+
+    volumes:
+      - iris-data:/data
+
+    # An authenticated JSON-RPC round trip, not a TCP open: a listening socket
+    # says nothing about whether the token is accepted or the RPC layer answers.
+    #
+    # It deliberately stops short of launching a browser. `getStatus` reports
+    # ready without touching Chromium, so this does NOT prove the browser layer
+    # works — the deploy verifies that once, with a direct
+    # `playwright.chromium.launch()`. Launching Chromium every 30s would burn
+    # memory on a shared box and make the probe its own stability risk.
+    #
+    # Lives in docker/healthcheck.js because compose reads `${...}` in an inline
+    # script as its own interpolation syntax.
+    healthcheck:
+      test: ['CMD', 'node', '/app/docker/healthcheck.js']
+      interval: 30s
+      timeout: 15s
+      # Chromium's first launch after a cold start is slow; a short grace period
+      # would report a healthy service as failed while it is still warming.
+      start_period: 60s
+      retries: 3
+
+    # Chromium needs more than Docker's 64 MB default here — a page render can
+    # exhaust it and the crash surfaces as an opaque browser disconnect.
+    shm_size: 1gb
+
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  iris-data:

@@ -292,6 +292,46 @@ The server binds to `127.0.0.1` and prints a per-session auth token on startup.
 Clients must send it on the WebSocket handshake as an `Authorization: Bearer <token>`
 header; connections without the token are rejected (close code `1008`).
 
+Both can be overridden, which is what makes the server deployable:
+
+| setting | flag | environment | default |
+|---|---|---|---|
+| bind address | `--host <addr>` | `IRIS_CONNECT_HOST` | `127.0.0.1` |
+| auth token | — | `IRIS_CONNECT_TOKEN` | random per start |
+
+A supplied token is used verbatim and **not** printed — it stays out of the logs,
+and it survives a restart, which a per-session token does not.
+
+> ⚠️ **Widening the bind address exposes a browser driver.** This server can be
+> told to navigate anywhere, so anything that can reach it is an SSRF engine with
+> one bearer token in front of it. Only widen it where something else provides the
+> boundary — a published port scoped to loopback, or a private network. Never put
+> it on a public interface.
+
+### Running it as a container
+
+```bash
+docker build -t iris .
+docker run -d --name iris \
+  --shm-size=1g \
+  -e IRIS_CONNECT_TOKEN="$(openssl rand -hex 32)" \
+  -p 127.0.0.1:4000:4000 \
+  iris
+```
+
+`docker-compose.staging.yml` is the deployed form of the same thing.
+
+Two container specifics worth knowing:
+
+- **The container binds `0.0.0.0` internally** (`IRIS_CONNECT_HOST` is set in the
+  image). It has to: Docker forwards a published port to the container's network
+  interface, not its loopback, so a `127.0.0.1` bind would start, report healthy,
+  and refuse every connection. The boundary is the `127.0.0.1:` prefix on the
+  published port, which keeps it off external interfaces.
+- **`--shm-size=1g`.** Chromium needs more shared memory than Docker's 64 MB
+  default; without it a page render can exhaust it and surface as an opaque
+  browser disconnect.
+
 > **Experimental / legacy — frozen.** A bespoke WebSocket protocol that no mainstream
 > AI assistant speaks. It keeps working and keeps its security fixes, but takes no new
 > features pending the MCP direction; two of its methods still return placeholder data
