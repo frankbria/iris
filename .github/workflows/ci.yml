@@ -116,6 +116,8 @@ jobs:
           DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
           IRIS_CONNECT_TOKEN: ${{ secrets.IRIS_CONNECT_TOKEN }}
           IMAGE_TAG: ${{ github.sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           install -m 700 -d ~/.ssh
@@ -147,11 +149,27 @@ jobs:
           shred -u /tmp/iris.env 2>/dev/null || rm -f /tmp/iris.env
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" 'chmod 600 /opt/iris/.env'
 
+          # The box has to authenticate to GHCR: a newly published package is
+          # private by default even for a public repo, so an anonymous pull fails
+          # with "unauthorized".
+          #
+          # The token arrives over ssh's STDIN, not as an argument — a remote
+          # command line is readable in the host's process list by every other
+          # user on this shared box. And it is the run-scoped GITHUB_TOKEN rather
+          # than a stored PAT, so nothing long-lived is left behind; the logout
+          # below drops even that.
+          printf '%s' "$GHCR_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+
           # `docker compose up -d` derives running state from these files, so
           # this is idempotent: re-running leaves the same healthy state rather
           # than stacking another copy.
+          #
+          # `|| :` on the logout so a registry hiccup at teardown cannot fail an
+          # otherwise-good deploy; the credential is short-lived regardless.
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            'cd /opt/iris && docker compose pull --quiet && docker compose up -d --remove-orphans'
+            'cd /opt/iris && docker compose pull --quiet && docker compose up -d --remove-orphans; \
+             rc=$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit $rc'
 
           # Smoke test: wait for the container's own healthcheck to report
           # healthy, then fail the job if it does not. The healthcheck completes
