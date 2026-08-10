@@ -161,6 +161,29 @@ plans/
   - `SmartAIVisionClient` rethrows `ModelUnavailableError` instead of stepping to the next vendor — that swallow is what made a retired model read as "all providers failed". Text clients resolve via `createResolvedAIClient()`; `loadConfig()` stays synchronous
   - Caveat: `CostTracker` prices by exact model ID, so a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) has no pricing row and falls into the #126 "unknown price is billable" path — budget-safe, but unpriced until a row is added
 
+### A Red Suite May Be the Machine, Not the Diff (issue #142)
+
+Before treating a local test failure as a regression, check whether the host was
+busy. Suites that drive a real Chromium miss their deadlines under CPU load, and
+the result reads like a logic bug: a different test each run, usually in code the
+change never touched. Re-run the failing suite alone on a quiet machine — passes
+alone, fails in the full run means host load.
+
+Measured at `53ba416`: **5/5 clean unloaded, 4/8 clean with half the cores
+consumed.** `--coverage` is more prone to it, since instrumentation alone can tip
+an operation over its deadline.
+
+Do not "fix" it by raising a timeout or reducing Jest concurrency. Both were
+measured and rejected: serialising the browser suites gave an identical failure
+rate for +65% wall clock, those suites still failed running one at a time (so
+concurrent browser count is not the variable), and the protocol suite's 10s
+timeout is 20/20 clean idle against a workflow costing 1.6-3.2s. Raising a limit
+deletes the signal rather than the problem.
+
+Separately: a negative elapsed time in output is the WSL2 clock stepping
+backward, not contention. It is why no assertion here is written against a
+`Date.now()` delta — see #190 for the seven that were replaced.
+
 ### Test Hermeticity (issue #185)
 
 `jest.setup.ts` is where the suite is insulated from the developer's machine.
