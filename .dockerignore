@@ -1,0 +1,28 @@
+# Keep the build context small and free of anything secret or host-specific.
+
+node_modules
+dist
+coverage
+
+.git
+.github
+
+# Never let a developer's credentials into an image layer. A repo-root .env has
+# already caused one incident (#185, where it leaked into the test suite); an
+# image is a worse place for it to end up, because images get pushed.
+.env
+.env.*
+!.env.example
+
+# Local IRIS state: baselines, screenshots, SQLite caches and cost history.
+.iris
+
+__tests__
+plans
+docs
+*.md
+!README.md
+
+.vscode
+.idea
+*.log

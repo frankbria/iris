@@ -539,21 +539,44 @@ program
     (v) => parseIntOption(v, { min: 1, max: 65535, name: 'port' }),
     4000,
   )
-  .action(async (port: number) => {
+  .option(
+    '--host <address>',
+    'Address to bind (default 127.0.0.1; also IRIS_CONNECT_HOST). ' +
+      'Only widen this behind a trusted boundary — see the warning below',
+  )
+  .action(async (port: number, options: { host?: string }) => {
     const { startServer } = await import('./protocol');
     const { randomBytes } = await import('crypto');
 
-    // Per-session token. The server binds to 127.0.0.1 (loopback only) and now
-    // also requires this token in an `Authorization: Bearer` header — a browser
-    // page cannot set that header, so cross-site WebSocket hijacking and other
-    // origin-less local processes are locked out. Clients read the token below.
-    const authToken = randomBytes(32).toString('hex');
-    const wss = startServer(port, { authToken });
-    // Print the real bind address: startServer binds 127.0.0.1 (IPv4 only), so
-    // advertising `localhost` would send dual-stack clients to ::1 and miss the
-    // listener — making the new auth handshake look broken.
-    console.log(`JSON-RPC server listening on ws://127.0.0.1:${port}`);
-    console.log(`Auth token (send as "Authorization: Bearer <token>"):\n  ${authToken}`);
+    // Bind address, most explicit first. The default stays loopback: this server
+    // drives a real browser, so a wider bind turns it into an SSRF engine that
+    // anything routable can reach (see src/url-policy.ts for why that matters).
+    //
+    // It is configurable at all because a container cannot use loopback: Docker
+    // forwards a published port to the container's network interface, so a
+    // 127.0.0.1 bind means the service starts, looks healthy, and refuses every
+    // connection (issue #192). Widen it only where something else — a published
+    // port scoped to 127.0.0.1, a private network — provides the boundary.
+    const host = options.host ?? process.env.IRIS_CONNECT_HOST ?? '127.0.0.1';
+
+    // A supplied token is used verbatim so a deployed instance keeps a stable
+    // credential across restarts; without one, a fresh per-session token is
+    // generated exactly as before. Either way the server requires it in an
+    // `Authorization: Bearer` header — a browser page cannot set that header, so
+    // cross-site WebSocket hijacking and origin-less local processes are locked out.
+    const suppliedToken = process.env.IRIS_CONNECT_TOKEN;
+    const authToken = suppliedToken || randomBytes(32).toString('hex');
+
+    const wss = startServer(port, { host, authToken });
+    // Advertise the address actually bound. Hardcoding 127.0.0.1 here would
+    // describe a container as unreachable while it works fine, and advertising
+    // `localhost` would send dual-stack clients to ::1 and miss an IPv4 listener.
+    console.log(`JSON-RPC server listening on ws://${host}:${port}`);
+    // Only echo a token this process invented. Reprinting a supplied one tells
+    // the operator what they already know and copies a secret into the logs.
+    if (!suppliedToken) {
+      console.log(`Auth token (send as "Authorization: Bearer <token>"):\n  ${authToken}`);
+    }
 
     // Close the server on Ctrl+C / termination so wss.on('close') drains
     // in-flight sessions (executor.cleanup) instead of being skipped. Existing

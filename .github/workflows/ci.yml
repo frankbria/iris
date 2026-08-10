@@ -25,3 +25,107 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
+
+  # Build and deploy the container to staging (issue #192).
+  #
+  # Only on a merge to main, and only after `build` is green — a deploy is not a
+  # place to discover a failing test. Skips itself cleanly when the staging
+  # secrets are absent, so a fork or a repo without them gets a green CI rather
+  # than a permanently red job it cannot fix.
+  deploy-staging:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push the image to GHCR
+    # Two merges in quick succession must not interleave a half-pulled image.
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v7
+
+      # Everything below is pointless without a target. Checked once, up front,
+      # so the job reports "skipped, no secrets" instead of failing five steps in
+      # with an opaque ssh error.
+      - id: preflight
+        run: |
+          if [ -z "${{ secrets.STAGING_HOST }}" ] || [ -z "${{ secrets.STAGING_SSH_KEY }}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Staging secrets not configured - skipping deploy."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.preflight.outputs.configured == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - if: steps.preflight.outputs.configured == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      # Tagged with the commit SHA as well as `staging`, because that is what
+      # makes rollback a one-liner: redeploy a previous SHA.
+      - if: steps.preflight.outputs.configured == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:staging
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - if: steps.preflight.outputs.configured == 'true'
+        name: Deploy and smoke test
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          IRIS_CONNECT_TOKEN: ${{ secrets.IRIS_CONNECT_TOKEN }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$STAGING_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          scp -i ~/.ssh/deploy_key docker-compose.staging.yml \
+            "$STAGING_USER@$STAGING_HOST:/opt/iris/docker-compose.yml"
+
+          # `docker compose up -d` derives running state from the file, so this
+          # is idempotent: re-running it leaves the same healthy state rather
+          # than stacking another copy.
+          ssh -i ~/.ssh/deploy_key "$STAGING_USER@$STAGING_HOST" \
+            "cd /opt/iris && \
+             IRIS_TAG='$IMAGE_TAG' IRIS_CONNECT_TOKEN='$IRIS_CONNECT_TOKEN' \
+             docker compose pull --quiet && \
+             IRIS_TAG='$IMAGE_TAG' IRIS_CONNECT_TOKEN='$IRIS_CONNECT_TOKEN' \
+             docker compose up -d --remove-orphans"
+
+          # Smoke test: wait for the container's own healthcheck to report
+          # healthy, then fail the job if it does not. The healthcheck completes
+          # an authenticated JSON-RPC round trip, so "healthy" means the service
+          # actually serves — not merely that a port is open.
+          ssh -i ~/.ssh/deploy_key "$STAGING_USER@$STAGING_HOST" '
+            set -eu
+            for i in $(seq 1 30); do
+              status=$(docker inspect -f "{{.State.Health.Status}}" iris-staging 2>/dev/null || echo missing)
+              [ "$status" = healthy ] && { echo "healthy after ${i}0s"; exit 0; }
+              [ "$status" = unhealthy ] && break
+              sleep 10
+            done
+            echo "iris-staging did not become healthy; last status: ${status:-unknown}"
+            docker logs --tail 50 iris-staging 2>&1 || true
+            exit 1
+          '
+
+          # Independent of the healthcheck: prove the shipped CLI runs.
+          ssh -i ~/.ssh/deploy_key "$STAGING_USER@$STAGING_HOST" \
+            "docker exec iris-staging node dist/cli.js --version"

@@ -50,7 +50,10 @@ describe('CLI Commands', () => {
     expect(consoleOutput).toContain('JSON-RPC server listening on ws://127.0.0.1:4000');
     // connect now generates a per-session auth token and passes it to the server,
     // and prints it so local tooling can send it as an Authorization: Bearer header.
+    // `host` joined the options in #192. Asserted explicitly rather than
+    // loosened away, so the loopback default stays pinned by this test.
     expect(startServerSpy).toHaveBeenCalledWith(4000, {
+      host: '127.0.0.1',
       authToken: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     expect(consoleOutput).toEqual(
@@ -64,6 +67,99 @@ describe('CLI Commands', () => {
     for (const l of process.listeners('SIGTERM').slice(sigtermBefore)) {
       process.removeListener('SIGTERM', l);
     }
+  });
+
+  // ==========================================================================
+  // Issue #192: `iris connect` could not run in a container.
+  //
+  // startServer() has always accepted { host } (protocol.ts:94) but connect
+  // never passed it, so the bind address was hardcoded to 127.0.0.1. Docker
+  // forwards a published port to the container's network interface, not its
+  // loopback, so a containerised server started, looked healthy, and refused
+  // every connection. The token had the matching problem: minted per start and
+  // only printed, so it rotated on every restart and no healthcheck could
+  // authenticate.
+  //
+  // Both defaults are deliberately unchanged — loopback and a random token —
+  // so a bare `iris connect` behaves exactly as before.
+  // ==========================================================================
+  describe('connect host and token overrides (issue #192)', () => {
+    const ENV_KEYS = ['IRIS_CONNECT_HOST', 'IRIS_CONNECT_TOKEN'];
+    let sigintBefore: number;
+    let sigtermBefore: number;
+
+    beforeEach(() => {
+      ENV_KEYS.forEach((k) => delete process.env[k]);
+      sigintBefore = process.listeners('SIGINT').length;
+      sigtermBefore = process.listeners('SIGTERM').length;
+      jest.spyOn(protocolModule, 'startServer').mockReturnValue({ close: jest.fn() } as never);
+    });
+
+    afterEach(() => {
+      ENV_KEYS.forEach((k) => delete process.env[k]);
+      // The action installs signal handlers; drop them so they do not leak.
+      for (const l of process.listeners('SIGINT').slice(sigintBefore)) {
+        process.removeListener('SIGINT', l);
+      }
+      for (const l of process.listeners('SIGTERM').slice(sigtermBefore)) {
+        process.removeListener('SIGTERM', l);
+      }
+    });
+
+    const startArgs = () =>
+      (protocolModule.startServer as jest.Mock).mock.calls[0] as [
+        number,
+        { host?: string; authToken?: string },
+      ];
+
+    it('defaults to loopback when neither flag nor env is set', async () => {
+      await runCli(['node', 'iris', 'connect']);
+      expect(startArgs()[1].host).toBe('127.0.0.1');
+    });
+
+    it('binds the host given by --host', async () => {
+      await runCli(['node', 'iris', 'connect', '--host', '0.0.0.0']);
+      expect(startArgs()[1].host).toBe('0.0.0.0');
+    });
+
+    it('binds the host given by IRIS_CONNECT_HOST', async () => {
+      process.env.IRIS_CONNECT_HOST = '0.0.0.0';
+      await runCli(['node', 'iris', 'connect']);
+      expect(startArgs()[1].host).toBe('0.0.0.0');
+    });
+
+    it('lets --host win over IRIS_CONNECT_HOST', async () => {
+      process.env.IRIS_CONNECT_HOST = '10.0.0.1';
+      await runCli(['node', 'iris', 'connect', '--host', '0.0.0.0']);
+      expect(startArgs()[1].host).toBe('0.0.0.0');
+    });
+
+    it('advertises the address it actually bound, not a hardcoded one', async () => {
+      // Printing 127.0.0.1 while listening on 0.0.0.0 is how the old code would
+      // have made a working container look broken.
+      await runCli(['node', 'iris', 'connect', '--host', '0.0.0.0']);
+      expect(consoleOutput).toContain('JSON-RPC server listening on ws://0.0.0.0:4000');
+    });
+
+    it('uses IRIS_CONNECT_TOKEN verbatim when supplied', async () => {
+      process.env.IRIS_CONNECT_TOKEN = 'supplied-token-value';
+      await runCli(['node', 'iris', 'connect']);
+      expect(startArgs()[1].authToken).toBe('supplied-token-value');
+    });
+
+    it('does not print a supplied token', async () => {
+      // The operator already has it; echoing it only copies a secret into the
+      // container logs.
+      process.env.IRIS_CONNECT_TOKEN = 'supplied-token-value';
+      await runCli(['node', 'iris', 'connect']);
+      expect(consoleOutput.join('\n')).not.toContain('supplied-token-value');
+    });
+
+    it('still generates and prints a token when none is supplied', async () => {
+      await runCli(['node', 'iris', 'connect']);
+      expect(startArgs()[1].authToken).toMatch(/^[0-9a-f]{64}$/);
+      expect(consoleOutput.join('\n')).toContain(startArgs()[1].authToken as string);
+    });
   });
 
   test('connect command registers graceful shutdown that closes the server (issue #37)', async () => {
