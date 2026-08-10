@@ -1068,13 +1068,12 @@ gh issue view 71
 ## Testing
 
 **Test Coverage:**
-- Total: 828 tests (827 passing, 99.9% pass rate)
+- Total: 1240 tests (1239 passing, 1 skipped)
 - Failing: 0
-- Skipped: 1
-- Overall coverage: 75.7% statements (target: 85%)
-  - Branch coverage: 57.34% (primary improvement opportunity)
+- Overall coverage: 93.07% statements (target: 85%)
+  - Branch coverage: 82.4%
 
-_Metrics last verified: 2026-06-26_
+_Metrics last verified: 2026-08-09_
 
 **Test Suites:**
 - Unit tests for all core modules
@@ -1082,6 +1081,45 @@ _Metrics last verified: 2026-06-26_
 - E2E tests: visual and accessibility suites passing (1 visual case skipped)
 - Browser automation tests with real Playwright
 - Performance benchmarks
+
+### If the suite is red on your machine but green in CI
+
+**Check the machine before you check your diff.** Several suites drive a real
+Chromium, and a Playwright operation that normally takes ~2s will blow its
+deadline when the CPU is busy. The failures look nothing like a timing problem:
+you get an assertion failure or a 30s Jest timeout, in a different test each
+run, usually somewhere you did not touch.
+
+Tell the two apart in one step — **re-run the failing suite on its own with the
+machine quiet**:
+
+```bash
+npx jest __tests__/e2e/a11y-e2e.test.ts
+```
+
+Passes alone, fails in the full run? That is host load, not your change. The
+full suite is **5/5 clean on an unloaded machine** and **4/8 clean with half the
+cores consumed** — measured, not estimated (issue #142).
+
+Two things worth knowing before you try to fix it:
+
+- **Jest-level remedies do not work here, and they have been measured.**
+  Serialising the browser suites gives an identical failure rate for +65% wall
+  clock, and those suites still fail when running strictly one at a time — so
+  the number of concurrent browsers is not the variable. Capping workers or
+  sharing one browser instance will cost you time and buy nothing.
+- **Do not raise a timeout to make it go away.** The limits are not tight: the
+  protocol suite's 10s request timeout is 20/20 clean when idle against a
+  workflow that normally costs 1.6–3.2s. Raising it removes the signal, not the
+  problem.
+
+`npm test -- --coverage` is more prone to this than a plain run — Istanbul's
+instrumentation slows everything down, which is enough to tip a browser
+operation over its deadline on its own.
+
+A negative elapsed time in test output (`✓ … (-1286 ms)`) is a separate thing:
+the WSL2 system clock stepping backward, not contention. It is why assertions in
+this repo avoid `Date.now()` deltas.
 
 ---
 
