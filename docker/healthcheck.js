@@ -1,17 +1,28 @@
 #!/usr/bin/env node
 /**
- * Container healthcheck for `iris connect` (issue #192).
+ * Container health probe for `iris connect` (issue #192).
  *
- * A TCP open proves nothing here: the socket is listening long before the
- * browser layer is usable, and a wedged Chromium leaves a perfectly healthy
- * looking port behind. This completes a real authenticated JSON-RPC round trip
- * instead, so an unhealthy report means the service genuinely cannot serve.
+ * Completes an authenticated JSON-RPC round trip: the socket is up, the bearer
+ * token is accepted, and the RPC layer answers. Cheap enough to run every 30s.
+ *
+ * What it deliberately does NOT prove is that Chromium works. `getStatus`
+ * reports `status: 'ready'` without touching the browser (src/protocol.ts:234),
+ * so a container with a missing or broken browser stays "healthy" here until
+ * something asks it to navigate.
+ *
+ * An earlier version of this file took a `--with-browser` flag that called the
+ * `launchBrowser` RPC for that. It was removed because it could not fail:
+ * `createBrowserSession` (protocol.ts:346) only constructs an ActionExecutor and
+ * returns `page: null` — no browser is started, yet the RPC answers "Browser
+ * launched successfully". Verified by deleting /ms-playwright and watching the
+ * probe still pass. The deploy checks the browser directly instead, with a
+ * `playwright.chromium.launch()` that genuinely fails when it is broken.
  *
  * Kept as a file rather than inlined into docker-compose.yml: compose treats
- * `${...}` as its own interpolation syntax, so an inline script has to escape
- * every `$`, which is both unreadable and easy to get subtly wrong.
+ * `${...}` as its own interpolation syntax, so an inline script would have to
+ * escape every `$`.
  *
- * Exit 0 = healthy. Any other exit, and the reason on stderr, = unhealthy.
+ * Exit 0 = pass. Any other exit, with a reason on stderr, = fail.
  */
 
 const WebSocket = require('ws');
@@ -26,9 +37,9 @@ function fail(reason) {
 }
 
 if (!TOKEN) {
-  // Without the token the probe cannot authenticate, and would report every
+  // Without the token the probe cannot authenticate and would report every
   // healthy container as failing. That is a misconfiguration, not ill health,
-  // so say which one it is.
+  // so name which one it is.
   fail('IRIS_CONNECT_TOKEN is not set in the container environment');
 }
 
@@ -41,12 +52,11 @@ const ws = new WebSocket(`ws://127.0.0.1:${PORT}`, {
 
 const timer = setTimeout(() => fail(`no response within ${TIMEOUT_MS}ms`), TIMEOUT_MS);
 
-ws.on('open', () => {
-  ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getStatus', params: {} }));
-});
+ws.on('open', () =>
+  ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getStatus', params: {} })),
+);
 
 ws.on('message', (raw) => {
-  clearTimeout(timer);
   let response;
   try {
     response = JSON.parse(raw.toString());
@@ -56,6 +66,7 @@ ws.on('message', (raw) => {
   if (response.error) {
     return fail(`rpc error: ${JSON.stringify(response.error)}`);
   }
+  clearTimeout(timer);
   ws.close();
   process.exit(0);
 });
@@ -64,7 +75,7 @@ ws.on('message', (raw) => {
 // server accepts the upgrade and then rejects the connection.
 ws.on('close', (code, reason) => {
   clearTimeout(timer);
-  fail(`connection closed before responding (code ${code}${reason ? `: ${reason}` : ''})`);
+  fail(`connection closed before completing (code ${code}${reason ? `: ${reason}` : ''})`);
 });
 
 ws.on('error', (err) => {

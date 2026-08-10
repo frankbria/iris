@@ -50,8 +50,23 @@ jobs:
       # so the job reports "skipped, no secrets" instead of failing five steps in
       # with an opaque ssh error.
       - id: preflight
+        # Secrets travel via `env`, never interpolated into the script body with
+        # `${{ }}`. A `${{ }}` expansion is substituted as literal text before
+        # bash sees it, so a value containing shell metacharacters would execute
+        # — the standard Actions script-injection footgun. Through `env` the
+        # value is only ever a variable.
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          IRIS_CONNECT_TOKEN: ${{ secrets.IRIS_CONNECT_TOKEN }}
         run: |
-          if [ -z "${{ secrets.STAGING_HOST }}" ] || [ -z "${{ secrets.STAGING_SSH_KEY }}" ]; then
+          # All four, not just the two the ssh call needs first. Checking a
+          # subset meant a missing STAGING_USER or IRIS_CONNECT_TOKEN still built
+          # and pushed an image before failing at scp — work done and a registry
+          # tag moved, for a deploy that was never going to land.
+          if [ -z "$STAGING_HOST" ] || [ -z "$STAGING_USER" ] \
+             || [ -z "$STAGING_SSH_KEY" ] || [ -z "$IRIS_CONNECT_TOKEN" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Staging secrets not configured - skipping deploy."
           else
@@ -87,6 +102,7 @@ jobs:
           STAGING_HOST: ${{ secrets.STAGING_HOST }}
           STAGING_USER: ${{ secrets.STAGING_USER }}
           STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
           IRIS_CONNECT_TOKEN: ${{ secrets.IRIS_CONNECT_TOKEN }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
@@ -94,20 +110,37 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$STAGING_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$STAGING_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
+          # Prefer a pinned host key when one is configured. ssh-keyscan is
+          # trust-on-first-use: it accepts whatever key answers at that moment,
+          # so it authenticates nothing against an active MITM. Set
+          # STAGING_SSH_KNOWN_HOSTS to close that.
+          if [ -n "${STAGING_SSH_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else
+            echo "::warning::STAGING_SSH_KNOWN_HOSTS not set - falling back to ssh-keyscan (TOFU)."
+            ssh-keyscan -H "$STAGING_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+          ssh -i ~/.ssh/deploy_key "$STAGING_USER@$STAGING_HOST" 'mkdir -p /opt/iris'
           scp -i ~/.ssh/deploy_key docker-compose.staging.yml \
             "$STAGING_USER@$STAGING_HOST:/opt/iris/docker-compose.yml"
 
-          # `docker compose up -d` derives running state from the file, so this
-          # is idempotent: re-running it leaves the same healthy state rather
+          # The token goes to a 0600 file that compose reads automatically,
+          # rather than onto the remote command line. A command line is visible
+          # in the host's process list to every other user on the box — and this
+          # box is shared — for as long as the command runs.
+          umask 077
+          printf 'IRIS_TAG=%s\nIRIS_CONNECT_TOKEN=%s\n' "$IMAGE_TAG" "$IRIS_CONNECT_TOKEN" > /tmp/iris.env
+          scp -i ~/.ssh/deploy_key /tmp/iris.env "$STAGING_USER@$STAGING_HOST:/opt/iris/.env"
+          shred -u /tmp/iris.env 2>/dev/null || rm -f /tmp/iris.env
+          ssh -i ~/.ssh/deploy_key "$STAGING_USER@$STAGING_HOST" 'chmod 600 /opt/iris/.env'
+
+          # `docker compose up -d` derives running state from these files, so
+          # this is idempotent: re-running leaves the same healthy state rather
           # than stacking another copy.
           ssh -i ~/.ssh/deploy_key "$STAGING_USER@$STAGING_HOST" \
-            "cd /opt/iris && \
-             IRIS_TAG='$IMAGE_TAG' IRIS_CONNECT_TOKEN='$IRIS_CONNECT_TOKEN' \
-             docker compose pull --quiet && \
-             IRIS_TAG='$IMAGE_TAG' IRIS_CONNECT_TOKEN='$IRIS_CONNECT_TOKEN' \
-             docker compose up -d --remove-orphans"
+            'cd /opt/iris && docker compose pull --quiet && docker compose up -d --remove-orphans'
 
           # Smoke test: wait for the container's own healthcheck to report
           # healthy, then fail the job if it does not. The healthcheck completes
@@ -126,6 +159,14 @@ jobs:
             exit 1
           '
 
-          # Independent of the healthcheck: prove the shipped CLI runs.
+          # The periodic healthcheck stops short of the browser on purpose, so
+          # prove that layer once, here. A direct playwright launch rather than
+          # the `launchBrowser` RPC: that RPC answers "Browser launched
+          # successfully" without starting one (protocol.ts:346 returns
+          # page: null), so a check built on it passes with Chromium deleted.
           ssh -i ~/.ssh/deploy_key "$STAGING_USER@$STAGING_HOST" \
-            "docker exec iris-staging node dist/cli.js --version"
+            'docker exec -w /app iris-staging node -e "require(\"playwright\").chromium.launch().then(b=>b.close()).then(()=>console.log(\"chromium ok\"))"'
+
+          # Independent of both: prove the shipped CLI runs.
+          ssh -i ~/.ssh/deploy_key "$STAGING_USER@$STAGING_HOST" \
+            'docker exec iris-staging node dist/cli.js --version'
