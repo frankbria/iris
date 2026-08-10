@@ -319,7 +319,15 @@ docker run -d --name iris \
   iris
 ```
 
-`docker-compose.staging.yml` is the deployed form of the same thing.
+`docker-compose.staging.yml` is the deployed form of the same thing. CI deploys
+it on merge to `main` using the **`staging` GitHub Environment**, which supplies
+`HOST`, `USER`, `SSH_KEY`, `SSH_KNOWN_HOSTS` and `IRIS_CONNECT_TOKEN`. The job
+skips itself when those are absent, so a fork does not get a red CI it cannot fix.
+
+`IRIS_CONNECT_TOKEN` belongs to the environment, not the repository: it is the
+credential to one running service, so a single repo-wide value would let a
+staging leak drive the production browser. A `production` environment holds a
+different value under the same name.
 
 Two container specifics worth knowing:
 
