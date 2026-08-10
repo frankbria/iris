@@ -146,6 +146,18 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # FIRST, before anything touches the network or writes a key. Review
+          # finding: this guard originally sat after the known_hosts block, where
+          # it was unreachable in the very case it exists for — under
+          # `set -euo pipefail` a failing `ssh-keyscan` against a firewalled
+          # address aborts the script before the check can report anything useful.
+          # Validating configuration before acting on it is also just the right
+          # order.
+          case "$DEPLOY_HOST" in
+            *.ts.net|100.*) : ;;
+            *) echo "::error::HOST must be the tailnet name (*.ts.net) or 100.x address; the public address is firewalled off from CI." ; exit 1 ;;
+          esac
+
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -160,15 +172,6 @@ jobs:
             echo "::warning::SSH_KNOWN_HOSTS not set in this environment - falling back to ssh-keyscan (TOFU)."
             ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           fi
-          # Fail loudly and early on the misconfiguration this network path
-          # invites: a HOST left as the public address resolves and then hangs
-          # for the full TCP timeout, which reads like an outage rather than a
-          # wrong secret.
-          case "$DEPLOY_HOST" in
-            *.ts.net|100.*) : ;;
-            *) echo "::error::HOST must be the tailnet name (*.ts.net) or 100.x address; the public address is firewalled off from CI." ; exit 1 ;;
-          esac
-
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /opt/iris'
           scp -i ~/.ssh/deploy_key docker-compose.staging.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:/opt/iris/docker-compose.yml"
