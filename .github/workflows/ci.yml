@@ -146,18 +146,6 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # FIRST, before anything touches the network or writes a key. Review
-          # finding: this guard originally sat after the known_hosts block, where
-          # it was unreachable in the very case it exists for — under
-          # `set -euo pipefail` a failing `ssh-keyscan` against a firewalled
-          # address aborts the script before the check can report anything useful.
-          # Validating configuration before acting on it is also just the right
-          # order.
-          case "$DEPLOY_HOST" in
-            *.ts.net|100.*) : ;;
-            *) echo "::error::HOST must be the tailnet name (*.ts.net) or 100.x address; the public address is firewalled off from CI." ; exit 1 ;;
-          esac
-
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -172,6 +160,31 @@ jobs:
             echo "::warning::SSH_KNOWN_HOSTS not set in this environment - falling back to ssh-keyscan (TOFU)."
             ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           fi
+          # Reachability, checked directly rather than inferred from the shape of
+          # the hostname. An earlier version pattern-matched HOST against
+          # *.ts.net|100.* — which rejects a trailing-dot FQDN (what
+          # `tailscale status --json` prints) and a bare MagicDNS short name, both
+          # of which route perfectly well. Guessing from the string blocked valid
+          # configuration while proving nothing about the actual property.
+          #
+          # ConnectTimeout is what makes this cheap: a wrong or firewalled HOST
+          # now reports in ~10s with ssh's own diagnosis instead of hanging for
+          # the full TCP timeout.
+          if ! ssh -i ~/.ssh/deploy_key -o ConnectTimeout=10 \
+                 "$DEPLOY_USER@$DEPLOY_HOST" true 2>/tmp/ssh-probe.err; then
+            echo "::error::Cannot open a session to HOST:22 from this runner."
+            echo "ssh said:"; sed 's/^/  /' /tmp/ssh-probe.err
+            echo "Most likely, in order:"
+            echo "  1. HOST is not the box's tailnet address. It must be the MagicDNS name"
+            echo "     or 100.x address - the public address is firewalled off from CI"
+            echo "     (ufw allows :22 only from the home subnet and on tailscale0)."
+            echo "     Note a trailing dot from 'tailscale status --json' is fine here but"
+            echo "     may not be what you pasted."
+            echo "  2. The tailnet ACL does not let tag:ci reach the box on port 22."
+            echo "  3. SSH_KNOWN_HOSTS is labelled with a different name than HOST."
+            exit 1
+          fi
+
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /opt/iris'
           scp -i ~/.ssh/deploy_key docker-compose.staging.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:/opt/iris/docker-compose.yml"
