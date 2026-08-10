@@ -39,6 +39,18 @@ jobs:
   # also what makes IRIS_CONNECT_TOKEN per-environment: it is the credential to
   # one running service, and a repo-wide value would let a staging leak drive
   # the production browser.
+  #
+  # NETWORK PATH — the VPS firewalls port 22 off the public internet. `ufw`
+  # allows it only from the home subnet (70.172.0.0/17) and `on tailscale0`, so
+  # a GitHub-hosted runner cannot ssh in directly; it times out after ~2min.
+  # The runner joins the tailnet instead. Consequences:
+  #   * HOST must be the box's tailnet MagicDNS name (…​.ts.net) or 100.x
+  #     address. Its public IP will hang and then fail.
+  #   * SSH_KNOWN_HOSTS must be labelled with that same HOST value — a
+  #     known_hosts entry is keyed by the hostname you connect as.
+  #   * The tailnet ACL must let `tag:ci` reach the box on port 22.
+  # Mirrors the working setup in frankbria/narrative-modeling-app (its #384) and
+  # frankbria/codeframe.
   deploy-staging:
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -71,18 +83,32 @@ jobs:
           DEPLOY_USER: ${{ secrets.USER }}
           DEPLOY_SSH_KEY: ${{ secrets.SSH_KEY }}
           IRIS_CONNECT_TOKEN: ${{ secrets.IRIS_CONNECT_TOKEN }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
         run: |
-          # All four, not just the two the ssh call needs first. Checking a
+          # All six, not just the two the ssh call needs first. Checking a
           # subset meant a missing USER or IRIS_CONNECT_TOKEN still built and
           # pushed an image before failing at scp — work done and a registry tag
           # moved, for a deploy that was never going to land.
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] \
-             || [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$IRIS_CONNECT_TOKEN" ]; then
+             || [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$IRIS_CONNECT_TOKEN" ] \
+             || [ -z "$TS_OAUTH_CLIENT_ID" ] || [ -z "$TS_OAUTH_SECRET" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Staging secrets not configured - skipping deploy."
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # Before any step that touches the box. Without this the deploy step spends
+      # ~2 minutes in a TCP connect and dies with "Connection timed out", which
+      # reads like the host being down rather than the runner being unroutable.
+      - if: steps.preflight.outputs.configured == 'true'
+        name: Join the tailnet
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
 
       - if: steps.preflight.outputs.configured == 'true'
         uses: docker/login-action@v3
@@ -120,6 +146,18 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # FIRST, before anything touches the network or writes a key. Review
+          # finding: this guard originally sat after the known_hosts block, where
+          # it was unreachable in the very case it exists for — under
+          # `set -euo pipefail` a failing `ssh-keyscan` against a firewalled
+          # address aborts the script before the check can report anything useful.
+          # Validating configuration before acting on it is also just the right
+          # order.
+          case "$DEPLOY_HOST" in
+            *.ts.net|100.*) : ;;
+            *) echo "::error::HOST must be the tailnet name (*.ts.net) or 100.x address; the public address is firewalled off from CI." ; exit 1 ;;
+          esac
+
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -134,7 +172,6 @@ jobs:
             echo "::warning::SSH_KNOWN_HOSTS not set in this environment - falling back to ssh-keyscan (TOFU)."
             ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           fi
-
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /opt/iris'
           scp -i ~/.ssh/deploy_key docker-compose.staging.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:/opt/iris/docker-compose.yml"
