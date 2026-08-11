@@ -181,20 +181,28 @@ jobs:
             #
             # None of this prints HOST itself: it is a registered secret, and a
             # derived boolean or a peer list is not the value.
-            echo "--- diagnosis ---"
-            case "$DEPLOY_HOST" in
-              *.ts.net|*.ts.net.|100.*) echo "HOST shape: looks like a tailnet address" ;;
-              *) echo "HOST shape: does NOT look like a tailnet address (not *.ts.net or 100.x)" ;;
-            esac
-            echo "runner tailnet state:"
-            tailscale status 2>&1 | sed 's/^/  /' | head -15 || echo "  (tailscale status unavailable)"
-            # `tailscale ping` distinguishes the two timeout-shaped causes: it
-            # reports an ACL denial explicitly, whereas an address that is not on
-            # the tailnet at all simply never resolves to a peer.
-            echo "tailscale ping:"
-            timeout 20 tailscale ping --timeout=5s --c=3 "$DEPLOY_HOST" 2>&1 | sed 's/^/  /' | head -8 \
-              || echo "  (ping failed or host is not a tailnet peer)"
-            echo "-----------------"
+            # Whole block in a subshell with -e and pipefail OFF. Diagnostics must
+            # never themselves fail the step — and with pipefail on, `… | head -15`
+            # SIGPIPEs its producers once the limit is hit, so a tailnet with more
+            # than 15 peers would print 15 good lines and then claim the command
+            # was unavailable. An error path that fires on success is worse than
+            # no error path. The explicit `exit 1` below is what ends the step.
+            (
+              set +e +o pipefail
+              echo "--- diagnosis ---"
+              case "$DEPLOY_HOST" in
+                *.ts.net|*.ts.net.|100.*) echo "HOST shape: looks like a tailnet address" ;;
+                *) echo "HOST shape: does NOT look like a tailnet address (not *.ts.net or 100.x)" ;;
+              esac
+              echo "runner tailnet state:"
+              tailscale status 2>&1 | head -15 | sed 's/^/  /'
+              # `tailscale ping` distinguishes the two timeout-shaped causes: it
+              # reports an ACL denial explicitly, whereas an address that is not on
+              # the tailnet at all simply never resolves to a peer.
+              echo "tailscale ping:"
+              timeout 20 tailscale ping --timeout=5s --c=3 "$DEPLOY_HOST" 2>&1 | head -8 | sed 's/^/  /'
+              echo "-----------------"
+            )
             echo "Read it as:"
             echo "  shape NOT tailnet            -> HOST is wrong; re-set it (secrets are write-only,"
             echo "                                  so it cannot be read back to check)."
