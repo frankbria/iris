@@ -110,6 +110,29 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
+      # tailscale/github-action reports outcome=success even when every attempt to
+      # bring the tunnel up failed — observed on run 31447624977, where five
+      # consecutive 400s ("requested tags [tag:ci] are invalid or not permitted")
+      # still produced a green step. Everything downstream then failed three
+      # minutes later with an opaque ssh timeout.
+      #
+      # So verify rather than trust: `tailscale status` prints "Logged out." when
+      # the daemon is up but unauthenticated.
+      - if: steps.preflight.outputs.configured == 'true'
+        name: Assert the tailnet is actually up
+        run: |
+          set -uo pipefail
+          st=$(tailscale status 2>&1 || true)
+          if printf '%s' "$st" | grep -qiE 'logged out|stopped|NeedsLogin'; then
+            echo "::error::Joined the tailnet in name only - tailscale reports: $(printf '%s' "$st" | head -1)"
+            echo "The join step above reports success even when every attempt failed; read its log."
+            echo "Most likely the OAuth client cannot apply the requested tag. The same tag works"
+            echo "in frankbria/codeframe and frankbria/narrative-modeling-app, so the tailnet ACL"
+            echo "is fine - it is this environment's TS_OAUTH_* pair that differs."
+            exit 1
+          fi
+          echo "tailnet up: $(printf '%s' "$st" | head -1)"
+
       - if: steps.preflight.outputs.configured == 'true'
         uses: docker/login-action@v3
         with:
@@ -190,10 +213,11 @@ jobs:
             (
               set +e +o pipefail
               echo "--- diagnosis ---"
-              case "$DEPLOY_HOST" in
-                *.ts.net|*.ts.net.|100.*) echo "HOST shape: looks like a tailnet address" ;;
-                *) echo "HOST shape: does NOT look like a tailnet address (not *.ts.net or 100.x)" ;;
-              esac
+              # No HOST shape check. It produced a false negative twice: it
+              # rejects a bare MagicDNS short name like `frankbria-localdev`,
+              # which routes perfectly well, and it told a maintainer their
+              # correct HOST was wrong. The reachability probe above already
+              # tests the property this was guessing at.
               echo "runner tailnet state:"
               tailscale status 2>&1 | head -15 | sed 's/^/  /'
               # `tailscale ping` distinguishes the two timeout-shaped causes: it
