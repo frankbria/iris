@@ -85,6 +85,7 @@ jobs:
           IRIS_CONNECT_TOKEN: ${{ secrets.IRIS_CONNECT_TOKEN }}
           TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
         run: |
           # All six, not just the two the ssh call needs first. Checking a
           # subset meant a missing USER or IRIS_CONNECT_TOKEN still built and
@@ -92,18 +93,41 @@ jobs:
           # moved, for a deploy that was never going to land.
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] \
              || [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$IRIS_CONNECT_TOKEN" ] \
-             || [ -z "$TS_OAUTH_CLIENT_ID" ] || [ -z "$TS_OAUTH_SECRET" ]; then
+             || { [ -z "$TS_AUTHKEY" ] \
+                  && { [ -z "$TS_OAUTH_CLIENT_ID" ] || [ -z "$TS_OAUTH_SECRET" ]; }; }; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Staging secrets not configured - skipping deploy."
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
+            # The `secrets` context is unavailable in a step-level `if`, so the
+            # credential choice travels as an output instead.
+            if [ -n "$TS_AUTHKEY" ]; then
+              echo "ts_auth=authkey" >> "$GITHUB_OUTPUT"
+            else
+              echo "ts_auth=oauth" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       # Before any step that touches the box. Without this the deploy step spends
       # ~2 minutes in a TCP connect and dies with "Connection timed out", which
       # reads like the host being down rather than the runner being unroutable.
-      - if: steps.preflight.outputs.configured == 'true'
-        name: Join the tailnet
+      # Either credential works, and TS_AUTHKEY takes precedence when set.
+      #
+      # An OAuth client mints its own tagged auth key, so it needs `auth_keys`
+      # WRITE scope with tag:ci attached to that scope — get either half wrong and
+      # `tailscale up` returns 400 "requested tags are invalid or not permitted".
+      # A pre-made auth key carries its tag already, so there is no scope/tag
+      # interaction left to misconfigure. Given the tag itself is known good on
+      # this tailnet (codeframe and narrative-modeling-app both use tag:ci), the
+      # auth key removes the remaining variable rather than diagnosing it.
+      - if: steps.preflight.outputs.ts_auth == 'authkey'
+        name: Join the tailnet (auth key)
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+
+      - if: steps.preflight.outputs.ts_auth == 'oauth'
+        name: Join the tailnet (OAuth)
         uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
@@ -126,9 +150,13 @@ jobs:
           if printf '%s' "$st" | grep -qiE 'logged out|stopped|NeedsLogin'; then
             echo "::error::Joined the tailnet in name only - tailscale reports: $(printf '%s' "$st" | head -1)"
             echo "The join step above reports success even when every attempt failed; read its log."
-            echo "Most likely the OAuth client cannot apply the requested tag. The same tag works"
-            echo "in frankbria/codeframe and frankbria/narrative-modeling-app, so the tailnet ACL"
-            echo "is fine - it is this environment's TS_OAUTH_* pair that differs."
+            echo "If joining by OAuth: the client needs auth_keys WRITE scope with tag:ci"
+            echo "attached to that scope. tag:ci itself is known good on this tailnet"
+            echo "(codeframe and narrative-modeling-app both use it), so the ACL is not the"
+            echo "problem - the client's scope or its attached tags are."
+            echo "Simpler alternative: set TS_AUTHKEY to a reusable, ephemeral, tag:ci auth"
+            echo "key. It carries its tag already, so there is no scope/tag pairing to get"
+            echo "wrong, and this workflow prefers it when present."
             exit 1
           fi
           echo "tailnet up: $(printf '%s' "$st" | head -1)"
