@@ -85,6 +85,7 @@ jobs:
           IRIS_CONNECT_TOKEN: ${{ secrets.IRIS_CONNECT_TOKEN }}
           TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
         run: |
           # All six, not just the two the ssh call needs first. Checking a
           # subset meant a missing USER or IRIS_CONNECT_TOKEN still built and
@@ -92,23 +93,73 @@ jobs:
           # moved, for a deploy that was never going to land.
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] \
              || [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$IRIS_CONNECT_TOKEN" ] \
-             || [ -z "$TS_OAUTH_CLIENT_ID" ] || [ -z "$TS_OAUTH_SECRET" ]; then
+             || { [ -z "$TS_AUTHKEY" ] \
+                  && { [ -z "$TS_OAUTH_CLIENT_ID" ] || [ -z "$TS_OAUTH_SECRET" ]; }; }; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Staging secrets not configured - skipping deploy."
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
+            # The `secrets` context is unavailable in a step-level `if`, so the
+            # credential choice travels as an output instead.
+            if [ -n "$TS_AUTHKEY" ]; then
+              echo "ts_auth=authkey" >> "$GITHUB_OUTPUT"
+            else
+              echo "ts_auth=oauth" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       # Before any step that touches the box. Without this the deploy step spends
       # ~2 minutes in a TCP connect and dies with "Connection timed out", which
       # reads like the host being down rather than the runner being unroutable.
-      - if: steps.preflight.outputs.configured == 'true'
-        name: Join the tailnet
+      # Either credential works, and TS_AUTHKEY takes precedence when set.
+      #
+      # An OAuth client mints its own tagged auth key, so it needs `auth_keys`
+      # WRITE scope with tag:ci attached to that scope — get either half wrong and
+      # `tailscale up` returns 400 "requested tags are invalid or not permitted".
+      # A pre-made auth key carries its tag already, so there is no scope/tag
+      # interaction left to misconfigure. Given the tag itself is known good on
+      # this tailnet (codeframe and narrative-modeling-app both use tag:ci), the
+      # auth key removes the remaining variable rather than diagnosing it.
+      - if: steps.preflight.outputs.ts_auth == 'authkey'
+        name: Join the tailnet (auth key)
+        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+
+      - if: steps.preflight.outputs.ts_auth == 'oauth'
+        name: Join the tailnet (OAuth)
         uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
+
+      # tailscale/github-action reports outcome=success even when every attempt to
+      # bring the tunnel up failed — observed on run 31447624977, where five
+      # consecutive 400s ("requested tags [tag:ci] are invalid or not permitted")
+      # still produced a green step. Everything downstream then failed three
+      # minutes later with an opaque ssh timeout.
+      #
+      # So verify rather than trust: `tailscale status` prints "Logged out." when
+      # the daemon is up but unauthenticated.
+      - if: steps.preflight.outputs.configured == 'true'
+        name: Assert the tailnet is actually up
+        run: |
+          set -uo pipefail
+          st=$(tailscale status 2>&1 || true)
+          if printf '%s' "$st" | grep -qiE 'logged out|stopped|NeedsLogin'; then
+            echo "::error::Joined the tailnet in name only - tailscale reports: $(printf '%s' "$st" | head -1)"
+            echo "The join step above reports success even when every attempt failed; read its log."
+            echo "If joining by OAuth: the client needs auth_keys WRITE scope with tag:ci"
+            echo "attached to that scope. tag:ci itself is known good on this tailnet"
+            echo "(codeframe and narrative-modeling-app both use it), so the ACL is not the"
+            echo "problem - the client's scope or its attached tags are."
+            echo "Simpler alternative: set TS_AUTHKEY to a reusable, ephemeral, tag:ci auth"
+            echo "key. It carries its tag already, so there is no scope/tag pairing to get"
+            echo "wrong, and this workflow prefers it when present."
+            exit 1
+          fi
+          echo "tailnet up: $(printf '%s' "$st" | head -1)"
 
       - if: steps.preflight.outputs.configured == 'true'
         uses: docker/login-action@v3
@@ -190,10 +241,11 @@ jobs:
             (
               set +e +o pipefail
               echo "--- diagnosis ---"
-              case "$DEPLOY_HOST" in
-                *.ts.net|*.ts.net.|100.*) echo "HOST shape: looks like a tailnet address" ;;
-                *) echo "HOST shape: does NOT look like a tailnet address (not *.ts.net or 100.x)" ;;
-              esac
+              # No HOST shape check. It produced a false negative twice: it
+              # rejects a bare MagicDNS short name like `frankbria-localdev`,
+              # which routes perfectly well, and it told a maintainer their
+              # correct HOST was wrong. The reachability probe above already
+              # tests the property this was guessing at.
               echo "runner tailnet state:"
               tailscale status 2>&1 | head -15 | sed 's/^/  /'
               # `tailscale ping` distinguishes the two timeout-shaped causes: it
@@ -204,10 +256,11 @@ jobs:
               echo "-----------------"
             )
             echo "Read it as:"
-            echo "  shape NOT tailnet            -> HOST is wrong; re-set it (secrets are write-only,"
-            echo "                                  so it cannot be read back to check)."
-            echo "  shape ok + ping says ACL     -> tailnet ACL must allow tag:ci -> the box on :22."
-            echo "  shape ok + no peer found     -> HOST names something not on this tailnet."
+            echo "  'Logged out'        -> the tailnet join failed; see the assert step above."
+            echo "  ping reports an ACL -> the ACL must allow tag:ci -> the box on :22."
+            echo "  no peer found       -> HOST names something not on this tailnet. Note a bare"
+            echo "                         MagicDNS short name IS valid here - do not assume the"
+            echo "                         hostname is wrong just because it is not *.ts.net."
             exit 1
           fi
 
