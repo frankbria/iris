@@ -256,10 +256,11 @@ jobs:
               echo "-----------------"
             )
             echo "Read it as:"
-            echo "  shape NOT tailnet            -> HOST is wrong; re-set it (secrets are write-only,"
-            echo "                                  so it cannot be read back to check)."
-            echo "  shape ok + ping says ACL     -> tailnet ACL must allow tag:ci -> the box on :22."
-            echo "  shape ok + no peer found     -> HOST names something not on this tailnet."
+            echo "  'Logged out'        -> the tailnet join failed; see the assert step above."
+            echo "  ping reports an ACL -> the ACL must allow tag:ci -> the box on :22."
+            echo "  no peer found       -> HOST names something not on this tailnet. Note a bare"
+            echo "                         MagicDNS short name IS valid here - do not assume the"
+            echo "                         hostname is wrong just because it is not *.ts.net."
             exit 1
           fi
 
