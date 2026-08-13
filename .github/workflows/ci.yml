@@ -113,13 +113,9 @@ jobs:
       # reads like the host being down rather than the runner being unroutable.
       # Either credential works, and TS_AUTHKEY takes precedence when set.
       #
-      # An OAuth client mints its own tagged auth key, so it needs `auth_keys`
-      # WRITE scope with tag:ci attached to that scope — get either half wrong and
-      # `tailscale up` returns 400 "requested tags are invalid or not permitted".
-      # A pre-made auth key carries its tag already, so there is no scope/tag
-      # interaction left to misconfigure. Given the tag itself is known good on
-      # this tailnet (codeframe and narrative-modeling-app both use tag:ci), the
-      # auth key removes the remaining variable rather than diagnosing it.
+      # An auth key carries its tag already; an OAuth client mints one and must
+      # request tags explicitly — see the tags: line below for the rule that
+      # matters there.
       - if: steps.preflight.outputs.ts_auth == 'authkey'
         name: Join the tailnet (auth key)
         uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
@@ -128,11 +124,27 @@ jobs:
 
       - if: steps.preflight.outputs.ts_auth == 'oauth'
         name: Join the tailnet (OAuth)
-        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3.3.0
+        # v4.1.3 to match frankbria/auto-author, the working precedent on this
+        # fleet, rather than the older v3.3.0 this started on.
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
+          # BOTH tags. Tailscale requires the requested set to match the OAuth
+          # client's FULL tag set, not a subset — this client carries tag:ci and
+          # tag:staging-server, and asking for either alone returns
+          #   400 "requested tags [tag:ci] are invalid or not permitted"
+          # which reads as a permissions problem and is actually an exact-match
+          # rule. auto-author verified it against the API: [tag:ci] 400,
+          # [tag:staging-server] 400, [tag:ci,tag:staging-server] SUCCESS.
+          #
+          # This cost five deploy attempts. codeframe and narrative-modeling-app
+          # use `tags: tag:ci` only because their clients carry that single tag,
+          # so their request is already the full set — copying their line without
+          # checking this client's tags is what produced the 400s.
+          #
+          # If this client's tags change, this line changes with them.
+          tags: tag:ci,tag:staging-server
 
       # tailscale/github-action reports outcome=success even when every attempt to
       # bring the tunnel up failed — observed on run 31447624977, where five
@@ -150,13 +162,15 @@ jobs:
           if printf '%s' "$st" | grep -qiE 'logged out|stopped|NeedsLogin'; then
             echo "::error::Joined the tailnet in name only - tailscale reports: $(printf '%s' "$st" | head -1)"
             echo "The join step above reports success even when every attempt failed; read its log."
-            echo "If joining by OAuth: the client needs auth_keys WRITE scope with tag:ci"
-            echo "attached to that scope. tag:ci itself is known good on this tailnet"
-            echo "(codeframe and narrative-modeling-app both use it), so the ACL is not the"
-            echo "problem - the client's scope or its attached tags are."
-            echo "Simpler alternative: set TS_AUTHKEY to a reusable, ephemeral, tag:ci auth"
-            echo "key. It carries its tag already, so there is no scope/tag pairing to get"
-            echo "wrong, and this workflow prefers it when present."
+            echo "If joining by OAuth and the log shows"
+            echo "  400 'requested tags [...] are invalid or not permitted'"
+            echo "then the requested tags do not MATCH the client's full tag set. Tailscale"
+            echo "requires an exact match, not a subset: a client carrying tag:ci and"
+            echo "tag:staging-server rejects a request for either one alone. Compare the"
+            echo "tags: line in this workflow against the client's tags in the Tailscale"
+            echo "admin console. It is not an ACL problem."
+            echo "Alternative: set TS_AUTHKEY to a reusable, ephemeral, tagged auth key - it"
+            echo "carries its tag already, and this workflow prefers it when present."
             exit 1
           fi
           echo "tailnet up: $(printf '%s' "$st" | head -1)"
