@@ -1,4 +1,35 @@
+import * as fs from 'fs';
 import { Browser, chromium, Page } from 'playwright';
+
+/**
+ * Is a Chromium binary actually on disk? A path resolve and a stat — no process
+ * is spawned (issue #194).
+ *
+ * Deliberately cheap, because it runs on a call that must stay fast. It answers
+ * "is the browser installed", NOT "will it launch": a binary present but unable
+ * to start — missing shared libraries, a blocked sandbox — still passes here.
+ * Anything needing proof of launch has to actually launch one, which is why
+ * #192's container healthcheck calls `chromium.launch()` directly rather than
+ * relying on this.
+ *
+ * `executablePath()` computes a path from `PLAYWRIGHT_BROWSERS_PATH` and does
+ * not throw when nothing is installed (verified against playwright 1.62), so
+ * existence must be checked separately — the path alone proves nothing.
+ *
+ * Calls `chromium.executablePath()` inline rather than through a local wrapper:
+ * a wrapper would be invoked via its module-internal binding, which
+ * `jest.spyOn` cannot intercept, whereas a property access on playwright's own
+ * `chromium` object can be. Fewer moving parts and testable.
+ */
+export function chromiumIsInstalled(): boolean {
+  try {
+    return fs.existsSync(chromium.executablePath());
+  } catch {
+    // A registry or resolution failure is indistinguishable from "not usable"
+    // for this caller, and this probe must never throw into a request path.
+    return false;
+  }
+}
 
 export interface BrowserLaunchOptions {
   headless?: boolean;
