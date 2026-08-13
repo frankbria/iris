@@ -170,14 +170,17 @@ export function startServer(
               res.error = { code: -32602, message: 'Invalid params' };
               break;
             }
-            // Exclusive: cleanup + create + map-write must be indivisible, or a
-            // second pipelined launch interleaves at one of those awaits and
-            // orphans an executor (issue #128).
             // A missing browser is a setup fault, so report it HERE rather than
             // letting it surface later as the failure of whatever action runs
             // first (issue #194). Cheap on purpose — a path resolve and a stat,
             // no process spawned — because this call must stay fast and the
             // browser is still started lazily below.
+            //
+            // Before the gate, so a rejected launch has NO side effects: an
+            // existing session survives rather than being torn down to make room
+            // for a replacement that was never going to be created. Deleting the
+            // browser binary does not kill an already-running Chromium, so that
+            // session stays usable, and the inactivity sweeper still reclaims it.
             if (!chromiumIsInstalled()) {
               res.error = {
                 code: -32000,
@@ -187,6 +190,9 @@ export function startServer(
               break;
             }
 
+            // Exclusive: cleanup + create + map-write must be indivisible, or a
+            // second pipelined launch interleaves at one of those awaits and
+            // orphans an executor (issue #128).
             res.result = await gate.write(async () => {
               // Tear down any existing session first so its Chromium process
               // isn't orphaned when the map entry is overwritten (issue #69).
