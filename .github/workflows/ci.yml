@@ -87,6 +87,17 @@ jobs:
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
           TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
         run: |
+          # Secrets pasted into a web form pick up stray whitespace: a leading
+          # space or a trailing newline is invisible in the UI and survives into
+          # the value. That cost a deploy attempt — ssh reported "hostname
+          # contains invalid characters" and tailscale logged
+          # `lookup  ***: no such host` with a visible gap before the host.
+          #
+          # Neither a hostname nor a username may contain whitespace, so stripping
+          # it is always safe here and never changes a legitimate value.
+          DEPLOY_HOST=$(printf '%s' "$DEPLOY_HOST" | tr -d '[:space:]')
+          DEPLOY_USER=$(printf '%s' "$DEPLOY_USER" | tr -d '[:space:]')
+
           # All six, not just the two the ssh call needs first. Checking a
           # subset meant a missing USER or IRIS_CONNECT_TOKEN still built and
           # pushed an image before failing at scp — work done and a registry tag
@@ -211,6 +222,12 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+
+          # Trimmed here too: step `env:` blocks are independent, so the cleaning
+          # done in preflight does not carry across.
+          DEPLOY_HOST=$(printf '%s' "$DEPLOY_HOST" | tr -d '[:space:]')
+          DEPLOY_USER=$(printf '%s' "$DEPLOY_USER" | tr -d '[:space:]')
+
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -260,6 +277,9 @@ jobs:
               # which routes perfectly well, and it told a maintainer their
               # correct HOST was wrong. The reachability probe above already
               # tests the property this was guessing at.
+              # The quotes matter: they are what made a leading space in HOST
+              # visible at all. Do not remove them.
+              echo "resolving HOST as: '$DEPLOY_HOST'"
               echo "runner tailnet state:"
               tailscale status 2>&1 | head -15 | sed 's/^/  /'
               # `tailscale ping` distinguishes the two timeout-shaped causes: it
