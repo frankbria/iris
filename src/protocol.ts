@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { translateSync, translate, Action, ActionSchema } from './translator';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
+import { chromiumIsInstalled } from './browser';
 import { Page } from 'playwright';
 
 export interface JsonRpcRequest {
@@ -169,6 +170,26 @@ export function startServer(
               res.error = { code: -32602, message: 'Invalid params' };
               break;
             }
+            // A missing browser is a setup fault, so report it HERE rather than
+            // letting it surface later as the failure of whatever action runs
+            // first (issue #194). Cheap on purpose — a path resolve and a stat,
+            // no process spawned — because this call must stay fast and the
+            // browser is still started lazily below.
+            //
+            // Before the gate, so a rejected launch has NO side effects: an
+            // existing session survives rather than being torn down to make room
+            // for a replacement that was never going to be created. Deleting the
+            // browser binary does not kill an already-running Chromium, so that
+            // session stays usable, and the inactivity sweeper still reclaims it.
+            if (!chromiumIsInstalled()) {
+              res.error = {
+                code: -32000,
+                message:
+                  'Playwright browsers are not installed. Run: npx playwright install chromium',
+              };
+              break;
+            }
+
             // Exclusive: cleanup + create + map-write must be indivisible, or a
             // second pipelined launch interleaves at one of those awaits and
             // orphans an executor (issue #128).
@@ -180,7 +201,15 @@ export function startServer(
               sessions.set(ws, session);
               return {
                 success: true,
-                message: 'Browser launched successfully',
+                // Says what happened. This used to claim "Browser launched
+                // successfully" while createBrowserSession returns page: null and
+                // starts nothing — a statement about the world that was untrue
+                // when sent, and the reason a container healthcheck built on this
+                // RPC reported a browser-less container as healthy (issue #194).
+                //
+                // The deferral itself is kept: a client that calls this and never
+                // acts should not be holding a Chromium.
+                message: 'Session created; browser starts on the first action',
                 sessionId: getSessionId(ws),
               };
             });

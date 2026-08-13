@@ -222,11 +222,18 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         const launchReq = { jsonrpc: '2.0', id: 20, method: 'launchBrowser' };
         const launchRes = await sendRequestViaConnection(ws, launchReq);
         expect(launchRes.id).toBe(20);
+        // Issue #194: the message no longer claims a browser was launched,
+        // because launchBrowser does not launch one. createBrowserSession
+        // constructs an ActionExecutor and returns page: null; Chromium starts
+        // lazily on the first action. The laziness is deliberate — a client that
+        // never acts should not hold a browser — so the claim was fixed, not the
+        // behaviour.
         expect(launchRes.result).toEqual({
           success: true,
-          message: 'Browser launched successfully',
+          message: expect.stringMatching(/session created/i),
           sessionId: expect.any(String),
         });
+        expect(launchRes.result.message).not.toMatch(/launched/i);
 
         // 2. Check browser status
         const statusReq = { jsonrpc: '2.0', id: 21, method: 'getBrowserStatus' };
