@@ -49,7 +49,7 @@ JSON-RPC server and MCP stand.
 
 ### Phase 2 - Visual Regression & Accessibility (In Progress)
 
-**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1077/1078 tests passing, integration ongoing.
+**Status:** Visual regression complete; accessibility runner functional (axe-core, keyboard, ARIA) with some `src/a11y/index.ts` convenience wrappers still stubbed. 1254/1255 tests passing, integration ongoing.
 
 **Visual Testing Core:**
 - ✅ Visual capture engine with page stabilization and masking
@@ -81,12 +81,12 @@ JSON-RPC server and MCP stand.
 - ✅ Comprehensive API documentation and user guides
 - ✅ CI/CD integration examples
 
-**Test Results:** 1077/1078 tests passing (99.9% pass rate), 1 skipped, 0 failing
+**Test Results:** 1254/1255 tests passing, 1 skipped, 0 failing
 
-**Coverage:** 75.7% statements overall (below the 85% target)
-- Branch coverage: 57.34% (primary improvement area)
+**Coverage:** 93.1% statements overall (above the 85% target)
+- Branch coverage: 82.47%
 
-_Test counts verified 2026-08-01; coverage figures last measured 2026-06-26._
+_Test counts and coverage both measured 2026-08-13._
 
 **Status:** Usable for visual regression today; accessibility integration and the `src/a11y/index.ts` wrappers are still in progress (see open issues).
 
@@ -292,7 +292,13 @@ The server binds to `127.0.0.1` and prints a per-session auth token on startup.
 Clients must send it on the WebSocket handshake as an `Authorization: Bearer <token>`
 header; connections without the token are rejected (close code `1008`).
 
-Both can be overridden, which is what makes the server deployable:
+`launchBrowser` creates a **session**; Chromium starts lazily on the first action,
+so the response says so rather than claiming a launch. If the browsers are not
+installed it fails there, naming the fix, instead of surfacing later as the
+failure of whatever action ran first (issue #194).
+
+Both the bind address and the token can be overridden, which is what makes the
+server deployable:
 
 | setting | flag | environment | default |
 |---|---|---|---|
@@ -948,7 +954,7 @@ Includes a complete GitHub Actions workflow (`iris-tests.yml`) covering visual r
 
 ```bash
 npm test
-# Result: 575/576 passing (99.8% pass rate)
+# Result: 1254/1255 passing
 # 0 failing
 # 1 skipped
 ```
@@ -963,8 +969,12 @@ npm run build
 
 ```bash
 npm test -- --coverage
-# Overall: 75.7% statements (below 85% target)
-# Branch coverage: 57.34% (primary improvement area)
+# Overall: 93.1% statements (above the 85% target)
+# Branch coverage: 82.47%
+#
+# Note: --coverage is more prone to the load-sensitive timeouts described under
+# "If the suite is red on your machine but green in CI" — Istanbul's
+# instrumentation alone can tip a browser operation past its deadline.
 ```
 
 ### Run Benchmarks
@@ -1097,8 +1107,8 @@ gh issue view 71
 - ✅ Performance benchmarks
 - ✅ Comprehensive documentation and examples
 - ✅ CI/CD ready
-- ✅ Test suite stabilized (99.8% pass rate, 0 failing)
-- ⚠️ Coverage at 75.7% (below 85% target - branch coverage improvement needed)
+- ✅ Test suite stabilized (1254/1255 passing, 0 failing)
+- ✅ Coverage at 93.1% statements / 82.47% branch (above the 85% statement target)
 - ⚠️ Some `src/a11y/index.ts` convenience wrappers still stubbed
 
 ### Phase 3 📋 (Planned - Q1 2026)
@@ -1116,12 +1126,12 @@ gh issue view 71
 ## Testing
 
 **Test Coverage:**
-- Total: 1240 tests (1239 passing, 1 skipped)
+- Total: 1255 tests (1254 passing, 1 skipped)
 - Failing: 0
-- Overall coverage: 93.07% statements (target: 85%)
-  - Branch coverage: 82.4%
+- Overall coverage: 93.1% statements (target: 85%)
+  - Branch coverage: 82.47%
 
-_Metrics last verified: 2026-08-09_
+_Metrics last verified: 2026-08-13_
 
 **Test Suites:**
 - Unit tests for all core modules
@@ -1307,5 +1317,5 @@ iris a11y --help
 **Status:**
 - Phase 1: ✅ Complete
 - Phase 2: 🚧 In Progress (visual regression complete; a11y integration ongoing)
-- Tests: 575/576 passing (99.8%), 1 skipped, 0 failing
-- Coverage: 75.7% statements (below 85% target)
+- Tests: 1254/1255 passing, 1 skipped, 0 failing
+- Coverage: 93.1% statements (above the 85% target)
