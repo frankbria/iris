@@ -71,7 +71,7 @@
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
-    "@types/node": "^24.13.3",
+    "@types/node": "^26.2.0",
     "@types/picomatch": "^4.0.3",
     "@types/ws": "^8.18.1",
     "eslint": "^10.6.0",
