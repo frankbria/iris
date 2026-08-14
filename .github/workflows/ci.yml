@@ -187,7 +187,7 @@ jobs:
           echo "tailnet up: $(printf '%s' "$st" | head -1)"
 
       - if: steps.preflight.outputs.configured == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
