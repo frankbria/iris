@@ -194,7 +194,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - if: steps.preflight.outputs.configured == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Tagged with the commit SHA as well as `staging`, because that is what
       # makes rollback a one-liner: redeploy a previous SHA.
