@@ -54,7 +54,7 @@
     "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",
     "commander": "^11.0.0",
-    "openai": "^6.45.0",
+    "openai": "^7.4.0",
     "p-limit": "^5.0.0",
     "picomatch": "^4.0.5",
     "pixelmatch": "^7.2.0",
