@@ -46,7 +46,7 @@
     "node": "^22.13.0 || >=24"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.115.0",
+    "@anthropic-ai/sdk": "^0.117.1",
     "@axe-core/playwright": "^4.8.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/better-sqlite3": "^7.6.13",
