@@ -787,9 +787,17 @@ describe('watchFiles entry point', () => {
 
   // watchFiles never resolves (keep-alive promise); start it and let the
   // observable setup work (fs.stat, createWatcher, start) flush.
+  // Wait for chokidar.watch to be *called* rather than sleeping a fixed 20 ms:
+  // under CI load the async pre-work in watchFiles() overran that window and
+  // the assertion saw zero calls (issue #142 pattern).
   const startWatchFiles = async (target?: string): Promise<void> => {
+    const before = (chokidar.watch as jest.Mock).mock.calls.length;
     void watchFiles(target, 'click submit');
-    await new Promise((r) => setTimeout(r, 20));
+    // Iteration count, not a Date.now() deadline: the WSL2 clock can step (#190).
+    for (let i = 0; (chokidar.watch as jest.Mock).mock.calls.length === before; i++) {
+      if (i >= 400) throw new Error('chokidar.watch was not called within ~2s');
+      await new Promise((r) => setTimeout(r, 5));
+    }
   };
 
   it('rejects remote URL targets', async () => {
