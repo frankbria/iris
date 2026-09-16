@@ -17,7 +17,7 @@
 # toolchain never reaches the shipped image: better-sqlite3 has no prebuilt
 # binary for this platform and needs node-gyp, which the Playwright base image
 # has no `make` for.
-FROM mcr.microsoft.com/playwright:v1.62.1-noble AS deps
+FROM mcr.microsoft.com/playwright:v1.63.0-noble AS deps
 
 WORKDIR /app
 RUN apt-get update \
@@ -38,7 +38,7 @@ RUN npm ci --omit=dev --ignore-scripts \
 
 # --- build ------------------------------------------------------------------
 # Full dependency tree (TypeScript et al.) purely to produce dist/.
-FROM mcr.microsoft.com/playwright:v1.62.1-noble AS build
+FROM mcr.microsoft.com/playwright:v1.63.0-noble AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -51,7 +51,7 @@ COPY src ./src
 RUN npm run build
 
 # --- runtime ----------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.62.1-noble AS runtime
+FROM mcr.microsoft.com/playwright:v1.63.0-noble AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app
