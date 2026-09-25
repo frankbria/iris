@@ -6,6 +6,7 @@ import * as translatorModule from '../src/translator';
 import * as executorModule from '../src/executor';
 import * as agentLoopModule from '../src/agent-loop';
 import * as watcherModule from '../src/watcher';
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -16,7 +17,18 @@ describe('CLI Commands', () => {
   beforeEach(() => {
     consoleOutput = [];
     jest.spyOn(console, 'log').mockImplementation(mockedLog);
+    // `connect` installs process-wide error handlers (#330); on the Jest worker
+    // they would outlive the test and turn any stray throw into exit(1).
+    jest.spyOn(protocolModule, 'installProcessErrorPolicy').mockImplementation(() => {});
   });
+
+  /** A stand-in server that binds successfully: `connect` waits for 'listening' (#330). */
+  const listeningServer = () => {
+    const fake = Object.assign(new EventEmitter(), { close: jest.fn(), clients: new Set() });
+    // A native promise, not nextTick: fake timers (issue #37 test) fake nextTick too.
+    void Promise.resolve().then(() => fake.emit('listening'));
+    return fake as never;
+  };
 
   afterEach(() => {
     jest.restoreAllMocks();
@@ -41,13 +53,14 @@ describe('CLI Commands', () => {
     // `await import('./protocol')` in cli.ts resolves to this same module instance.
     const startServerSpy = jest
       .spyOn(protocolModule, 'startServer')
-      .mockReturnValue({ close: jest.fn() } as never);
+      .mockImplementation(listeningServer);
 
     const sigintBefore = process.listeners('SIGINT').length;
     const sigtermBefore = process.listeners('SIGTERM').length;
 
     await runCli(['node', 'iris', 'connect']);
     expect(consoleOutput).toContain('JSON-RPC server listening on ws://127.0.0.1:4000');
+    expect(protocolModule.installProcessErrorPolicy).toHaveBeenCalled();
     // connect now generates a per-session auth token and passes it to the server,
     // and prints it so local tooling can send it as an Authorization: Bearer header.
     // `host` joined the options in #192. Asserted explicitly rather than
@@ -92,7 +105,7 @@ describe('CLI Commands', () => {
       ENV_KEYS.forEach((k) => delete process.env[k]);
       sigintBefore = process.listeners('SIGINT').length;
       sigtermBefore = process.listeners('SIGTERM').length;
-      jest.spyOn(protocolModule, 'startServer').mockReturnValue({ close: jest.fn() } as never);
+      jest.spyOn(protocolModule, 'startServer').mockImplementation(listeningServer);
     });
 
     afterEach(() => {
@@ -188,7 +201,7 @@ describe('CLI Commands', () => {
     const clients = new Set([{ close: clientClose, terminate: clientTerminate }]);
     jest
       .spyOn(protocolModule, 'startServer')
-      .mockReturnValue({ close: mockClose, clients } as never);
+      .mockImplementation(() => Object.assign(listeningServer(), { close: mockClose, clients }));
 
     const sigintBefore = process.listeners('SIGINT').length;
     const sigtermBefore = process.listeners('SIGTERM').length;
@@ -216,6 +229,30 @@ describe('CLI Commands', () => {
     process.removeListener('SIGINT', newSigint[0]);
     process.removeListener('SIGTERM', newSigterm[0]);
     jest.useRealTimers();
+  });
+
+  // #330: the bind fails asynchronously, after startServer() has returned. It
+  // used to be reported as "listening" and then crash on an unhandled 'error'.
+  test('connect reports a taken port and exits 3 without claiming to listen', async () => {
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const errors: string[] = [];
+    jest.spyOn(console, 'error').mockImplementation((m: string) => errors.push(m));
+    const fake = Object.assign(new EventEmitter(), { close: jest.fn(), clients: new Set() });
+    jest.spyOn(protocolModule, 'startServer').mockImplementation(() => {
+      const busy = Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' });
+      void Promise.resolve().then(() => fake.emit('error', busy));
+      return fake as never;
+    });
+    const sigintBefore = process.listeners('SIGINT').length;
+
+    await runCli(['node', 'iris', 'connect']);
+
+    expect(errors).toContain('Cannot listen on 127.0.0.1:4000: address already in use');
+    expect(exitSpy).toHaveBeenCalledWith(3);
+    expect(fake.close).toHaveBeenCalled();
+    expect(consoleOutput.join('\n')).not.toMatch(/listening/);
+    expect(protocolModule.installProcessErrorPolicy).not.toHaveBeenCalled();
+    expect(process.listeners('SIGINT')).toHaveLength(sigintBefore);
   });
 
   test('run command persists test execution to database', async () => {
@@ -336,7 +373,7 @@ describe('CLI Commands', () => {
 
     beforeEach(() => {
       // Keep run persistence off disk; the finally block always writes a test run.
-      jest.spyOn(dbModule, 'initializeDatabase').mockReturnValue({ close: jest.fn() } as never);
+      jest.spyOn(dbModule, 'initializeDatabase').mockImplementation(listeningServer);
       jest.spyOn(dbModule, 'insertTestRun').mockImplementation(() => undefined as never);
       jest
         .spyOn(console, 'error')
@@ -458,7 +495,7 @@ describe('CLI Commands', () => {
     };
 
     beforeEach(() => {
-      jest.spyOn(dbModule, 'initializeDatabase').mockReturnValue({ close: jest.fn() } as never);
+      jest.spyOn(dbModule, 'initializeDatabase').mockImplementation(listeningServer);
       jest.spyOn(dbModule, 'insertTestRun').mockImplementation(() => undefined as never);
       delete process.env.IRIS_BASE_URL;
     });
@@ -553,7 +590,7 @@ describe('CLI Commands', () => {
     };
 
     beforeEach(() => {
-      jest.spyOn(dbModule, 'initializeDatabase').mockReturnValue({ close: jest.fn() } as never);
+      jest.spyOn(dbModule, 'initializeDatabase').mockImplementation(listeningServer);
       jest.spyOn(dbModule, 'insertTestRun').mockImplementation(() => undefined as never);
       delete process.env.IRIS_BASE_URL;
     });
@@ -755,7 +792,7 @@ describe('CLI Commands', () => {
     };
 
     beforeEach(() => {
-      jest.spyOn(dbModule, 'initializeDatabase').mockReturnValue({ close: jest.fn() } as never);
+      jest.spyOn(dbModule, 'initializeDatabase').mockImplementation(listeningServer);
       jest.spyOn(dbModule, 'insertTestRun').mockImplementation(() => undefined as never);
       jest
         .spyOn(console, 'error')

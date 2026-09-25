@@ -59,7 +59,8 @@ const ExecuteBrowserActionParams = z.object({
 
 export interface JsonRpcResponse {
   jsonrpc: '2.0';
-  id: number | string;
+  /** `null` only when the request's id could not be read (JSON-RPC 2.0 §5). */
+  id: number | string | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   result?: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -142,13 +143,31 @@ export function startServer(
     // the socket rather than needing its own cleanup path.
     const gate = new SessionGate();
 
+    // A request can outlive its socket: the client may close while a handler
+    // is awaiting. ws then buffers the reply for a peer that is gone instead of
+    // sending it, so check first (#330).
+    const reply = (res: JsonRpcResponse) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(res));
+    };
+
     ws.on('message', async (data) => {
-      let req: JsonRpcRequest;
+      let parsed: unknown;
       try {
-        req = JSON.parse(data.toString());
+        parsed = JSON.parse(data.toString());
       } catch {
         return;
       }
+
+      // Valid JSON is not necessarily a request: `null`, `1`, `[]` and `"x"`
+      // all parse. Reading `.id` off `null` used to throw here, outside every
+      // try, and the rejected listener took the whole process — and every
+      // session in it — down (#330). Batches are not supported, so `[]` is
+      // rejected the same way.
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        reply({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+        return;
+      }
+      const req = parsed as JsonRpcRequest;
 
       const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id };
 
@@ -295,7 +314,7 @@ export function startServer(
         };
       }
 
-      ws.send(JSON.stringify(res));
+      reply(res);
     });
 
     ws.on('close', () => {
@@ -534,4 +553,32 @@ function hasValidToken(authHeader: string | undefined, expected: string): boolea
  */
 function getSessionId(_ws: WebSocket): string {
   return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+/**
+ * Process-wide error policy for the long-running RPC server (#330).
+ *
+ * - **Unhandled rejection: log and keep serving.** Rejections here come from
+ *   per-request async work, so one bad request must not end every other
+ *   client's session. Node's default (crash) turned a single malformed frame
+ *   into a full outage.
+ * - **Uncaught exception: log and exit 1.** A synchronous throw that escaped
+ *   every handler leaves shared state unknown, and continuing would be
+ *   silently serving from it. Playwright kills the browsers it launched when
+ *   the process exits, so no Chromium is orphaned.
+ *
+ * `proc` and `log` are injectable so the policy is testable without touching
+ * the real process's handlers.
+ */
+export function installProcessErrorPolicy(
+  proc: NodeJS.Process = process,
+  log: (message: string, err: unknown) => void = console.error,
+): void {
+  proc.on('unhandledRejection', (reason) => {
+    log('[iris] unhandled rejection (contained; server keeps running):', reason);
+  });
+  proc.on('uncaughtException', (err) => {
+    log('[iris] uncaught exception; exiting because server state is unknown:', err);
+    proc.exit(1);
+  });
 }
