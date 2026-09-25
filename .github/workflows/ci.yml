@@ -23,6 +23,11 @@ jobs:
       - run: npm run format:check
       # Tests launch a real browser; install Chromium + its OS deps first.
       - run: npx playwright install --with-deps chromium
+      # IRIS launches Chromium sandboxed (#331), and ubuntu-24.04's AppArmor
+      # blocks the unprivileged user namespaces the sandbox needs ("No usable
+      # sandbox!"). Lift the restriction rather than set IRIS_CHROMIUM_SANDBOX=0,
+      # so the suite keeps proving a real sandbox, not the opt-out.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
 
