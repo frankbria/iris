@@ -32,6 +32,10 @@ services:
       IRIS_CONNECT_TOKEN: ${IRIS_CONNECT_TOKEN:?IRIS_CONNECT_TOKEN must be set}
       # Keep run history inside the named volume rather than the container layer.
       IRIS_DB_PATH: /data/iris.db
+      # Temporary (#331 -> #332): Docker's default seccomp profile blocks the
+      # user namespaces Chromium's sandbox needs, so a sandboxed launch fails
+      # here. #332 supplies a profile that permits them and deletes this line.
+      IRIS_CHROMIUM_SANDBOX: '0'
 
     volumes:
       - iris-data:/data
@@ -41,8 +45,8 @@ services:
     #
     # It deliberately stops short of launching a browser. `getStatus` reports
     # ready without touching Chromium, so this does NOT prove the browser layer
-    # works — the deploy verifies that once, with a direct
-    # `playwright.chromium.launch()`. Launching Chromium every 30s would burn
+    # works — the deploy verifies that once, through IRIS's own launch factory
+    # (`launchBrowser()` in dist/browser.js). Launching Chromium every 30s would burn
     # memory on a shared box and make the probe its own stability risk.
     #
     # Lives in docker/healthcheck.js because compose reads `${...}` in an inline

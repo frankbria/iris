@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { Browser, chromium, Page } from 'playwright';
+import { Browser, BrowserContext, BrowserContextOptions, chromium, Page } from 'playwright';
 
 /**
  * Is a Chromium binary actually on disk? A path resolve and a stat — no process
@@ -9,7 +9,7 @@ import { Browser, chromium, Page } from 'playwright';
  * "is the browser installed", NOT "will it launch": a binary present but unable
  * to start — missing shared libraries, a blocked sandbox — still passes here.
  * Anything needing proof of launch has to actually launch one, which is why
- * #192's container healthcheck calls `chromium.launch()` directly rather than
+ * #192's staging deploy launches one through {@link launchBrowser} rather than
  * relying on this.
  *
  * `executablePath()` computes a path from `PLAYWRIGHT_BROWSERS_PATH` and does
@@ -38,10 +38,33 @@ export interface BrowserLaunchOptions {
 }
 
 /**
- * Launch a Chromium browser instance.
+ * Context options every IRIS page gets (issue #331). Pages are untrusted — in
+ * hosted mode they are whatever a customer points us at — so nothing they do
+ * may write to disk, outlive the page, or gain a capability without a prompt.
+ */
+const HARDENED_CONTEXT_OPTIONS = {
+  acceptDownloads: false,
+  serviceWorkers: 'block',
+  permissions: [],
+} as const satisfies BrowserContextOptions;
+
+/**
+ * Launch a Chromium browser instance. The only place in `src/` that starts one:
+ * the CLI executor, the visual runner and the a11y runner all come through here
+ * (issue #331, enforced by `browser-hardening.test.ts`).
+ *
+ * Sandboxed unless `IRIS_CHROMIUM_SANDBOX=0`: Playwright appends `--no-sandbox`
+ * to every launch that does not ask for `chromiumSandbox: true`. The opt-out
+ * exists for hosts that cannot provide a sandbox and only run trusted pages.
+ *
+ * Playwright's own SIGINT/SIGTERM/SIGHUP handlers are off: they close every
+ * browser the moment a signal lands, underneath the shutdown `iris connect`
+ * and `iris watch` run themselves. Nothing is orphaned without them — Chromium
+ * exits when its `--remote-debugging-pipe` parent goes away.
  *
  * @throws a message naming `npx playwright install chromium` when the browser
- * binary is missing — see {@link launchBrowser} internals and issue #79.
+ * binary is missing (issue #79), or naming the opt-out when the host cannot
+ * sandbox Chromium (issue #331).
  */
 export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise<Browser> {
   try {
@@ -51,8 +74,22 @@ export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise
       // Playwright >=1.61 removed the deprecated `devtools` launch option; this
       // Chromium arg is its documented equivalent.
       args: options.devtools ? ['--auto-open-devtools-for-tabs'] : [],
+      chromiumSandbox: process.env.IRIS_CHROMIUM_SANDBOX !== '0',
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
     });
   } catch (error) {
+    // Playwright's banner, then Chromium's own. Seen under Docker's default
+    // seccomp profile and Ubuntu's AppArmor user-namespace restriction.
+    if (error instanceof Error && /sandboxing failed|No usable sandbox/i.test(error.message)) {
+      throw new Error(
+        'Chromium could not start its sandbox on this host. Allow unprivileged user ' +
+          'namespaces (in Docker: a seccomp profile that permits them), or set ' +
+          'IRIS_CHROMIUM_SANDBOX=0 to run unsandboxed — only for pages you trust. ' +
+          `Original error: ${error.message}`,
+      );
+    }
     // Installing iris does not guarantee the browser binaries: Playwright
     // downloads them from a postinstall script, which pnpm skips by default and
     // which `--ignore-scripts` and hardened CI images disable outright. The
@@ -94,10 +131,22 @@ export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise
 }
 
 /**
- * Create a new page in the given browser.
+ * Open a browser context with the hardened options applied last, so a caller's
+ * `acceptDownloads` or `permissions` cannot loosen them. Other options
+ * (viewport, locale, ...) pass through.
+ */
+export async function newHardenedContext(
+  browser: Browser,
+  options: BrowserContextOptions = {},
+): Promise<BrowserContext> {
+  return await browser.newContext({ ...options, ...HARDENED_CONTEXT_OPTIONS });
+}
+
+/**
+ * Create a new page, in its own hardened context, in the given browser.
  */
 export async function newPage(browser: Browser): Promise<Page> {
-  return await browser.newPage();
+  return await browser.newPage(HARDENED_CONTEXT_OPTIONS);
 }
 
 /**

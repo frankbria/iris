@@ -187,6 +187,13 @@ break and expensive to rediscover:
   while looking healthy. The security boundary is the host-side mapping.
 - **`shm_size: 1gb`.** Chromium exhausts Docker's 64 MB default and the crash
   reads as an opaque browser disconnect.
+- **`IRIS_CHROMIUM_SANDBOX: '0'` in staging, until #332.** Every launch goes
+  through `launchBrowser()` / `newHardenedContext()` in `src/browser.ts` (#331):
+  sandbox on, Playwright's signal handlers off, downloads and service workers
+  blocked. A guard test fails on any other `chromium.launch` / `browser.newContext`
+  in `src/`. Docker's default seccomp blocks the sandbox's user namespaces
+  (verified in the Playwright image as `pwuser`), hence the temporary opt-out; the
+  deploy probe launches through the factory so it tests the real setting.
 
 The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a

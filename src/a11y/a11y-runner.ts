@@ -11,7 +11,8 @@
  * e2e suite, not Istanbul.
  */
 
-import { chromium, Browser, Page } from 'playwright';
+import type { Browser, Page } from 'playwright';
+import { launchBrowser, newHardenedContext } from '../browser';
 import { AxeRunner } from './axe-integration';
 import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
@@ -148,9 +149,7 @@ export class AccessibilityRunner {
 
     try {
       // Launch browser
-      this.browser = await chromium.launch({
-        headless: true,
-      });
+      this.browser = await launchBrowser();
 
       // Test each page
       for (const pagePattern of this.config.pages) {
@@ -218,7 +217,7 @@ export class AccessibilityRunner {
       throw new Error('Browser not initialized');
     }
 
-    const context = await this.browser.newContext();
+    const context = await newHardenedContext(this.browser);
     const page = await context.newPage();
 
     // Install before the first navigation so no request escapes the guard.

@@ -180,7 +180,10 @@ describe('VisualTestRunner', () => {
 
       await visualRunner.run();
 
-      expect(chromium.launch).toHaveBeenCalledWith({ headless: true });
+      // Through the shared hardened factory (issue #331), not a raw launch.
+      expect(chromium.launch).toHaveBeenCalledWith(
+        expect.objectContaining({ headless: true, chromiumSandbox: true }),
+      );
       expect(mockBrowser.close).toHaveBeenCalled();
     });
 
@@ -459,6 +462,9 @@ describe('VisualTestRunner', () => {
 
       expect(mockBrowser.newContext).toHaveBeenCalledWith({
         viewport: { width: 375, height: 667 },
+        acceptDownloads: false,
+        serviceWorkers: 'block',
+        permissions: [],
       });
     });
 
@@ -467,6 +473,9 @@ describe('VisualTestRunner', () => {
 
       expect(mockBrowser.newContext).toHaveBeenCalledWith({
         viewport: { width: 1920, height: 1080 },
+        acceptDownloads: false,
+        serviceWorkers: 'block',
+        permissions: [],
       });
     });
   });

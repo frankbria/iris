@@ -16,7 +16,8 @@
  * returns `page: null` — no browser is started, yet the RPC answers "Browser
  * launched successfully". Verified by deleting /ms-playwright and watching the
  * probe still pass. The deploy checks the browser directly instead, with a
- * `playwright.chromium.launch()` that genuinely fails when it is broken.
+ * `launchBrowser()` (dist/browser.js, the same factory sessions use) that
+ * genuinely fails when it is broken.
  *
  * Kept as a file rather than inlined into docker-compose.yml: compose treats
  * `${...}` as its own interpolation syntax, so an inline script would have to
