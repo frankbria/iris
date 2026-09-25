@@ -120,6 +120,75 @@ describe('assertNavigationAllowed', () => {
       ).not.toThrow();
     });
   });
+
+  // Issue #333: the range table, and every spelling that reaches it. The policy
+  // sees the WHATWG-parsed hostname — the same parse Chromium does — so integer,
+  // hex and octal IPv4 and every IPv6 spelling arrive in canonical form. These
+  // tables pin that the canonical form is what gets classified.
+  describe('range table and host encodings (issue #333)', () => {
+    const strict = { blockPrivateHosts: true };
+
+    it.each([
+      ['169.254.169.254', 'http://169.254.169.254/'],
+      ['169.254.169.254 as an integer', 'http://2852039166/'],
+      ['169.254.169.254 in hex', 'http://0xa9.0xfe.0xa9.0xfe/'],
+      ['169.254.169.254 in octal', 'http://0251.0376.0251.0376/'],
+      ['169.254.169.254 IPv4-compatible', 'http://[::169.254.169.254]/'],
+      ['169.254.169.254 via NAT64', 'http://[64:ff9b::169.254.169.254]/'],
+      ['AWS IPv6 metadata', 'http://[fd00:ec2::254]/'],
+      ['Alibaba metadata', 'http://100.100.100.200/'],
+      ['Alibaba metadata IPv4-mapped', 'http://[::ffff:100.100.100.200]/'],
+      ['IPv6 link-local', 'http://[febf::1]/'],
+    ])('always blocks %s', (_label, url) => {
+      expect(() => assertNavigationAllowed(url)).toThrow(/link-local\/metadata/);
+    });
+
+    it.each([
+      ['0.0.0.0/8', 'http://0.0.0.0/'],
+      ['0.0.0.0/8 as "0"', 'http://0/'],
+      ['0.0.0.0/8 upper edge', 'http://0.255.255.255/'],
+      ['CGNAT 100.64.0.0/10', 'http://100.64.0.1/'],
+      ['CGNAT upper edge', 'http://100.127.255.254/'],
+      ['loopback as an integer', 'http://2130706433/'],
+      ['loopback in hex', 'http://0x7f.1/'],
+      ['loopback in octal', 'http://0177.0.0.1/'],
+      ['loopback shorthand', 'http://127.1/'],
+      ['172.16.0.0/12 upper edge', 'http://172.31.255.255/'],
+      ['RFC1918 in hex', 'http://0xc0a80001/'],
+      ['IPv6 unspecified', 'http://[::]/'],
+      ['IPv4-compatible loopback', 'http://[::127.0.0.1]/'],
+      ['IPv4-mapped CGNAT', 'http://[::ffff:100.64.0.1]/'],
+      ['NAT64 to RFC1918', 'http://[64:ff9b::10.0.0.1]/'],
+      ['NAT64 to loopback', 'http://[64:ff9b::7f00:1]/'],
+      ['IPv6 ULA', 'http://[fd12:3456::1]/'],
+      ['localhost with a trailing dot', 'http://localhost./'],
+      ['a *.localhost subdomain', 'http://app.localhost:3000/'],
+      ['a mixed-case *.localhost subdomain', 'http://A.B.LocalHost/'],
+    ])('blocks %s only when blockPrivateHosts is set', (_label, url) => {
+      expect(() => assertNavigationAllowed(url)).not.toThrow();
+      expect(() => assertNavigationAllowed(url, strict)).toThrow(/private\/loopback/);
+    });
+
+    it.each([
+      ['just below 0.0.0.0/8', 'http://1.0.0.0/'],
+      ['just below CGNAT', 'http://100.63.255.255/'],
+      ['just above CGNAT', 'http://100.128.0.0/'],
+      ['just below 169.254.0.0/16', 'http://169.253.255.255/'],
+      ['just above 169.254.0.0/16', 'http://169.255.0.0/'],
+      ['just above 172.16.0.0/12', 'http://172.32.0.0/'],
+      ['a public IPv6 address', 'http://[2001:4860:4860::8888]/'],
+      ['IPv4-mapped public', 'http://[::ffff:8.8.8.8]/'],
+      ['NAT64 to a public IPv4', 'http://[64:ff9b::8.8.8.8]/'],
+      ['a name that only contains "localhost"', 'http://localhost.example.com/'],
+      ['a name ending in "localhost" without a dot', 'http://notlocalhost/'],
+    ])('allows %s even when blockPrivateHosts is set', (_label, url) => {
+      expect(() => assertNavigationAllowed(url, strict)).not.toThrow();
+    });
+
+    it('treats the AWS IPv6 metadata entry as one address, not its whole ULA prefix', () => {
+      expect(() => assertNavigationAllowed('http://[fd00:ec2::253]/')).not.toThrow();
+    });
+  });
 });
 
 describe('pinnedOrigin (agent origin confinement, issue #151)', () => {
