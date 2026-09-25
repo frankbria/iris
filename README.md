@@ -386,6 +386,11 @@ human narration to stdout and write their machine-readable output to disk, so pa
 Human narration is suppressed entirely; warnings and errors go to stderr, so stdout
 is always safe to pipe into a JSON parser.
 
+Pages are treated as untrusted: every browser IRIS starts is sandboxed, and every
+page refuses downloads, service-worker registration and permission grants. An
+instruction that clicks a download link sees the download fail rather than a
+file land on disk.
+
 ```bash
 iris run --json --url https://example.com "click the sign in button"
 ```

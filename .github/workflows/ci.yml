@@ -364,8 +364,9 @@ jobs:
 
           # The periodic healthcheck stops short of the browser on purpose, so
           # prove that layer once, here. Through the launch factory every
-          # session uses (dist/browser.js, #331), so the sandbox setting under
-          # test is the real one; a raw playwright launch skips it. Not the
+          # session uses (dist/browser.js, #331), so it launches with whatever
+          # sandbox setting the container really has — unsandboxed until #332,
+          # since compose sets IRIS_CHROMIUM_SANDBOX=0. Not the
           # `launchBrowser` RPC: that RPC answers "Browser launched
           # successfully" without starting one (protocol.ts:346 returns
           # page: null), so a check built on it passes with Chromium deleted.

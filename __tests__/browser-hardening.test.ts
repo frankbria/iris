@@ -185,18 +185,24 @@ describe('single launch site (issue #331)', () => {
   }
 
   it('no module but src/browser.ts launches Chromium or opens a browser context', () => {
-    // Any identifier containing "browser" (browser, this.browser!, browserInstance),
-    // since a Browser is rarely named anything else. `context.newPage()` is fine:
-    // the context itself came from newHardenedContext().
-    const bypasses =
-      /chromium\.(launch|launchPersistentContext|launchServer|connectOverCDP)\(|\w*browser\w*!?\.(newContext|newPage)\(/i;
+    // Structural, not name-based, so a renamed receiver cannot slip through:
+    //  - a value import of a browser type (catches `chromium as pw` too);
+    //  - any `.newContext(` at all;
+    //  - `.newPage(` on anything but a `context` — the runners' contexts come
+    //    from newHardenedContext(); `browser.newPage()` would make its own.
+    const bypasses = [
+      /import\s+(?!type\b)[^;]*\b(chromium|firefox|webkit)\b[^;]*from\s+['"]playwright/,
+      /require\(\s*['"]playwright/,
+      /\.newContext\(/,
+      /(?<!\bcontext)\.newPage\(/,
+    ];
     const offenders = sources()
       .filter(([file]) => file !== path.join('src', 'browser.ts'))
       .flatMap(([file, text]) =>
         text
           .split('\n')
           .map((line, i) => ({ line, at: `${file}:${i + 1}` }))
-          .filter(({ line }) => !/^\s*(\/\/|\*)/.test(line) && bypasses.test(line))
+          .filter(({ line }) => !/^\s*(\/\/|\*)/.test(line) && bypasses.some((re) => re.test(line)))
           .map(({ at }) => at),
       );
     expect(offenders).toEqual([]);
