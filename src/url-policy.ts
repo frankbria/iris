@@ -5,6 +5,8 @@
  * instructions. Enforced at the `performAction` navigate boundary.
  */
 
+import { BlockList, isIP } from 'net';
+
 export interface UrlPolicyOptions {
   /**
    * When set, refuse any *navigation* that leaves this origin.
@@ -23,85 +25,98 @@ export interface UrlPolicyOptions {
   pinnedOrigin?: string;
   /** Allow `file://` navigation (e.g. the watcher rendering local files). Default: false. */
   allowFile?: boolean;
-  /** Also block loopback + RFC1918 + IPv6 ULA hosts. Default: false (localhost dev-server testing stays allowed). */
+  /** Also block loopback, private and reserved hosts (see PRIVATE_RANGES). Default: false (localhost dev-server testing stays allowed). */
   blockPrivateHosts?: boolean;
 }
 
-/** Strip IPv6 brackets, a DNS-equivalent trailing dot, and lowercase for comparison. */
+/** Strip IPv6 brackets, DNS-equivalent trailing dots, and lowercase for comparison. */
 function normalizeHost(hostname: string): string {
   return hostname
     .replace(/^\[|\]$/g, '')
-    .replace(/\.$/, '')
+    .replace(/\.+$/, '')
     .toLowerCase();
 }
 
-/** Parse dotted-quad IPv4 into octets, or null if not an IPv4 literal. */
-function ipv4Octets(host: string): number[] | null {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (!m) return null;
-  const octets = m.slice(1).map(Number);
-  return octets.every((o) => o <= 255) ? octets : null;
-}
-
 /**
- * Octets for a host that carries an IPv4 address, including IPv4-mapped IPv6
- * literals so `::ffff:169.254.169.254` and its hex form `::ffff:a9fe:a9fe`
- * can't smuggle a blocked IPv4 target past the range checks.
+ * The IPv6 prefixes that carry an IPv4 address in their low 32 bits: mapped
+ * (`::ffff:a.b.c.d`), the deprecated compatible form (`::a.b.c.d`), and NAT64 —
+ * the well-known `64:ff9b::/96` and the local-use `64:ff9b:1::/96` layout. Each
+ * IPv4 range is registered under all of them, so a blocked IPv4 target cannot be
+ * reached by spelling it as one of these IPv6 forms — while NAT64 to a public
+ * address, which IPv6-only networks depend on, stays reachable.
  */
-function ipv4OctetsFromAny(host: string): number[] | null {
-  const direct = ipv4Octets(host);
-  if (direct) return direct;
+const IPV4_IN_IPV6_PREFIXES = ['::ffff:', '::', '64:ff9b::', '64:ff9b:1::'];
 
-  // IPv4-mapped IPv6, dotted tail: ::ffff:169.254.169.254
-  const dotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(host);
-  if (dotted) return ipv4Octets(dotted[1]);
-
-  // IPv4-mapped IPv6, hex tail: ::ffff:a9fe:a9fe
-  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(host);
-  if (hex) {
-    const hi = parseInt(hex[1], 16);
-    const lo = parseInt(hex[2], 16);
-    return [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff];
+function rangeList(v4: Array<[string, number]>, v6: Array<[string, number]>): BlockList {
+  const list = new BlockList();
+  for (const [net, prefix] of v4) {
+    list.addSubnet(net, prefix, 'ipv4');
+    for (const p of IPV4_IN_IPV6_PREFIXES) list.addSubnet(p + net, 96 + prefix, 'ipv6');
   }
-  return null;
+  for (const [net, prefix] of v6) list.addSubnet(net, prefix, 'ipv6');
+  return list;
 }
 
-/** An IPv6 literal (post-bracket-strip) always contains a colon; hostnames never do. */
-function isIpv6Literal(host: string): boolean {
-  return host.includes(':');
-}
+// ponytail: host matching is on the URL's hostname only. WHATWG parsing (the
+// standard Chromium follows too; Node's is stricter, which fails closed here)
+// canonicalises integer/hex/octal IPv4 and every IPv6 spelling first, so those
+// are covered. Local-use NAT64 embedding at /48-/64 is not decoded, only its
+// /96 layout; the whole prefix is private. A DNS name that *resolves* to
+// a blocked address (incl. DNS rebinding) is not. That needs a resolve-at-connect
+// control (the hosted egress layer), not string matching.
 
-// ponytail: host matching is literal-only — it covers dotted-quad IPv4, IPv6
-// literals, and exact hostnames, NOT integer/hex/octal IP encodings
-// (http://2852039166/) nor DNS names that *resolve* to a link-local/metadata IP
-// (incl. DNS-rebinding). Chromium normalizes and resolves those at connect time,
-// so a determined SSRF could still reach 169.254.169.254 that way. Closing it
-// needs a resolve-at-connect network control (or OS/proxy egress blocking), not
-// URL-string matching — see Known Limitations. Add a resolver here if it matters.
 /** Cloud-metadata / link-local — always blocked, never a legitimate navigation target. */
-function isLinkLocalOrMetadata(host: string): boolean {
-  if (host === 'metadata.google.internal') return true;
-  const v4 = ipv4OctetsFromAny(host);
-  if (v4 && v4[0] === 169 && v4[1] === 254) return true; // 169.254.0.0/16
-  // IPv6 link-local fe80::/10 (fe80–febf) — only for IPv6 literals, so a hostname
-  // like "feature.example.com" is not mistaken for an address.
-  if (isIpv6Literal(host) && /^fe[89ab]/.test(host)) return true;
-  return false;
+const METADATA_HOSTS = new Set(['metadata.google.internal']);
+const METADATA_RANGES = rangeList(
+  [
+    ['169.254.0.0', 16], // link-local, incl. AWS/GCP/Azure 169.254.169.254
+    ['100.100.100.200', 32], // Alibaba Cloud metadata
+  ],
+  [
+    ['fe80::', 10], // IPv6 link-local
+    ['fd00:ec2::254', 128], // AWS IMDS over IPv6
+  ],
+);
+
+/** Loopback / private / reserved — blocked only when blockPrivateHosts is set. */
+const PRIVATE_RANGES = rangeList(
+  [
+    ['0.0.0.0', 8], // "this network" — Linux routes 0.0.0.0 to loopback
+    ['10.0.0.0', 8],
+    ['100.64.0.0', 10], // CGNAT, incl. Tailscale
+    ['127.0.0.0', 8],
+    ['172.16.0.0', 12],
+    ['192.0.0.0', 24], // IETF protocol assignments
+    ['192.0.2.0', 24], // TEST-NET-1
+    ['192.168.0.0', 16],
+    ['198.18.0.0', 15], // benchmarking; carriers number internal gear from it
+    ['198.51.100.0', 24], // TEST-NET-2
+    ['203.0.113.0', 24], // TEST-NET-3
+    ['224.0.0.0', 4], // multicast
+    ['240.0.0.0', 4], // reserved, incl. broadcast 255.255.255.255
+  ],
+  [
+    ['::', 128], // unspecified
+    ['::1', 128],
+    ['fc00::', 7], // ULA
+    ['fec0::', 10], // deprecated site-local, still routed on legacy networks
+    ['ff00::', 8], // multicast
+    ['64:ff9b:1::', 48], // local-use NAT64 (RFC 8215): never globally reachable
+  ],
+);
+
+/** Match a normalised host (brackets stripped) against a range list. */
+function inRanges(host: string, list: BlockList): boolean {
+  const family = isIP(host);
+  return family !== 0 && list.check(host, family === 4 ? 'ipv4' : 'ipv6');
 }
 
-/** Loopback / private ranges — blocked only when blockPrivateHosts is set. */
+function isLinkLocalOrMetadata(host: string): boolean {
+  return METADATA_HOSTS.has(host) || inRanges(host, METADATA_RANGES);
+}
+
 function isPrivateHost(host: string): boolean {
-  if (host === 'localhost') return true;
-  if (host === '::1') return true;
-  const v4 = ipv4OctetsFromAny(host);
-  if (v4) {
-    if (v4[0] === 127) return true; // loopback 127.0.0.0/8
-    if (v4[0] === 10) return true; // 10.0.0.0/8
-    if (v4[0] === 172 && v4[1] >= 16 && v4[1] <= 31) return true; // 172.16.0.0/12
-    if (v4[0] === 192 && v4[1] === 168) return true; // 192.168.0.0/16
-  }
-  if (isIpv6Literal(host) && /^f[cd]/.test(host)) return true; // IPv6 ULA fc00::/7
-  return false;
+  return host === 'localhost' || host.endsWith('.localhost') || inRanges(host, PRIVATE_RANGES);
 }
 
 /**
