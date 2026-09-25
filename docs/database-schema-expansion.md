@@ -1,7 +1,7 @@
 # Database Schema Expansion Summary
 
 ## Overview
-Expanded the database schema in `/home/frankbria/projects/iris/src/db.ts` to support visual regression and accessibility test results storage with comprehensive migration and versioning support.
+Expanded the database schema in `src/db.ts` to support visual regression and accessibility test results storage with comprehensive migration and versioning support.
 
 ## Changes Made
 

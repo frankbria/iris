@@ -40,9 +40,9 @@ jobs:
   # one running service, and a repo-wide value would let a staging leak drive
   # the production browser.
   #
-  # NETWORK PATH — the VPS firewalls port 22 off the public internet. `ufw`
-  # allows it only from the home subnet (70.172.0.0/17) and `on tailscale0`, so
-  # a GitHub-hosted runner cannot ssh in directly; it times out after ~2min.
+  # NETWORK PATH — the VPS firewalls port 22 off the public internet (the exact
+  # rules are in the operator's runbook, not here: this repo is public), so a
+  # GitHub-hosted runner cannot ssh in directly; it times out after ~2min.
   # The runner joins the tailnet instead. Consequences:
   #   * HOST must be the box's tailnet MagicDNS name (…​.ts.net) or 100.x
   #     address. Its public IP will hang and then fail.
@@ -163,15 +163,17 @@ jobs:
       # still produced a green step. Everything downstream then failed three
       # minutes later with an opaque ssh timeout.
       #
-      # So verify rather than trust: `tailscale status` prints "Logged out." when
-      # the daemon is up but unauthenticated.
+      # So verify rather than trust: BackendState is "Running" only once the
+      # daemon is authenticated ("NeedsLogin", "Stopped" otherwise). Read that
+      # field alone — plain `tailscale status` lists every peer's name and
+      # address, and this log is public.
       - if: steps.preflight.outputs.configured == 'true'
         name: Assert the tailnet is actually up
         run: |
           set -uo pipefail
-          st=$(tailscale status 2>&1 || true)
-          if printf '%s' "$st" | grep -qiE 'logged out|stopped|NeedsLogin'; then
-            echo "::error::Joined the tailnet in name only - tailscale reports: $(printf '%s' "$st" | head -1)"
+          state=$(tailscale status --json 2>/dev/null | jq -r '.BackendState // "unknown"')
+          if [ "$state" != "Running" ]; then
+            echo "::error::Joined the tailnet in name only - tailscale reports: ${state:-unknown}"
             echo "The join step above reports success even when every attempt failed; read its log."
             echo "If joining by OAuth and the log shows"
             echo "  400 'requested tags [...] are invalid or not permitted'"
@@ -184,7 +186,7 @@ jobs:
             echo "carries its tag already, and this workflow prefers it when present."
             exit 1
           fi
-          echo "tailnet up: $(printf '%s' "$st" | head -1)"
+          echo "tailnet up: $state"
 
       - if: steps.preflight.outputs.configured == 'true'
         uses: docker/login-action@v4
@@ -227,6 +229,10 @@ jobs:
           # done in preflight does not carry across.
           DEPLOY_HOST=$(printf '%s' "$DEPLOY_HOST" | tr -d '[:space:]')
           DEPLOY_USER=$(printf '%s' "$DEPLOY_USER" | tr -d '[:space:]')
+          # Actions masks a secret only as stored. If the stored HOST carried
+          # whitespace, the trimmed value no longer matches it and would print in
+          # clear wherever ssh or the diagnosis below echoes it.
+          echo "::add-mask::$DEPLOY_HOST"
 
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
@@ -261,40 +267,45 @@ jobs:
             # each diagnosed by inference and two of those inferences were wrong,
             # so gather the facts that actually separate the causes.
             #
-            # None of this prints HOST itself: it is a registered secret, and a
-            # derived boolean or a peer list is not the value.
-            # Whole block in a subshell with -e and pipefail OFF. Diagnostics must
-            # never themselves fail the step — and with pipefail on, `… | head -15`
-            # SIGPIPEs its producers once the limit is hit, so a tailnet with more
-            # than 15 peers would print 15 good lines and then claim the command
-            # was unavailable. An error path that fires on success is worse than
-            # no error path. The explicit `exit 1` below is what ends the step.
+            # None of this prints HOST itself: it is a registered secret. Nor
+            # does it print raw tailscale output — that carries peer names,
+            # tailnet addresses and the box's public endpoint, and this log is
+            # public. Only derived verdicts reach it.
+            # Whole block in a subshell with -e and pipefail OFF: diagnostics must
+            # never themselves fail the step. The explicit `exit 1` below is what
+            # ends the step.
             (
               set +e +o pipefail
               echo "--- diagnosis ---"
               # No HOST shape check. It produced a false negative twice: it
-              # rejects a bare MagicDNS short name like `frankbria-localdev`,
-              # which routes perfectly well, and it told a maintainer their
-              # correct HOST was wrong. The reachability probe above already
-              # tests the property this was guessing at.
+              # rejects a bare MagicDNS short name, which routes perfectly well,
+              # and it told a maintainer their correct HOST was wrong. The
+              # reachability probe above already tests the property this was
+              # guessing at.
               # The quotes matter: they are what made a leading space in HOST
               # visible at all. Do not remove them.
               echo "resolving HOST as: '$DEPLOY_HOST'"
-              echo "runner tailnet state:"
-              tailscale status 2>&1 | head -15 | sed 's/^/  /'
-              # `tailscale ping` distinguishes the two timeout-shaped causes: it
-              # reports an ACL denial explicitly, whereas an address that is not on
-              # the tailnet at all simply never resolves to a peer.
-              echo "tailscale ping:"
-              timeout 20 tailscale ping --timeout=5s --c=3 "$DEPLOY_HOST" 2>&1 | head -8 | sed 's/^/  /'
+              echo "runner tailnet state: $(tailscale status --json 2>/dev/null | jq -r '.BackendState // "unknown"')"
+              # `tailscale ping` is a disco ping, which tailnet ACLs do not
+              # filter — so a pong alongside a failed ssh points at the ACL or
+              # the box itself, while no pong means HOST is not a usable peer.
+              ping_out=$(timeout 20 tailscale ping --timeout=5s --c=3 "$DEPLOY_HOST" 2>&1)
+              case "$ping_out" in
+                *pong*) verdict="pong" ;;
+                *"no matching peer"* | *"error looking up"*) verdict="no peer found" ;;
+                *) verdict="no reply" ;;
+              esac
+              echo "tailscale ping: $verdict"
               echo "-----------------"
             )
             echo "Read it as:"
-            echo "  'Logged out'        -> the tailnet join failed; see the assert step above."
-            echo "  ping reports an ACL -> the ACL must allow tag:ci -> the box on :22."
-            echo "  no peer found       -> HOST names something not on this tailnet. Note a bare"
-            echo "                         MagicDNS short name IS valid here - do not assume the"
-            echo "                         hostname is wrong just because it is not *.ts.net."
+            echo "  state not Running -> the tailnet join failed; see the assert step above."
+            echo "  pong              -> HOST is on the tailnet; the ACL must allow tag:ci ->"
+            echo "                       the box on :22, and sshd must be listening there."
+            echo "  no peer found     -> HOST names something not on this tailnet. Note a bare"
+            echo "                       MagicDNS short name IS valid here - do not assume the"
+            echo "                       hostname is wrong just because it is not *.ts.net."
+            echo "  no reply          -> HOST is a known peer that did not answer (offline?)."
             exit 1
           fi
 

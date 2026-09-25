@@ -83,6 +83,7 @@ __tests__/
 ├── ai-client-preprocessor.test.ts # Preprocessor tests (24 tests)
 ├── ai-client-batch4.test.ts       # Cache + cost tracker tests (19 tests)
 ├── ai-client-models.test.ts       # Model pins, provider probe, resolution (26 tests)
+├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
 │   ├── diff.test.ts
@@ -329,7 +330,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1239/1240 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1259/1260 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

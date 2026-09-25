@@ -46,7 +46,7 @@ code is the ordering key.
 
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
-| `P0.1` | [#329](https://github.com/frankbria/iris/issues/329) | Repo hygiene: CI workflow comments and deploy docs | — | TODO |
+| `P0.1` | [#329](https://github.com/frankbria/iris/issues/329) | Repo hygiene: CI workflow comments and deploy docs | — | DONE ([#366](https://github.com/frankbria/iris/pull/366)) |
 | `P0.2` | [#330](https://github.com/frankbria/iris/issues/330) | RPC server: request handling robustness | — | TODO |
 | `P0.3` | [#231](https://github.com/frankbria/iris/issues/231) | ADR: hosted SaaS architecture (BYOK + managed credits, API + portal) | — | TODO |
 
