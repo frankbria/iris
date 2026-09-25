@@ -65,6 +65,16 @@ resolve under node10 and is what produced the false ESM-only reading.
 Decision 3 is therefore unchanged but now actionable: the WebSocket JSON-RPC
 retirement review can be scheduled against evidence.
 
+## Update — 2026-09-25: hosted product (ADR 0001)
+
+[ADR 0001](adr/0001-hosted-architecture.md) (#231) supersedes **decision 3 for the
+hosted product**: the WebSocket JSON-RPC server is what IRIS hosts at launch, served
+over WSS behind per-tenant API keys, so it is no longer frozen — it takes the Cycle 4
+hardening, auth and limits work. Decisions 1 and 2 stand for local use: the CLI stays
+the canonical local assistant surface, and the MCP stdio server stays local (hosted
+MCP over HTTP is post-launch, #314). The ADR's §7 lists every surface and whether it
+is hosted.
+
 ## What this decision does not do
 
 It does not shrink the product vision. The audit's conclusion was to *close* the
@@ -75,6 +85,7 @@ same time.
 ## References
 
 - [plans/README.md](../plans/README.md) — canonical status tracker; wins over any other planning doc
+- [ADR 0001](adr/0001-hosted-architecture.md) — hosted SaaS architecture
 - [plans/012](../plans/012-mcp-server-spike.md) — MCP spike
 - [#80](https://github.com/frankbria/iris/issues/80) — JSON-RPC mocked methods
 - [#114](https://github.com/frankbria/iris/issues/114) — MCP spike issue

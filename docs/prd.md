@@ -263,6 +263,10 @@ npx orchestrator watch --url http://localhost:3000
 
 ```
 
+BYOK above is the **local** tool's model. The hosted service (2026-09-25) keeps BYOK
+per organization and adds an optional managed-key credit tier billed through Stripe —
+see [ADR 0001: hosted SaaS architecture](adr/0001-hosted-architecture.md).
+
 **Progressive Disclosure:**
 
 - Works with zero config

@@ -102,6 +102,8 @@ docs/                               # Detailed project documentation
 ├── user_stories.md                # User stories and acceptance criteria
 ├── phase2_technical_architecture.md # Phase 2 technical details
 ├── phase2c_roadmap.md             # Phase 2C roadmap (ROADMAP — not started)
+├── integration-surfaces.md        # Which integration surfaces exist and why (decision record)
+├── adr/0001-hosted-architecture.md # Hosted SaaS architecture — anchors every Cycle 4 platform issue
 └── archive/                       # Superseded planning docs (historical)
 
 plans/

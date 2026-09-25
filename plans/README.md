@@ -25,7 +25,7 @@ observability, legal).
 
 **Decisions (2026-09-25):** AI billing is **BYOK + managed-key credits**; the
 launch surface is an **authenticated API + minimal portal**. P0.3
-([#231](https://github.com/frankbria/iris/issues/231), the hosted-architecture ADR) anchors every platform issue.
+([#231](https://github.com/frankbria/iris/issues/231), [ADR 0001](../docs/adr/0001-hosted-architecture.md)) anchors every platform issue.
 
 | Tier | Count |
 |------|-------|
@@ -48,7 +48,7 @@ code is the ordering key.
 |----------|-------|-------|-----------|--------|
 | `P0.1` | [#329](https://github.com/frankbria/iris/issues/329) | Repo hygiene: CI workflow comments and deploy docs | — | DONE ([#366](https://github.com/frankbria/iris/pull/366)) |
 | `P0.2` | [#330](https://github.com/frankbria/iris/issues/330) | RPC server: request handling robustness | — | DONE ([#367](https://github.com/frankbria/iris/pull/367)) |
-| `P0.3` | [#231](https://github.com/frankbria/iris/issues/231) | ADR: hosted SaaS architecture (BYOK + managed credits, API + portal) | — | TODO |
+| `P0.3` | [#231](https://github.com/frankbria/iris/issues/231) | ADR: hosted SaaS architecture (BYOK + managed credits, API + portal) | — | DONE ([ADR 0001](../docs/adr/0001-hosted-architecture.md)) |
 
 **B. Browser runtime**
 
