@@ -303,10 +303,12 @@ server deployable:
 | setting | flag | environment | default |
 |---|---|---|---|
 | bind address | `--host <addr>` | `IRIS_CONNECT_HOST` | `127.0.0.1` |
-| auth token | — | `IRIS_CONNECT_TOKEN` | random per start |
+| auth token | — | `IRIS_CONNECT_TOKEN`, or `IRIS_CONNECT_TOKEN_FILE` (a file holding it) | random per start |
 
 A supplied token is used verbatim and **not** printed — it stays out of the logs,
-and it survives a restart, which a per-session token does not.
+and it survives a restart, which a per-session token does not. Prefer the file
+form wherever the environment is visible to others (`docker inspect` shows it);
+setting both variables is refused, as is an empty or unreadable file.
 
 > ⚠️ **Widening the bind address exposes a browser driver.** This server can be
 > told to navigate anywhere, so anything that can reach it is an SSRF engine with
@@ -318,10 +320,18 @@ and it survives a restart, which a per-session token does not.
 
 ```bash
 docker build -t iris .
+install -d -m 700 secrets
+openssl rand -hex 32 > secrets/connect_token
+chmod 444 secrets/connect_token   # read by the container's pwuser (uid 1001)
 docker run -d --name iris \
-  --shm-size=1g \
-  -e IRIS_CONNECT_TOKEN="$(openssl rand -hex 32)" \
-  -e IRIS_CHROMIUM_SANDBOX=0 \
+  --init --read-only --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --security-opt seccomp=docker/seccomp-chromium.json \
+  --tmpfs /tmp:size=512m,mode=1777 \
+  --tmpfs /home/pwuser:size=256m,uid=1001,gid=1001,mode=0700 \
+  --shm-size=1g --memory 3g --cpus 2 --pids-limit 1024 \
+  -v "$PWD/secrets/connect_token:/run/secrets/connect_token:ro" \
+  -e IRIS_CONNECT_TOKEN_FILE=/run/secrets/connect_token \
   -p 127.0.0.1:4000:4000 \
   iris
 ```
@@ -330,13 +340,16 @@ docker run -d --name iris \
 it on merge to `main` using the **`staging` GitHub Environment**, which supplies
 `HOST`, `USER`, `SSH_KEY`, `SSH_KNOWN_HOSTS` and `IRIS_CONNECT_TOKEN`. The job
 skips itself when those are absent, so a fork does not get a red CI it cannot fix.
+The deploy writes the token to the compose secret file (`secrets/connect_token`
+beside the compose file) and hands it to uid 1001, so `USER` must be able to
+`chown`.
 
 `IRIS_CONNECT_TOKEN` belongs to the environment, not the repository: it is the
 credential to one running service, so a single repo-wide value would let a
 staging leak drive the production browser. A `production` environment holds a
 different value under the same name.
 
-Two container specifics worth knowing:
+Container specifics worth knowing:
 
 - **The container binds `0.0.0.0` internally** (`IRIS_CONNECT_HOST` is set in the
   image). It has to: Docker forwards a published port to the container's network
@@ -346,13 +359,19 @@ Two container specifics worth knowing:
 - **`--shm-size=1g`.** Chromium needs more shared memory than Docker's 64 MB
   default; without it a page render can exhaust it and surface as an opaque
   browser disconnect.
-- **`IRIS_CHROMIUM_SANDBOX=0`, for now.** IRIS launches Chromium sandboxed, and
-  Docker's default seccomp profile blocks the user namespaces the sandbox needs,
-  so without this every launch fails with "Chromium could not start its sandbox".
-  It runs pages unsandboxed: only point it at sites you trust.
-  [#332](https://github.com/frankbria/iris/issues/332) replaces it with a seccomp
-  profile. The same variable is the opt-out on a desktop Linux host that
-  restricts unprivileged user namespaces (Ubuntu 23.10+ AppArmor).
+- **`docker/seccomp-chromium.json` is what lets the sandbox run.** IRIS launches
+  Chromium sandboxed, and Docker's default seccomp profile only allows the user
+  namespace and `chroot` calls the sandbox makes to a container holding
+  `CAP_SYS_ADMIN` / `CAP_SYS_CHROOT` — which `--cap-drop ALL` removes. The file is
+  Docker's default profile plus one rule allowing those calls; without it every
+  launch fails with "Chromium could not start its sandbox". `IRIS_CHROMIUM_SANDBOX=0`
+  still exists as an opt-out for hosts that cannot sandbox at all (Ubuntu 23.10+
+  AppArmor restricting unprivileged user namespaces), and runs pages unsandboxed.
+- **The rest of the flags bound a misbehaving page.** `--init` reaps Chromium's
+  exited helpers (Node as PID 1 does not); `--read-only` with tmpfs for `/tmp` and
+  `$HOME` keeps the image immutable; the memory, CPU and pids limits keep one
+  runaway session from taking the host down with it. The compose file explains
+  each value.
 
 > **Experimental / legacy — frozen.** A bespoke WebSocket protocol that no mainstream
 > AI assistant speaks. It keeps working and keeps its security fixes, but takes no new

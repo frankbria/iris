@@ -8,6 +8,7 @@ import * as agentLoopModule from '../src/agent-loop';
 import * as watcherModule from '../src/watcher';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 describe('CLI Commands', () => {
@@ -97,7 +98,7 @@ describe('CLI Commands', () => {
   // so a bare `iris connect` behaves exactly as before.
   // ==========================================================================
   describe('connect host and token overrides (issue #192)', () => {
-    const ENV_KEYS = ['IRIS_CONNECT_HOST', 'IRIS_CONNECT_TOKEN'];
+    const ENV_KEYS = ['IRIS_CONNECT_HOST', 'IRIS_CONNECT_TOKEN', 'IRIS_CONNECT_TOKEN_FILE'];
     let sigintBefore: number;
     let sigtermBefore: number;
 
@@ -188,6 +189,58 @@ describe('CLI Commands', () => {
       await runCli(['node', 'iris', 'connect']);
       expect(startArgs()[1].authToken).toMatch(/^[0-9a-f]{64}$/);
       expect(consoleOutput.join('\n')).toContain(startArgs()[1].authToken as string);
+    });
+
+    // #332: an env var is visible to anything that can `docker inspect` the
+    // container, so the deployed token arrives as a file (a compose secret).
+    describe('IRIS_CONNECT_TOKEN_FILE (issue #332)', () => {
+      let dir: string;
+      let errors: string[];
+      let exitSpy: jest.SpyInstance;
+
+      beforeEach(() => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-token-'));
+        errors = [];
+        jest.spyOn(console, 'error').mockImplementation((m: string) => errors.push(m));
+        exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      });
+
+      afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+      const tokenFile = (content: string) => {
+        const file = path.join(dir, 'token');
+        fs.writeFileSync(file, content);
+        return file;
+      };
+
+      it('reads the token from the file, ignoring the trailing newline editors add', async () => {
+        process.env.IRIS_CONNECT_TOKEN_FILE = tokenFile('file-token-value\n');
+        await runCli(['node', 'iris', 'connect']);
+        expect(startArgs()[1].authToken).toBe('file-token-value');
+        expect(consoleOutput.join('\n')).not.toContain('file-token-value');
+      });
+
+      // Falling back to a random token would start a server nobody can reach,
+      // healthy-looking until the first client is refused.
+      it.each([
+        ['is empty', () => tokenFile('  \n')],
+        ['does not exist', () => path.join(dir, 'missing')],
+      ])('exits 3 without starting the server when the file %s', async (_label, file) => {
+        process.env.IRIS_CONNECT_TOKEN_FILE = file();
+        await runCli(['node', 'iris', 'connect']);
+        expect(exitSpy).toHaveBeenCalledWith(3);
+        expect(errors.join('\n')).toMatch(/IRIS_CONNECT_TOKEN_FILE/);
+        expect(protocolModule.startServer).not.toHaveBeenCalled();
+      });
+
+      it('refuses both variables at once rather than guessing which one wins', async () => {
+        process.env.IRIS_CONNECT_TOKEN = 'env-token';
+        process.env.IRIS_CONNECT_TOKEN_FILE = tokenFile('file-token');
+        await runCli(['node', 'iris', 'connect']);
+        expect(exitSpy).toHaveBeenCalledWith(2);
+        expect(errors.join('\n')).toMatch(/IRIS_CONNECT_TOKEN and IRIS_CONNECT_TOKEN_FILE/);
+        expect(protocolModule.startServer).not.toHaveBeenCalled();
+      });
     });
   });
 

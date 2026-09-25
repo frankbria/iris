@@ -26,10 +26,10 @@
  * Exit 0 = pass. Any other exit, with a reason on stderr, = fail.
  */
 
+const fs = require('fs');
 const WebSocket = require('ws');
 
 const PORT = process.env.IRIS_CONNECT_PORT || '4000';
-const TOKEN = process.env.IRIS_CONNECT_TOKEN;
 const TIMEOUT_MS = Number(process.env.IRIS_HEALTHCHECK_TIMEOUT_MS || 10000);
 
 function fail(reason) {
@@ -37,11 +37,22 @@ function fail(reason) {
   process.exit(1);
 }
 
+// Same sources as `iris connect`: the deployed container mounts the token as a
+// secret file (#332) rather than exposing it in its environment.
+let TOKEN = process.env.IRIS_CONNECT_TOKEN;
+if (process.env.IRIS_CONNECT_TOKEN_FILE) {
+  try {
+    TOKEN = fs.readFileSync(process.env.IRIS_CONNECT_TOKEN_FILE, 'utf8').trim();
+  } catch (err) {
+    fail(`cannot read IRIS_CONNECT_TOKEN_FILE: ${err.message}`);
+  }
+}
+
 if (!TOKEN) {
   // Without the token the probe cannot authenticate and would report every
   // healthy container as failing. That is a misconfiguration, not ill health,
   // so name which one it is.
-  fail('IRIS_CONNECT_TOKEN is not set in the container environment');
+  fail('neither IRIS_CONNECT_TOKEN nor IRIS_CONNECT_TOKEN_FILE supplies a token');
 }
 
 // Always loopback: this runs *inside* the container, where the server is bound
