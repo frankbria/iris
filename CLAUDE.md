@@ -190,6 +190,28 @@ The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a
 file because compose interprets `${...}` in an inline script as its own syntax.
 
+### RPC Server Error Policy (issue #330)
+
+`iris connect` installs `installProcessErrorPolicy()` (src/protocol.ts), and the
+split is deliberate:
+
+- **Unhandled rejection → log and keep serving.** Rejections come from per-request
+  async work. Node's default (crash) is how one malformed frame used to end every
+  client's session.
+- **Uncaught exception → log and exit 1.** A synchronous throw that escaped every
+  handler leaves shared state unknown. Playwright kills its browsers on exit.
+
+Two rules keep the server alive under hostile input. Validate a frame's *shape*
+before reading from it: `null`, `1`, `[]` and `"x"` are all valid JSON, and get
+`-32600` with `id: null`. And send only through `reply()`, which checks
+`readyState`. `connect` announces "listening" only after the `listening` event;
+a taken port exits 3.
+
+Test it out of process. Jest absorbs an unhandled rejection, so an in-process
+test passes against the very crash it is meant to catch.
+`protocol-robustness.test.ts` spawns `src/cli.ts` through ts-node
+(transpile-only) rather than `dist/`, so it never races the MCP suite's `tsc`.
+
 ### A Red Suite May Be the Machine, Not the Diff (issue #142)
 
 Before treating a local test failure as a regression, check whether the host was
