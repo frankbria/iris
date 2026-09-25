@@ -306,7 +306,10 @@ export function startServer(
             throw { code: -32601, message: 'Method not found' };
         }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } catch (err: any) {
+      } catch (thrown: any) {
+        // `throw null` (or any primitive) must not make this catch block throw
+        // in turn — that escapes the listener exactly like the frame crash (#330).
+        const err = typeof thrown === 'object' && thrown !== null ? thrown : {};
         res.error = {
           code: err.code || -32000,
           message: err.message || 'Server error',

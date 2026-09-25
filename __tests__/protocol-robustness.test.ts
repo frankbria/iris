@@ -19,6 +19,7 @@ import * as net from 'net';
 import * as path from 'path';
 import WebSocket from 'ws';
 import { startServer, installProcessErrorPolicy, JsonRpcResponse } from '../src/protocol';
+import * as translatorModule from '../src/translator';
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const TOKEN = 'robustness-test-token';
@@ -160,9 +161,10 @@ describe('iris connect bind failure (#330)', () => {
 
 describe('replies are only sent on an open socket (#330)', () => {
   it('does not send when the socket closed while the request was in flight', async () => {
-    const port = await freePort();
-    const wss = startServer(port);
+    // Port 0: the OS picks, so nothing can take the port between probe and bind.
+    const wss = startServer(0);
     await once(wss, 'listening');
+    const { port } = wss.address() as net.AddressInfo;
     const sentWhileNotOpen: number[] = [];
     try {
       wss.on('connection', (serverWs: WebSocket) => {
@@ -190,6 +192,50 @@ describe('replies are only sent on an open socket (#330)', () => {
       await new Promise((r) => wss.close(r));
     }
   });
+});
+
+// Same class as the original crash, one level down: the catch block read
+// `err.code` off whatever was thrown, so a `throw null` from anywhere in a
+// handler's call graph escaped the catch itself.
+describe('a non-object throw inside a handler (#330)', () => {
+  let wss: ReturnType<typeof startServer>;
+  let client: WebSocket;
+
+  // Setup and teardown live in hooks, not a try/finally in the test: a
+  // regression here means no reply, and a timed-out test body never reaches
+  // its finally — the open server would then keep Jest from exiting.
+  beforeEach(async () => {
+    wss = startServer(0);
+    await once(wss, 'listening');
+    client = new WebSocket(`ws://127.0.0.1:${(wss.address() as net.AddressInfo).port}`);
+    await once(client, 'open');
+  });
+
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    client.terminate();
+    await new Promise((r) => wss.close(r));
+  });
+
+  it.each([null, undefined, 'text'])(
+    'thrown %p still gets a -32000 reply',
+    async (thrown) => {
+      jest.spyOn(translatorModule, 'translateSync').mockImplementation(() => {
+        throw thrown;
+      });
+      const res = await roundTrip(
+        client,
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'executeCommand',
+          params: { instruction: 'x' },
+        }),
+      );
+      expect(res).toMatchObject({ id: 7, error: { code: -32000, message: 'Server error' } });
+    },
+    5000,
+  );
 });
 
 describe('installProcessErrorPolicy (#330)', () => {
