@@ -358,10 +358,15 @@ jobs:
           # this is idempotent: re-running leaves the same healthy state rather
           # than stacking another copy.
           #
+          # --force-recreate because compose hashes the secret's mount spec, not
+          # the file's content: a re-run of the same SHA after rotating the token
+          # would keep the old container serving the old token while the
+          # healthcheck reads the new one. A new SHA recreates anyway.
+          #
           # `|| :` on the logout so a registry hiccup at teardown cannot fail an
           # otherwise-good deploy; the credential is short-lived regardless.
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            'cd /opt/iris && docker compose pull --quiet && docker compose up -d --remove-orphans; \
+            'cd /opt/iris && docker compose pull --quiet && docker compose up -d --force-recreate --remove-orphans; \
              rc=$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit $rc'
 
           # Smoke test: wait for the container's own healthcheck to report

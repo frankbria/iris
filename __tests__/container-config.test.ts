@@ -118,6 +118,8 @@ describe('Dockerfile and deploy wiring (issue #332)', () => {
     expect(ci).toMatch(/docker\/seccomp-chromium\.json/);
     expect(ci).toMatch(/\/opt\/iris\/secrets\/connect_token/);
     expect(ci).not.toMatch(/IRIS_CONNECT_TOKEN=%s/);
+    // The token is read once at startup; a rotated file needs a new container.
+    expect(ci).toMatch(/docker compose up -d --force-recreate/);
   });
 });
 
