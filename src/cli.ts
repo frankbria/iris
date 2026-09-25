@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import * as path from 'path';
 import * as os from 'os';
+import { once } from 'events';
 import { loadDotenv, loadConfig } from './config';
 import type { IrisConfig, ProviderCredentials } from './config';
 import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-options';
@@ -545,7 +546,7 @@ program
       'Only widen this behind a trusted boundary — see the warning below',
   )
   .action(async (port: number, options: { host?: string }) => {
-    const { startServer } = await import('./protocol');
+    const { startServer, installProcessErrorPolicy } = await import('./protocol');
     const { randomBytes } = await import('crypto');
 
     // Bind address, most explicit first. The default stays loopback: this server
@@ -573,6 +574,21 @@ program
     const authToken = suppliedToken || randomBytes(32).toString('hex');
 
     const wss = startServer(port, { host, authToken });
+    // Wait for the bind before claiming it. `listen` fails asynchronously, so
+    // logging straight after startServer() announced a server that then died
+    // on an unhandled 'error' event when the port was taken (#330). `once`
+    // rejects on 'error', which is the bind failure.
+    try {
+      await once(wss, 'listening');
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      const reason = e.code === 'EADDRINUSE' ? 'address already in use' : e.message;
+      console.error(`Cannot listen on ${host}:${port}: ${reason}`);
+      wss.close();
+      process.exit(3); // Environment/runtime error
+      return;
+    }
+    installProcessErrorPolicy();
     // Advertise the address actually bound. Hardcoding 127.0.0.1 here would
     // describe a container as unreachable while it works fine, and advertising
     // `localhost` would send dual-stack clients to ::1 and miss an IPv4 listener.

@@ -570,9 +570,9 @@ Unlike `run`, the two reporting commands signal outcome through the exit code:
 | Code | Meaning | Commands |
 |------|---------|----------|
 | `0` | Completed (for `run`, check `status` in the JSON — it does not set a failure code) | all |
-| `1` | Unhandled error | `watch`, top-level |
+| `1` | Unhandled error (for `connect`: an uncaught exception — the server exits rather than serve from unknown state) | `watch`, `connect`, top-level |
 | `2` | Invalid usage (bad flag or argument combination) | `visual-diff` |
-| `3` | Environment/runtime error (browser launch, filesystem, network) | `visual-diff`, `a11y` |
+| `3` | Environment/runtime error (browser launch, filesystem, network; for `connect`: the port is already in use) | `visual-diff`, `a11y`, `connect` |
 | `4` | Accessibility violations found | `a11y` |
 | `5` | Visual regression detected | `visual-diff` |
 
