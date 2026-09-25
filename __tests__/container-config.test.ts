@@ -106,6 +106,13 @@ describe('Dockerfile and deploy wiring (issue #332)', () => {
     expect(users?.at(-1)).toBe('USER pwuser');
   });
 
+  // Docker seeds a new named volume from the image's mount point, owner
+  // included. Without this /data is root-owned and pwuser cannot create the
+  // history database at IRIS_DB_PATH — found while hardening in #332.
+  it('hands the /data volume mount point to pwuser', () => {
+    expect(read('Dockerfile')).toMatch(/^RUN install -d -o pwuser -g pwuser \/data$/m);
+  });
+
   it('ships the seccomp profile and the token file to the host, and not the token in .env', () => {
     const ci = read('.github/workflows/ci.yml');
     expect(ci).toMatch(/docker\/seccomp-chromium\.json/);

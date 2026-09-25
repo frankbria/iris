@@ -61,6 +61,11 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY docker/healthcheck.js ./docker/healthcheck.js
 
+# Mount point of the history volume (IRIS_DB_PATH=/data/iris.db in compose).
+# Docker seeds a new, empty named volume from this directory, owner included;
+# left to Docker it is created root-owned and pwuser cannot write the database.
+RUN install -d -o pwuser -g pwuser /data
+
 # `pwuser` (uid 1001) ships with the base image and owns the browser cache.
 # Running as root would be gratuitous for a process that only serves a socket.
 USER pwuser
