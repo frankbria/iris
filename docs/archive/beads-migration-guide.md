@@ -18,7 +18,7 @@ Beads (`bd`) is a dependency-aware issue tracker designed for AI-supervised work
 Beads is already installed in this project:
 
 ```bash
-# bd is installed globally at /home/frankbria/go/bin/bd
+# bd is installed globally at ~/go/bin/bd
 # Added to PATH in ~/.bashrc
 
 # Verify installation

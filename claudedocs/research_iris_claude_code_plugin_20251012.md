@@ -1328,10 +1328,10 @@ describe('IRIS MCP Server Integration', () => {
 
 ### C. IRIS Documentation
 
-- **Current README**: /home/frankbria/projects/iris/README.md
-- **Getting Started**: /home/frankbria/projects/iris/docs/GETTING_STARTED_GUIDE.md
-- **API Docs**: /home/frankbria/projects/iris/docs/api/
-- **Phase 2 Report**: /home/frankbria/projects/iris/plan/phase2_completion_report.md
+- **Current README**: README.md
+- **Getting Started**: docs/GETTING_STARTED_GUIDE.md
+- **API Docs**: docs/api/
+- **Phase 2 Report**: plan/phase2_completion_report.md
 
 ### D. Contact & Support
 
