@@ -54,7 +54,7 @@ code is the ordering key.
 
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
-| `P0.4` | [#331](https://github.com/frankbria/iris/issues/331) | Browser launch: shared launch factory | P0.3 (#231) | TODO |
+| `P0.4` | [#331](https://github.com/frankbria/iris/issues/331) | Browser launch: shared launch factory | P0.3 (#231) | DONE ([#369](https://github.com/frankbria/iris/pull/369); staging unsandboxed until P0.5) |
 | `P0.5` | [#332](https://github.com/frankbria/iris/issues/332) | Container runtime configuration | P0.4 (#331) | TODO |
 | `P0.6` | [#333](https://github.com/frankbria/iris/issues/333) | URL policy: range table update | — | TODO |
 | `P0.7` | [#334](https://github.com/frankbria/iris/issues/334) | Hosted mode: URL policy defaults | P0.3 (#231), P0.6 (#333) | TODO |
