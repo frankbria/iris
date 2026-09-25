@@ -29,22 +29,23 @@ export interface UrlPolicyOptions {
   blockPrivateHosts?: boolean;
 }
 
-/** Strip IPv6 brackets, a DNS-equivalent trailing dot, and lowercase for comparison. */
+/** Strip IPv6 brackets, DNS-equivalent trailing dots, and lowercase for comparison. */
 function normalizeHost(hostname: string): string {
   return hostname
     .replace(/^\[|\]$/g, '')
-    .replace(/\.$/, '')
+    .replace(/\.+$/, '')
     .toLowerCase();
 }
 
 /**
  * The IPv6 prefixes that carry an IPv4 address in their low 32 bits: mapped
- * (`::ffff:a.b.c.d`), the deprecated compatible form (`::a.b.c.d`), and NAT64
- * (`64:ff9b::a.b.c.d`). Each IPv4 range is registered under all three, so a
- * blocked IPv4 target cannot be reached by spelling it as IPv6 — while NAT64 to a
- * public address, which IPv6-only networks depend on, stays reachable.
+ * (`::ffff:a.b.c.d`), the deprecated compatible form (`::a.b.c.d`), and NAT64 —
+ * the well-known `64:ff9b::/96` and the local-use `64:ff9b:1::/96` layout. Each
+ * IPv4 range is registered under all of them, so a blocked IPv4 target cannot be
+ * reached by spelling it as one of these IPv6 forms — while NAT64 to a public
+ * address, which IPv6-only networks depend on, stays reachable.
  */
-const IPV4_IN_IPV6_PREFIXES = ['::ffff:', '::', '64:ff9b::'];
+const IPV4_IN_IPV6_PREFIXES = ['::ffff:', '::', '64:ff9b::', '64:ff9b:1::'];
 
 function rangeList(v4: Array<[string, number]>, v6: Array<[string, number]>): BlockList {
   const list = new BlockList();
@@ -56,9 +57,11 @@ function rangeList(v4: Array<[string, number]>, v6: Array<[string, number]>): Bl
   return list;
 }
 
-// ponytail: host matching is on the URL's hostname only. WHATWG parsing (which
-// `new URL` and Chromium share) canonicalises integer/hex/octal IPv4 and every
-// IPv6 spelling first, so those are covered — but a DNS name that *resolves* to
+// ponytail: host matching is on the URL's hostname only. WHATWG parsing (the
+// standard Chromium follows too; Node's is stricter, which fails closed here)
+// canonicalises integer/hex/octal IPv4 and every IPv6 spelling first, so those
+// are covered. Local-use NAT64 embedding at /48-/64 is not decoded, only its
+// /96 layout; the whole prefix is private. A DNS name that *resolves* to
 // a blocked address (incl. DNS rebinding) is not. That needs a resolve-at-connect
 // control (the hosted egress layer), not string matching.
 
@@ -89,6 +92,7 @@ const PRIVATE_RANGES = rangeList(
     ['::', 128], // unspecified
     ['::1', 128],
     ['fc00::', 7], // ULA
+    ['64:ff9b:1::', 48], // local-use NAT64 (RFC 8215): never globally reachable
   ],
 );
 

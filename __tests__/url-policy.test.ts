@@ -139,6 +139,7 @@ describe('assertNavigationAllowed', () => {
       ['Alibaba metadata', 'http://100.100.100.200/'],
       ['Alibaba metadata IPv4-mapped', 'http://[::ffff:100.100.100.200]/'],
       ['IPv6 link-local', 'http://[febf::1]/'],
+      ['169.254.169.254 via local-use NAT64', 'http://[64:ff9b:1::169.254.169.254]/'],
     ])('always blocks %s', (_label, url) => {
       expect(() => assertNavigationAllowed(url)).toThrow(/link-local\/metadata/);
     });
@@ -162,6 +163,8 @@ describe('assertNavigationAllowed', () => {
       ['NAT64 to loopback', 'http://[64:ff9b::7f00:1]/'],
       ['IPv6 ULA', 'http://[fd12:3456::1]/'],
       ['localhost with a trailing dot', 'http://localhost./'],
+      ['localhost with two trailing dots', 'http://localhost../'],
+      ['local-use NAT64 to a public IPv4', 'http://[64:ff9b:1::8.8.8.8]/'],
       ['a *.localhost subdomain', 'http://app.localhost:3000/'],
       ['a mixed-case *.localhost subdomain', 'http://A.B.LocalHost/'],
     ])('blocks %s only when blockPrivateHosts is set', (_label, url) => {
