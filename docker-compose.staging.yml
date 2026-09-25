@@ -26,19 +26,62 @@ services:
       - '127.0.0.1:4000:4000'
 
     environment:
-      # Stable across restarts, unlike the per-start random token, so clients and
-      # the healthcheck keep working after a bounce. Supply it from the host
-      # environment or a .env file beside this compose file — never commit it.
-      IRIS_CONNECT_TOKEN: ${IRIS_CONNECT_TOKEN:?IRIS_CONNECT_TOKEN must be set}
+      # The token is a file, not an env var (#332): an environment is readable by
+      # anyone who can `docker inspect` the container, and by every process in
+      # it. Stable across restarts, unlike the per-start random token, so clients
+      # and the healthcheck keep working after a bounce.
+      IRIS_CONNECT_TOKEN_FILE: /run/secrets/connect_token
       # Keep run history inside the named volume rather than the container layer.
       IRIS_DB_PATH: /data/iris.db
-      # Temporary (#331 -> #332): Docker's default seccomp profile blocks the
-      # user namespaces Chromium's sandbox needs, so a sandboxed launch fails
-      # here. #332 supplies a profile that permits them and deletes this line.
-      IRIS_CHROMIUM_SANDBOX: '0'
+
+    # A bind mount, so the container sees the host file's own owner and mode:
+    # it must be readable by pwuser (uid 1001). Keep it inside a 0700 directory
+    # so that on a shared host, whoever holds uid 1001 there cannot reach it.
+    secrets:
+      - connect_token
 
     volumes:
       - iris-data:/data
+
+    # --- runtime hardening (#332) ---------------------------------------------
+    # Every session spawns a Chromium that renders arbitrary pages; these bound
+    # what one that goes wrong, or is made to go wrong, can do to the box.
+
+    # Node as PID 1 does not reap orphans, so Chromium's exited helpers piled up
+    # as zombies. Docker's init (tini) reaps them and forwards SIGTERM.
+    init: true
+
+    # The Chromium sandbox needs no capabilities — it uses unprivileged user
+    # namespaces — and nothing else here binds a low port or changes ownership.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      # Docker's default profile plus one rule: user namespaces without
+      # CAP_SYS_ADMIN, which Chromium's sandbox needs. Without it a sandboxed
+      # launch fails with "Chromium could not start its sandbox". Details in the
+      # rule's own comment inside the file.
+      - seccomp=./docker/seccomp-chromium.json
+
+    # Nothing in the image may change at runtime. Chromium writes its profile
+    # to /tmp and caches under $HOME; run history goes to the /data volume.
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+      - /home/pwuser:size=256m,uid=1001,gid=1001,mode=0700
+
+    # Sized for a handful of concurrent sessions on a shared box: each Chromium
+    # takes roughly 150-400 MB, and the shm below counts against this limit.
+    mem_limit: 3g
+    cpus: '2'
+    # Threads count as pids. The idle server is ~20 and each browser session
+    # with a page open adds ~60 (measured in this image), so this leaves room
+    # for about 15 sessions while a runaway process tree cannot exhaust the
+    # host's process table.
+    pids_limit: 1024
+    # `iris connect` closes client sockets on SIGTERM and force-exits after 5s
+    # (src/cli.ts); Docker's default 10s would SIGKILL a slow drain first.
+    stop_grace_period: 20s
 
     # An authenticated JSON-RPC round trip, not a TCP open: a listening socket
     # says nothing about whether the token is accepted or the RPC layer answers.
@@ -72,3 +115,8 @@ services:
 
 volumes:
   iris-data:
+
+# Written by the deploy (ci.yml) to /opt/iris/secrets/connect_token. Never commit it.
+secrets:
+  connect_token:
+    file: ./secrets/connect_token

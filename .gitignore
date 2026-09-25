@@ -52,3 +52,6 @@ tasks/
 
 # Local MCP client config — copy .mcp.json.example, don't commit the copy
 .mcp.json
+
+# Docker secrets for local compose runs (#332)
+secrets/

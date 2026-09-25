@@ -548,6 +548,7 @@ program
   .action(async (port: number, options: { host?: string }) => {
     const { startServer, installProcessErrorPolicy } = await import('./protocol');
     const { randomBytes } = await import('crypto');
+    const { readFile } = await import('fs/promises');
 
     // Bind address, most explicit first. The default stays loopback: this server
     // drives a real browser, so a wider bind turns it into an SSRF engine that
@@ -570,7 +571,32 @@ program
     // generated exactly as before. Either way the server requires it in an
     // `Authorization: Bearer` header — a browser page cannot set that header, so
     // cross-site WebSocket hijacking and origin-less local processes are locked out.
-    const suppliedToken = process.env.IRIS_CONNECT_TOKEN;
+    //
+    // IRIS_CONNECT_TOKEN_FILE is the deployed form (#332): an env var shows up in
+    // `docker inspect` and /proc/<pid>/environ, a mounted secret file does not.
+    const tokenFile = process.env.IRIS_CONNECT_TOKEN_FILE;
+    if (tokenFile && process.env.IRIS_CONNECT_TOKEN) {
+      console.error('Set IRIS_CONNECT_TOKEN and IRIS_CONNECT_TOKEN_FILE one at a time, not both');
+      process.exit(2); // Invalid usage
+      return;
+    }
+    let suppliedToken = process.env.IRIS_CONNECT_TOKEN;
+    if (tokenFile) {
+      // An unreadable or empty file must not fall through to a random token: that
+      // server would look healthy and refuse every client holding the real one.
+      try {
+        suppliedToken = (await readFile(tokenFile, 'utf8')).trim();
+      } catch (err) {
+        console.error(`Cannot read IRIS_CONNECT_TOKEN_FILE: ${(err as Error).message}`);
+        process.exit(3); // Environment/runtime error
+        return;
+      }
+      if (!suppliedToken) {
+        console.error(`IRIS_CONNECT_TOKEN_FILE (${tokenFile}) holds no token`);
+        process.exit(3); // Environment/runtime error
+        return;
+      }
+    }
     const authToken = suppliedToken || randomBytes(32).toString('hex');
 
     const wss = startServer(port, { host, authToken });

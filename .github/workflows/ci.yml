@@ -314,19 +314,33 @@ jobs:
             exit 1
           fi
 
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /opt/iris'
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /opt/iris/docker'
           scp -i ~/.ssh/deploy_key docker-compose.staging.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:/opt/iris/docker-compose.yml"
+          # Referenced by the compose file's security_opt; without it the
+          # sandboxed Chromium cannot start (#332).
+          scp -i ~/.ssh/deploy_key docker/seccomp-chromium.json \
+            "$DEPLOY_USER@$DEPLOY_HOST:/opt/iris/docker/seccomp-chromium.json"
 
-          # The token goes to a 0600 file that compose reads automatically,
-          # rather than onto the remote command line. A command line is visible
-          # in the host's process list to every other user on the box — and this
-          # box is shared — for as long as the command runs.
-          umask 077
-          printf 'IRIS_TAG=%s\nIRIS_CONNECT_TOKEN=%s\n' "$IMAGE_TAG" "$IRIS_CONNECT_TOKEN" > /tmp/iris.env
+          # compose reads .env automatically; it no longer carries the token.
+          printf 'IRIS_TAG=%s\n' "$IMAGE_TAG" > /tmp/iris.env
           scp -i ~/.ssh/deploy_key /tmp/iris.env "$DEPLOY_USER@$DEPLOY_HOST:/opt/iris/.env"
-          shred -u /tmp/iris.env 2>/dev/null || rm -f /tmp/iris.env
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" 'chmod 600 /opt/iris/.env'
+          rm -f /tmp/iris.env
+
+          # The token becomes the compose secret file (#332), sent over ssh's
+          # STDIN rather than on the remote command line, which every other user
+          # of this shared box can read in the process list. The container sees
+          # the host file's owner and mode through the bind mount, so it must be
+          # readable by pwuser (uid 1001); the 0700 directory keeps whoever holds
+          # uid 1001 on the host out.
+          printf '%s' "$IRIS_CONNECT_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" '
+            set -eu
+            umask 077
+            install -d -m 700 /opt/iris/secrets
+            cat > /opt/iris/secrets/connect_token
+            chown 1001:1001 /opt/iris/secrets/connect_token
+            chmod 400 /opt/iris/secrets/connect_token
+          '
 
           # The box has to authenticate to GHCR: a newly published package is
           # private by default even for a public repo, so an anonymous pull fails
@@ -369,9 +383,10 @@ jobs:
 
           # The periodic healthcheck stops short of the browser on purpose, so
           # prove that layer once, here. Through the launch factory every
-          # session uses (dist/browser.js, #331), so it launches with whatever
-          # sandbox setting the container really has — unsandboxed until #332,
-          # since compose sets IRIS_CHROMIUM_SANDBOX=0. Not the
+          # session uses (dist/browser.js, #331), so it launches sandboxed under
+          # the container's real seccomp profile and capabilities (#332): a host
+          # that still blocks the sandbox fails here, not at a user's first
+          # session. Not the
           # `launchBrowser` RPC: that RPC answers "Browser launched
           # successfully" without starting one (protocol.ts:346 returns
           # page: null), so a check built on it passes with Chromium deleted.

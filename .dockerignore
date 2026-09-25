@@ -26,3 +26,6 @@ docs
 .vscode
 .idea
 *.log
+
+# Compose secret files (#332)
+secrets
