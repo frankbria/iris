@@ -10,6 +10,208 @@ doc disagrees with this file, this file wins.
 
 ---
 
+## Cycle 4 — SaaS Launch (active)
+
+Generated 2026-09-25 by a multi-agent SaaS launch review (7 areas × 5–8
+dimensions, 3-vote adversarial verification), deduplicated into 99
+atomic issues (one developer, one session each), all labelled `saas-launch`:
+`gh issue list --label saas-launch`.
+
+**Verdict: not ready.** IRIS is a well-tested single-user local tool; launching
+it as a hosted product needs hardening of the existing runtime, tighter AI
+spend tracking, and a platform layer that does not exist yet (accounts,
+tenancy, billing, TLS ingress, production environment, backups,
+observability, legal).
+
+**Decisions (2026-09-25):** AI billing is **BYOK + managed-key credits**; the
+launch surface is an **authenticated API + minimal portal**. P0.3
+([#231](https://github.com/frankbria/iris/issues/231), the hosted-architecture ADR) anchors every platform issue.
+
+| Tier | Count | Issues |
+|------|-------|--------|
+| P0 | 51 | #229–#279 |
+| P1 | 32 | #280–#311 |
+| P2 | 13 | #312–#324 |
+| P3 | 3 | #325–#327 |
+
+**Order:** working `P0.1 → … → P3.3` has no forward dependencies (validated
+before filing). Groups A–E are independent of the platform work in F–K and can
+run in parallel with it.
+
+### P0 — Launch blockers
+
+
+**A. Immediate fixes**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.1` | [#229](https://github.com/frankbria/iris/issues/229) | Security hardening | — | TODO |
+| `P0.2` | [#230](https://github.com/frankbria/iris/issues/230) | Security hardening | — | TODO |
+| `P0.3` | [#231](https://github.com/frankbria/iris/issues/231) | ADR: hosted SaaS architecture (BYOK + managed credits, API + portal) | — | TODO |
+
+**B. Browser runtime**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.4` | [#232](https://github.com/frankbria/iris/issues/232) | Security hardening | P0.3 (#231) | TODO |
+| `P0.5` | [#233](https://github.com/frankbria/iris/issues/233) | Security hardening | P0.4 (#232) | TODO |
+| `P0.6` | [#234](https://github.com/frankbria/iris/issues/234) | Security hardening | — | TODO |
+| `P0.7` | [#235](https://github.com/frankbria/iris/issues/235) | Security hardening | P0.3 (#231), P0.6 (#234) | TODO |
+| `P0.8` | [#236](https://github.com/frankbria/iris/issues/236) | Security hardening | P0.7 (#235) | TODO |
+| `P0.9` | [#237](https://github.com/frankbria/iris/issues/237) | Security hardening | P0.4 (#232), P0.6 (#234) | TODO |
+| `P0.10` | [#238](https://github.com/frankbria/iris/issues/238) | Security hardening | P0.7 (#235) | TODO |
+
+**C. RPC server**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.11` | [#239](https://github.com/frankbria/iris/issues/239) | Security hardening | P0.2 (#230) | TODO |
+| `P0.12` | [#240](https://github.com/frankbria/iris/issues/240) | Browser session lifecycle: orphans, crashes, sweeper killing mid-action | P0.2 (#230) | TODO |
+
+**D. AI spend tracking**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.13` | [#241](https://github.com/frankbria/iris/issues/241) | One data-dir resolver for history, cost ledger and vision cache; configurable budgets | P0.3 (#231) | TODO |
+| `P0.14` | [#242](https://github.com/frankbria/iris/issues/242) | Meter and budget-gate text/agent LLM calls | P0.13 (#241) | TODO |
+| `P0.15` | [#243](https://github.com/frankbria/iris/issues/243) | Unpriced or rescued model IDs must not record $0 | P0.14 (#242) | TODO |
+| `P0.16` | [#244](https://github.com/frankbria/iris/issues/244) | Record every completed paid call; reserve budget before concurrent calls | P0.14 (#242) | TODO |
+| `P0.17` | [#245](https://github.com/frankbria/iris/issues/245) | Honour the configured AI provider instead of a fixed fallback chain | — | TODO |
+
+**E. Reports**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.18` | [#246](https://github.com/frankbria/iris/issues/246) | Security hardening | — | TODO |
+
+**F. Platform foundations (identity, tenancy, storage)**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.19` | [#247](https://github.com/frankbria/iris/issues/247) | Monorepo workspaces + scaffold `apps/portal` (Next.js, Nova preset) | P0.3 (#231) | TODO |
+| `P0.20` | [#248](https://github.com/frankbria/iris/issues/248) | PostgreSQL service + migration runner for hosted data | P0.3 (#231), P0.19 (#247) | TODO |
+| `P0.21` | [#249](https://github.com/frankbria/iris/issues/249) | Portal: signup, login and email verification (BetterAuth) | P0.19 (#247), P0.20 (#248) | TODO |
+| `P0.22` | [#250](https://github.com/frankbria/iris/issues/250) | Portal: organizations, membership and roles | P0.21 (#249) | TODO |
+| `P0.23` | [#251](https://github.com/frankbria/iris/issues/251) | Security hardening | P0.22 (#250) | TODO |
+| `P0.24` | [#252](https://github.com/frankbria/iris/issues/252) | Security hardening | P0.11 (#239), P0.23 (#251) | TODO |
+| `P0.25` | [#253](https://github.com/frankbria/iris/issues/253) | Security hardening | P0.24 (#252) | TODO |
+| `P0.26` | [#254](https://github.com/frankbria/iris/issues/254) | Tenant-scoped history store (storage seam: SQLite local, Postgres hosted) | P0.13 (#241), P0.20 (#248) | TODO |
+| `P0.27` | [#255](https://github.com/frankbria/iris/issues/255) | Tenant-scoped cost ledger and vision cache | P0.16 (#244), P0.26 (#254) | TODO |
+| `P0.28` | [#256](https://github.com/frankbria/iris/issues/256) | Security hardening | — | TODO |
+| `P0.29` | [#257](https://github.com/frankbria/iris/issues/257) | Object storage for artifacts with tenant/run prefixes and signed URLs | P0.26 (#254), P0.28 (#256) | TODO |
+
+**G. BYOK**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.30` | [#258](https://github.com/frankbria/iris/issues/258) | Per-request AI credentials seam (translator + vision client) | P0.14 (#242) | TODO |
+| `P0.31` | [#259](https://github.com/frankbria/iris/issues/259) | Security hardening | P0.23 (#251), P0.30 (#258) | TODO |
+
+**H. Managed-key credits & billing**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.32` | [#260](https://github.com/frankbria/iris/issues/260) | Plan catalog and org entitlements | P0.20 (#248) | TODO |
+| `P0.33` | [#261](https://github.com/frankbria/iris/issues/261) | Stripe customer and subscription lifecycle | P0.22 (#250), P0.32 (#260) | TODO |
+| `P0.34` | [#262](https://github.com/frankbria/iris/issues/262) | Security hardening | P0.33 (#261) | TODO |
+| `P0.35` | [#263](https://github.com/frankbria/iris/issues/263) | Billable usage ledger: browser-minutes, text calls, vision calls, agent turns | P0.27 (#255) | TODO |
+| `P0.36` | [#264](https://github.com/frankbria/iris/issues/264) | Report managed-credit usage to Stripe meters | P0.34 (#262), P0.35 (#263) | TODO |
+| `P0.37` | [#265](https://github.com/frankbria/iris/issues/265) | Security hardening | P0.25 (#253), P0.32 (#260), P0.35 (#263) | TODO |
+| `P0.38` | [#266](https://github.com/frankbria/iris/issues/266) | Payment failure: grace period, suspension and restore | P0.34 (#262), P0.37 (#265) | TODO |
+
+**I. Hosted features + portal**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.39` | [#267](https://github.com/frankbria/iris/issues/267) | Hosted a11y job API | P0.8 (#236), P0.24 (#252), P0.26 (#254) | TODO |
+| `P0.40` | [#268](https://github.com/frankbria/iris/issues/268) | Hosted visual-diff job API with project baselines and approval | P0.29 (#257), P0.39 (#267) | TODO |
+| `P0.41` | [#269](https://github.com/frankbria/iris/issues/269) | Results retrieval API: runs, run detail, artifact URLs | P0.26 (#254), P0.29 (#257) | TODO |
+| `P0.42` | [#270](https://github.com/frankbria/iris/issues/270) | Portal: runs and results pages | P0.41 (#269) | TODO |
+| `P0.43` | [#271](https://github.com/frankbria/iris/issues/271) | Portal: usage and billing page | P0.33 (#261), P0.35 (#263) | TODO |
+
+**J. Ops**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.44` | [#272](https://github.com/frankbria/iris/issues/272) | Security hardening | P0.24 (#252) | TODO |
+| `P0.45` | [#273](https://github.com/frankbria/iris/issues/273) | Production environment and deploy pipeline | P0.20 (#248), P0.44 (#272) | TODO |
+| `P0.46` | [#274](https://github.com/frankbria/iris/issues/274) | Backups and restore drill for Postgres and object storage | P0.45 (#273) | TODO |
+| `P0.47` | [#275](https://github.com/frankbria/iris/issues/275) | Observability: structured logs, metrics, alerting | P0.45 (#273) | TODO |
+
+**K. Legal, trust & data lifecycle**
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P0.48` | [#276](https://github.com/frankbria/iris/issues/276) | Terms of Service and Acceptable Use Policy with recorded acceptance | P0.21 (#249) | TODO |
+| `P0.49` | [#277](https://github.com/frankbria/iris/issues/277) | Privacy policy, subprocessor list and DPA | P0.19 (#247) | TODO |
+| `P0.50` | [#278](https://github.com/frankbria/iris/issues/278) | Security hardening | P0.24 (#252) | TODO |
+| `P0.51` | [#279](https://github.com/frankbria/iris/issues/279) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | TODO |
+
+### P1 — Pre-launch hardening
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P1.1` | [#280](https://github.com/frankbria/iris/issues/280) | Visual severity treats a pixel count as a fraction | — | TODO |
+| `P1.2` | [#281](https://github.com/frankbria/iris/issues/281) | Failed AI analysis must not downgrade a regression to pass | P1.1 (#280) | TODO |
+| `P1.3` | [#282](https://github.com/frankbria/iris/issues/282) | Diff full-page captures whose height changed; bound decoded image size | — | TODO |
+| `P1.4` | [#283](https://github.com/frankbria/iris/issues/283) | Diff engine: fix pixelmatch option mapping and random early exit | — | TODO |
+| `P1.5` | [#284](https://github.com/frankbria/iris/issues/284) | Visual report and runner: broken image links, dropped errors, mangled URLs | P0.28 (#256) | TODO |
+| `P1.6` | [#285](https://github.com/frankbria/iris/issues/285) | Keyboard tester: invalid selectors and crash on SVG links | — | TODO |
+| `P1.7` | [#286](https://github.com/frankbria/iris/issues/286) | Keyboard tester verdicts: focus order, roving tabindex, Escape | P1.6 (#285) | TODO |
+| `P1.8` | [#287](https://github.com/frankbria/iris/issues/287) | a11y runner: per-page error isolation and report directory creation | — | TODO |
+| `P1.9` | [#288](https://github.com/frankbria/iris/issues/288) | a11y reports, JUnit and history agree with the CLI verdict | P1.8 (#287) | TODO |
+| `P1.10` | [#289](https://github.com/frankbria/iris/issues/289) | a11y CLI flags: validate --fail-on, allow disabling keyboard, fix --pages parsing | — | TODO |
+| `P1.11` | [#290](https://github.com/frankbria/iris/issues/290) | WCAG AA level must include WCAG 2.1/2.2 AA rules | — | TODO |
+| `P1.12` | [#291](https://github.com/frankbria/iris/issues/291) | Security hardening | — | TODO |
+| `P1.13` | [#292](https://github.com/frankbria/iris/issues/292) | Agent loop verdict integrity: stale goalMet, trivial asserts, false-positive matching | — | TODO |
+| `P1.14` | [#293](https://github.com/frankbria/iris/issues/293) | Agent loop error surfacing: provider failure and page-controlled hangs | — | TODO |
+| `P1.15` | [#294](https://github.com/frankbria/iris/issues/294) | `iris run` exits non-zero on failure | — | TODO |
+| `P1.16` | [#295](https://github.com/frankbria/iris/issues/295) | Security hardening | — | TODO |
+| `P1.17` | [#296](https://github.com/frankbria/iris/issues/296) | Do not auto-retry non-idempotent clicks and fills | — | TODO |
+| `P1.18` | [#297](https://github.com/frankbria/iris/issues/297) | Pattern translator: stop turning prose into CSS selectors | — | TODO |
+| `P1.19` | [#298](https://github.com/frankbria/iris/issues/298) | Vision provider detection and Ollama timeouts | — | TODO |
+| `P1.20` | [#299](https://github.com/frankbria/iris/issues/299) | AI cache and ledger hygiene: memory-tier TTL, index name collision | — | TODO |
+| `P1.21` | [#300](https://github.com/frankbria/iris/issues/300) | Security hardening | — | TODO |
+| `P1.22` | [#301](https://github.com/frankbria/iris/issues/301) | Security hardening | P0.7 (#235), P1.21 (#300) | TODO |
+| `P1.23` | [#302](https://github.com/frankbria/iris/issues/302) | Security hardening | — | TODO |
+| `P1.24` | [#303](https://github.com/frankbria/iris/issues/303) | Local history integrity: transactions, stable ordering, file permissions | — | TODO |
+| `P1.25` | [#304](https://github.com/frankbria/iris/issues/304) | Security hardening | P0.2 (#230) | TODO |
+| `P1.26` | [#305](https://github.com/frankbria/iris/issues/305) | Security hardening | P0.3 (#231) | TODO |
+| `P1.27` | [#306](https://github.com/frankbria/iris/issues/306) | Build and smoke-test the container on every PR; tie base image to Playwright | — | TODO |
+| `P1.28` | [#307](https://github.com/frankbria/iris/issues/307) | Security hardening | P0.1 (#229) | TODO |
+| `P1.29` | [#308](https://github.com/frankbria/iris/issues/308) | Security hardening | P1.27 (#306) | TODO |
+| `P1.30` | [#309](https://github.com/frankbria/iris/issues/309) | Graceful shutdown: drain in-flight work, readiness signal, MCP shutdown | P0.12 (#240) | TODO |
+| `P1.31` | [#310](https://github.com/frankbria/iris/issues/310) | Security hardening | P0.26 (#254) | TODO |
+| `P1.32` | [#311](https://github.com/frankbria/iris/issues/311) | Docs truth pass for the hosted product | P0.3 (#231), P0.45 (#273) | TODO |
+
+### P2 — Post-launch fast-follow
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P2.1` | [#312](https://github.com/frankbria/iris/issues/312) | RPC observation method: screenshots and page snapshots ("eyes") | P0.24 (#252) | TODO |
+| `P2.2` | [#313](https://github.com/frankbria/iris/issues/313) | Security hardening | P0.7 (#235) | TODO |
+| `P2.3` | [#314](https://github.com/frankbria/iris/issues/314) | Hosted MCP over HTTP with tenant auth and metering | P0.24 (#252), P0.35 (#263), P2.2 (#313) | TODO |
+| `P2.4` | [#315](https://github.com/frankbria/iris/issues/315) | Per-plan artifact storage quota | P0.29 (#257), P0.37 (#265) | TODO |
+| `P2.5` | [#316](https://github.com/frankbria/iris/issues/316) | Zero-downtime deploys | P0.45 (#273), P1.30 (#309) | TODO |
+| `P2.6` | [#317](https://github.com/frankbria/iris/issues/317) | Public status page | P0.47 (#275) | TODO |
+| `P2.7` | [#318](https://github.com/frankbria/iris/issues/318) | Store money as integer micro-units | P0.35 (#263) | TODO |
+| `P2.8` | [#319](https://github.com/frankbria/iris/issues/319) | Watcher: `--execute` targets and nested ignore globs | — | TODO |
+| `P2.9` | [#320](https://github.com/frankbria/iris/issues/320) | npm package publish-readiness | — | TODO |
+| `P2.10` | [#321](https://github.com/frankbria/iris/issues/321) | Local SQLite: real migration runner or delete dead migrations | P0.20 (#248) | TODO |
+| `P2.11` | [#322](https://github.com/frankbria/iris/issues/322) | Accessibility of IRIS own reports | P0.18 (#246) | TODO |
+| `P2.12` | [#323](https://github.com/frankbria/iris/issues/323) | Capture engine: do not force `transform: none` on every element | — | TODO |
+| `P2.13` | [#324](https://github.com/frankbria/iris/issues/324) | Security hardening | — | TODO |
+
+### P3 — Polish / test trust / hygiene
+
+| `[PX.Y]` | Issue | Title | Depends on | Status |
+|----------|-------|-------|-----------|--------|
+| `P3.1` | [#325](https://github.com/frankbria/iris/issues/325) | Test trust: AI client fakes must return usage; cover the persistent cache | P0.16 (#244) | TODO |
+| `P3.2` | [#326](https://github.com/frankbria/iris/issues/326) | Test trust: protocol suite runs authenticated | P0.24 (#252) | TODO |
+| `P3.3` | [#327](https://github.com/frankbria/iris/issues/327) | Hygiene: stale comments and dead code in the RPC and AI layers | — | TODO |
+
+---
+
 ## Cycle 3 — Vision Alignment (active)
 
 Generated 2026-07-23 by the `improve` skill (deep audit: does the architecture
