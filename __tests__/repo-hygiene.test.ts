@@ -28,8 +28,26 @@ function gitGrep(pattern: string): string[] {
   }
 }
 
+/**
+ * Edges of the URL policy's range table (#333), and the Alibaba Cloud metadata
+ * address it always blocks. Listed individually rather than allowing CGNAT
+ * (100.64.0.0/10) wholesale: that range is where tailnet addresses live.
+ */
+const URL_POLICY_RANGE_EDGES = [
+  '1.0.0.0',
+  '100.63.255.255',
+  '100.64.0.0',
+  '100.100.100.200',
+  '100.127.255.255',
+  '100.128.0.0',
+  '169.253.255.255',
+  '169.255.0.0',
+  '172.32.0.0',
+];
+
 /** Addresses that are not anybody's machine: RFC 1918/5737/6890 ranges plus public resolvers. */
 function isNonIdentifyingIPv4(ip: string): boolean {
+  if (URL_POLICY_RANGE_EDGES.includes(ip)) return true;
   const [a, b, c] = ip.split('.').map(Number);
   if (a === 0 || a === 10 || a === 127 || a >= 224) return true; // this-net, private, loopback, multicast/reserved
   if (a === 169 && b === 254) return true; // link-local (incl. cloud metadata)
