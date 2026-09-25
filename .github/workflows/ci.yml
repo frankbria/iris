@@ -23,6 +23,11 @@ jobs:
       - run: npm run format:check
       # Tests launch a real browser; install Chromium + its OS deps first.
       - run: npx playwright install --with-deps chromium
+      # IRIS launches Chromium sandboxed (#331), and ubuntu-24.04's AppArmor
+      # blocks the unprivileged user namespaces the sandbox needs ("No usable
+      # sandbox!"). Lift the restriction rather than set IRIS_CHROMIUM_SANDBOX=0,
+      # so the suite keeps proving a real sandbox, not the opt-out.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
 
@@ -363,12 +368,15 @@ jobs:
           '
 
           # The periodic healthcheck stops short of the browser on purpose, so
-          # prove that layer once, here. A direct playwright launch rather than
-          # the `launchBrowser` RPC: that RPC answers "Browser launched
+          # prove that layer once, here. Through the launch factory every
+          # session uses (dist/browser.js, #331), so it launches with whatever
+          # sandbox setting the container really has — unsandboxed until #332,
+          # since compose sets IRIS_CHROMIUM_SANDBOX=0. Not the
+          # `launchBrowser` RPC: that RPC answers "Browser launched
           # successfully" without starting one (protocol.ts:346 returns
           # page: null), so a check built on it passes with Chromium deleted.
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            'docker exec -w /app iris-staging node -e "require(\"playwright\").chromium.launch().then(b=>b.close()).then(()=>console.log(\"chromium ok\"))"'
+            'docker exec -w /app iris-staging node -e "require(\"./dist/browser\").launchBrowser().then(b=>b.close()).then(()=>console.log(\"chromium ok\"))"'
 
           # Independent of both: prove the shipped CLI runs.
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \

@@ -93,6 +93,9 @@ for (const key of [
   // first time someone added an env var and forgot this list.
   'IRIS_CONNECT_HOST',
   'IRIS_CONNECT_TOKEN',
+  // #331: '0' turns the Chromium sandbox off, which browser-hardening.test.ts
+  // would then report as a missing sandbox.
+  'IRIS_CHROMIUM_SANDBOX',
 ]) {
   delete process.env[key];
 }

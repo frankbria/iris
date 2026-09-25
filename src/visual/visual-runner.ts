@@ -6,7 +6,8 @@
  */
 
 import * as path from 'path';
-import { chromium, Browser } from 'playwright';
+import type { Browser } from 'playwright';
+import { launchBrowser, newHardenedContext } from '../browser';
 import { VisualCaptureEngine } from './capture';
 import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
@@ -188,9 +189,7 @@ export class VisualTestRunner {
 
     try {
       // Launch browser
-      this.browser = await chromium.launch({
-        headless: true,
-      });
+      this.browser = await launchBrowser();
 
       const devices = this.config.devices || ['desktop'];
 
@@ -317,7 +316,7 @@ export class VisualTestRunner {
 
     // Create context with device viewport
     const viewport = this.getDeviceViewport(device);
-    const context = await this.browser.newContext({ viewport });
+    const context = await newHardenedContext(this.browser, { viewport });
     const page = await context.newPage();
 
     // Set default baseline directory

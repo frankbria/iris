@@ -157,7 +157,10 @@ describe('AccessibilityRunner', () => {
 
       await accessibilityRunner.run();
 
-      expect(chromium.launch).toHaveBeenCalledWith({ headless: true });
+      // Through the shared hardened factory (issue #331), not a raw launch.
+      expect(chromium.launch).toHaveBeenCalledWith(
+        expect.objectContaining({ headless: true, chromiumSandbox: true }),
+      );
       expect(mockBrowser.close).toHaveBeenCalled();
     });
 

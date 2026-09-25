@@ -321,6 +321,7 @@ docker build -t iris .
 docker run -d --name iris \
   --shm-size=1g \
   -e IRIS_CONNECT_TOKEN="$(openssl rand -hex 32)" \
+  -e IRIS_CHROMIUM_SANDBOX=0 \
   -p 127.0.0.1:4000:4000 \
   iris
 ```
@@ -345,6 +346,13 @@ Two container specifics worth knowing:
 - **`--shm-size=1g`.** Chromium needs more shared memory than Docker's 64 MB
   default; without it a page render can exhaust it and surface as an opaque
   browser disconnect.
+- **`IRIS_CHROMIUM_SANDBOX=0`, for now.** IRIS launches Chromium sandboxed, and
+  Docker's default seccomp profile blocks the user namespaces the sandbox needs,
+  so without this every launch fails with "Chromium could not start its sandbox".
+  It runs pages unsandboxed: only point it at sites you trust.
+  [#332](https://github.com/frankbria/iris/issues/332) replaces it with a seccomp
+  profile. The same variable is the opt-out on a desktop Linux host that
+  restricts unprivileged user namespaces (Ubuntu 23.10+ AppArmor).
 
 > **Experimental / legacy — frozen.** A bespoke WebSocket protocol that no mainstream
 > AI assistant speaks. It keeps working and keeps its security fixes, but takes no new
@@ -377,6 +385,11 @@ human narration to stdout and write their machine-readable output to disk, so pa
 
 Human narration is suppressed entirely; warnings and errors go to stderr, so stdout
 is always safe to pipe into a JSON parser.
+
+Pages are treated as untrusted: every browser IRIS starts is sandboxed, and every
+page refuses downloads, service-worker registration and permission grants. An
+instruction that clicks a download link sees the download fail rather than a
+file land on disk.
 
 ```bash
 iris run --json --url https://example.com "click the sign in button"

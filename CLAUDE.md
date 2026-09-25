@@ -83,6 +83,7 @@ __tests__/
 ├── ai-client-preprocessor.test.ts # Preprocessor tests (24 tests)
 ├── ai-client-batch4.test.ts       # Cache + cost tracker tests (19 tests)
 ├── ai-client-models.test.ts       # Model pins, provider probe, resolution (26 tests)
+├── browser-hardening.test.ts      # One launch factory: spawned argv has no --no-sandbox; context hardening; src/ guard (#331)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
@@ -187,6 +188,13 @@ break and expensive to rediscover:
   while looking healthy. The security boundary is the host-side mapping.
 - **`shm_size: 1gb`.** Chromium exhausts Docker's 64 MB default and the crash
   reads as an opaque browser disconnect.
+- **`IRIS_CHROMIUM_SANDBOX: '0'` in staging, until #332.** Every launch goes
+  through `launchBrowser()` / `newHardenedContext()` in `src/browser.ts` (#331):
+  sandbox on, Playwright's signal handlers off, downloads and service workers
+  blocked. A guard test fails on any other `chromium.launch` / `browser.newContext`
+  in `src/`. Docker's default seccomp blocks the sandbox's user namespaces
+  (verified in the Playwright image as `pwuser`), hence the temporary opt-out; the
+  deploy probe launches through the factory so it tests the real setting.
 
 The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a
@@ -354,7 +362,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1271/1272 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1284/1285 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

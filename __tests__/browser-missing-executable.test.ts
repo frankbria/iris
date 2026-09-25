@@ -53,13 +53,12 @@ describe('launchBrowser with missing Playwright browsers (issue #79)', () => {
   });
 
   it('passes other launch failures through untouched', async () => {
-    // Only the missing-executable case gets rewritten; a sandbox or permission
-    // failure keeps its own diagnostics, which our message would obscure.
-    const other = new Error('Failed to launch: No usable sandbox!');
+    // Only recognised failures get guidance; anything else keeps its own
+    // diagnostics, which our message would obscure.
+    const other = new Error('Failed to launch: EACCES /usr/bin/chrome');
     mockLaunch.mockRejectedValue(other);
 
-    await expect(launchBrowser()).rejects.toThrow('Failed to launch: No usable sandbox!');
-    await expect(launchBrowser()).rejects.not.toThrow(/npx playwright install/);
+    await expect(launchBrowser()).rejects.toBe(other);
   });
 
   it('puts the resolved cache path in the message, where it survives re-wrapping', async () => {
@@ -108,5 +107,66 @@ describe('launchBrowser with missing Playwright browsers (issue #79)', () => {
     expect(mockLaunch).toHaveBeenCalledWith(
       expect.objectContaining({ headless: true, slowMo: 0, args: [] }),
     );
+  });
+});
+
+/**
+ * Issue #331: launches are sandboxed by default, and hosts that cannot provide
+ * one (Docker's default seccomp profile, Ubuntu's AppArmor userns restriction)
+ * now fail where they used to silently run unsandboxed. The failure has to say
+ * what to do about it.
+ */
+describe('launchBrowser on a host that cannot sandbox Chromium (issue #331)', () => {
+  const saved = process.env.IRIS_CHROMIUM_SANDBOX;
+  beforeEach(() => jest.clearAllMocks());
+  afterEach(() => {
+    if (saved === undefined) delete process.env.IRIS_CHROMIUM_SANDBOX;
+    else process.env.IRIS_CHROMIUM_SANDBOX = saved;
+  });
+
+  // Both shapes seen in the wild: Playwright's banner (captured from the
+  // Playwright image under Docker's default seccomp) and Chromium's own.
+  it.each([
+    'browserType.launch: Target page, context or browser has been closed\nBrowser logs:\nChromium sandboxing failed!',
+    'Failed to launch the browser process!\n[0925/120000.000:FATAL:zygote_host_impl_linux.cc(127)] No usable sandbox!',
+  ])('names the fix and the opt-out: %s', async (message) => {
+    mockLaunch.mockRejectedValue(new Error(message));
+
+    const error = await launchBrowser().catch((e) => e);
+    expect(error.message).toMatch(/sandbox/i);
+    expect(error.message).toMatch(/IRIS_CHROMIUM_SANDBOX=0/);
+    // The original diagnostics stay in the message: every layer above rebuilds
+    // the error from `.message` alone.
+    expect(error.message).toContain(message.split('\n')[0]);
+  });
+
+  it('requests the sandbox and leaves signal handling to IRIS', async () => {
+    mockLaunch.mockResolvedValue({ close: jest.fn() });
+
+    await launchBrowser();
+    expect(mockLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chromiumSandbox: true,
+        handleSIGINT: false,
+        handleSIGTERM: false,
+        handleSIGHUP: false,
+      }),
+    );
+  });
+
+  it('only the exact value "0" turns the sandbox off', async () => {
+    mockLaunch.mockResolvedValue({ close: jest.fn() });
+
+    for (const [value, sandbox] of [
+      ['0', false],
+      ['false', true],
+      ['', true],
+    ] as const) {
+      process.env.IRIS_CHROMIUM_SANDBOX = value;
+      await launchBrowser();
+      expect(mockLaunch).toHaveBeenLastCalledWith(
+        expect.objectContaining({ chromiumSandbox: sandbox }),
+      );
+    }
   });
 });
