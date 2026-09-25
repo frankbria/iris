@@ -185,8 +185,11 @@ describe('single launch site (issue #331)', () => {
   }
 
   it('no module but src/browser.ts launches Chromium or opens a browser context', () => {
+    // Any identifier containing "browser" (browser, this.browser!, browserInstance),
+    // since a Browser is rarely named anything else. `context.newPage()` is fine:
+    // the context itself came from newHardenedContext().
     const bypasses =
-      /chromium\.(launch|launchPersistentContext|launchServer|connectOverCDP)\(|\bbrowser!?\.(newContext|newPage)\(/;
+      /chromium\.(launch|launchPersistentContext|launchServer|connectOverCDP)\(|\w*browser\w*!?\.(newContext|newPage)\(/i;
     const offenders = sources()
       .filter(([file]) => file !== path.join('src', 'browser.ts'))
       .flatMap(([file, text]) =>
