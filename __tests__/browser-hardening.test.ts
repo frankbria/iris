@@ -185,14 +185,18 @@ describe('single launch site (issue #331)', () => {
   }
 
   it('no module but src/browser.ts launches Chromium or opens a browser context', () => {
-    // Structural, not name-based, so a renamed receiver cannot slip through:
-    //  - a value import of a browser type (catches `chromium as pw` too);
+    // Mostly independent of what the receiver is called:
+    //  - launching any browser type, however it was imported (`pw.chromium.launch(`);
+    //  - a value import of a browser type (catches `chromium as pw`), or a
+    //    require / dynamic import of playwright;
     //  - any `.newContext(` at all;
-    //  - `.newPage(` on anything but a `context` — the runners' contexts come
-    //    from newHardenedContext(); `browser.newPage()` would make its own.
+    //  - `.newPage(` on anything but a receiver named `context` — the one
+    //    name-based rule: the runners' contexts come from newHardenedContext(),
+    //    and `browser.newPage()` would make an unhardened one.
     const bypasses = [
+      /\b(chromium|firefox|webkit)\.(launch|launchPersistentContext|launchServer|connectOverCDP)\(/,
       /import\s+(?!type\b)[^;]*\b(chromium|firefox|webkit)\b[^;]*from\s+['"]playwright/,
-      /require\(\s*['"]playwright/,
+      /(require|import)\(\s*['"]playwright/,
       /\.newContext\(/,
       /(?<!\bcontext)\.newPage\(/,
     ];
