@@ -86,12 +86,21 @@ const PRIVATE_RANGES = rangeList(
     ['100.64.0.0', 10], // CGNAT, incl. Tailscale
     ['127.0.0.0', 8],
     ['172.16.0.0', 12],
+    ['192.0.0.0', 24], // IETF protocol assignments
+    ['192.0.2.0', 24], // TEST-NET-1
     ['192.168.0.0', 16],
+    ['198.18.0.0', 15], // benchmarking; carriers number internal gear from it
+    ['198.51.100.0', 24], // TEST-NET-2
+    ['203.0.113.0', 24], // TEST-NET-3
+    ['224.0.0.0', 4], // multicast
+    ['240.0.0.0', 4], // reserved, incl. broadcast 255.255.255.255
   ],
   [
     ['::', 128], // unspecified
     ['::1', 128],
     ['fc00::', 7], // ULA
+    ['fec0::', 10], // deprecated site-local, still routed on legacy networks
+    ['ff00::', 8], // multicast
     ['64:ff9b:1::', 48], // local-use NAT64 (RFC 8215): never globally reachable
   ],
 );
