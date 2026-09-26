@@ -5,7 +5,7 @@ import { translate } from './translator';
 import { describeAction } from './actions';
 import { initializeDatabase, insertTestRun } from './db';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
-import { navigate } from './browser';
+import { guardedGoto } from './url-policy-guard';
 import { Page } from 'playwright';
 import { VisualCaptureEngine } from './visual/capture';
 import { VisualDiffEngine } from './visual/diff';
@@ -449,7 +449,7 @@ export class FileWatcher {
       if (!this.page || !this.captureEngine) {
         throw new Error('Feedback session not initialized');
       }
-      await navigate(this.page, url);
+      await guardedGoto(this.page, url);
       const capture = await this.captureEngine.capture(this.page, {
         fullPage: true,
         maskSelectors: [],
@@ -493,7 +493,7 @@ export class FileWatcher {
       throw new Error('Feedback session not initialized');
     }
 
-    await navigate(this.page, url);
+    await guardedGoto(this.page, url);
     const capture = await this.captureEngine.capture(this.page, {
       fullPage: true,
       maskSelectors: [],
@@ -641,7 +641,7 @@ export class FileWatcher {
           // its real DOM rather than the blank page. This is execution setup, not a
           // translated action, so it is not counted in executionResults.
           this.logger.log(`   🌐 Navigating to ${fileUrl}`);
-          await navigate(this.page, fileUrl);
+          await guardedGoto(this.page, fileUrl);
 
           // Execute each action and report progress
           for (let i = 0; i < result.actions.length; i++) {

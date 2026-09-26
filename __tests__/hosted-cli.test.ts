@@ -10,8 +10,10 @@
 
 import { spawn } from 'child_process';
 import { once } from 'events';
+import * as fs from 'fs';
 import { createServer, Server } from 'http';
 import { AddressInfo } from 'net';
+import * as os from 'os';
 import * as path from 'path';
 
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -94,5 +96,53 @@ describe('iris run URL policy', () => {
       success: false,
       error: expect.stringMatching(/private\/loopback/),
     });
+  }, 60_000);
+});
+
+describe('iris watch URL policy', () => {
+  // The watcher renders the changed file over file://. CDP's Fetch domain never
+  // pauses a file:// URL, so only a check before page.goto can refuse it.
+  it('--execute refuses to render the changed file under IRIS_HOSTED=1', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-hosted-watch-'));
+    const file = path.join(dir, 'page.html');
+    fs.writeFileSync(file, '<button id="b">b</button>');
+    const proc = spawn(
+      process.execPath,
+      [
+        '-r',
+        'ts-node/register',
+        path.join(REPO_ROOT, 'src/cli.ts'),
+        'watch',
+        file,
+        '--execute',
+        '-i',
+        'click #b',
+      ],
+      { cwd: REPO_ROOT, env: { ...process.env, TS_NODE_TRANSPILE_ONLY: '1', IRIS_HOSTED: '1' } },
+    );
+    let output = '';
+    proc.stdout.on('data', (d) => (output += d));
+    proc.stderr.on('data', (d) => (output += d));
+    try {
+      // Iteration counts, not Date.now() deadlines: the WSL2 clock can step (#190).
+      const waitFor = async (re: RegExp, what: string, onTick?: (i: number) => void) => {
+        for (let i = 0; !re.test(output); i++) {
+          if (i >= 200) throw new Error(`timed out waiting for ${what}.\n${output}`);
+          onTick?.(i);
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      };
+      await waitFor(/Waiting for changes/, 'the watcher to be ready');
+      // Touch the file every 3s, longer than the 1s debounce, which a faster
+      // loop would keep resetting.
+      await waitFor(/Navigation blocked: file/, 'the refusal', (i) => {
+        if (i % 30 === 0) fs.writeFileSync(file, `<button id="b">b${i}</button>`);
+      });
+      expect(output).not.toMatch(/Executing: click/);
+    } finally {
+      proc.kill();
+      await once(proc, 'exit');
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }, 60_000);
 });

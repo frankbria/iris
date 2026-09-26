@@ -49,7 +49,9 @@ jest.mock('../src/db', () => ({
 
 // Mock executor
 // Shared mock Page: execute mode now navigates the page before running actions,
-// so the page must expose a goto() that the real browser.navigate() helper calls.
+// so the page must expose a goto() that the real guardedGoto() calls. That call
+// carries an explicit `undefined` options argument, hence the second argument in
+// the assertions below.
 const mockPage = { goto: jest.fn().mockResolvedValue(undefined) };
 const mockExecutorInstance = {
   launchBrowser: jest.fn().mockResolvedValue({}),
@@ -491,6 +493,7 @@ describe('FileWatcher execute-mode runtime', () => {
     // DOM-targeting actions operate on the real page instead of about:blank.
     expect(mockPage.goto).toHaveBeenCalledWith(
       pathToFileURL(path.resolve(process.cwd(), 'src/test.ts')).href,
+      undefined,
     );
 
     // The single default action from the translator mock is executed.
@@ -1206,7 +1209,7 @@ describe('FileWatcher AI feedback mode', () => {
       await jest.advanceTimersByTimeAsync(60);
 
       // A dev server is the point; the changed .css file would render as nothing.
-      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000');
+      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000', undefined);
     });
 
     it('falls back to the changed file when no URL is configured', async () => {
@@ -1217,6 +1220,7 @@ describe('FileWatcher AI feedback mode', () => {
 
       expect(mockPage.goto).toHaveBeenCalledWith(
         pathToFileURL(path.resolve(process.cwd(), 'page.html')).href,
+        undefined,
       );
     });
   });
