@@ -26,3 +26,61 @@ Prove fidelity with a mutation check (break prod → a test must fail).
 ## 2026-07-02 — showboat exec pitfalls
 - `showboat exec` syntax is `exec <file> <lang> [code]` and does NOT run through a shell from the current dir — use `--workdir` for repo-relative commands and absolute paths elsewhere.
 - When a command fails, change it before re-running: I re-sent an identical failing jest command 3 times. Diff the retry against the failure before executing.
+
+## 2026-07-03 — mutation checks need golden values, not just invariants (PR #95)
+Identical-image / invariant-style tests (ssim=1 for equal inputs) survive
+coefficient mutations — any weighting maps equal inputs to equal outputs. When
+vendoring numeric code, pin a golden output for a fixed asymmetric input and
+verify it against the upstream package before trusting it.
+
+## 2026-07-03 — run prettier --write in the same step as writing any new file
+Committed a new test file before format:check again despite the existing
+memory; the fix cost an extra commit + CI cycle. Format immediately after
+Write/Edit, not as a pre-push afterthought.
+
+## 2026-09-25 — scrubbing leaked values: don't re-leak them while fixing (PR #366)
+- A guard test against leaked values must report `file:line` only. `expect(matches).toEqual([])`
+  prints the matched value, and CI logs are public — a failing run republishes it.
+- The raw branch diff's `-` lines contain the values being removed. Redact before handing the
+  diff to an external reviewer, and post only the verdict (not the transcript) to the PR.
+- Never put the leaked specifics in commit messages, PR bodies or demo docs; describe by category.
+
+## 2026-09-25 — tests that must fail fast, and a self-inflicted pkill (PR #367)
+- A test that times out abandons its body: a `try/finally` teardown never runs, the open
+  server keeps Jest alive, and a regression HANGS CI instead of failing. Put servers/sockets
+  in `beforeEach`/`afterEach` for any test whose failure mode is "no reply".
+- `pkill -f "<pattern>"` inside a compound command matched that command's own shell and
+  killed it — including the `cp` that restored a mutated source file. Kill by PID, or
+  restore in a separate step.
+- Jest modern fake timers fake `process.nextTick` and `setImmediate` too; to emit an event
+  from a fake under fake timers, use a native `Promise.resolve().then(...)`.
+- An in-process test cannot see a process crash (Jest absorbs unhandled rejections). For
+  "the server must survive X", spawn the real entry point.
+
+## 2026-09-25 — sandboxed Chromium and a swept-in file (PR #369)
+- `git commit -a` swept the user's uncommitted `tasks/lessons.md` into a feature commit.
+  When the tree starts dirty, stage explicit paths; check `git show --stat HEAD` after.
+- Sandboxed Chromium needs unprivileged user namespaces. Blocked by Docker's default
+  seccomp AND by ubuntu-24.04 AppArmor (GitHub runners): prove the target environment
+  launches before assuming "works locally" means "works in CI / the container".
+- Chromium rewrites its argv; `/proc/<pid>/cmdline` of the direct child is the reliable
+  way to see launch flags (CDP getBrowserCommandLine needs --enable-automation).
+
+## 2026-09-25 — wait loops, masked exit codes, and cap_drop vs seccomp (PR #370)
+- `until ! pgrep -f "codex review"` never ended: `pgrep -f` matched the wait loop's own
+  command line. Wait on a PID or an output marker (`grep -q "exit" <file>`), not a pgrep pattern.
+- `cmd | head -1; echo $?` reports head's status. In demo evidence capture `rc=$?` before any pipe.
+- `cap_drop: ALL` also removes the caps Docker's seccomp profile keys rules on
+  (`CAP_SYS_CHROOT` -> `chroot`), so a profile that only unblocks user namespaces still fails
+  at the sandbox's chroot. Read the actual Chromium error (`sys_chroot(...) == 0`) before
+  guessing which syscall is missing.
+- Compose hashes a file secret's mount spec, not its content: rotating it needs
+  `--force-recreate` (bot review caught this).
+
+## 2026-09-25 — range tables vs the hygiene guard, and push batching (PR #371)
+- Tests for network ranges collide with the #329 repo-hygiene IPv4 guard (CGNAT is tailnet
+  space). Use range *edges* in tests and allowlist those exact values — never widen the guard
+  to a whole range.
+- The CLAUDE.md test count went stale twice in one PR. Update it in the last commit before merge.
+- Every push cancels the in-flight CI GLM review and leaves a "did not complete" comment.
+  Batch fix commits into one push where possible.
