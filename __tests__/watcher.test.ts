@@ -816,6 +816,20 @@ describe('watchFiles entry point', () => {
     }
   };
 
+  it('passes blockPrivateHosts through to the executor URL policy (#334)', async () => {
+    const { ActionExecutor } = require('../src/executor');
+    void watchFiles(undefined, 'click submit', { execute: true, blockPrivateHosts: true });
+    // Iteration count, not a Date.now() deadline: the WSL2 clock can step (#190).
+    for (let i = 0; ActionExecutor.mock.calls.length === 0; i++) {
+      if (i >= 400) throw new Error('ActionExecutor was not constructed within ~2s');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(ActionExecutor.mock.calls[0][0].urlPolicy).toEqual({
+      allowFile: true,
+      blockPrivateHosts: true,
+    });
+  });
+
   it('rejects remote URL targets', async () => {
     await expect(watchFiles('https://example.com', 'click submit')).rejects.toThrow(
       'Cannot watch remote URLs',
