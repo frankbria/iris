@@ -28,6 +28,7 @@ let proxyPort: number;
 let lookups: string[];
 let dials: string[];
 let answers: Record<string, string[][]>;
+let slowLookup: Promise<void> = Promise.resolve();
 
 beforeAll(async () => {
   target = http.createServer((req, res) => {
@@ -55,10 +56,12 @@ beforeEach(async () => {
     'rebind.test': [[PUBLIC], ['127.0.0.1']],
     // Public, dialed at 127.0.0.1 on the port asked for: a closed port, or a raw upstream.
     'down.test': [['8.8.4.4']],
+    'slow.test': [['8.8.4.4']],
   };
   proxy = await startEgressProxy({
     lookup: async (host) => {
       lookups.push(host);
+      if (host === 'slow.test') await slowLookup; // released by the test that uses it
       const queue = answers[host];
       if (!queue) throw new Error(`ENOTFOUND ${host}`);
       return queue.length > 1 ? queue.shift()! : queue[0];
@@ -271,6 +274,22 @@ describe('egress proxy: hostile or broken upstreams', () => {
     }
   });
 
+  it('survives an upstream that resets the connection mid-body', async () => {
+    // A reset (RST), unlike a clean FIN, surfaces as an 'error' on the upstream
+    // response. Unhandled, that is an uncaught exception, which ends `iris connect`.
+    const up = await rawUpstream((socket) => {
+      socket.write('HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n0123456789', () =>
+        setTimeout(() => socket.resetAndDestroy(), 50),
+      );
+    });
+    try {
+      await expect(get(`http://down.test:${up.port}/`)).rejects.toThrow();
+      expect((await get('http://site.test/after')).status).toBe(200);
+    } finally {
+      up.stop();
+    }
+  });
+
   it('closes the upstream connection once the response is done', async () => {
     // A keep-alive upstream socket nobody reuses is a descriptor leaked per request.
     const up = await rawUpstream((socket) =>
@@ -303,6 +322,32 @@ describe('egress proxy: hostile or broken upstreams', () => {
         req.end();
       });
       expect(await within(up.closed)).toBe('closed');
+    } finally {
+      up.stop();
+    }
+  });
+
+  it('does not leak the upstream when a CONNECT client leaves during the lookup', async () => {
+    // A cancelled preconnect: the client is gone before the name resolves.
+    const up = await rawUpstream(() => {});
+    let release!: () => void;
+    slowLookup = new Promise<void>((resolve) => (release = resolve));
+    try {
+      const client = net.connect(proxyPort, '127.0.0.1');
+      client.on('error', () => {});
+      await once(client, 'connect');
+      client.write(`CONNECT slow.test:${up.port} HTTP/1.1\r\nHost: slow.test\r\n\r\n`);
+      while (!lookups.includes('slow.test')) await new Promise((r) => setImmediate(r));
+      client.destroy();
+      await once(client, 'close');
+      release();
+      // Dialed or not, nothing may be left holding an upstream socket.
+      const dialed = await within(
+        new Promise<void>((resolve) => setTimeout(resolve, 200)).then(() =>
+          dials.length === 0 ? undefined : up.closed,
+        ),
+      );
+      expect(dialed).toBe('closed');
     } finally {
       up.stop();
     }

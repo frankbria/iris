@@ -144,7 +144,10 @@ export async function startEgressProxy(options: EgressProxyOptions = {}): Promis
         refuse(res, new Refusal(502, 'invalid upstream status'));
         return;
       }
-      // An upstream that dies mid-body never ends `res` through the pipe.
+      // An upstream that dies mid-body never ends `res` through the pipe. A reset
+      // also emits 'error' here; Node 24 drops it when nothing listens, but a
+      // listener keeps that from being an uncaught exception on any version.
+      upstreamRes.on('error', () => res.destroy());
       upstreamRes.on('close', () => upstreamRes.complete || res.destroy());
       upstreamRes.pipe(res);
     });
