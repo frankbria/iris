@@ -111,3 +111,17 @@ Write/Edit, not as a pre-push afterthought.
   CLI demos in a temp cwd, `npm run build` and run `dist/cli.js`.
 - `pkill -f <pattern>` inside a compound Bash command can match the command's own shell and
   kill it (exit 144). Stop background demo servers by port or PID instead.
+
+## 2026-09-26 — hosted egress proxy (PR #374)
+- A paused socket never sees its peer's FIN. A raw test server that never reads its socket
+  never emits 'end'/'close', so a "was it closed?" assertion reads open no matter what the code
+  does. `socket.resume()` in test servers. The same fact made a proposed CONNECT guard
+  (`if (client.destroyed) return` after an await) dead code: the handed-over socket is paused.
+- `execFileSync` in a process that also hosts the server under test deadlocks: the child
+  waits on a server whose event loop the sync spawn is blocking. Spawn async in demos.
+- Chromium's Local Network Access blocks a public page's requests to loopback by itself. A
+  negative control that loads a public page shows "0 hits" with no IRIS layer at all; load the
+  control page from loopback, and mutate the layer under test to prove it is the one refusing.
+- A reviewer's crash claim ("no 'error' listener → uncaught") needs an out-of-process repro:
+  Node 24 drops an IncomingMessage 'error' nobody listens to. Jest can't tell either way.
+- opencode/GLM stalled again (180s, no stream bytes); codex fallback answered.
