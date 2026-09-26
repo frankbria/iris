@@ -386,7 +386,9 @@ describe('VisualTestRunner', () => {
     it('should wait for fonts when configured', async () => {
       await visualRunner.run();
 
-      expect(mockPage.evaluate).toHaveBeenCalledWith(expect.any(Function));
+      expect(mockPage.evaluate).toHaveBeenCalledWith(
+        expect.stringContaining('document.fonts.ready'),
+      );
     });
 
     it('should disable animations when configured', async () => {

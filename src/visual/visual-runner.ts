@@ -337,7 +337,9 @@ export class VisualTestRunner {
 
       // Wait for stabilization
       if (this.config.capture.stabilization.waitForFonts) {
-        await page.evaluate(() => document.fonts.ready);
+        // A string, not a function: Istanbul instruments a function body with
+        // counters that do not exist in the browser, which fails under --coverage.
+        await page.evaluate('document.fonts.ready.then(() => undefined)');
       }
 
       if (this.config.capture.stabilization.disableAnimations) {

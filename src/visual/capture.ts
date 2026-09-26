@@ -2,6 +2,15 @@ import { Page } from 'playwright';
 import { createHash } from 'crypto';
 import { CaptureConfig, CaptureResult, CaptureMetadata } from './types';
 
+type Viewport = CaptureMetadata['viewport'];
+
+/**
+ * Evaluated in the browser. A string rather than a function because Istanbul
+ * instruments function bodies with `cov_*` counters that do not exist in the
+ * page, so a function here fails every capture under `--coverage`.
+ */
+const VIEWPORT_EXPRESSION = '({ width: window.innerWidth, height: window.innerHeight })';
+
 /**
  * VisualCaptureEngine handles screenshot capture with stabilization and masking
  */
@@ -90,10 +99,7 @@ export class VisualCaptureEngine {
   ): Promise<CaptureMetadata> {
     const url = page.url();
     const title = await page.title();
-    const viewport = await page.evaluate(() => ({
-      width: window.innerWidth,
-      height: window.innerHeight,
-    }));
+    const viewport = await page.evaluate<Viewport>(VIEWPORT_EXPRESSION);
     const hash = this.generateHash(buffer);
     const timestamp = Date.now();
 
@@ -119,10 +125,7 @@ export class VisualCaptureEngine {
       const url = page.url();
       const title = await page.title().catch(() => 'Unknown');
       const viewport = await page
-        .evaluate(() => ({
-          width: window.innerWidth,
-          height: window.innerHeight,
-        }))
+        .evaluate<Viewport>(VIEWPORT_EXPRESSION)
         .catch(() => ({ width: 0, height: 0 }));
 
       return {
