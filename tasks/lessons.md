@@ -99,3 +99,15 @@ Write/Edit, not as a pre-push afterthought.
   The internal review caught `watch`, and the CI GLM caught unpinned WebSockets.
 - `gh pr edit --body-file` fails on the Projects-classic deprecation error. Use
   `gh api -X PATCH repos/<o>/<r>/pulls/<n> -F body=@file` instead.
+
+## 2026-09-26 — runner URL policy (PR #373)
+- A real-browser test that fails only under `jest --coverage` is invisible to CI, which runs
+  without coverage. Before calling such a failure a regression, reproduce it on main in a
+  worktree. Here it was the pre-existing `cov_* is not defined` in `page.evaluate`.
+- Fixing one instance of a pattern is not fixing the pattern. The CI bot found a third
+  instrumented callback (`waitForFunction`) in the same file. Grep for every sibling call
+  (`evaluate(`, `waitForFunction(`, `$eval(`) before writing "fixed" in a commit or doc.
+- ts-node run from a cwd outside the repo fails with TS diagnostic 5109 (no tsconfig). For
+  CLI demos in a temp cwd, `npm run build` and run `dist/cli.js`.
+- `pkill -f <pattern>` inside a compound Bash command can match the command's own shell and
+  kill it (exit 144). Stop background demo servers by port or PID instead.
