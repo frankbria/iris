@@ -51,6 +51,9 @@ export interface PageContext {
   timestamp: number;
 }
 
+/** Timing defaults for an option the caller leaves unset. The RPC server clamps these too (#338). */
+export const EXECUTOR_DEFAULTS = { retryAttempts: 3, retryDelay: 1000, timeout: 30000 } as const;
+
 /**
  * ActionExecutor handles the execution of translated actions with retry logic,
  * error handling, and browser lifecycle management.
@@ -66,9 +69,9 @@ export class ActionExecutor {
 
   constructor(options: ActionExecutorOptions = {}) {
     this.options = {
-      retryAttempts: options.retryAttempts ?? 3,
-      retryDelay: options.retryDelay ?? 1000,
-      timeout: options.timeout ?? 30000,
+      retryAttempts: options.retryAttempts ?? EXECUTOR_DEFAULTS.retryAttempts,
+      retryDelay: options.retryDelay ?? EXECUTOR_DEFAULTS.retryDelay,
+      timeout: options.timeout ?? EXECUTOR_DEFAULTS.timeout,
       trackContext: options.trackContext ?? true,
       browserOptions: options.browserOptions ?? { headless: true },
       urlPolicy: options.urlPolicy ?? {},

@@ -13,6 +13,7 @@ const mockInstances: Array<{
 }> = [];
 
 jest.mock('../src/executor', () => ({
+  EXECUTOR_DEFAULTS: jest.requireActual('../src/executor').EXECUTOR_DEFAULTS,
   ActionExecutor: jest.fn().mockImplementation(() => {
     const instance = {
       // Resolve on a later tick to widen the race window between pipelined

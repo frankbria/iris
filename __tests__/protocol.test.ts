@@ -330,15 +330,21 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
   });
 
   describe('Security Hardening', () => {
-    test('rejects cross-origin connection with code 1008', async () => {
-      const closeCode = await new Promise<number>((resolve, reject) => {
+    // Refused at the upgrade since #338, so the client sees an HTTP status rather
+    // than an accepted socket closed with 1008.
+    test('rejects cross-origin connection with HTTP 403', async () => {
+      const status = await new Promise<number>((resolve, reject) => {
         const ws = new WebSocket(`ws://localhost:${port}`, {
           origin: 'http://evil.example',
         });
-        ws.on('close', (code) => resolve(code));
-        ws.on('error', reject);
+        ws.on('unexpected-response', (_req, res) => {
+          resolve(res.statusCode ?? 0);
+          ws.terminate();
+        });
+        ws.on('error', () => undefined); // terminate() during the handshake reports one
+        ws.on('open', () => reject(new Error('accepted')));
       });
-      expect(closeCode).toBe(1008);
+      expect(status).toBe(403);
     });
 
     test('accepts a connection whose Origin is in the allowlist', async () => {
@@ -383,27 +389,31 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         await new Promise<void>((resolve) => authWss.close(() => resolve()));
       });
 
-      function closeCodeFor(headers?: Record<string, string>): Promise<number> {
+      function upgradeStatusFor(headers?: Record<string, string>): Promise<number> {
         return new Promise((resolve, reject) => {
           const ws = new WebSocket(`ws://127.0.0.1:${authPort}`, { headers });
-          ws.on('close', (code) => resolve(code));
-          ws.on('error', reject);
+          ws.on('unexpected-response', (_req, res) => {
+            resolve(res.statusCode ?? 0);
+            ws.terminate();
+          });
+          ws.on('error', () => undefined); // terminate() during the handshake reports one
+          ws.on('open', () => reject(new Error('accepted')));
         });
       }
 
-      test('rejects a connection with no auth token (1008)', async () => {
-        expect(await closeCodeFor()).toBe(1008);
+      test('rejects a connection with no auth token (401)', async () => {
+        expect(await upgradeStatusFor()).toBe(401);
       });
 
-      test('rejects a connection with a wrong auth token (1008)', async () => {
-        expect(await closeCodeFor({ authorization: 'Bearer wrong-token' })).toBe(1008);
+      test('rejects a connection with a wrong auth token (401)', async () => {
+        expect(await upgradeStatusFor({ authorization: 'Bearer wrong-token' })).toBe(401);
       });
 
       // "Do not treat absent Origin as trusted": an origin-less client with no
       // token is still rejected, closing the pre-auth hole in the origin-only guard.
-      test('rejects an origin-less connection lacking a token (1008)', async () => {
+      test('rejects an origin-less connection lacking a token (401)', async () => {
         // ws sends no Origin header by default (non-browser client).
-        expect(await closeCodeFor()).toBe(1008);
+        expect(await upgradeStatusFor()).toBe(401);
       });
 
       test('accepts a connection presenting the correct bearer token', async () => {
@@ -505,7 +515,8 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       expect(res.error!.code).toBe(-32602);
     });
 
-    test('launchBrowser rejects out-of-range wire timings (timeout:0 / huge retries) (-32602)', async () => {
+    // Huge values are clamped rather than rejected since #338 (protocol-limits.test.ts).
+    test('launchBrowser rejects a timeout of 0, which would disable the page timeout (-32602)', async () => {
       const zeroTimeout = await sendRequest({
         jsonrpc: '2.0',
         id: 90,
@@ -514,14 +525,6 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       });
       expect(zeroTimeout.id).toBe(90);
       expect(zeroTimeout.error?.code).toBe(-32602);
-
-      const hugeRetries = await sendRequest({
-        jsonrpc: '2.0',
-        id: 91,
-        method: 'launchBrowser',
-        params: { options: { retryAttempts: 100000 } },
-      });
-      expect(hugeRetries.error?.code).toBe(-32602);
     });
 
     // A well-formed action array passes the schema and reaches the session check.
@@ -612,6 +615,7 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
           success: true,
           message: expect.stringMatching(/session created/i),
           sessionId: expect.any(String),
+          options: expect.any(Object), // effective timings after clamping (#338)
         });
         expect(launchRes.result.message).not.toMatch(/launched/i);
 
