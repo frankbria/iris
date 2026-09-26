@@ -73,6 +73,7 @@ src/
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
 ├── url-policy-guard.ts    # Makes that stick per-request (CDP Fetch): redirect hops + sub-resources
+├── egress-proxy.ts        # Hosted: resolve-and-pin HTTP/CONNECT proxy under all Chromium traffic (#336)
 ├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
 └── config.ts              # Configuration types and validation
 
@@ -85,6 +86,8 @@ __tests__/
 ├── ai-client-batch4.test.ts       # Cache + cost tracker tests (19 tests)
 ├── ai-client-models.test.ts       # Model pins, provider probe, resolution (26 tests)
 ├── browser-hardening.test.ts      # One launch factory: spawned argv has no --no-sandbox; context hardening; src/ guard (#331)
+├── egress-proxy.test.ts           # Proxy over real sockets: resolved-address refusals, rebinding pin, positive controls (#336)
+├── egress-proxy-browser.test.ts   # Hosted Chromium: worker/SharedWorker/WebSocket egress and WebRTC UDP (#336)
 ├── container-config.test.ts       # Compose hardening, seccomp profile, token file + healthcheck (#332)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
@@ -240,7 +243,28 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   browser with `cov_* is not defined`. Pass a string expression, as
   `src/visual/capture.ts` does (also for `waitForFunction`), or exclude the module from coverage as the a11y
   modules are.
-- Not covered here: hostnames that resolve to private addresses (#336).
+- Hostnames that *resolve* to private addresses are the egress proxy's job, below.
+
+### Hosted Egress Proxy (issue #336)
+
+Under `IRIS_HOSTED`, `launchBrowser()` points Chromium at an in-process HTTP/CONNECT
+proxy (`src/egress-proxy.ts`, one per process, started on first launch). It is the
+only layer that sees worker and SharedWorker requests, and the only one that sees
+resolved addresses: it resolves the target once, refuses it (403) if **any** answer
+is private, reserved or metadata (`isBlockedAddress()`, the same range tables), and
+dials the address it vetted, so a rebinding resolver gets no second lookup.
+
+- `bypass: '<-loopback>'` is passed explicitly. Chromium sends loopback direct past
+  any proxy unless told otherwise; Playwright adds the rule itself but drops it when
+  `PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK` is set.
+- `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`: UDP cannot be proxied,
+  and STUN to an internal host:port otherwise goes straight out.
+- Tests substitute DNS and dialing through `hostedEgressProxy({ lookup, connect })`,
+  called before the first launch in the registry. `connect` sends the one "public"
+  test address (`8.8.8.8`) to a local server, so every refusal has a positive control
+  that goes through the same proxy. A refused target must leave no hit on the server.
+- Not covered: a container-level egress firewall, and names Chromium resolves for DNS
+  prefetch (a lookup, no connection).
 
 ### RPC Server Error Policy (issue #330)
 
@@ -404,7 +428,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1406/1407 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1436/1437 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation
