@@ -54,6 +54,11 @@ program
     false,
   )
   .option(
+    '--block-private-hosts',
+    'Refuse loopback, private and reserved hosts (always on under IRIS_HOSTED=1)',
+    false,
+  )
+  .option(
     '--timeout <ms>',
     'Timeout for actions in milliseconds',
     (v) => parseIntOption(v, { min: 1000, max: 3600000, name: 'timeout' }),
@@ -73,6 +78,7 @@ program
         allow?: Array<'click' | 'fill' | 'navigate' | 'assert'>;
         allowCrossOrigin?: boolean;
         allowDestructive?: boolean;
+        blockPrivateHosts?: boolean;
       },
     ) => {
       const startTime = new Date();
@@ -110,6 +116,7 @@ program
           headless: options.headless !== false,
           devtools: options.headless === false, // Enable devtools in non-headless mode
         },
+        urlPolicy: { blockPrivateHosts: options.blockPrivateHosts },
       };
 
       try {
@@ -146,7 +153,7 @@ program
             : (originOf(startUrl) ?? undefined);
           const executor = new ActionExecutor({
             ...executorOptions,
-            urlPolicy: { pinnedOrigin },
+            urlPolicy: { ...executorOptions.urlPolicy, pinnedOrigin },
           });
 
           try {
@@ -439,6 +446,11 @@ program
   .option('--execute', 'Enable browser execution (default: translation only)')
   .option('--headless', 'Run browser in headless mode (default: true when executing)')
   .option('--quiet', 'Suppress per-change narration; errors still print', false)
+  .option(
+    '--block-private-hosts',
+    'Refuse loopback, private and reserved hosts (always on under IRIS_HOSTED=1)',
+    false,
+  )
   // Same unreachable-branch fix as `run` — see the note there (issue #78).
   .option('--no-headless', 'Run browser visibly with devtools open, for debugging')
   .option(
@@ -486,6 +498,7 @@ program
         instruction: string;
         execute?: boolean;
         quiet?: boolean;
+        blockPrivateHosts?: boolean;
         headless?: boolean;
         browserTimeout?: number;
         retryAttempts?: number;
@@ -515,6 +528,7 @@ program
         await watchFiles(target, options.instruction, {
           execute: options.execute,
           quiet: options.quiet,
+          blockPrivateHosts: options.blockPrivateHosts,
           headless: options.headless,
           browserTimeout: options.browserTimeout,
           retryAttempts: options.retryAttempts,

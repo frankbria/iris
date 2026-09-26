@@ -613,6 +613,14 @@ describe('CLI Commands', () => {
       // here would silently override any future config-level default.
       expect(watchFiles.mock.calls[0][2]?.headless).toBeUndefined();
     });
+
+    test('passes --block-private-hosts through to the watcher (#334)', async () => {
+      const watchFiles = stubWatchFiles();
+
+      await runCli(['node', 'iris', 'watch', '.', '--execute', '--block-private-hosts']);
+
+      expect(watchFiles.mock.calls[0][2]?.blockPrivateHosts).toBe(true);
+    });
   });
 
   // Issue #113: `run` emitted only emoji-decorated human text, so no AI assistant

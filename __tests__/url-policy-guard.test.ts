@@ -460,6 +460,39 @@ describe('URL policy guard', () => {
       expect(sameOriginSocketConnections).toBe(1);
     }, 60_000);
 
+    // Without a pin the socket route used not to exist at all, so a page could
+    // open a WebSocket to any host the request guard would refuse (#334).
+    const openSocket = (url: string) =>
+      p.evaluate(
+        (u) =>
+          new Promise<string>((resolve) => {
+            const ws = new WebSocket(u);
+            ws.onopen = () => resolve('open');
+            ws.onclose = (e) => resolve(`close ${e.code}`);
+            ws.onerror = () => resolve('error');
+            setTimeout(() => resolve('timeout'), 4000);
+          }),
+        url,
+      );
+
+    it('closes a WebSocket to a metadata host with no pin', async () => {
+      await installUrlPolicyGuard(p, {});
+      await guardedGoto(p, `${origin}/final`);
+
+      expect(await openSocket('ws://169.254.169.254/')).toBe('close 1008');
+    }, 60_000);
+
+    it('closes a WebSocket to a private host once blockPrivateHosts is merged in', async () => {
+      // The fixture is itself on a private host, so load it first and tighten
+      // after: the socket route must read the live, merged policy.
+      await installUrlPolicyGuard(p, {});
+      await guardedGoto(p, `${origin}/final`);
+      await installUrlPolicyGuard(p, { blockPrivateHosts: true });
+
+      expect(await openSocket(OFFSITE.replace('http:', 'ws:'))).toBe('close 1008');
+      expect(offsiteSocketConnections).toBe(0);
+    }, 60_000);
+
     it('follows a pin that a later install changed', async () => {
       // The WebSocket predicate must read the live policy. Closing over the
       // value passed at install time would keep enforcing the origin that was

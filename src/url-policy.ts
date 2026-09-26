@@ -6,6 +6,7 @@
  */
 
 import { BlockList, isIP } from 'net';
+import { isHostedMode } from './hosted';
 
 export interface UrlPolicyOptions {
   /**
@@ -23,9 +24,9 @@ export interface UrlPolicyOptions {
    * since a page legitimately loads images and fonts from other origins.
    */
   pinnedOrigin?: string;
-  /** Allow `file://` navigation (e.g. the watcher rendering local files). Default: false. */
+  /** Allow `file://` navigation (e.g. the watcher rendering local files). Default: false. Ignored under IRIS_HOSTED. */
   allowFile?: boolean;
-  /** Also block loopback, private and reserved hosts (see PRIVATE_RANGES). Default: false (localhost dev-server testing stays allowed). */
+  /** Also block loopback, private and reserved hosts (see PRIVATE_RANGES). Default: false (localhost dev-server testing stays allowed); always on under IRIS_HOSTED. */
   blockPrivateHosts?: boolean;
 }
 
@@ -176,6 +177,11 @@ export function isWithinPinnedOrigin(url: string, pinnedOrigin: string): boolean
  * Throw if `url` is not a permitted navigation target. Returns normally when allowed.
  */
 export function assertNavigationAllowed(url: string, options: UrlPolicyOptions = {}): void {
+  // Hosted mode is applied here, last, rather than by each caller: every
+  // navigation path (the navigate action, the per-request guard, the MCP
+  // pre-flight) ends up in this function, and no caller's policy can relax it.
+  if (isHostedMode()) options = { ...options, blockPrivateHosts: true, allowFile: false };
+
   let parsed: URL;
   try {
     parsed = new URL(url);

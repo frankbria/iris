@@ -52,9 +52,10 @@ class McpStdioClient {
   /** Diagnostics are expected on stderr; kept for failure messages. */
   stderr = '';
 
-  constructor() {
+  constructor(env: NodeJS.ProcessEnv = {}) {
     this.proc = spawn(process.execPath, [SERVER_ENTRY], {
       cwd: REPO_ROOT,
+      env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.proc.stdout.setEncoding('utf8');
@@ -275,6 +276,31 @@ describe('MCP stdio server', () => {
     expect(result.isError).toBe(true);
     expect(result.content?.[0]?.text).toMatch(/blocked/i);
   }, 30_000);
+
+  it('refuses internal hosts under IRIS_HOSTED=1, and a client cannot opt back in (#334)', async () => {
+    const hosted = new McpStdioClient({ IRIS_HOSTED: '1' });
+    try {
+      await hosted.handshake();
+      // 100.64.0.0 rather than an arbitrary CGNAT host: see the #329 hygiene allowlist.
+      for (const url of [
+        'http://127.0.0.1/',
+        'http://10.0.0.1/',
+        'http://100.64.0.0/',
+        'http://169.254.169.254/',
+        fixtureURL, // localhost: the page the local-mode scan above reaches
+      ]) {
+        const res = await hosted.request('tools/call', {
+          name: 'run_accessibility_test',
+          arguments: { url },
+        });
+        const result = res.result as unknown as ToolCallResult;
+        expect(result.isError).toBe(true);
+        expect(result.content?.[0]?.text).toMatch(/Navigation blocked/);
+      }
+    } finally {
+      await hosted.close();
+    }
+  }, 60_000);
 
   it('returns a tool error instead of crashing when the page is unreachable', async () => {
     await client.handshake();

@@ -49,7 +49,9 @@ jest.mock('../src/db', () => ({
 
 // Mock executor
 // Shared mock Page: execute mode now navigates the page before running actions,
-// so the page must expose a goto() that the real browser.navigate() helper calls.
+// so the page must expose a goto() that the real guardedGoto() calls. That call
+// carries an explicit `undefined` options argument, hence the second argument in
+// the assertions below.
 const mockPage = { goto: jest.fn().mockResolvedValue(undefined) };
 const mockExecutorInstance = {
   launchBrowser: jest.fn().mockResolvedValue({}),
@@ -389,6 +391,22 @@ describe('FileWatcher', () => {
       expect(typeof watcher['initializeBrowserSession']).toBe('function');
     });
 
+    it('threads --block-private-hosts into the executor URL policy (#334)', async () => {
+      const { ActionExecutor } = require('../src/executor');
+      await new FileWatcher({ execute: true, blockPrivateHosts: true })[
+        'initializeBrowserSession'
+      ]();
+      expect(ActionExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({ urlPolicy: { allowFile: true, blockPrivateHosts: true } }),
+      );
+
+      ActionExecutor.mockClear();
+      await new FileWatcher({ execute: true })['initializeBrowserSession']();
+      expect(ActionExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({ urlPolicy: { allowFile: true, blockPrivateHosts: false } }),
+      );
+    });
+
     it('should include browser session status in getStatus', () => {
       const watcher = new FileWatcher({ execute: true });
 
@@ -475,6 +493,7 @@ describe('FileWatcher execute-mode runtime', () => {
     // DOM-targeting actions operate on the real page instead of about:blank.
     expect(mockPage.goto).toHaveBeenCalledWith(
       pathToFileURL(path.resolve(process.cwd(), 'src/test.ts')).href,
+      undefined,
     );
 
     // The single default action from the translator mock is executed.
@@ -799,6 +818,20 @@ describe('watchFiles entry point', () => {
       await new Promise((r) => setTimeout(r, 5));
     }
   };
+
+  it('passes blockPrivateHosts through to the executor URL policy (#334)', async () => {
+    const { ActionExecutor } = require('../src/executor');
+    void watchFiles(undefined, 'click submit', { execute: true, blockPrivateHosts: true });
+    // Iteration count, not a Date.now() deadline: the WSL2 clock can step (#190).
+    for (let i = 0; ActionExecutor.mock.calls.length === 0; i++) {
+      if (i >= 400) throw new Error('ActionExecutor was not constructed within ~2s');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(ActionExecutor.mock.calls[0][0].urlPolicy).toEqual({
+      allowFile: true,
+      blockPrivateHosts: true,
+    });
+  });
 
   it('rejects remote URL targets', async () => {
     await expect(watchFiles('https://example.com', 'click submit')).rejects.toThrow(
@@ -1176,7 +1209,7 @@ describe('FileWatcher AI feedback mode', () => {
       await jest.advanceTimersByTimeAsync(60);
 
       // A dev server is the point; the changed .css file would render as nothing.
-      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000');
+      expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000', undefined);
     });
 
     it('falls back to the changed file when no URL is configured', async () => {
@@ -1187,6 +1220,7 @@ describe('FileWatcher AI feedback mode', () => {
 
       expect(mockPage.goto).toHaveBeenCalledWith(
         pathToFileURL(path.resolve(process.cwd(), 'page.html')).href,
+        undefined,
       );
     });
   });

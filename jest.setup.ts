@@ -97,6 +97,9 @@ for (const key of [
   // #331: '0' turns the Chromium sandbox off, which browser-hardening.test.ts
   // would then report as a missing sandbox.
   'IRIS_CHROMIUM_SANDBOX',
+  // #334: an exported IRIS_HOSTED=1 would make every test that navigates to a
+  // local fixture page fail on a developer's machine while CI stays green.
+  'IRIS_HOSTED',
 ]) {
   delete process.env[key];
 }

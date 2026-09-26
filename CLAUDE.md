@@ -71,6 +71,7 @@ src/
 │   └── tools.ts           # run_accessibility_test (axe violations only)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
+├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
 ├── url-policy-guard.ts    # Makes that stick per-request (CDP Fetch): redirect hops + sub-resources
 ├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
 └── config.ts              # Configuration types and validation
@@ -212,6 +213,27 @@ break and expensive to rediscover:
 The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a
 file because compose interprets `${...}` in an inline script as its own syntax.
+
+### Hosted Mode URL Policy (issue #334)
+
+`IRIS_HOSTED` is read once by `isHostedMode()` (src/hosted.ts), memoized, and fails
+closed: anything but unset, `''`, `0` or `false` is on. Under it,
+`assertNavigationAllowed()` forces `blockPrivateHosts: true, allowFile: false`
+over whatever policy its caller passed. The override lives in that one function
+on purpose: the navigate action, the per-request CDP guard and the MCP pre-flight
+all end up there, so no caller has to remember it and none can relax it. The
+page's WebSocket route (`routeWebSocket`, which CDP Fetch cannot see) is installed
+with every guard, not only under a pin, and refuses whatever that function refuses. Local
+mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
+
+- The protocol suite runs under `IRIS_HOSTED=1`, set at the top of the file. Tests
+  that need to reach a loopback page go in its "local mode" block, which loads
+  its own server through `jest.isolateModules`.
+- The switch is memoized per module registry. A test that needs it on or off has
+  to read it inside `jest.isolateModules`, or spawn a process with the variable set.
+  Setting `process.env` after the first read does nothing.
+- Not covered here: the visual and a11y runners (#335) and hostnames that resolve
+  to private addresses (#336).
 
 ### RPC Server Error Policy (issue #330)
 
@@ -375,7 +397,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1358/1359 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1393/1394 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation
