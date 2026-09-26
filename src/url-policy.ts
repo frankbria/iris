@@ -26,6 +26,11 @@ export interface UrlPolicyOptions {
   pinnedOrigin?: string;
   /** Allow `file://` navigation (e.g. the watcher rendering local files). Default: false. Ignored under IRIS_HOSTED. */
   allowFile?: boolean;
+  /**
+   * Allow a `data:` document (e.g. the a11y CLI scanning inline HTML). Default: false.
+   * Ignored under IRIS_HOSTED. Its sub-resources are still network requests, and still vetted.
+   */
+  allowData?: boolean;
   /** Also block loopback, private and reserved hosts (see PRIVATE_RANGES). Default: false (localhost dev-server testing stays allowed); always on under IRIS_HOSTED. */
   blockPrivateHosts?: boolean;
 }
@@ -180,7 +185,9 @@ export function assertNavigationAllowed(url: string, options: UrlPolicyOptions =
   // Hosted mode is applied here, last, rather than by each caller: every
   // navigation path (the navigate action, the per-request guard, the MCP
   // pre-flight) ends up in this function, and no caller's policy can relax it.
-  if (isHostedMode()) options = { ...options, blockPrivateHosts: true, allowFile: false };
+  if (isHostedMode()) {
+    options = { ...options, blockPrivateHosts: true, allowFile: false, allowData: false };
+  }
 
   let parsed: URL;
   try {
@@ -196,6 +203,8 @@ export function assertNavigationAllowed(url: string, options: UrlPolicyOptions =
     }
     return; // file paths have no host to range-check
   }
+
+  if (scheme === 'data:' && options.allowData) return; // no host to range-check
 
   if (scheme !== 'http:' && scheme !== 'https:') {
     throw new Error(`Navigation blocked: scheme "${scheme}" is not allowed (only http/https).`);

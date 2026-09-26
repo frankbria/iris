@@ -8,6 +8,7 @@
 import * as path from 'path';
 import type { Browser } from 'playwright';
 import { launchBrowser, newHardenedContext } from '../browser';
+import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
 import { VisualCaptureEngine } from './capture';
 import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
@@ -324,11 +325,15 @@ export class VisualTestRunner {
     const storage = new StorageManager(baselineDir);
 
     try {
+      // Before the first navigation, so no redirect hop or sub-resource escapes it.
+      // `{}` still refuses metadata hosts; IRIS_HOSTED makes it strict (#335).
+      await installUrlPolicyGuard(page, {});
+
       // Navigate to page (assuming pagePattern is a URL for now)
       // Trim a trailing slash off the base so `https://host/` + `/about` doesn't double up.
       const base = (this.config.baseURL ?? 'http://localhost:3000').replace(/\/$/, '');
       const url = pagePattern.startsWith('http') ? pagePattern : `${base}${pagePattern}`;
-      await page.goto(url, { waitUntil: 'networkidle' });
+      await guardedGoto(page, url, { waitUntil: 'networkidle' });
 
       // Wait for stabilization
       if (this.config.capture.stabilization.waitForFonts) {

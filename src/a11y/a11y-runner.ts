@@ -60,9 +60,10 @@ export interface AccessibilityRunnerConfig {
    * the target of a 30x, so those hops are vetted explicitly. See
    * `src/url-policy-guard.ts` and issue #148.
    *
-   * Left unset by the `iris a11y` CLI, whose URLs are typed by the operator and
-   * which legitimately scans `data:` pages. Set by the MCP tool, whose URLs are
-   * model-supplied and may be derived from untrusted page content.
+   * Always enforced (#335). Unset means the operator default: `file:` and `data:`
+   * allowed, as the `iris a11y` CLI's typed URLs need, metadata hosts refused.
+   * IRIS_HOSTED overrides either way. The MCP tool passes `{}`, since its URLs
+   * are model-supplied and may be derived from untrusted page content.
    */
   urlPolicy?: UrlPolicyOptions;
 }
@@ -220,12 +221,13 @@ export class AccessibilityRunner {
     const context = await newHardenedContext(this.browser);
     const page = await context.newPage();
 
-    // Install before the first navigation so no request escapes the guard.
-    if (this.config.urlPolicy) {
-      await installUrlPolicyGuard(page, this.config.urlPolicy);
-    }
-
     try {
+      // Install before the first navigation so no request escapes the guard.
+      await installUrlPolicyGuard(
+        page,
+        this.config.urlPolicy ?? { allowFile: true, allowData: true },
+      );
+
       // Navigate to page. Treat any scheme-prefixed value (http:, https:, about:,
       // data:, file:) as a complete URL; only bare paths get the dev-server base.
       const isFullUrl = /^[a-z]+:/i.test(pagePattern);
@@ -234,7 +236,6 @@ export class AccessibilityRunner {
       const url = isFullUrl ? pagePattern : `${base}${pagePattern}`;
       // guardedGoto walks any redirect chain one vetted hop at a time, as real
       // navigations, so the scanned document's URL and asset base stay correct.
-      // On a page with no guard installed it is a plain goto.
       //
       // Report where it LANDED, not where it was pointed: a scan of `http://host/`
       // that redirects to `/login` measured `/login`, and labelling that result

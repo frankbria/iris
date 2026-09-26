@@ -24,6 +24,14 @@ describe('assertNavigationAllowed', () => {
       expect(() => assertNavigationAllowed('')).toThrow();
     });
 
+    it('allows data: only when opted in', () => {
+      expect(() =>
+        assertNavigationAllowed('data:text/html,<h1>hi</h1>', { allowData: true }),
+      ).not.toThrow();
+      // The opt-in is for data: alone, not every non-web scheme.
+      expect(() => assertNavigationAllowed('javascript:alert(1)', { allowData: true })).toThrow();
+    });
+
     it('allows file:// when opted in', () => {
       expect(() =>
         assertNavigationAllowed('file:///tmp/page.html', { allowFile: true }),

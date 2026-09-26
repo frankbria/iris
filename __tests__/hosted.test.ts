@@ -88,6 +88,12 @@ describe('assertNavigationAllowed under IRIS_HOSTED=1', () => {
     );
   });
 
+  it('refuses data: even when the caller opts in', () => {
+    expect(() => assertNavigationAllowed('data:text/html,hi', { allowData: true })).toThrow(
+      /data:/,
+    );
+  });
+
   it('still allows a public URL, and still enforces a pinned origin', () => {
     expect(() => assertNavigationAllowed('https://example.com/')).not.toThrow();
     expect(() =>
