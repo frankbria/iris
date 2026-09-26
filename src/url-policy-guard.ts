@@ -39,8 +39,8 @@ import type { UrlPolicyOptions } from './url-policy';
  * Live popups a guarded context may hold at once (#337).
  *
  * Each popup is a renderer and a guard session of its own, and a page can open
- * them in a loop. Past this many, a new one is closed before its first request
- * is answered. A checkout's payment window or an OAuth popup is one or two.
+ * them in a loop. Past this many, every request a new one makes is refused and
+ * it is closed. A checkout's payment window or an OAuth popup is one or two.
  */
 export const MAX_POPUPS_PER_CONTEXT = 5;
 
@@ -182,10 +182,9 @@ async function installWebSocketGuard(page: Page, state: GuardState): Promise<voi
 /**
  * Attach the Fetch handler that vets every request before it is sent.
  *
- * @returns the page's CDP target id, which is how the browser net recognises
- *   popups this page opens.
+ * @returns the page's CDP session, reused to find its target id for the browser net.
  */
-async function installFetchGuard(page: Page, state: GuardState): Promise<string> {
+async function installFetchGuard(page: Page, state: GuardState): Promise<CDPSession> {
   const cdp: CDPSession = await page.context().newCDPSession(page);
 
   // Request stage only. It is sufficient *because* CDP re-pauses the target of
@@ -218,8 +217,7 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<string>
     }
   });
 
-  const { targetInfo } = await cdp.send('Target.getTargetInfo');
-  return targetInfo.targetId;
+  return cdp;
 }
 
 /** One guarded target as the browser net sees it. */
@@ -234,7 +232,7 @@ interface BrowserNet {
   targets: Map<string, NetTarget>;
   /** Live popups of guarded pages, per browser context id, for the cap. */
   popups: Map<string, Set<string>>;
-  /** Popups over the cap: being closed, and every request they make refused. */
+  /** Popups over the cap: every request they make is refused until they are closed. */
   overCap: Set<string>;
 }
 
@@ -269,8 +267,10 @@ async function startBrowserNet(browser: Browser): Promise<BrowserNet> {
     const live = net.popups.get(contextId) ?? new Set<string>();
     net.popups.set(contextId, live);
     if (live.size >= MAX_POPUPS_PER_CONTEXT) {
+      // Refused here, closed once its own guard install sees it (joinBrowserNet).
+      // Not Target.closeTarget now: closing a target Playwright is still
+      // attaching to stalls the click that opened it — measured, 2 runs in 3.
       net.overCap.add(targetInfo.targetId);
-      cdp.send('Target.closeTarget', { targetId: targetInfo.targetId }).catch(() => {});
       return;
     }
     live.add(targetInfo.targetId);
@@ -328,10 +328,14 @@ async function startBrowserNet(browser: Browser): Promise<BrowserNet> {
   return net;
 }
 
-/** Register a guarded page with its browser's net, starting the net on first use. */
-async function joinBrowserNet(page: Page, state: GuardState, targetId: string): Promise<void> {
+/**
+ * Register a guarded page with its browser's net, starting the net on first use.
+ *
+ * @returns false for a popup over the cap, which the caller closes instead of guarding.
+ */
+async function joinBrowserNet(page: Page, state: GuardState, cdp: CDPSession): Promise<boolean> {
   const browser = page.context().browser();
-  if (!browser) return; // a persistent context; IRIS never launches one (#331)
+  if (!browser) return true; // a persistent context; IRIS never launches one (#331)
 
   let net = browserNets.get(browser);
   if (!net) {
@@ -340,7 +344,11 @@ async function joinBrowserNet(page: Page, state: GuardState, targetId: string): 
     // A failed start must not poison every later install on this browser.
     net.catch(() => browserNets.delete(browser));
   }
-  (await net).targets.set(targetId, { state, inherited: false });
+  const { targetInfo } = await cdp.send('Target.getTargetInfo');
+  const joined = await net;
+  if (joined.overCap.has(targetInfo.targetId)) return false;
+  joined.targets.set(targetInfo.targetId, { state, inherited: false });
+  return true;
 }
 
 /**
@@ -479,8 +487,11 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   const entryRef = contextEntry;
   page.once('close', () => entryRef.guards.delete(state));
 
-  const targetId = await installFetchGuard(page, state);
-  await joinBrowserNet(page, state, targetId);
+  const cdp = await installFetchGuard(page, state);
+  if (!(await joinBrowserNet(page, state, cdp))) {
+    await page.close();
+    return;
+  }
   await installWebSocketGuard(page, state);
 }
 

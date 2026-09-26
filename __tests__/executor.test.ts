@@ -43,7 +43,12 @@ describe('ActionExecutor', () => {
   let mockBrowser: jest.Mocked<Browser>;
   let mockPage: jest.Mocked<Page>;
   let mockCdpSession: { send: jest.Mock; on: jest.Mock };
-  let mockContext: { newCDPSession: jest.Mock; route: jest.Mock; on: jest.Mock };
+  let mockContext: {
+    newCDPSession: jest.Mock;
+    route: jest.Mock;
+    on: jest.Mock;
+    browser: jest.Mock;
+  };
 
   beforeAll(async () => {
     // Import the ActionExecutor class (which should be implemented)
@@ -89,11 +94,13 @@ describe('ActionExecutor', () => {
     // hand one out or createPage cannot install the guard at all.
     mockCdpSession = { send: jest.fn().mockResolvedValue(undefined), on: jest.fn() };
     // The guard also attaches a context-level net for popups (issue #155), so
-    // the fake context needs route/on as well as a CDP session.
+    // the fake context needs route/on as well as a CDP session. No browser, so
+    // the browser-level popup net (#337) is skipped, as for a persistent context.
     mockContext = {
       newCDPSession: jest.fn().mockResolvedValue(mockCdpSession),
       route: jest.fn().mockResolvedValue(undefined),
       on: jest.fn(),
+      browser: jest.fn().mockReturnValue(null),
     };
     mockPage = {
       url: jest.fn().mockReturnValue('https://example.com'),
