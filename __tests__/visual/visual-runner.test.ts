@@ -83,6 +83,7 @@ describe('VisualTestRunner', () => {
       newCDPSession: jest.fn().mockResolvedValue({ send: jest.fn(), on: jest.fn() }),
       route: jest.fn().mockResolvedValue(undefined),
       on: jest.fn(),
+      browser: jest.fn().mockReturnValue(null),
       close: jest.fn().mockResolvedValue(undefined),
     } as any;
 

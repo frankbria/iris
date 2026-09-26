@@ -72,7 +72,7 @@ src/
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
-├── url-policy-guard.ts    # Makes that stick per-request (CDP Fetch): redirect hops + sub-resources
+├── url-policy-guard.ts    # Makes that stick per-request (CDP Fetch): redirect hops, sub-resources, popups (#337)
 ├── egress-proxy.ts        # Hosted: resolve-and-pin HTTP/CONNECT proxy under all Chromium traffic (#336)
 ├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
 └── config.ts              # Configuration types and validation
@@ -244,6 +244,40 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   `src/visual/capture.ts` does (also for `waitForFunction`), or exclude the module from coverage as the a11y
   modules are.
 - Hostnames that *resolve* to private addresses are the egress proxy's job, below.
+
+### URL Guard: Popups, Pins, Opaque Starts (issue #337)
+
+`installUrlPolicyGuard()` now has three layers, and each exists because the others
+cannot see something:
+
+- **Page CDP session** — every request of the page, including redirect hops.
+- **Context route** — a popup's opening request, which arrives before the popup's
+  own session can attach. Playwright continues *redirect hops* inside its own Fetch
+  handler (`redirectedFrom` → `Fetch.continueRequest`), so a route never sees them.
+- **Browser net** (`browser.newBrowserCDPSession()`, one per Browser) — `Fetch`
+  on Document requests of every target plus `Target.setDiscoverTargets`. A popup's
+  `targetInfo.openerId` names its opener (the page target, even when a
+  cross-origin iframe opened it), so its opening request *and every redirect hop*
+  are judged by the opener's live policy (`GuardDecision.attribution: 'opener'`).
+  Skipped when `context.browser()` is null; mocked contexts return null for it.
+
+Constraints that are easy to break:
+
+- Do not hold a popup's opening request until the `page` event: the event waits
+  for that request, so it deadlocks.
+- Live popups per guarded context are capped (`MAX_POPUPS_PER_CONTEXT`). An
+  over-cap popup is still registered (so popups opened *through* it find a guarded
+  opener and hit the cap too), its requests are refused, and the browser net closes
+  it right after refusing its first request. Never `Target.closeTarget` at
+  `targetCreated`: closing a target Playwright is still attaching to stalled the
+  opening click in 2 of 3 runs. Its guard install also closes it (`page.close()`).
+- A pinned origin now refuses **every** cross-origin request, images and fonts
+  included: an image URL is a write channel for a filled-in secret. The explicit
+  allowance is `--allow-cross-origin`.
+- `runAgentLoop` with pinning on refuses to start from an opaque origin
+  (`about:blank`, `data:`), returning `terminationReason: 'error'`, and
+  `checkAction` refuses too. Agent-loop tests therefore serve their fixture from a
+  local http origin, not a `data:` URL.
 
 ### Hosted Egress Proxy (issue #336)
 
@@ -428,7 +462,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1438/1439 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1449/1450 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

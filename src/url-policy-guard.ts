@@ -31,39 +31,18 @@
  * Chromium-only, which is what IRIS launches everywhere.
  */
 
-import type { BrowserContext, CDPSession, Page } from 'playwright';
+import type { Browser, BrowserContext, CDPSession, Page } from 'playwright';
 import { assertNavigationAllowed } from './url-policy';
 import type { UrlPolicyOptions } from './url-policy';
 
 /**
- * Resource types exempt from origin pinning (CDP spelling).
+ * Live popups a guarded context may hold at once (#337).
  *
- * These are rendered, not executed and not readable: the page cannot pull an
- * arbitrary response body out of an image or a font. Refusing them would break
- * the page the agent is trying to read, for no security gain.
- *
- * Everything NOT listed stays pinned, and the exclusions are deliberate:
- *
- * - `XHR`, `Fetch`, `EventSource`, `Ping` — carry data off-origin and return
- *   readable responses, so a same-origin click that fires one is an
- *   exfiltration channel the agent's per-action check cannot see.
- * - `Script` — code execution with the page's own authority. A cross-origin
- *   script can read the DOM and act as the user, which is precisely the
- *   post-click injection scenario this control exists for. It is NOT passive,
- *   however much it looks like a static asset in a network log. The cost is
- *   real — a site serving its JavaScript from a CDN needs
- *   `--allow-cross-origin` — and taken deliberately.
- *
- * Unknown future types default to pinned rather than exempt.
+ * Each popup is a renderer and a guard session of its own, and a page can open
+ * them in a loop. Past this many, every request a new one makes is refused and
+ * it is closed. A checkout's payment window or an OAuth popup is one or two.
  */
-const PIN_EXEMPT_RESOURCE_TYPES = new Set([
-  'stylesheet',
-  'image',
-  'media',
-  'font',
-  'texttrack',
-  'manifest',
-]);
+export const MAX_POPUPS_PER_CONTEXT = 5;
 
 /** Why the guard turned a navigation away. */
 interface NavigationRefusal {
@@ -123,8 +102,11 @@ export interface GuardDecision {
    * `page` — the request named its own frame and was judged by that page's policy.
    * `context-net` — unattributable (a popup's opening request); judged against
    * every guard in the context.
+   * `opener` — a popup's request judged against the policy of the page that
+   * opened it, before the popup has a guard of its own: its documents (opening
+   * request, redirect hops) by the browser net, anything else by the context net.
    */
-  attribution: 'page' | 'context-net';
+  attribution: 'page' | 'context-net' | 'opener';
   /** Every policy consulted, in the order consulted. */
   policies: UrlPolicyOptions[];
   allowed: boolean;
@@ -171,19 +153,6 @@ function blockReason(url: string, policy: UrlPolicyOptions): string | null {
   }
 }
 
-/**
- * The policy as it applies to one request, relaxing the pin for passive assets.
- *
- * Case-insensitive because the two interception layers spell resource types
- * differently — CDP says `Stylesheet`, Playwright says `stylesheet` — and a
- * mismatch here would silently un-exempt every passive asset.
- */
-function policyFor(policy: UrlPolicyOptions, resourceType: string): UrlPolicyOptions {
-  return PIN_EXEMPT_RESOURCE_TYPES.has(resourceType.toLowerCase())
-    ? { ...policy, pinnedOrigin: undefined }
-    : policy;
-}
-
 /** ws/wss onto http/https, so a page's own socket is not mistaken for an escape. */
 function toHttpScheme(wsUrl: string): string {
   return wsUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
@@ -211,8 +180,12 @@ async function installWebSocketGuard(page: Page, state: GuardState): Promise<voi
   );
 }
 
-/** Attach the Fetch handler that vets every request before it is sent. */
-async function installFetchGuard(page: Page, state: GuardState): Promise<void> {
+/**
+ * Attach the Fetch handler that vets every request before it is sent.
+ *
+ * @returns the page's CDP session, reused to find its target id for the browser net.
+ */
+async function installFetchGuard(page: Page, state: GuardState): Promise<CDPSession> {
   const cdp: CDPSession = await page.context().newCDPSession(page);
 
   // Request stage only. It is sufficient *because* CDP re-pauses the target of
@@ -222,7 +195,7 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<void> {
 
   cdp.on('Fetch.requestPaused', async (event) => {
     const url = event.request.url;
-    const reason = blockReason(url, policyFor(state.policy, event.resourceType));
+    const reason = blockReason(url, state.policy);
 
     try {
       if (!reason) {
@@ -244,6 +217,149 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<void> {
       // closed page. There is nothing left to continue or fail.
     }
   });
+
+  return cdp;
+}
+
+/** One guarded target as the browser net sees it. */
+interface NetTarget {
+  state: GuardState;
+  /** A popup still running on its opener's guard, not yet on one of its own. */
+  inherited: boolean;
+}
+
+interface BrowserNet {
+  /** Guarded pages and the popups opened from them, by CDP target id. */
+  targets: Map<string, NetTarget>;
+  /** Live popups of guarded pages, per browser context id, for the cap. */
+  popups: Map<string, Set<string>>;
+  /** Popups over the cap: every request they make is refused until they are closed. */
+  overCap: Set<string>;
+}
+
+const browserNets = new WeakMap<Browser, Promise<BrowserNet>>();
+
+/**
+ * Vet every popup document — its opening request and each redirect hop — before
+ * it is sent (#337).
+ *
+ * Neither page-scoped layer can. The context route sees a popup's opening
+ * request, but Playwright continues the hops of a redirect itself, so a
+ * same-origin link that 302s elsewhere was never checked. The popup's own CDP
+ * session attaches too late — its first request has gone by the time the 'page'
+ * event fires, and holding that request until then deadlocks, because the event
+ * waits for it.
+ *
+ * A browser-level session has neither problem: it pauses the documents of every
+ * target, and `Target.targetCreated` names the opener before the popup's first
+ * request arrives. So a popup is judged by exactly the policy of the page that
+ * opened it — no guessing among the context's guards — until its own guard
+ * attaches. Documents only: sub-resources of a popup are the job of that guard.
+ */
+async function startBrowserNet(browser: Browser): Promise<BrowserNet> {
+  const cdp = await browser.newBrowserCDPSession();
+  const net: BrowserNet = { targets: new Map(), popups: new Map(), overCap: new Set() };
+
+  cdp.on('Target.targetCreated', ({ targetInfo }) => {
+    const opener = targetInfo.openerId ? net.targets.get(targetInfo.openerId) : undefined;
+    if (!opener || targetInfo.type !== 'page') return;
+
+    // Registered even when over the cap: its WindowProxy is live as soon as
+    // window.open returns, and a popup opened through it must still find a
+    // guarded opener — and so the cap — rather than fall through unjudged.
+    net.targets.set(targetInfo.targetId, { state: opener.state, inherited: true });
+
+    const contextId = targetInfo.browserContextId ?? '';
+    const live = net.popups.get(contextId) ?? new Set<string>();
+    net.popups.set(contextId, live);
+    if (live.size >= MAX_POPUPS_PER_CONTEXT) {
+      // Refused here, closed once its own guard install sees it (joinBrowserNet).
+      // Not Target.closeTarget now: closing a target Playwright is still
+      // attaching to stalls the click that opened it — measured, 2 runs in 3.
+      net.overCap.add(targetInfo.targetId);
+      return;
+    }
+    live.add(targetInfo.targetId);
+  });
+
+  cdp.on('Target.targetDestroyed', ({ targetId }) => {
+    net.targets.delete(targetId);
+    net.overCap.delete(targetId);
+    for (const live of net.popups.values()) live.delete(targetId);
+  });
+
+  cdp.on('Fetch.requestPaused', async (event) => {
+    const url = event.request.url;
+    // A top-level frame's id is its target id, so this matches the main
+    // document of a guarded page or popup. Subframes are the page guard's job.
+    const target = net.targets.get(event.frameId);
+    let reason: string | null = null;
+    if (net.overCap.has(event.frameId)) {
+      reason = `popup limit reached (${MAX_POPUPS_PER_CONTEXT} per context)`;
+    } else if (target) {
+      reason = blockReason(url, target.state.policy);
+      if (target.inherited) {
+        reportDecision({
+          url,
+          resourceType: event.resourceType,
+          attribution: 'opener',
+          policies: [target.state.policy],
+          allowed: reason === null,
+          reason,
+        });
+      } else if (reason) {
+        // Whichever layer answers first wins; record it so guardedGoto can
+        // still say why. Never for a popup — that would overwrite its opener's.
+        target.state.refusal = { url, detail: reason };
+      }
+    }
+
+    try {
+      await (reason
+        ? cdp.send('Fetch.failRequest', {
+            requestId: event.requestId,
+            errorReason: 'BlockedByClient',
+          })
+        : cdp.send('Fetch.continueRequest', { requestId: event.requestId }));
+      // Also closed here, not only from its guard install: a popup opened
+      // through an over-cap popup has no live opener by then, so Playwright
+      // reports none and no guard is ever installed on it.
+      if (net.overCap.has(event.frameId)) {
+        await cdp.send('Target.closeTarget', { targetId: event.frameId });
+      }
+    } catch {
+      // Target or request already gone.
+    }
+  });
+
+  await cdp.send('Target.setDiscoverTargets', { discover: true });
+  await cdp.send('Fetch.enable', {
+    patterns: [{ urlPattern: '*', resourceType: 'Document', requestStage: 'Request' }],
+  });
+  return net;
+}
+
+/**
+ * Register a guarded page with its browser's net, starting the net on first use.
+ *
+ * @returns false for a popup over the cap, which the caller closes instead of guarding.
+ */
+async function joinBrowserNet(page: Page, state: GuardState, cdp: CDPSession): Promise<boolean> {
+  const browser = page.context().browser();
+  if (!browser) return true; // a persistent context; IRIS never launches one (#331)
+
+  let net = browserNets.get(browser);
+  if (!net) {
+    net = startBrowserNet(browser);
+    browserNets.set(browser, net);
+    // A failed start must not poison every later install on this browser.
+    net.catch(() => browserNets.delete(browser));
+  }
+  const { targetInfo } = await cdp.send('Target.getTargetInfo');
+  const joined = await net;
+  if (joined.overCap.has(targetInfo.targetId)) return false;
+  joined.targets.set(targetInfo.targetId, { state, inherited: false });
+  return true;
 }
 
 /**
@@ -254,8 +370,10 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<void> {
  * Installing a CDP session from `context.on('page')` loses the race: measured,
  * the popup's first request has already gone by the time that fires. A
  * context-level Playwright route does see it, so it covers the opening request
- * while the CDP session installed alongside covers everything after — including
- * redirect targets, which a route never sees.
+ * and the popup's CDP session covers what the popup requests once attached. The
+ * opening request's redirect hops fall between the two — the route never sees
+ * them and the session is not there yet — which is what the browser net
+ * ({@link startBrowserNet}) exists for (#337).
  *
  * Only ever continues or aborts. Fulfilling is what broke WebSockets (#154) and
  * has no part here.
@@ -267,8 +385,8 @@ async function installContextNet(context: BrowserContext, entry: ContextEntry): 
     // `frame()` throws for the opening request of a page that does not exist
     // yet — "issued before the frame is created" — which is exactly the popup
     // case this net is here for. Playwright offers nothing else to attribute
-    // that one request to, so it is vetted against the context's most recent
-    // guard. Every other request names its own page and is judged by that
+    // that one request to, so it is vetted against every guard in the context
+    // (below). Every other request names its own page and is judged by that
     // page's policy.
     let owner: Page | undefined;
     let attributable = true;
@@ -278,10 +396,20 @@ async function installContextNet(context: BrowserContext, entry: ContextEntry): 
       attributable = false;
     }
 
-    // An attributable page with no guard never opted in. Leaving it alone is
-    // the documented contract; policing it with another page's pin would refuse
-    // requests it never agreed to.
-    const policy = attributable ? guards.get(owner as Page)?.policy : undefined;
+    let policy = attributable ? guards.get(owner as Page)?.policy : undefined;
+    // A popup of a guarded page whose own guard is still attaching: judged by
+    // its opener's policy meanwhile, so assets its first document requests
+    // cannot go out in that window (#337).
+    let viaOpener = false;
+    if (owner && !policy) {
+      const opener = await owner.opener().catch(() => null);
+      policy = opener ? guards.get(opener)?.policy : undefined;
+      viaOpener = policy !== undefined;
+    }
+
+    // An attributable page with no guard (and no guarded opener) never opted
+    // in. Leaving it alone is the documented contract; policing it with another
+    // page's pin would refuse requests it never agreed to.
     if (attributable && !policy) {
       await route.continue().catch(() => {});
       return;
@@ -303,14 +431,14 @@ async function installContextNet(context: BrowserContext, entry: ContextEntry): 
     const consulted = policy ? [policy] : [...entry.guards].map((g) => g.policy);
     let reason: string | null = null;
     for (const candidate of consulted) {
-      reason = blockReason(url, policyFor(candidate, resourceType));
+      reason = blockReason(url, candidate);
       if (reason) break; // one refusal is enough
     }
 
     reportDecision({
       url,
       resourceType,
-      attribution: policy ? 'page' : 'context-net',
+      attribution: viaOpener ? 'opener' : policy ? 'page' : 'context-net',
       policies: consulted,
       allowed: reason === null,
       reason,
@@ -380,7 +508,11 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   const entryRef = contextEntry;
   page.once('close', () => entryRef.guards.delete(state));
 
-  await installFetchGuard(page, state);
+  const cdp = await installFetchGuard(page, state);
+  if (!(await joinBrowserNet(page, state, cdp))) {
+    await page.close();
+    return;
+  }
   await installWebSocketGuard(page, state);
 }
 

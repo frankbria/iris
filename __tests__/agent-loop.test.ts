@@ -8,6 +8,8 @@
  */
 
 import { chromium, Browser, Page } from 'playwright';
+import { createServer, Server } from 'http';
+import type { AddressInfo } from 'net';
 import { observePage, runAgentLoop, MAX_DIGEST_CHARS, MAX_URL_CHARS } from '../src/agent-loop';
 import { ActionExecutor } from '../src/executor';
 import * as aiClient from '../src/ai-client';
@@ -19,19 +21,36 @@ const PAGE = `<!doctype html><html lang="en"><head><title>Checkout</title></head
   <a href="https://example.com/help">Help</a>
 </body></html>`;
 
-const load = (page: Page, html: string) =>
-  page.goto('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+/**
+ * Served from a real http origin, not a data: URL: a data: page has no origin to
+ * pin to, and the loop refuses to start from one (#337). The padded query keeps
+ * the URL long, so the URL caps below are still exercised.
+ */
+let server: Server;
+let origin = '';
+let served = '';
+const load = (page: Page, html: string) => {
+  served = html;
+  return page.goto(`${origin}/?pad=${'x'.repeat(600)}`);
+};
 
 describe('agent loop', () => {
   let browser: Browser;
   let page: Page;
 
   beforeAll(async () => {
+    server = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(served);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     browser = await chromium.launch();
   }, 60000);
 
   afterAll(async () => {
     await browser?.close();
+    await new Promise((resolve) => server.close(resolve));
   });
 
   beforeEach(async () => {
@@ -51,7 +70,7 @@ describe('agent loop', () => {
     it('includes the url, title and semantic roles', async () => {
       const digest = await observePage(page);
 
-      expect(digest).toContain('URL: data:text/html');
+      expect(digest).toContain(`URL: ${origin}/`);
       expect(digest).toContain('TITLE: Checkout');
       // Roles and accessible names are what an instruction actually refers to.
       expect(digest).toMatch(/button/);
@@ -74,7 +93,8 @@ describe('agent loop', () => {
     });
 
     // The body cap alone is not enough: page.url() on a data: URL carries the
-    // entire encoded document, so an uncapped header blew the whole budget.
+    // entire encoded document (and a real one can carry a huge query string), so
+    // an uncapped header blew the whole budget.
     it('caps the URL so the header cannot blow the budget', async () => {
       const digest = await observePage(page);
       const urlLine = digest.split('\n')[0];
@@ -412,8 +432,6 @@ describe('agent loop', () => {
           instruction: 'pay',
           executor,
           page,
-          // The fixture is a data: URL, which has no origin, so pinning is
-          // inert here — asserted directly in agent-policy.test.ts instead.
           maxTurns: 1,
         });
 
@@ -434,7 +452,7 @@ describe('agent loop', () => {
           executor,
           page,
           maxTurns: 1,
-          // The page is a data: URL; claim it was meant to be example.com.
+          // The page is on the local fixture; claim it was meant to be trusted.example.
           startUrl: 'https://trusted.example/start',
         });
 
@@ -478,6 +496,42 @@ describe('agent loop', () => {
         });
 
         expect(newCDPSession).not.toHaveBeenCalled();
+      });
+
+      it('refuses to start from an opaque origin while pinning is on (#337)', async () => {
+        // about:blank and data: have no origin. Skipping the pin there failed
+        // open: the run went ahead with no confinement at all.
+        await page.goto('data:text/html,<button id="pay">Pay</button>');
+        scriptAI([[{ type: 'click', selector: '#pay' }]]);
+        const execute = jest.spyOn(executor, 'executeAction');
+        const log: string[] = [];
+
+        const result = await runAgentLoop({
+          instruction: 'pay',
+          executor,
+          page,
+          maxTurns: 3,
+          log: (m) => log.push(m),
+        });
+
+        expect(result).toMatchObject({ terminationReason: 'error', turns: 0, results: [] });
+        expect(execute).not.toHaveBeenCalled();
+        expect(log.join('\n')).toMatch(/no origin to pin/);
+      });
+
+      it('runs from an opaque origin when the caller opted out of pinning', async () => {
+        await page.goto('data:text/html,<button id="pay">Pay</button>');
+        scriptAI([[{ type: 'click', selector: '#pay' }]]);
+
+        const result = await runAgentLoop({
+          instruction: 'pay',
+          executor,
+          page,
+          maxTurns: 1,
+          policy: { pinOrigin: false },
+        });
+
+        expect(result.results[0].success).toBe(true);
       });
 
       it('stops after three refusals instead of burning the turn budget', async () => {

@@ -120,8 +120,9 @@ function targetText(action: Action): string {
  *
  * @param currentUrl where the page is right now — not where it started, since
  *   the point is to catch drift.
- * @param startOrigin the origin the run was pointed at, or null if unknown (in
- *   which case origin pinning cannot be enforced and is skipped).
+ * @param startOrigin the origin the run was pointed at, or null if unknown — in
+ *   which case, with pinning on, every action is refused: there is nothing to
+ *   confine to, and skipping the check would fail open (#337).
  */
 export function checkAction(
   action: Action,
@@ -134,6 +135,14 @@ export function checkAction(
     return {
       allowed: false,
       reason: `action type "${action.type}" is not permitted this run (allowed: ${allow.join(', ')})`,
+    };
+  }
+
+  if (policy.pinOrigin !== false && !startOrigin) {
+    return {
+      allowed: false,
+      reason:
+        'no starting origin to pin to (about:blank, data:) — pass --allow-cross-origin to run unpinned',
     };
   }
 

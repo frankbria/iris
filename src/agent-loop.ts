@@ -149,7 +149,15 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
   // trusting the caller to have done it — the default is advertised as safe, and
   // a library caller gets the same guarantee the CLI does. Installing is
   // idempotent: it merges into whatever policy the executor already set.
-  if (policy.pinOrigin !== false && startOrigin) {
+  if (policy.pinOrigin !== false) {
+    // No origin (about:blank, data:) means nothing to confine to. Running anyway
+    // would silently turn the advertised default into "any origin" (#337).
+    if (!startOrigin) {
+      log(
+        'refusing to start: the starting page has no origin to pin to — opt out of pinning to run anyway',
+      );
+      return { goalMet: null, turns: 0, results: [], terminationReason: 'error' };
+    }
     await installUrlPolicyGuard(page, { pinnedOrigin: startOrigin });
   }
 
