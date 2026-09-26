@@ -45,7 +45,7 @@ program
   )
   .option(
     '--allow-cross-origin',
-    'Let --agent leave the starting origin (off by default: an agent that wanders onto another authenticated site is the risk)',
+    'Let --agent leave the starting origin, and load cross-origin assets (off by default: an agent that wanders onto another authenticated site, or a page that beacons a filled-in value out through an image URL, is the risk)',
     false,
   )
   .option(

