@@ -754,7 +754,7 @@ describe('URL policy guard', () => {
 
       expect(requestLog).not.toContain('/to-offsite-tab');
       expect(offsiteLog).not.toContain('/escaped');
-      expect(context.pages().length).toBeLessThanOrEqual(1 + MAX_POPUPS_PER_CONTEXT);
+      expect(context.pages()).toHaveLength(1 + MAX_POPUPS_PER_CONTEXT);
     }, 60_000);
   });
 

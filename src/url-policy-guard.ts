@@ -320,6 +320,12 @@ async function startBrowserNet(browser: Browser): Promise<BrowserNet> {
             errorReason: 'BlockedByClient',
           })
         : cdp.send('Fetch.continueRequest', { requestId: event.requestId }));
+      // Also closed here, not only from its guard install: a popup opened
+      // through an over-cap popup has no live opener by then, so Playwright
+      // reports none and no guard is ever installed on it.
+      if (net.overCap.has(event.frameId)) {
+        await cdp.send('Target.closeTarget', { targetId: event.frameId });
+      }
     } catch {
       // Target or request already gone.
     }
