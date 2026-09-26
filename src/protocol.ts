@@ -2,7 +2,12 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { translateSync, translate, Action, ActionSchema } from './translator';
-import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
+import {
+  ActionExecutor,
+  ExecutionResult,
+  ActionExecutorOptions,
+  EXECUTOR_DEFAULTS,
+} from './executor';
 import { chromiumIsInstalled } from './browser';
 import { Page } from 'playwright';
 
@@ -28,19 +33,22 @@ const ExecuteCommandParams = z.object({ instruction: z.string().min(1) });
 // unknown keys by default — critically dropping any client-supplied `urlPolicy`
 // (e.g. `allowFile: true`), so the RPC path can never opt out of the secure
 // default navigation policy on this unauthenticated surface.
+//
+// Ceilings are not here: timings are clamped to the server's `ServerLimits`
+// after parsing (#338). The schema only rejects values that are wrong at any
+// size — timeout:0 would disable the page timeout and hang the executor.
 const LaunchBrowserOptions = z.object({
-  // Bounds are enforced because these come from the unauthenticated RPC wire: an
-  // unbounded retry/delay is a DoS, and timeout:0 would disable the page timeout
-  // entirely (hang the executor), so timeout is required to be positive.
-  retryAttempts: z.number().int().min(0).max(10).optional(),
-  retryDelay: z.number().int().min(0).max(60_000).optional(),
-  timeout: z.number().int().positive().max(600_000).optional(),
+  retryAttempts: z.number().int().min(0).optional(),
+  retryDelay: z.number().int().min(0).optional(),
+  timeout: z.number().int().positive().optional(),
   trackContext: z.boolean().optional(),
   browserOptions: z
     .object({
-      headless: z.boolean().optional(),
-      devtools: z.boolean().optional(),
-      slowMo: z.number().int().min(0).max(60_000).optional(),
+      // A visible browser or devtools window is an operator's local debugging
+      // aid, never something a wire client may ask a server for (#338).
+      headless: z.literal(true).optional(),
+      devtools: z.literal(false).optional(),
+      slowMo: z.number().int().min(0).optional(),
     })
     .optional(),
 });
@@ -87,6 +95,49 @@ export interface BrowserStatus {
 }
 
 /**
+ * Server-side resource limits (#338). Every one bounds something a wire client
+ * could otherwise make unbounded: memory per frame, sockets, Chromium processes,
+ * work per request, and how long one action may hold a session.
+ */
+export interface ServerLimits {
+  /** Largest accepted frame; a bigger one closes the socket with 1009. ws's own default is 100 MiB. */
+  maxPayloadBytes: number;
+  /** Open sockets; the next upgrade gets HTTP 503. */
+  maxConnections: number;
+  /**
+   * Browser sessions across the whole server — each can hold a Chromium. A
+   * connection has at most one (launchBrowser replaces it), so this is the cap
+   * that bounds browsers, not a per-connection count.
+   */
+  maxSessions: number;
+  /** Length of an `executeBrowserAction` `actions` array. */
+  maxActionsPerRequest: number;
+  /** Ceilings the wire's launch options are clamped to. */
+  maxTimeoutMs: number;
+  maxRetryAttempts: number;
+  maxRetryDelayMs: number;
+  maxSlowMoMs: number;
+  /** Ping interval; a peer that has not answered the previous ping is terminated. */
+  heartbeatIntervalMs: number;
+}
+
+/**
+ * Sized for the staging container (3 GB, 2 CPUs): a Chromium session costs a few
+ * hundred MB, so four leaves headroom for the server and the egress proxy.
+ */
+export const DEFAULT_SERVER_LIMITS: Readonly<ServerLimits> = Object.freeze({
+  maxPayloadBytes: 1024 * 1024,
+  maxConnections: 16,
+  maxSessions: 4,
+  maxActionsPerRequest: 100,
+  maxTimeoutMs: 120_000,
+  maxRetryAttempts: 5,
+  maxRetryDelayMs: 10_000,
+  maxSlowMoMs: 1_000,
+  heartbeatIntervalMs: 30_000,
+});
+
+/**
  * Start a JSON-RPC 2.0 over WebSocket server on the given port.
  */
 export function startServer(
@@ -96,10 +147,42 @@ export function startServer(
     host?: string;
     allowedOrigins?: string[];
     authToken?: string;
+    /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
+    limits?: Partial<ServerLimits>;
   },
 ): WebSocketServer {
   const host = options?.host ?? '127.0.0.1';
-  const wss = new WebSocketServer({ port, host });
+  const limits: ServerLimits = { ...DEFAULT_SERVER_LIMITS, ...options?.limits };
+  const allowedOrigins = options?.allowedOrigins ?? [];
+  const ActionParams = ExecuteBrowserActionParams.extend({
+    actions: z.array(ActionSchema).max(limits.maxActionsPerRequest).optional(),
+  });
+
+  const wss: WebSocketServer = new WebSocketServer({
+    port,
+    host,
+    maxPayload: limits.maxPayloadBytes,
+    // Every check runs before the upgrade completes, so a refused client never
+    // holds a socket, a message listener or a connection slot (#338). This used
+    // to accept first and close with 1008 after. Synchronous on purpose: the
+    // connection count read here cannot change before ws adds the new client.
+    verifyClient: ({ req }, done) => {
+      // Reject cross-site WebSocket hijacking: a browser page connecting to
+      // localhost sends an Origin header; trusted local tooling sends none.
+      const origin = req.headers.origin;
+      if (origin && !allowedOrigins.includes(origin)) return done(false, 403, 'Origin not allowed');
+      // The token travels in the Authorization header, which a browser page
+      // cannot set on a WebSocket. Absent Origin is NOT treated as trusted: no
+      // token means rejected.
+      if (options?.authToken && !hasValidToken(req.headers.authorization, options.authToken)) {
+        return done(false, 401, 'Unauthorized');
+      }
+      if (wss.clients.size >= limits.maxConnections) {
+        return done(false, 503, 'Connection limit reached');
+      }
+      done(true);
+    },
+  });
   const sessions = new Map<WebSocket, BrowserSession>();
   const sessionTimeout = options?.sessionTimeout || 30 * 60 * 1000; // 30 minutes default
   /** Server start, so `getStatus` can report real uptime rather than a constant (issue #80). */
@@ -117,26 +200,28 @@ export function startServer(
     },
     5 * 60 * 1000,
   ); // Check every 5 minutes
+  cleanupInterval.unref();
 
-  wss.on('connection', (ws, request) => {
-    // Reject cross-site WebSocket hijacking: a browser page connecting to
-    // localhost sends an Origin header; trusted local tooling sends none.
-    const origin = request.headers.origin;
-    const allowedOrigins = options?.allowedOrigins ?? [];
-    if (origin && !allowedOrigins.includes(origin)) {
-      ws.close(1008, 'Origin not allowed');
-      return;
+  // Heartbeat: a half-open peer (vanished without a FIN) otherwise pins its
+  // browser until the idle sweep, ~35 minutes. A peer that has not answered the
+  // previous ping by the next tick is terminated, which fires 'close' and so
+  // the ordinary session cleanup.
+  const alive = new WeakSet<WebSocket>();
+  const heartbeat = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (!alive.has(ws)) {
+        ws.terminate();
+        continue;
+      }
+      alive.delete(ws);
+      ws.ping();
     }
+  }, limits.heartbeatIntervalMs);
+  heartbeat.unref();
 
-    // Require a per-connection bearer token when the server is token-protected.
-    // The token travels in the Authorization header, which a browser page cannot
-    // set on a WebSocket — so this closes the pre-auth hole where an origin-less
-    // (or same-origin) local process could drive the browser unauthenticated.
-    // Absent Origin is NOT treated as trusted: no token means rejected.
-    if (options?.authToken && !hasValidToken(request.headers.authorization, options.authToken)) {
-      ws.close(1008, 'Unauthorized');
-      return;
-    }
+  wss.on('connection', (ws) => {
+    alive.add(ws);
+    ws.on('pong', () => alive.add(ws));
 
     // One gate per connection: sessions are keyed by socket, so ordering only
     // needs to hold within a connection. Scoped to this closure so it dies with
@@ -189,6 +274,7 @@ export function startServer(
               res.error = { code: -32602, message: 'Invalid params' };
               break;
             }
+            const launchOptions = clampLaunchOptions(parsedOptions.data, limits);
             // A missing browser is a setup fault, so report it HERE rather than
             // letting it surface later as the failure of whatever action runs
             // first (issue #194). Cheap on purpose — a path resolve and a stat,
@@ -216,8 +302,22 @@ export function startServer(
               // Tear down any existing session first so its Chromium process
               // isn't orphaned when the map entry is overwritten (issue #69).
               await cleanupSession(ws, sessions);
-              const session = await createBrowserSession(parsedOptions.data);
-              sessions.set(ws, session);
+              // This callback can resume after the socket closed: it waits on
+              // in-flight actions and on the old session's teardown. Its 'close'
+              // cleanup has then already run, so a session set now would hold a
+              // maxSessions slot until the idle sweep.
+              if (ws.readyState !== WebSocket.OPEN) {
+                throw { code: -32000, message: 'Connection closed during launch' };
+              }
+              // Check and insert with no await between them: the map is shared
+              // by every connection, and each connection has its own gate.
+              if (sessions.size >= limits.maxSessions) {
+                throw {
+                  code: -32000,
+                  message: `Session limit reached (${limits.maxSessions}); try again later`,
+                };
+              }
+              sessions.set(ws, createBrowserSession(launchOptions));
               return {
                 success: true,
                 // Says what happened. This used to claim "Browser launched
@@ -230,6 +330,13 @@ export function startServer(
                 // acts should not be holding a Chromium.
                 message: 'Session created; browser starts on the first action',
                 sessionId: getSessionId(ws),
+                // What the session will actually use, after clamping.
+                options: {
+                  timeout: launchOptions.timeout,
+                  retryAttempts: launchOptions.retryAttempts,
+                  retryDelay: launchOptions.retryDelay,
+                  slowMo: launchOptions.browserOptions.slowMo,
+                },
               };
             });
             break;
@@ -255,7 +362,7 @@ export function startServer(
           }
 
           case 'executeBrowserAction': {
-            const parsed = ExecuteBrowserActionParams.safeParse(req.params);
+            const parsed = ActionParams.safeParse(req.params);
             if (!parsed.success) {
               res.error = { code: -32602, message: 'Invalid params' };
               break;
@@ -274,7 +381,13 @@ export function startServer(
                   message: 'No active browser session. Call launchBrowser first.',
                 };
               }
-              return executeBrowserActions(session, instruction, actions, url);
+              return executeBrowserActions(
+                session,
+                instruction,
+                actions,
+                url,
+                limits.maxActionsPerRequest,
+              );
             });
             break;
           }
@@ -331,6 +444,7 @@ export function startServer(
 
   wss.on('close', () => {
     clearInterval(cleanupInterval);
+    clearInterval(heartbeat);
     // Cleanup all sessions
     for (const [ws] of sessions.entries()) {
       cleanupSession(ws, sessions);
@@ -392,11 +506,43 @@ class SessionGate {
 }
 
 /**
- * Create a new browser session with ActionExecutor
+ * Clamp wire launch options to the server's limits (#338). Omitted timings are
+ * filled from the executor defaults first, so a default above an operator's
+ * lower ceiling is clamped too.
  */
-async function createBrowserSession(
-  browserOptions?: ActionExecutorOptions,
-): Promise<BrowserSession> {
+function clampLaunchOptions(
+  options: z.infer<typeof LaunchBrowserOptions>,
+  limits: ServerLimits,
+): ActionExecutorOptions & {
+  timeout: number;
+  retryAttempts: number;
+  retryDelay: number;
+  browserOptions: { slowMo: number };
+} {
+  return {
+    ...options,
+    timeout: Math.min(options.timeout ?? EXECUTOR_DEFAULTS.timeout, limits.maxTimeoutMs),
+    retryAttempts: Math.min(
+      options.retryAttempts ?? EXECUTOR_DEFAULTS.retryAttempts,
+      limits.maxRetryAttempts,
+    ),
+    retryDelay: Math.min(
+      options.retryDelay ?? EXECUTOR_DEFAULTS.retryDelay,
+      limits.maxRetryDelayMs,
+    ),
+    browserOptions: {
+      ...options.browserOptions,
+      headless: true,
+      slowMo: Math.min(options.browserOptions?.slowMo ?? 0, limits.maxSlowMoMs),
+    },
+  };
+}
+
+/**
+ * Create a new browser session with ActionExecutor. Synchronous so the session
+ * cap's check-then-insert has no await in it.
+ */
+function createBrowserSession(browserOptions?: ActionExecutorOptions): BrowserSession {
   const executor = new ActionExecutor(browserOptions);
 
   const session: BrowserSession = {
@@ -415,9 +561,10 @@ async function createBrowserSession(
  */
 async function executeBrowserActions(
   session: BrowserSession,
-  instruction?: string,
-  actions?: Action[],
-  url?: string,
+  instruction: string | undefined,
+  actions: Action[] | undefined,
+  url: string | undefined,
+  maxActions: number,
 ): Promise<{
   success: boolean;
   results: ExecutionResult[];
@@ -427,19 +574,6 @@ async function executeBrowserActions(
 }> {
   try {
     session.lastActivity = Date.now();
-
-    // Create page if needed. Concurrent first actions share one in-flight
-    // createPage() via the cached promise instead of each creating a page
-    // (check-then-act race, issue #69). The promise is cleared once settled so
-    // a failed creation can be retried.
-    if (!session.page) {
-      if (!session.pageCreationPromise) {
-        session.pageCreationPromise = session.executor.createPage().finally(() => {
-          session.pageCreationPromise = null;
-        });
-      }
-      session.page = await session.pageCreationPromise;
-    }
 
     let actionsToExecute: Action[] = [];
     let translationResult = null;
@@ -463,6 +597,44 @@ async function executeBrowserActions(
         translationResult,
         error: 'No actions to execute',
       };
+    }
+
+    // The schema caps a wire `actions` array; this is the only place that sees
+    // what an instruction translated to, and an AI translation has no bound of
+    // its own (#338). Checked before the page exists, so a refusal starts no browser.
+    if (actionsToExecute.length > maxActions) {
+      return {
+        success: false,
+        results: [],
+        translationResult,
+        error: `Instruction translated to ${actionsToExecute.length} actions; the limit is ${maxActions}`,
+      };
+    }
+
+    // The socket may have closed while this action was translating, and its
+    // cleanup has then already run. A page created now would launch a Chromium
+    // that nothing reclaims.
+    if (!session.isActive) {
+      return { success: false, results: [], translationResult, error: 'Session closed' };
+    }
+
+    // Create page if needed. Concurrent first actions share one in-flight
+    // createPage() via the cached promise instead of each creating a page
+    // (check-then-act race, issue #69). The promise is cleared once settled so
+    // a failed creation can be retried.
+    if (!session.page) {
+      if (!session.pageCreationPromise) {
+        session.pageCreationPromise = session.executor.createPage().finally(() => {
+          session.pageCreationPromise = null;
+        });
+      }
+      session.page = await session.pageCreationPromise;
+      // Closed while the browser was starting: cleanup found no browser to
+      // close yet, so close the one that just arrived.
+      if (!session.isActive) {
+        await session.executor.cleanup();
+        return { success: false, results: [], translationResult, error: 'Session closed' };
+      }
     }
 
     // Execute the actions
@@ -528,6 +700,9 @@ async function cleanupSession(
 ): Promise<void> {
   const session = sessions.get(ws);
   if (session) {
+    // Before the await: an action already holding this session checks the flag
+    // before it creates a page, and must see it at once.
+    session.isActive = false;
     try {
       await session.executor.cleanup();
     } catch {

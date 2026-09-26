@@ -83,8 +83,9 @@ ws.on('message', (raw) => {
   process.exit(0);
 });
 
-// An auth failure arrives as a 1008 close rather than an error, because the
-// server accepts the upgrade and then rejects the connection.
+// A refused upgrade (bad token, connection cap) arrives on 'error' as
+// "Unexpected server response: <status>" (#338). This catches a close after
+// the socket was accepted: a server shutting down, or a heartbeat termination.
 ws.on('close', (code, reason) => {
   clearTimeout(timer);
   fail(`connection closed before completing (code ${code}${reason ? `: ${reason}` : ''})`);

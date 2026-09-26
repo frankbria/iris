@@ -88,6 +88,7 @@ __tests__/
 ├── browser-hardening.test.ts      # One launch factory: spawned argv has no --no-sandbox; context hardening; src/ guard (#331)
 ├── egress-proxy.test.ts           # Proxy over real sockets: resolved-address refusals, rebinding pin, positive controls (#336)
 ├── egress-proxy-browser.test.ts   # Hosted Chromium: worker/SharedWorker/WebSocket egress and WebRTC UDP (#336)
+├── protocol-limits.test.ts        # RPC limits over real sockets: payload, connections, sessions, actions, clamps, heartbeat (#338)
 ├── container-config.test.ts       # Compose hardening, seccomp profile, token file + healthcheck (#332)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
@@ -322,6 +323,36 @@ test passes against the very crash it is meant to catch.
 `protocol-robustness.test.ts` spawns `src/cli.ts` through ts-node
 (transpile-only) rather than `dist/`, so it never races the MCP suite's `tsc`.
 
+### RPC Server Limits (issue #338)
+
+`startServer(port, { limits })` takes any subset of `ServerLimits`; the rest come
+from `DEFAULT_SERVER_LIMITS` (src/protocol.ts). `iris connect` exposes the four an
+operator sizes a box by: `--max-payload`, `--max-connections`, `--max-sessions`,
+`--max-actions`.
+
+- **Origin, token and the connection cap run in `verifyClient`**, before the
+  upgrade. A refused client gets HTTP 403 / 401 / 503 and never becomes a
+  `wss.clients` entry. It used to be accepted and closed with `1008`. A test for a
+  refusal listens for `unexpected-response`. Calling `terminate()` there emits
+  `error`, so the test needs an error listener too.
+- **`maxSessions` is server-wide.** A connection has at most one session (launch
+  replaces it). Each connection has its own `SessionGate`, so the gate does not
+  order the shared map. The cap's check and `sessions.set` must stay free of
+  awaits between them, which is why `createBrowserSession` is synchronous.
+- **Timings are clamped, not rejected.** Omitted values are filled from
+  `EXECUTOR_DEFAULTS` (src/executor.ts) first, so an operator ceiling below a
+  default still applies. A `jest.mock('../src/executor')` that loads the protocol
+  must re-export `EXECUTOR_DEFAULTS` (see `protocol-leaks.test.ts`).
+- **Heartbeat tests use `autoPong: false`** on the client, which makes a half-open
+  peer as the server sees it.
+- **Work can outlive its socket.** A queued `launchBrowser` or an in-flight action
+  can resume after the socket's `'close'` cleanup has run. So launch refuses to
+  insert unless the socket is `OPEN`, and an action refuses to create a page once
+  `cleanupSession` has cleared `session.isActive`. Without those, the first leaves
+  a phantom session holding a `maxSessions` slot for 30 minutes, and the second
+  launches a Chromium nothing reclaims. Tests hold the fake Ollama answer to open
+  that window on demand.
+
 ### A Red Suite May Be the Machine, Not the Diff (issue #142)
 
 Before treating a local test failure as a regression, check whether the host was
@@ -462,7 +493,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1449/1450 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1465/1466 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

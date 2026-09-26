@@ -545,6 +545,15 @@ program
     },
   );
 
+/** `iris connect` options; the `max*` ones are server limits (#338). */
+interface ConnectOptions {
+  host?: string;
+  maxPayload?: number;
+  maxConnections?: number;
+  maxSessions?: number;
+  maxActions?: number;
+}
+
 program
   .command('connect')
   .description('Start JSON-RPC/WebSocket server on the given port')
@@ -559,7 +568,20 @@ program
     'Address to bind (default 127.0.0.1; also IRIS_CONNECT_HOST). ' +
       'Only widen this behind a trusted boundary — see the warning below',
   )
-  .action(async (port: number, options: { host?: string }) => {
+  // Server resource limits (#338); an omitted flag keeps DEFAULT_SERVER_LIMITS.
+  .option('--max-payload <bytes>', 'Largest accepted frame (default 1 MiB)', (v) =>
+    parseIntOption(v, { min: 1024, max: 100 * 1024 * 1024, name: 'max-payload' }),
+  )
+  .option('--max-connections <n>', 'Open sockets (default 16)', (v) =>
+    parseIntOption(v, { min: 1, max: 10_000, name: 'max-connections' }),
+  )
+  .option('--max-sessions <n>', 'Browser sessions server-wide (default 4)', (v) =>
+    parseIntOption(v, { min: 1, max: 1000, name: 'max-sessions' }),
+  )
+  .option('--max-actions <n>', 'Actions per executeBrowserAction request (default 100)', (v) =>
+    parseIntOption(v, { min: 1, max: 10_000, name: 'max-actions' }),
+  )
+  .action(async (port: number, options: ConnectOptions) => {
     const { startServer, installProcessErrorPolicy } = await import('./protocol');
     const { randomBytes } = await import('crypto');
     const { readFile } = await import('fs/promises');
@@ -613,7 +635,16 @@ program
     }
     const authToken = suppliedToken || randomBytes(32).toString('hex');
 
-    const wss = startServer(port, { host, authToken });
+    const limits = Object.fromEntries(
+      Object.entries({
+        maxPayloadBytes: options.maxPayload,
+        maxConnections: options.maxConnections,
+        maxSessions: options.maxSessions,
+        maxActionsPerRequest: options.maxActions,
+      }).filter(([, v]) => v !== undefined),
+    );
+
+    const wss = startServer(port, { host, authToken, limits });
     // Wait for the bind before claiming it. `listen` fails asynchronously, so
     // logging straight after startServer() announced a server that then died
     // on an unhandled 'error' event when the port was taken (#330). `once`

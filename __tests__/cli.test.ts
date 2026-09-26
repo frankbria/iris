@@ -69,6 +69,7 @@ describe('CLI Commands', () => {
     expect(startServerSpy).toHaveBeenCalledWith(4000, {
       host: '127.0.0.1',
       authToken: expect.stringMatching(/^[0-9a-f]{64}$/),
+      limits: {}, // no flags: the server's DEFAULT_SERVER_LIMITS apply (#338)
     });
     expect(consoleOutput).toEqual(
       expect.arrayContaining([expect.stringContaining('Authorization: Bearer <token>')]),
@@ -183,6 +184,41 @@ describe('CLI Commands', () => {
       process.env.IRIS_CONNECT_TOKEN = 'supplied-token-value';
       await runCli(['node', 'iris', 'connect']);
       expect(consoleOutput.join('\n')).not.toContain('supplied-token-value');
+    });
+
+    // #338: the operator-facing limits. Only flags actually given are passed, so
+    // everything else falls back to DEFAULT_SERVER_LIMITS in one place.
+    it('passes --max-* flags through as server limits', async () => {
+      await runCli([
+        'node',
+        'iris',
+        'connect',
+        '--max-payload',
+        '65536',
+        '--max-connections',
+        '8',
+        '--max-sessions',
+        '2',
+        '--max-actions',
+        '25',
+      ]);
+      expect((startArgs()[1] as { limits?: object }).limits).toEqual({
+        maxPayloadBytes: 65536,
+        maxConnections: 8,
+        maxSessions: 2,
+        maxActionsPerRequest: 25,
+      });
+    });
+
+    it('rejects a limit of 0 before starting the server', async () => {
+      jest.spyOn(process.stderr, 'write').mockReturnValue(true);
+      jest.spyOn(process, 'exit').mockImplementation(((code: number) => {
+        throw new Error(`exit ${code}`);
+      }) as never);
+      await expect(runCli(['node', 'iris', 'connect', '--max-sessions', '0'])).rejects.toThrow(
+        'exit 1',
+      );
+      expect(protocolModule.startServer).not.toHaveBeenCalled();
     });
 
     it('still generates and prints a token when none is supplied', async () => {

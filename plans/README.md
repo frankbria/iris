@@ -66,7 +66,7 @@ code is the ordering key.
 
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
-| `P0.11` | [#338](https://github.com/frankbria/iris/issues/338) | RPC server: configurable limits | P0.2 (#330) | TODO |
+| `P0.11` | [#338](https://github.com/frankbria/iris/issues/338) | RPC server: configurable limits | P0.2 (#330) | DONE ([#380](https://github.com/frankbria/iris/pull/380)) |
 | `P0.12` | [#240](https://github.com/frankbria/iris/issues/240) | Browser session lifecycle: orphans, crashes, sweeper killing mid-action | P0.2 (#330) | TODO |
 
 **D. AI spend tracking**
@@ -186,6 +186,7 @@ code is the ordering key.
 | `P1.32` | [#311](https://github.com/frankbria/iris/issues/311) | Docs truth pass for the hosted product | P0.3 (#231), P0.45 (#273) | TODO |
 | `P1.33` | [#375](https://github.com/frankbria/iris/issues/375) | Hosted egress: prove WebTransport and QUIC cannot bypass the proxy | P0.9 (#336) | TODO |
 | `P1.34` | [#376](https://github.com/frankbria/iris/issues/376) | Container egress firewall for the hosted deployment | P0.9 (#336), P1.33 (#375) | TODO |
+| `P1.35` | [#379](https://github.com/frankbria/iris/issues/379) | Egress proxy timeouts, configurable popup cap, per-session page cap | P0.11 (#338) | TODO |
 
 ### P2 — Post-launch fast-follow
 
