@@ -221,7 +221,9 @@ closed: anything but unset, `''`, `0` or `false` is on. Under it,
 `assertNavigationAllowed()` forces `blockPrivateHosts: true, allowFile: false`
 over whatever policy its caller passed. The override lives in that one function
 on purpose: the navigate action, the per-request CDP guard and the MCP pre-flight
-all end up there, so no caller has to remember it and none can relax it. Local
+all end up there, so no caller has to remember it and none can relax it. The
+page's WebSocket route (`routeWebSocket`, which CDP Fetch cannot see) is installed
+with every guard, not only under a pin, and refuses whatever that function refuses. Local
 mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
 
 - The protocol suite runs under `IRIS_HOSTED=1`, set at the top of the file. Tests
@@ -395,7 +397,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1391/1392 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1393/1394 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

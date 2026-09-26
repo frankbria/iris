@@ -319,12 +319,13 @@ setting both variables is refused, as is an empty or unreadable file.
 **Hosted mode refuses internal destinations.** With `IRIS_HOSTED=1`, every
 navigation refuses loopback, private, CGNAT, reserved and cloud-metadata hosts,
 and `file:` URLs. That covers RPC sessions, the MCP tool, `run` and `watch`,
-including redirect hops and sub-resources. The variable is read once and cannot be
+including redirect hops, sub-resources and the page's own WebSockets. The variable is read once and cannot be
 relaxed by a client request or a CLI flag. Any value other than unset, empty, `0`
 or `false` turns it on. Without it, local mode keeps loopback reachable so a
 `localhost` dev server can be tested, and `run` / `watch` take
 `--block-private-hosts` to opt into the same refusal. Hostnames that *resolve* to a
-private address are not caught by this check. That needs the hosted egress layer
+private address are not caught by this check, and neither are sockets opened from a
+worker. Both need the hosted egress layer
 ([#336](https://github.com/frankbria/iris/issues/336)).
 
 ### Running it as a container

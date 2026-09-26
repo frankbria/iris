@@ -32,7 +32,7 @@
  */
 
 import type { BrowserContext, CDPSession, Page } from 'playwright';
-import { assertNavigationAllowed, isWithinPinnedOrigin } from './url-policy';
+import { assertNavigationAllowed } from './url-policy';
 import type { UrlPolicyOptions } from './url-policy';
 
 /**
@@ -190,25 +190,23 @@ function toHttpScheme(wsUrl: string): string {
 }
 
 /**
- * Refuse WebSocket connections that leave the pinned origin.
+ * Refuse WebSocket connections the policy refuses: one that leaves the pinned
+ * origin, or one to a host the request guard would block (metadata always;
+ * private hosts under `blockPrivateHosts` or IRIS_HOSTED, #334).
  *
  * Separate from the request guard because CDP's Fetch domain does not cover the
- * WebSocket handshake, so a direct, readable, bidirectional channel off-origin
- * would otherwise be exempt by accident.
+ * WebSocket handshake, so a direct, readable, bidirectional channel would
+ * otherwise be exempt by accident. Page-level only: a worker's socket is not
+ * routed here, which is the egress layer's job (#336).
  */
-async function installWebSocketPin(page: Page, state: GuardState): Promise<void> {
+async function installWebSocketGuard(page: Page, state: GuardState): Promise<void> {
   // Match only the sockets to be refused, so an allowed one is never
-  // intercepted and needs no proxying to keep working.
+  // intercepted and needs no proxying to keep working. The policy is read from
+  // the live state, not a captured parameter: a later install can tighten or
+  // replace it, and a closed-over value would keep enforcing the first one.
   await page.routeWebSocket(
-    (url) => {
-      // Read the pin from the live state, not a captured parameter: a later
-      // install can tighten or replace it, and a closed-over value would keep
-      // enforcing the origin that was pinned first.
-      const pinnedOrigin = state.policy.pinnedOrigin;
-      if (!pinnedOrigin) return false;
-      return !isWithinPinnedOrigin(toHttpScheme(url.toString()), pinnedOrigin);
-    },
-    (ws) => ws.close({ code: 1008, reason: 'blocked: leaves the pinned origin' }),
+    (url) => blockReason(toHttpScheme(url.toString()), state.policy) !== null,
+    (ws) => ws.close({ code: 1008, reason: 'blocked by navigation policy' }),
   );
 }
 
@@ -359,14 +357,8 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   // executor) established.
   const existing = guards.get(page);
   if (existing) {
-    const hadPin = existing.policy.pinnedOrigin;
+    // The WebSocket route reads the live policy, so it follows the merge.
     existing.policy = { ...existing.policy, ...policy };
-    // A merge that introduces a pin still needs the WebSocket route, which the
-    // first install had no reason to add. A merge that *changes* one does not:
-    // the predicate reads the live policy, so it follows the new value.
-    if (!hadPin && existing.policy.pinnedOrigin) {
-      await installWebSocketPin(page, existing);
-    }
     return;
   }
 
@@ -388,9 +380,7 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   page.once('close', () => entryRef.guards.delete(state));
 
   await installFetchGuard(page, state);
-  if (policy.pinnedOrigin) {
-    await installWebSocketPin(page, state);
-  }
+  await installWebSocketGuard(page, state);
 }
 
 /**
