@@ -102,8 +102,9 @@ export interface GuardDecision {
    * `page` — the request named its own frame and was judged by that page's policy.
    * `context-net` — unattributable (a popup's opening request); judged against
    * every guard in the context.
-   * `opener` — a popup's document request (its opening request or a redirect
-   * hop), judged by the browser net against the policy of the page that opened it.
+   * `opener` — a popup's request judged against the policy of the page that
+   * opened it, before the popup has a guard of its own: its documents (opening
+   * request, redirect hops) by the browser net, anything else by the context net.
    */
   attribution: 'page' | 'context-net' | 'opener';
   /** Every policy consulted, in the order consulted. */
@@ -395,10 +396,20 @@ async function installContextNet(context: BrowserContext, entry: ContextEntry): 
       attributable = false;
     }
 
-    // An attributable page with no guard never opted in. Leaving it alone is
-    // the documented contract; policing it with another page's pin would refuse
-    // requests it never agreed to.
-    const policy = attributable ? guards.get(owner as Page)?.policy : undefined;
+    let policy = attributable ? guards.get(owner as Page)?.policy : undefined;
+    // A popup of a guarded page whose own guard is still attaching: judged by
+    // its opener's policy meanwhile, so assets its first document requests
+    // cannot go out in that window (#337).
+    let viaOpener = false;
+    if (owner && !policy) {
+      const opener = await owner.opener().catch(() => null);
+      policy = opener ? guards.get(opener)?.policy : undefined;
+      viaOpener = policy !== undefined;
+    }
+
+    // An attributable page with no guard (and no guarded opener) never opted
+    // in. Leaving it alone is the documented contract; policing it with another
+    // page's pin would refuse requests it never agreed to.
     if (attributable && !policy) {
       await route.continue().catch(() => {});
       return;
@@ -427,7 +438,7 @@ async function installContextNet(context: BrowserContext, entry: ContextEntry): 
     reportDecision({
       url,
       resourceType,
-      attribution: policy ? 'page' : 'context-net',
+      attribution: viaOpener ? 'opener' : policy ? 'page' : 'context-net',
       policies: consulted,
       allowed: reason === null,
       reason,
