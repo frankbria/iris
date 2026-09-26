@@ -102,6 +102,7 @@ describe('URL policy guard', () => {
               `<a id="popup-img" target="_blank" href="/offsite-image">popup-img</a>` +
               `<button id="many" onclick="for (let i = 0; i < ${MAX_POPUPS_PER_CONTEXT + 2}; i++) window.open('/final?popup=' + i)">many</button>` +
               // Opens one popup past the cap, then a popup FROM that one (#337 review).
+              `<button id="blank" onclick="for (let i = 0; i < ${MAX_POPUPS_PER_CONTEXT}; i++) window.open('/final?popup=' + i); window.open()">blank</button>` +
               `<button id="nested" onclick="let w; for (let i = 0; i <= ${MAX_POPUPS_PER_CONTEXT}; i++) w = window.open('/final?popup=' + i); w.open('/to-offsite-tab')">nested</button>`,
           ),
         );
@@ -740,6 +741,18 @@ describe('URL policy guard', () => {
 
       expect(requestLog).toContain('/offsite-image');
       expect(offsiteLog).not.toContain('/early.gif');
+    }, 60_000);
+
+    it('closes an over-cap popup that never makes a request', async () => {
+      // window.open() with no URL stays on about:blank, so the browser net never
+      // pauses a request for it; its guard install is what closes it.
+      await installUrlPolicyGuard(p, {});
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      await p.click('#blank');
+      await p.waitForTimeout(3000);
+
+      expect(context.pages()).toHaveLength(1 + MAX_POPUPS_PER_CONTEXT);
     }, 60_000);
 
     it('does not let an over-cap popup open popups of its own', async () => {

@@ -266,9 +266,11 @@ Constraints that are easy to break:
 - Do not hold a popup's opening request until the `page` event: the event waits
   for that request, so it deadlocks.
 - Live popups per guarded context are capped (`MAX_POPUPS_PER_CONTEXT`). An
-  over-cap popup has its requests refused by the browser net and is closed via
-  `page.close()` from its guard install. `Target.closeTarget` while Playwright is
-  still attaching stalled the opening click in 2 of 3 runs.
+  over-cap popup is still registered (so popups opened *through* it find a guarded
+  opener and hit the cap too), its requests are refused, and the browser net closes
+  it right after refusing its first request. Never `Target.closeTarget` at
+  `targetCreated`: closing a target Playwright is still attaching to stalled the
+  opening click in 2 of 3 runs. Its guard install also closes it (`page.close()`).
 - A pinned origin now refuses **every** cross-origin request, images and fonts
   included: an image URL is a write channel for a filled-in secret. The explicit
   allowance is `--allow-cross-origin`.
@@ -460,7 +462,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1446/1447 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1449/1450 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation
