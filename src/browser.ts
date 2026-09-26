@@ -1,5 +1,7 @@
 import * as fs from 'fs';
 import { Browser, BrowserContext, BrowserContextOptions, chromium, Page } from 'playwright';
+import { hostedEgressProxy } from './egress-proxy';
+import { isHostedMode } from './hosted';
 
 /**
  * Is a Chromium binary actually on disk? A path resolve and a stat — no process
@@ -62,18 +64,36 @@ const HARDENED_CONTEXT_OPTIONS = {
  * and `iris watch` run themselves. Nothing is orphaned without them — Chromium
  * exits when its `--remote-debugging-pipe` parent goes away.
  *
+ * Under IRIS_HOSTED, all traffic goes through the egress proxy and WebRTC
+ * sends no unproxied UDP (#336).
+ *
  * @throws a message naming `npx playwright install chromium` when the browser
  * binary is missing (issue #79), or naming the opt-out when the host cannot
  * sandbox Chromium (issue #331).
  */
 export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise<Browser> {
+  const args: string[] = [];
+  // Playwright >=1.61 removed the deprecated `devtools` launch option; this
+  // Chromium arg is its documented equivalent.
+  if (options.devtools) args.push('--auto-open-devtools-for-tabs');
+
+  // Hosted: every connection goes through the egress proxy, which vets the
+  // resolved address (#336). `<-loopback>` is spelled out rather than left to
+  // Playwright, which drops it when PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK
+  // is set — and Chromium's implicit rule sends loopback direct, past the proxy.
+  // WebRTC's UDP is the one channel that cannot be proxied, so it is switched off.
+  let proxy: { server: string; bypass: string } | undefined;
+  if (isHostedMode()) {
+    proxy = { server: (await hostedEgressProxy()).url, bypass: '<-loopback>' };
+    args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
+  }
+
   try {
     return await chromium.launch({
       headless: options.headless ?? true,
       slowMo: options.slowMo ?? 0,
-      // Playwright >=1.61 removed the deprecated `devtools` launch option; this
-      // Chromium arg is its documented equivalent.
-      args: options.devtools ? ['--auto-open-devtools-for-tabs'] : [],
+      args,
+      proxy,
       chromiumSandbox: process.env.IRIS_CHROMIUM_SANDBOX !== '0',
       handleSIGINT: false,
       handleSIGTERM: false,
