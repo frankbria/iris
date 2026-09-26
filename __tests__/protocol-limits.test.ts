@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { AddressInfo } from 'net';
 import { startServer, JsonRpcResponse, ServerLimits, DEFAULT_SERVER_LIMITS } from '../src/protocol';
+import { ActionExecutor } from '../src/executor';
 
 /**
  * Server-side resource limits (#338), each exercised over a real socket.
@@ -193,11 +194,19 @@ describe('maxActionsPerRequest on the instruction path', () => {
   // another provider.
   const saved = { HOME: process.env.HOME, OLLAMA_ENDPOINT: process.env.OLLAMA_ENDPOINT };
   let provider: http.Server;
+  /** When set, the provider holds its answer until this settles and reports arrival. */
+  let hold: { released: Promise<void>; arrived: () => void; answered: () => void } | null = null;
 
   beforeAll(async () => {
     const click = { type: 'click', selector: '#x' };
-    provider = http.createServer((req, res) => {
+    provider = http.createServer(async (req, res) => {
       req.resume();
+      const held = hold;
+      if (held) {
+        held.arrived();
+        await held.released;
+        res.on('finish', held.answered);
+      }
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ response: JSON.stringify({ actions: [click, click, click] }) }));
     });
@@ -225,6 +234,92 @@ describe('maxActionsPerRequest on the instruction path', () => {
     expect(res.result.translationResult.actions).toHaveLength(3);
     // Refused before the page: no browser was started for it.
     expect((await call(ws, 'getBrowserStatus')).result.hasPage).toBe(false);
+  });
+
+  // A launch queued behind an in-flight action resumes only when the action
+  // settles. If the socket closed meanwhile, its 'close' cleanup has already run,
+  // so a session inserted then would hold a maxSessions slot until the 30-minute
+  // idle sweep. The held provider answer keeps the action in flight on demand.
+  test('a launch that resumes after its socket closed inserts no session', async () => {
+    const url = await serve({ maxActionsPerRequest: 2, maxSessions: 1 });
+    const a = await open(url);
+    await call(a, 'launchBrowser');
+
+    let release!: () => void;
+    let arrived!: () => void;
+    let answered!: () => void;
+    const arrival = new Promise<void>((r) => (arrived = r));
+    const answer = new Promise<void>((r) => (answered = r));
+    hold = { released: new Promise<void>((r) => (release = r)), arrived, answered };
+    try {
+      a.send(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'executeBrowserAction',
+          params: { instruction: 'do three things please' },
+        }),
+      );
+      await arrival; // the action is in flight, holding the gate open for readers
+      a.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'launchBrowser' })); // queued writer
+      a.close();
+      await eventually(() => servers[0].clients.size === 0); // 'close' cleanup has run
+    } finally {
+      hold = null;
+      release();
+    }
+    await answer;
+
+    // The action settles on its refusal, then the queued launch runs. Several
+    // round trips give it every chance to land a phantom session.
+    const b = await open(url);
+    for (let i = 0; i < 5; i++) {
+      expect((await call(b, 'getStatus')).result.activeSessions).toBe(0);
+    }
+    expect((await call(b, 'launchBrowser')).result.success).toBe(true);
+  });
+
+  // Same interleaving, reader side: an action whose socket closes mid-flight used
+  // to go on to createPage() on an executor whose cleanup had already run,
+  // launching a Chromium that no map entry or sweep would ever reclaim. The spy
+  // calls through; it only counts.
+  test('an action that resumes after its socket closed starts no browser', async () => {
+    const createPage = jest.spyOn(ActionExecutor.prototype, 'createPage');
+    try {
+      const url = await serve(); // 3 actions fit the default cap, so it would go on to the page
+      const a = await open(url);
+      await call(a, 'launchBrowser');
+
+      let release!: () => void;
+      let arrived!: () => void;
+      let answered!: () => void;
+      const arrival = new Promise<void>((r) => (arrived = r));
+      const answer = new Promise<void>((r) => (answered = r));
+      hold = { released: new Promise<void>((r) => (release = r)), arrived, answered };
+      try {
+        a.send(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'executeBrowserAction',
+            params: { instruction: 'do three things please' },
+          }),
+        );
+        await arrival;
+        a.close();
+        await eventually(() => servers[0].clients.size === 0);
+      } finally {
+        hold = null;
+        release();
+      }
+      await answer;
+
+      const b = await open(url);
+      for (let i = 0; i < 5; i++) await call(b, 'getStatus');
+      expect(createPage).not.toHaveBeenCalled();
+    } finally {
+      createPage.mockRestore();
+    }
   });
 });
 

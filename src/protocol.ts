@@ -302,6 +302,13 @@ export function startServer(
               // Tear down any existing session first so its Chromium process
               // isn't orphaned when the map entry is overwritten (issue #69).
               await cleanupSession(ws, sessions);
+              // This callback can resume after the socket closed: it waits on
+              // in-flight actions and on the old session's teardown. Its 'close'
+              // cleanup has then already run, so a session set now would hold a
+              // maxSessions slot until the idle sweep.
+              if (ws.readyState !== WebSocket.OPEN) {
+                throw { code: -32000, message: 'Connection closed during launch' };
+              }
               // Check and insert with no await between them: the map is shared
               // by every connection, and each connection has its own gate.
               if (sessions.size >= limits.maxSessions) {
@@ -604,6 +611,13 @@ async function executeBrowserActions(
       };
     }
 
+    // The socket may have closed while this action was translating, and its
+    // cleanup has then already run. A page created now would launch a Chromium
+    // that nothing reclaims.
+    if (!session.isActive) {
+      return { success: false, results: [], translationResult, error: 'Session closed' };
+    }
+
     // Create page if needed. Concurrent first actions share one in-flight
     // createPage() via the cached promise instead of each creating a page
     // (check-then-act race, issue #69). The promise is cleared once settled so
@@ -615,6 +629,12 @@ async function executeBrowserActions(
         });
       }
       session.page = await session.pageCreationPromise;
+      // Closed while the browser was starting: cleanup found no browser to
+      // close yet, so close the one that just arrived.
+      if (!session.isActive) {
+        await session.executor.cleanup();
+        return { success: false, results: [], translationResult, error: 'Session closed' };
+      }
     }
 
     // Execute the actions
@@ -680,6 +700,9 @@ async function cleanupSession(
 ): Promise<void> {
   const session = sessions.get(ws);
   if (session) {
+    // Before the await: an action already holding this session checks the flag
+    // before it creates a page, and must see it at once.
+    session.isActive = false;
     try {
       await session.executor.cleanup();
     } catch {

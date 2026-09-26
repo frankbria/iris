@@ -345,6 +345,13 @@ operator sizes a box by: `--max-payload`, `--max-connections`, `--max-sessions`,
   must re-export `EXECUTOR_DEFAULTS` (see `protocol-leaks.test.ts`).
 - **Heartbeat tests use `autoPong: false`** on the client, which makes a half-open
   peer as the server sees it.
+- **Work can outlive its socket.** A queued `launchBrowser` or an in-flight action
+  can resume after the socket's `'close'` cleanup has run. So launch refuses to
+  insert unless the socket is `OPEN`, and an action refuses to create a page once
+  `cleanupSession` has cleared `session.isActive`. Without those, the first leaves
+  a phantom session holding a `maxSessions` slot for 30 minutes, and the second
+  launches a Chromium nothing reclaims. Tests hold the fake Ollama answer to open
+  that window on demand.
 
 ### A Red Suite May Be the Machine, Not the Diff (issue #142)
 
@@ -486,7 +493,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1463/1464 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1465/1466 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation
