@@ -144,3 +144,21 @@ Write/Edit, not as a pre-push afterthought.
 - The codex path was already in memory (nvm v24.12.0) and I still guessed another
   version first. Read the memory note before invoking the fallback.
 
+
+## 2026-09-26 — RPC server limits (PR #380)
+- Run mutation checks *after* a cross-family reviewer finishes, or in a worktree. opencode reads
+  the live working tree, saw the scripted mutations mid-review, and spent effort flagging
+  "uncommitted edits that must not ship".
+- An unquoted heredoc (`<<EOF`) around a Python edit makes bash run every backtick in the
+  replacement text. A PR-body edit silently lost a `` `file.ts` `` span that way. Quote the
+  delimiter (`<<'EOF'`) and pass shell values through the environment.
+- `gh issue comment` has no `--jq`. With `2>/dev/null` the usage error vanished, and the comment
+  looked posted when it was not. Never silence stderr on a write to GitHub; read back the URL.
+- A string-anchored edit applied after prettier can match twice: two tests ending in the same
+  three lines. Anchor on something unique to the target test, and assert the count.
+- A RED run for a "browser leaked after close" bug hangs Jest: the orphaned Chromium keeps the
+  worker alive. Run such REDs with `timeout ... --forceExit`, then check for stray `chrome`
+  processes by PID.
+- Moving auth into `verifyClient` turns a refusal from a 1008 close into an HTTP status. Every
+  consumer of the old signal (tests, healthcheck comment, README) had to move with it; grep for
+  the close code before changing the refusal path.
