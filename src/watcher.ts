@@ -29,6 +29,8 @@ export interface WatchOptions {
   browserTimeout?: number; // Browser operation timeout (default: 30000)
   retryAttempts?: number; // Retry attempts for failed actions (default: 2)
   retryDelay?: number; // Delay between retries (default: 1000)
+  /** Refuse loopback, private and reserved hosts (default: false; forced on by IRIS_HOSTED). */
+  blockPrivateHosts?: boolean;
   // AI feedback mode options
   /** Classify what changed on screen instead of replaying an instruction. */
   feedback?: boolean;
@@ -143,6 +145,7 @@ export class FileWatcher {
       browserTimeout: options.browserTimeout ?? 30000,
       retryAttempts: options.retryAttempts ?? 2,
       retryDelay: options.retryDelay ?? 1000,
+      blockPrivateHosts: options.blockPrivateHosts ?? false,
       feedback: options.feedback ?? false,
       feedbackUrl: options.feedbackUrl ?? '',
       maxAiCalls: options.maxAiCalls ?? DEFAULT_MAX_AI_CALLS,
@@ -755,7 +758,7 @@ export class FileWatcher {
         },
         // The watcher renders the changed local file, so file:// navigation is
         // expected and opted in here (blocked by default everywhere else).
-        urlPolicy: { allowFile: true },
+        urlPolicy: { allowFile: true, blockPrivateHosts: this.options.blockPrivateHosts },
       };
 
       this.executor = new ActionExecutor(executorOptions);
@@ -873,6 +876,7 @@ export interface WatchExecutionOptions {
   execute?: boolean;
   /** Suppress narration; errors still print. Threaded to the watcher's logger. */
   quiet?: boolean;
+  blockPrivateHosts?: boolean;
   headless?: boolean;
   browserTimeout?: number;
   retryAttempts?: number;
@@ -938,6 +942,9 @@ export async function watchFiles(
     }
     if (executionOptions.quiet !== undefined) {
       options.quiet = executionOptions.quiet;
+    }
+    if (executionOptions.blockPrivateHosts !== undefined) {
+      options.blockPrivateHosts = executionOptions.blockPrivateHosts;
     }
     if (executionOptions.headless !== undefined) {
       options.headless = executionOptions.headless;

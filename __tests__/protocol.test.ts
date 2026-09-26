@@ -1,14 +1,21 @@
 import WebSocket from 'ws';
 import http from 'http';
+import { AddressInfo } from 'net';
 import { startServer, JsonRpcResponse } from '../src/protocol';
+
+// The suite runs under the hosted URL policy, the one the RPC server ships with
+// (#334). IRIS_HOSTED is read on first navigation, so setting it here, before any
+// test runs, is enough. The "local mode" block below loads its own copy of the
+// server with the variable unset.
+process.env.IRIS_HOSTED = '1';
 
 describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
   let wss: ReturnType<typeof startServer>;
   const port = 5000;
 
-  // Ephemeral localhost page server. data:/file: navigation is now blocked by the
-  // URL policy, so integration tests navigate to a real http://127.0.0.1 page
-  // (loopback is allowed by default) instead of a data: URL.
+  // Ephemeral localhost page server. data:/file: navigation is blocked by the URL
+  // policy, and so is loopback under the hosted policy: only the local-mode block
+  // below can actually reach it.
   let pageServer: http.Server;
   let pageUrl: string;
 
@@ -45,9 +52,9 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
     });
   }
 
-  function createPersistentConnection(): Promise<WebSocket> {
+  function createPersistentConnection(serverPort = port): Promise<WebSocket> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`ws://localhost:${port}`);
+      const ws = new WebSocket(`ws://localhost:${serverPort}`);
       ws.on('open', () => resolve(ws));
       ws.on('error', reject);
     });
@@ -214,137 +221,50 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
       expect(res.error!.message).toBe('No active browser session');
     });
 
-    test('full browser automation workflow', async () => {
-      const ws = await createPersistentConnection();
-
-      try {
-        // 1. Launch browser
-        const launchReq = { jsonrpc: '2.0', id: 20, method: 'launchBrowser' };
-        const launchRes = await sendRequestViaConnection(ws, launchReq);
-        expect(launchRes.id).toBe(20);
-        // Issue #194: the message no longer claims a browser was launched,
-        // because launchBrowser does not launch one. createBrowserSession
-        // constructs an ActionExecutor and returns page: null; Chromium starts
-        // lazily on the first action. The laziness is deliberate — a client that
-        // never acts should not hold a browser — so the claim was fixed, not the
-        // behaviour.
-        expect(launchRes.result).toEqual({
-          success: true,
-          message: expect.stringMatching(/session created/i),
-          sessionId: expect.any(String),
-        });
-        expect(launchRes.result.message).not.toMatch(/launched/i);
-
-        // 2. Check browser status
-        const statusReq = { jsonrpc: '2.0', id: 21, method: 'getBrowserStatus' };
-        const statusRes = await sendRequestViaConnection(ws, statusReq);
-        expect(statusRes.id).toBe(21);
-        expect(statusRes.result).toEqual({
-          isActive: true,
-          hasPage: false,
-          lastActivity: expect.any(Number),
-        });
-
-        // 3. Execute browser action (this will create a page)
-        const actionReq = {
-          jsonrpc: '2.0',
-          id: 22,
-          method: 'executeBrowserAction',
-          params: {
-            instruction: `navigate to ${pageUrl}`,
-          },
-        };
-        const actionRes = await sendRequestViaConnection(ws, actionReq);
-        expect(actionRes.id).toBe(22);
-        expect(actionRes.result).toEqual({
-          success: expect.any(Boolean),
-          results: expect.any(Array),
-          translationResult: expect.any(Object),
-        });
-
-        // 4. Check browser status after action
-        const statusReq2 = { jsonrpc: '2.0', id: 23, method: 'getBrowserStatus' };
-        const statusRes2 = await sendRequestViaConnection(ws, statusReq2);
-        expect(statusRes2.id).toBe(23);
-        expect(statusRes2.result).toEqual({
-          isActive: true,
-          hasPage: true,
-          lastActivity: expect.any(Number),
-          context: expect.any(Object),
-        });
-
-        // 5. Close browser
-        const closeReq = { jsonrpc: '2.0', id: 24, method: 'closeBrowser' };
-        const closeRes = await sendRequestViaConnection(ws, closeReq);
-        expect(closeRes.id).toBe(24);
-        expect(closeRes.result).toEqual({
-          success: true,
-          message: 'Browser closed successfully',
-        });
-
-        // 6. Verify browser status after close
-        const statusReq3 = { jsonrpc: '2.0', id: 25, method: 'getBrowserStatus' };
-        const statusRes3 = await sendRequestViaConnection(ws, statusReq3);
-        expect(statusRes3.id).toBe(25);
-        expect(statusRes3.result).toEqual({
-          isActive: false,
-          hasPage: false,
-          lastActivity: 0,
-        });
-      } finally {
-        ws.close();
-      }
-    }, 30000); // 30 second timeout for this test
-
-    test('executeBrowserAction with direct actions parameter', async () => {
-      const ws = await createPersistentConnection();
-
-      try {
-        // Launch browser
-        const launchReq = { jsonrpc: '2.0', id: 30, method: 'launchBrowser' };
-        await sendRequestViaConnection(ws, launchReq);
-
-        // Execute with direct actions (use data: URL for faster test)
-        const actionReq = {
-          jsonrpc: '2.0',
-          id: 31,
-          method: 'executeBrowserAction',
-          params: {
-            actions: [
-              { type: 'navigate', url: pageUrl },
-              { type: 'click', selector: '#button' },
-            ],
-          },
-        };
-        const actionRes = await sendRequestViaConnection(ws, actionReq);
-        expect(actionRes.id).toBe(31);
-        expect(actionRes.result).toEqual({
-          success: expect.any(Boolean),
-          results: expect.arrayContaining([
-            expect.objectContaining({
-              action: { type: 'navigate', url: expect.stringContaining('127.0.0.1') },
-              success: expect.any(Boolean),
-            }),
-            expect.objectContaining({
-              action: { type: 'click', selector: '#button' },
-              success: expect.any(Boolean),
-            }),
-          ]),
-          translationResult: null,
-        });
-
-        // Close browser
-        const closeReq = { jsonrpc: '2.0', id: 32, method: 'closeBrowser' };
-        await sendRequestViaConnection(ws, closeReq);
-      } finally {
-        ws.close();
-      }
-    }, 30000);
-
     // Note: the redirect-SSRF guard (a 30x to a metadata host is aborted by the
     // per-request route) is covered deterministically in executor.test.ts — whether
     // page.goto rejects after an aborted redirect is browser/env-dependent, so it is
     // not asserted here.
+
+    test('refuses internal hosts under the hosted policy, whatever urlPolicy the client sends (#334)', async () => {
+      const ws = await createPersistentConnection();
+
+      try {
+        await sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 60,
+          method: 'launchBrowser',
+          params: {
+            options: { timeout: 4000, retryAttempts: 0, urlPolicy: { blockPrivateHosts: false } },
+          },
+        });
+
+        // 100.64.0.0 rather than an arbitrary CGNAT host: see the #329 hygiene allowlist.
+        const targets = [
+          'http://127.0.0.1/',
+          'http://10.0.0.1/',
+          'http://100.64.0.0/',
+          'http://169.254.169.254/',
+          pageUrl,
+        ];
+        for (const [i, url] of targets.entries()) {
+          const actionRes = await sendRequestViaConnection(ws, {
+            jsonrpc: '2.0',
+            id: 61 + i,
+            method: 'executeBrowserAction',
+            params: { actions: [{ type: 'navigate', url }] },
+          });
+          expect(actionRes.result.results[0]).toMatchObject({
+            success: false,
+            error: expect.stringMatching(/Navigation blocked/),
+          });
+        }
+
+        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 69, method: 'closeBrowser' });
+      } finally {
+        ws.close();
+      }
+    }, 30000);
 
     test('launchBrowser ignores a client-supplied urlPolicy (cannot re-enable file://)', async () => {
       const ws = await createPersistentConnection();
@@ -648,5 +568,140 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
         ws.close();
       }
     });
+  });
+  describe('local mode (IRIS_HOSTED unset)', () => {
+    let localWss: ReturnType<typeof startServer>;
+    let localPort: number;
+
+    beforeAll(async () => {
+      // A separate module registry, with the switch read while it is unset, so
+      // this server keeps today's permissive default and reaches the loopback page.
+      delete process.env.IRIS_HOSTED;
+      try {
+        jest.isolateModules(() => {
+          (require('../src/hosted') as typeof import('../src/hosted')).isHostedMode();
+          const local = require('../src/protocol') as typeof import('../src/protocol');
+          localWss = local.startServer(0);
+        });
+      } finally {
+        process.env.IRIS_HOSTED = '1';
+      }
+      await new Promise<void>((resolve) => localWss.once('listening', () => resolve()));
+      localPort = (localWss.address() as AddressInfo).port;
+    });
+
+    afterAll((done) => {
+      localWss.close(() => done());
+    });
+
+    test('full browser automation workflow', async () => {
+      const ws = await createPersistentConnection(localPort);
+
+      try {
+        // 1. Launch browser
+        const launchReq = { jsonrpc: '2.0', id: 20, method: 'launchBrowser' };
+        const launchRes = await sendRequestViaConnection(ws, launchReq);
+        expect(launchRes.id).toBe(20);
+        // Issue #194: the message no longer claims a browser was launched,
+        // because launchBrowser does not launch one. createBrowserSession
+        // constructs an ActionExecutor and returns page: null; Chromium starts
+        // lazily on the first action. The laziness is deliberate — a client that
+        // never acts should not hold a browser — so the claim was fixed, not the
+        // behaviour.
+        expect(launchRes.result).toEqual({
+          success: true,
+          message: expect.stringMatching(/session created/i),
+          sessionId: expect.any(String),
+        });
+        expect(launchRes.result.message).not.toMatch(/launched/i);
+
+        // 2. Check browser status
+        const statusReq = { jsonrpc: '2.0', id: 21, method: 'getBrowserStatus' };
+        const statusRes = await sendRequestViaConnection(ws, statusReq);
+        expect(statusRes.id).toBe(21);
+        expect(statusRes.result).toEqual({
+          isActive: true,
+          hasPage: false,
+          lastActivity: expect.any(Number),
+        });
+
+        // 3. Execute browser action (this will create a page)
+        const actionReq = {
+          jsonrpc: '2.0',
+          id: 22,
+          method: 'executeBrowserAction',
+          params: {
+            instruction: `navigate to ${pageUrl}`,
+          },
+        };
+        const actionRes = await sendRequestViaConnection(ws, actionReq);
+        expect(actionRes.id).toBe(22);
+        expect(actionRes.result).toEqual({
+          success: expect.any(Boolean),
+          results: expect.any(Array),
+          translationResult: expect.any(Object),
+        });
+
+        // 4. Check browser status after action
+        const statusReq2 = { jsonrpc: '2.0', id: 23, method: 'getBrowserStatus' };
+        const statusRes2 = await sendRequestViaConnection(ws, statusReq2);
+        expect(statusRes2.id).toBe(23);
+        expect(statusRes2.result).toEqual({
+          isActive: true,
+          hasPage: true,
+          lastActivity: expect.any(Number),
+          context: expect.any(Object),
+        });
+
+        // 5. Close browser
+        const closeReq = { jsonrpc: '2.0', id: 24, method: 'closeBrowser' };
+        const closeRes = await sendRequestViaConnection(ws, closeReq);
+        expect(closeRes.id).toBe(24);
+        expect(closeRes.result).toEqual({
+          success: true,
+          message: 'Browser closed successfully',
+        });
+
+        // 6. Verify browser status after close
+        const statusReq3 = { jsonrpc: '2.0', id: 25, method: 'getBrowserStatus' };
+        const statusRes3 = await sendRequestViaConnection(ws, statusReq3);
+        expect(statusRes3.id).toBe(25);
+        expect(statusRes3.result).toEqual({
+          isActive: false,
+          hasPage: false,
+          lastActivity: 0,
+        });
+      } finally {
+        ws.close();
+      }
+    }, 30000); // 30 second timeout for this test
+
+    test('navigates to a loopback page and clicks on it', async () => {
+      const ws = await createPersistentConnection(localPort);
+
+      try {
+        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 90, method: 'launchBrowser' });
+        const actionRes = await sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 91,
+          method: 'executeBrowserAction',
+          params: {
+            actions: [
+              { type: 'navigate', url: pageUrl },
+              { type: 'click', selector: '#button' },
+            ],
+          },
+        });
+        expect(actionRes.result.success).toBe(true);
+        expect(actionRes.result.results.map((r: { success: boolean }) => r.success)).toEqual([
+          true,
+          true,
+        ]);
+
+        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 92, method: 'closeBrowser' });
+      } finally {
+        ws.close();
+      }
+    }, 30000);
   });
 });

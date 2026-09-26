@@ -389,6 +389,22 @@ describe('FileWatcher', () => {
       expect(typeof watcher['initializeBrowserSession']).toBe('function');
     });
 
+    it('threads --block-private-hosts into the executor URL policy (#334)', async () => {
+      const { ActionExecutor } = require('../src/executor');
+      await new FileWatcher({ execute: true, blockPrivateHosts: true })[
+        'initializeBrowserSession'
+      ]();
+      expect(ActionExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({ urlPolicy: { allowFile: true, blockPrivateHosts: true } }),
+      );
+
+      ActionExecutor.mockClear();
+      await new FileWatcher({ execute: true })['initializeBrowserSession']();
+      expect(ActionExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({ urlPolicy: { allowFile: true, blockPrivateHosts: false } }),
+      );
+    });
+
     it('should include browser session status in getStatus', () => {
       const watcher = new FileWatcher({ execute: true });
 
