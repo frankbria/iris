@@ -238,7 +238,7 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   `data:` pages. The MCP tool passes `{}`. Hosted mode overrides all of them.
 - Under `jest --coverage`, a *function* passed to `page.evaluate` fails in the
   browser with `cov_* is not defined`. Pass a string expression, as
-  `src/visual/capture.ts` does, or exclude the module from coverage as the a11y
+  `src/visual/capture.ts` does (also for `waitForFunction`), or exclude the module from coverage as the a11y
   modules are.
 - Not covered here: hostnames that resolve to private addresses (#336).
 
@@ -404,7 +404,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1405/1406 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1406/1407 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

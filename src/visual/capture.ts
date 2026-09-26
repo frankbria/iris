@@ -166,13 +166,10 @@ export class VisualCaptureEngine {
     // Wait for network to be idle
     await page.waitForLoadState('networkidle');
 
-    // Wait for fonts to load
-    await page.waitForFunction(() => {
-      if (document.fonts && document.fonts.ready) {
-        return document.fonts.ready.then(() => true);
-      }
-      return true;
-    });
+    // Wait for fonts to load. A string for the same reason as VIEWPORT_EXPRESSION.
+    await page.waitForFunction(
+      'document.fonts && document.fonts.ready ? document.fonts.ready.then(() => true) : true',
+    );
 
     // Additional stabilization delay
     await page.waitForTimeout(stabilizeMs);
