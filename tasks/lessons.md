@@ -84,3 +84,18 @@ Write/Edit, not as a pre-push afterthought.
 - The CLAUDE.md test count went stale twice in one PR. Update it in the last commit before merge.
 - Every push cancels the in-flight CI GLM review and leaves a "did not complete" comment.
   Batch fix commits into one push where possible.
+
+## 2026-09-26 — hosted URL policy (PR #372)
+- `cmd 2>&1 > file` sends stderr to the terminal and only stdout to the file. Jest writes its
+  summary to stderr, so the log had coverage but no pass/fail counts. Use `> file 2>&1`.
+- Only run `prettier --write` on files inside the `format:check` globs. `jest.setup.ts` is
+  outside them and not prettier-clean, so one list entry turned into a 63-line reformat.
+- A "touch the file until it reacts" loop that writes faster than the watcher's debounce keeps
+  resetting the timer and never fires. Wait for ready, then write at intervals above the debounce.
+- Playwright's `routeWebSocket` hooks new documents. `page.setContent()` makes none, so a socket
+  opened after it is not routed. Navigate first, then exercise the route.
+- A per-caller guard misses callers. Before calling a policy "enforced everywhere", grep for raw
+  `page.goto`/`navigate(` and for every channel the interception layer cannot see (file://, WS).
+  The internal review caught `watch`, and the CI GLM caught unpinned WebSockets.
+- `gh pr edit --body-file` fails on the Projects-classic deprecation error. Use
+  `gh api -X PATCH repos/<o>/<r>/pulls/<n> -F body=@file` instead.
