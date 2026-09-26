@@ -207,6 +207,7 @@ describe('maxActionsPerRequest on the instruction path', () => {
   });
 
   afterAll(async () => {
+    fs.rmSync(process.env.HOME as string, { recursive: true, force: true });
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
