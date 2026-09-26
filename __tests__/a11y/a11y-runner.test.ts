@@ -67,11 +67,18 @@ describe('AccessibilityRunner', () => {
       goto: jest.fn().mockResolvedValue(undefined),
       evaluate: jest.fn().mockResolvedValue([]),
       close: jest.fn().mockResolvedValue(undefined),
+      // What installUrlPolicyGuard touches: the runner always installs it (#335).
+      context: () => mockContext,
+      once: jest.fn(),
+      routeWebSocket: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     // Mock Playwright BrowserContext
     mockContext = {
       newPage: jest.fn().mockResolvedValue(mockPage),
+      newCDPSession: jest.fn().mockResolvedValue({ send: jest.fn(), on: jest.fn() }),
+      route: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn(),
       close: jest.fn().mockResolvedValue(undefined),
     } as any;
 

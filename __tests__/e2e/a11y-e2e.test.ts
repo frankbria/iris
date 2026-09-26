@@ -110,10 +110,8 @@ describe('Accessibility CLI E2E Tests', () => {
         </html>
       `;
 
-      await page.setContent(html);
-
       const config: AccessibilityRunnerConfig = {
-        pages: [await page.url()],
+        pages: ['data:text/html,' + encodeURIComponent(html)],
         axe: {
           rules: {},
           tags: ['wcag2a', 'wcag2aa'],

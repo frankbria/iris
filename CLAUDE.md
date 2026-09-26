@@ -218,8 +218,8 @@ file because compose interprets `${...}` in an inline script as its own syntax.
 
 `IRIS_HOSTED` is read once by `isHostedMode()` (src/hosted.ts), memoized, and fails
 closed: anything but unset, `''`, `0` or `false` is on. Under it,
-`assertNavigationAllowed()` forces `blockPrivateHosts: true, allowFile: false`
-over whatever policy its caller passed. The override lives in that one function
+`assertNavigationAllowed()` forces `blockPrivateHosts: true, allowFile: false,
+allowData: false` over whatever policy its caller passed. The override lives in that one function
 on purpose: the navigate action, the per-request CDP guard and the MCP pre-flight
 all end up there, so no caller has to remember it and none can relax it. The
 page's WebSocket route (`routeWebSocket`, which CDP Fetch cannot see) is installed
@@ -232,8 +232,15 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
 - The switch is memoized per module registry. A test that needs it on or off has
   to read it inside `jest.isolateModules`, or spawn a process with the variable set.
   Setting `process.env` after the first read does nothing.
-- Not covered here: the visual and a11y runners (#335) and hostnames that resolve
-  to private addresses (#336).
+- The visual and a11y runners install the guard on every page before navigating
+  (#335). Visual passes `{}`; a11y passes its `urlPolicy`, or when unset
+  `{ allowFile: true, allowData: true }` so the CLI can still scan local files and
+  `data:` pages. The MCP tool passes `{}`. Hosted mode overrides all of them.
+- Under `jest --coverage`, a *function* passed to `page.evaluate` fails in the
+  browser with `cov_* is not defined`. Pass a string expression, as
+  `src/visual/capture.ts` does (also for `waitForFunction`), or exclude the module from coverage as the a11y
+  modules are.
+- Not covered here: hostnames that resolve to private addresses (#336).
 
 ### RPC Server Error Policy (issue #330)
 
@@ -397,7 +404,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1393/1394 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1406/1407 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

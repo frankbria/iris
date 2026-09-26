@@ -71,11 +71,18 @@ describe('VisualTestRunner', () => {
       waitForTimeout: jest.fn().mockResolvedValue(undefined),
       waitForLoadState: jest.fn().mockResolvedValue(undefined),
       close: jest.fn().mockResolvedValue(undefined),
+      // What installUrlPolicyGuard touches: the runner always installs it (#335).
+      context: () => mockContext,
+      once: jest.fn(),
+      routeWebSocket: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     // Mock Playwright BrowserContext
     mockContext = {
       newPage: jest.fn().mockResolvedValue(mockPage),
+      newCDPSession: jest.fn().mockResolvedValue({ send: jest.fn(), on: jest.fn() }),
+      route: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn(),
       close: jest.fn().mockResolvedValue(undefined),
     } as any;
 
@@ -379,7 +386,9 @@ describe('VisualTestRunner', () => {
     it('should wait for fonts when configured', async () => {
       await visualRunner.run();
 
-      expect(mockPage.evaluate).toHaveBeenCalledWith(expect.any(Function));
+      expect(mockPage.evaluate).toHaveBeenCalledWith(
+        expect.stringContaining('document.fonts.ready'),
+      );
     });
 
     it('should disable animations when configured', async () => {

@@ -15,6 +15,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { VisualTestRunner, VisualTestRunnerConfig } from '../../src/visual/visual-runner';
+import { VisualCaptureEngine } from '../../src/visual/capture';
+import { launchBrowser, newHardenedContext } from '../../src/browser';
 
 describe('Visual capture against a real HTTP page (P0.1 regression)', () => {
   let server: Server;
@@ -87,5 +89,29 @@ describe('Visual capture against a real HTTP page (P0.1 regression)', () => {
     expect(result.summary.failed).toBe(0);
     expect(result.summary.newBaselines).toBe(1);
     expect(result.results[0].passed).toBe(true);
+  }, 30000);
+
+  // The runner passes stabilizeMs: 0, so the engine's own stabilization (network
+  // idle + the fonts wait) is only reached by calling it directly. Its unit test
+  // mocks waitForFunction, so this is the one place the browser runs it.
+  it('stabilizes and captures a real page when stabilizeMs > 0', async () => {
+    const browser = await launchBrowser();
+    try {
+      const page = await (await newHardenedContext(browser)).newPage();
+      await page.goto(`${baseURL}/`);
+      const result = await new VisualCaptureEngine().capture(page, {
+        fullPage: false,
+        maskSelectors: [],
+        stabilizeMs: 50,
+        disableAnimations: true,
+        quality: 90,
+        type: 'png',
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.success).toBe(true);
+      expect(result.metadata.viewport.width).toBeGreaterThan(0);
+    } finally {
+      await browser.close();
+    }
   }, 30000);
 });
