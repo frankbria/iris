@@ -1,4 +1,8 @@
 import WebSocket from 'ws';
+import http from 'http';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { AddressInfo } from 'net';
 import { startServer, JsonRpcResponse, ServerLimits, DEFAULT_SERVER_LIMITS } from '../src/protocol';
 
@@ -178,6 +182,48 @@ describe('maxActionsPerRequest', () => {
     // No session, so a valid request fails later, on the session check.
     const atCap = await call(ws, 'executeBrowserAction', { actions: [click, click] });
     expect(atCap.error?.code).toBe(-32000);
+  });
+});
+
+describe('maxActionsPerRequest on the instruction path', () => {
+  // An AI translation has no bound of its own, so the cap has to hold for what
+  // an instruction turns into, not only for a wire `actions` array. The provider
+  // is a local HTTP server speaking Ollama's /api/generate, over a real socket.
+  // HOME points at an empty dir so a developer's ~/.iris/config.json cannot pick
+  // another provider.
+  const saved = { HOME: process.env.HOME, OLLAMA_ENDPOINT: process.env.OLLAMA_ENDPOINT };
+  let provider: http.Server;
+
+  beforeAll(async () => {
+    const click = { type: 'click', selector: '#x' };
+    provider = http.createServer((req, res) => {
+      req.resume();
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ response: JSON.stringify({ actions: [click, click, click] }) }));
+    });
+    await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve));
+    process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-limits-home-'));
+    process.env.OLLAMA_ENDPOINT = `http://127.0.0.1:${(provider.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await new Promise((r) => provider.close(r));
+  });
+
+  test('an instruction translating to more actions than the cap is refused', async () => {
+    const ws = await open(await serve({ maxActionsPerRequest: 2 }));
+    await call(ws, 'launchBrowser');
+    // Prose, so the pattern translator passes and the AI path runs.
+    const res = await call(ws, 'executeBrowserAction', { instruction: 'do three things please' });
+    expect(res.result.success).toBe(false);
+    expect(res.result.error).toMatch(/translated to 3 actions; the limit is 2/);
+    expect(res.result.translationResult.actions).toHaveLength(3);
+    // Refused before the page: no browser was started for it.
+    expect((await call(ws, 'getBrowserStatus')).result.hasPage).toBe(false);
   });
 });
 

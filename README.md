@@ -290,7 +290,8 @@ iris connect 8080  # Custom port
 
 The server binds to `127.0.0.1` and prints a per-session auth token on startup.
 Clients must send it on the WebSocket handshake as an `Authorization: Bearer <token>`
-header; connections without the token are rejected (close code `1008`).
+header. A missing or wrong token is refused during the handshake with HTTP `401`
+(a disallowed `Origin` gets `403`), so a refused client never holds a socket.
 
 `launchBrowser` creates a **session**; Chromium starts lazily on the first action,
 so the response says so rather than claiming a launch. If the browsers are not
@@ -309,6 +310,22 @@ A supplied token is used verbatim and **not** printed — it stays out of the lo
 and it survives a restart, which a per-session token does not. Prefer the file
 form wherever the environment is visible to others (`docker inspect` shows it);
 setting both variables is refused, as is an empty or unreadable file.
+
+**Resource limits.** Every one bounds something a client could otherwise grow
+without limit:
+
+| limit | flag | default | when exceeded |
+|---|---|---|---|
+| frame size | `--max-payload <bytes>` | 1 MiB | socket closed with `1009` |
+| open connections | `--max-connections <n>` | 16 | handshake refused, HTTP `503` |
+| browser sessions, server-wide | `--max-sessions <n>` | 4 | `launchBrowser` error `-32000` |
+| actions per `executeBrowserAction` | `--max-actions <n>` | 100 | `-32602` for an `actions` array; `success: false` when an `instruction` translates to more |
+
+Clients may not ask for a visible browser or devtools (`-32602`). Their `timeout`,
+`retryAttempts`, `retryDelay` and `slowMo` are clamped to 120 s, 5, 10 s and 1 s,
+and `launchBrowser` returns the values it will actually use under `options`. A
+ping every 30 s terminates a peer that stopped answering, which frees its browser.
+Those ceilings and the interval are settable through `startServer(port, { limits })`.
 
 > ⚠️ **Widening the bind address exposes a browser driver.** This server can be
 > told to navigate anywhere, so anything that can reach it is an SSRF engine with

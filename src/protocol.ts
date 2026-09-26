@@ -200,6 +200,7 @@ export function startServer(
     },
     5 * 60 * 1000,
   ); // Check every 5 minutes
+  cleanupInterval.unref();
 
   // Heartbeat: a half-open peer (vanished without a FIN) otherwise pins its
   // browser until the idle sweep, ~35 minutes. A peer that has not answered the
@@ -373,7 +374,13 @@ export function startServer(
                   message: 'No active browser session. Call launchBrowser first.',
                 };
               }
-              return executeBrowserActions(session, instruction, actions, url);
+              return executeBrowserActions(
+                session,
+                instruction,
+                actions,
+                url,
+                limits.maxActionsPerRequest,
+              );
             });
             break;
           }
@@ -547,9 +554,10 @@ function createBrowserSession(browserOptions?: ActionExecutorOptions): BrowserSe
  */
 async function executeBrowserActions(
   session: BrowserSession,
-  instruction?: string,
-  actions?: Action[],
-  url?: string,
+  instruction: string | undefined,
+  actions: Action[] | undefined,
+  url: string | undefined,
+  maxActions: number,
 ): Promise<{
   success: boolean;
   results: ExecutionResult[];
@@ -559,19 +567,6 @@ async function executeBrowserActions(
 }> {
   try {
     session.lastActivity = Date.now();
-
-    // Create page if needed. Concurrent first actions share one in-flight
-    // createPage() via the cached promise instead of each creating a page
-    // (check-then-act race, issue #69). The promise is cleared once settled so
-    // a failed creation can be retried.
-    if (!session.page) {
-      if (!session.pageCreationPromise) {
-        session.pageCreationPromise = session.executor.createPage().finally(() => {
-          session.pageCreationPromise = null;
-        });
-      }
-      session.page = await session.pageCreationPromise;
-    }
 
     let actionsToExecute: Action[] = [];
     let translationResult = null;
@@ -595,6 +590,31 @@ async function executeBrowserActions(
         translationResult,
         error: 'No actions to execute',
       };
+    }
+
+    // The schema caps a wire `actions` array; this is the only place that sees
+    // what an instruction translated to, and an AI translation has no bound of
+    // its own (#338). Checked before the page exists, so a refusal starts no browser.
+    if (actionsToExecute.length > maxActions) {
+      return {
+        success: false,
+        results: [],
+        translationResult,
+        error: `Instruction translated to ${actionsToExecute.length} actions; the limit is ${maxActions}`,
+      };
+    }
+
+    // Create page if needed. Concurrent first actions share one in-flight
+    // createPage() via the cached promise instead of each creating a page
+    // (check-then-act race, issue #69). The promise is cleared once settled so
+    // a failed creation can be retried.
+    if (!session.page) {
+      if (!session.pageCreationPromise) {
+        session.pageCreationPromise = session.executor.createPage().finally(() => {
+          session.pageCreationPromise = null;
+        });
+      }
+      session.page = await session.pageCreationPromise;
     }
 
     // Execute the actions
