@@ -154,6 +154,33 @@ describe('hosted Chromium egress (#336)', () => {
   });
 });
 
+describe('hosted egress with Playwright’s forced loopback proxying disabled (#336)', () => {
+  // Chromium sends loopback direct unless the bypass list says `<-loopback>`.
+  // Playwright adds that itself, but not when this variable is set, so
+  // launchBrowser must spell it out or loopback walks past the proxy.
+  const saved = process.env.PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK;
+  let browser: Browser;
+
+  beforeAll(async () => {
+    process.env.PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK = '1';
+    browser = await launch(true);
+  });
+
+  afterAll(async () => {
+    if (saved === undefined) delete process.env.PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK;
+    else process.env.PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK = saved;
+    await browser?.close();
+  });
+
+  it('still sends loopback through the proxy', async () => {
+    const page = await browser.newPage();
+    await page.goto('http://site.test/');
+    seen = [];
+    await inWorker(page, fetchThen(`http://127.0.0.1:${port}/escape`));
+    expect(seen).toEqual([]);
+  });
+});
+
 describe('local mode reaches loopback (negative control for the probes above)', () => {
   let browser: Browser;
   let page: Page;

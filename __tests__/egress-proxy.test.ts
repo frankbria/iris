@@ -53,6 +53,8 @@ beforeEach(async () => {
     '127.0.0.1.nip.io': [['127.0.0.1']],
     'mixed.test': [[PUBLIC, '10.0.0.1']],
     'rebind.test': [[PUBLIC], ['127.0.0.1']],
+    // Public, dialed at 127.0.0.1 on the port asked for: a closed port, or a raw upstream.
+    'down.test': [['8.8.4.4']],
   };
   proxy = await startEgressProxy({
     lookup: async (host) => {
@@ -83,6 +85,7 @@ function get(url: string): Promise<{ status: number; body: string }> {
       let body = '';
       res.on('data', (chunk) => (body += chunk));
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+      res.on('error', reject);
     });
     req.on('error', reject);
     req.end();
@@ -188,11 +191,120 @@ describe('egress proxy: malformed and failing requests', () => {
     expect(dials).toEqual([]);
   });
 
+  it('answers 502 when the vetted address refuses the connection', async () => {
+    // The dialer sends 8.8.4.4 to 127.0.0.1 on the requested port; port 1 is closed.
+    expect((await get('http://down.test:1/')).status).toBe(502);
+    expect((await tunnel('down.test:1')).status).toBe(502);
+    expect(dials).toEqual(['8.8.4.4:1', '8.8.4.4:1']);
+  });
+
   it('keeps serving after a client sends garbage', async () => {
     const sock = net.connect(proxyPort, '127.0.0.1');
     sock.on('error', () => {});
     sock.end('\x00\x01 not http\r\n\r\n');
     await once(sock, 'close');
     expect((await get('http://site.test/after')).status).toBe(200);
+  });
+});
+
+/**
+ * A hostile or broken public upstream, speaking raw bytes. Reached as
+ * `down.test:<port>`; records whether each of its connections was closed.
+ */
+async function rawUpstream(
+  onConnection: (socket: net.Socket) => void,
+): Promise<{ port: number; closed: Promise<void>; stop: () => void }> {
+  let markClosed!: () => void;
+  const closed = new Promise<void>((resolve) => (markClosed = resolve));
+  const raw = net.createServer((socket) => {
+    socket.on('error', () => {});
+    // Read (and drop) the request, or a paused socket never sees the FIN.
+    socket.resume();
+    socket.once('close', markClosed);
+    onConnection(socket);
+  });
+  raw.listen(0, '127.0.0.1');
+  await once(raw, 'listening');
+  return {
+    port: (raw.address() as AddressInfo).port,
+    closed,
+    stop: () => raw.close(),
+  };
+}
+
+/** Resolves 'closed' if `closed` settles within the window, else 'open'. */
+function within(closed: Promise<void>, ms = 2000): Promise<'closed' | 'open'> {
+  return Promise.race([
+    closed.then(() => 'closed' as const),
+    new Promise<'open'>((resolve) => setTimeout(() => resolve('open'), ms)),
+  ]);
+}
+
+describe('egress proxy: hostile or broken upstreams', () => {
+  it.each([
+    ['a status writeHead rejects (099)', 'HTTP/1.1 099 X\r\ncontent-length: 0\r\n\r\n'],
+    ['a status writeHead rejects (000)', 'HTTP/1.1 000 X\r\ncontent-length: 0\r\n\r\n'],
+    [
+      'an unrequested protocol switch',
+      'HTTP/1.1 101 Switching\r\nupgrade: x\r\nconnection: upgrade\r\n\r\n',
+    ],
+  ])('answers 502 to %s and keeps serving', async (_label, reply) => {
+    // Node's client parser accepts these, and a throw in the response listener
+    // would be an uncaught exception, which ends `iris connect`.
+    const up = await rawUpstream((socket) => socket.write(reply));
+    try {
+      expect((await get(`http://down.test:${up.port}/`)).status).toBe(502);
+      expect((await get('http://site.test/after')).status).toBe(200);
+    } finally {
+      up.stop();
+    }
+  });
+
+  it('ends the client response when the upstream dies mid-body, rather than hanging', async () => {
+    const up = await rawUpstream((socket) =>
+      socket.end('HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n0123456789'),
+    );
+    try {
+      await expect(get(`http://down.test:${up.port}/`)).rejects.toThrow();
+    } finally {
+      up.stop();
+    }
+  });
+
+  it('closes the upstream connection once the response is done', async () => {
+    // A keep-alive upstream socket nobody reuses is a descriptor leaked per request.
+    const up = await rawUpstream((socket) =>
+      socket.write('HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: keep-alive\r\n\r\nok'),
+    );
+    try {
+      expect(await get(`http://down.test:${up.port}/`)).toEqual({ status: 200, body: 'ok' });
+      expect(await within(up.closed)).toBe('closed');
+    } finally {
+      up.stop();
+    }
+  });
+
+  it('closes the upstream connection when the client goes away mid-response', async () => {
+    const up = await rawUpstream((socket) =>
+      socket.write('HTTP/1.1 200 OK\r\ncontent-length: 1000000\r\n\r\npartial'),
+    );
+    try {
+      await new Promise<void>((resolve) => {
+        const req = http.request({
+          host: '127.0.0.1',
+          port: proxyPort,
+          path: `http://down.test:${up.port}/`,
+        });
+        req.on('response', () => {
+          req.destroy();
+          resolve();
+        });
+        req.on('error', () => {});
+        req.end();
+      });
+      expect(await within(up.closed)).toBe('closed');
+    } finally {
+      up.stop();
+    }
   });
 });

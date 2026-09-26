@@ -34,6 +34,17 @@ export interface EgressProxy {
   close(): Promise<void>;
 }
 
+/** Request headers that describe the client's hop, not the upstream's. */
+const HOP_BY_HOP = [
+  'connection',
+  'keep-alive',
+  'proxy-connection',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'upgrade',
+];
+
 /** Why a request was not forwarded, as the HTTP status the client gets. */
 class Refusal extends Error {
   constructor(
@@ -106,10 +117,13 @@ export async function startEgressProxy(options: EgressProxyOptions = {}): Promis
     if (url.protocol !== 'http:') throw new Refusal(400, `unsupported scheme ${url.protocol}`);
 
     const address = await vet(url.hostname);
+    if (req.socket.destroyed) return; // the client left while the name resolved
     const port = Number(url.port || 80);
     const headers = { ...req.headers };
-    delete headers['proxy-connection'];
-    delete headers['proxy-authorization'];
+    for (const name of HOP_BY_HOP) delete headers[name];
+    // One request per upstream socket: nothing pools them, so a kept-alive one
+    // would be a descriptor leaked per request.
+    headers.connection = 'close';
 
     const upstream = http.request({
       method: req.method,
@@ -118,9 +132,25 @@ export async function startEgressProxy(options: EgressProxyOptions = {}): Promis
       setHost: false, // the client's Host header is already the right one
       createConnection: () => connect(address, port),
     });
+    // Fires when the response is done or the client went away mid-way; either
+    // way the upstream has nothing left to do.
+    res.on('close', () => upstream.destroy());
     upstream.on('response', (upstreamRes) => {
-      res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+      // Node's parser accepts statuses `writeHead` rejects (000, 099). A throw
+      // here would be uncaught and end `iris connect`.
+      try {
+        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+      } catch {
+        refuse(res, new Refusal(502, 'invalid upstream status'));
+        return;
+      }
+      // An upstream that dies mid-body never ends `res` through the pipe.
+      upstreamRes.on('close', () => upstreamRes.complete || res.destroy());
       upstreamRes.pipe(res);
+    });
+    upstream.on('upgrade', (_upstreamRes, socket) => {
+      socket.destroy();
+      refuse(res, new Refusal(502, 'upstream switched protocols unasked'));
     });
     upstream.on('error', (error) => refuse(res, error));
     req.on('error', () => upstream.destroy());
