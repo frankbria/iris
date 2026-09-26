@@ -263,6 +263,11 @@ async function startBrowserNet(browser: Browser): Promise<BrowserNet> {
     const opener = targetInfo.openerId ? net.targets.get(targetInfo.openerId) : undefined;
     if (!opener || targetInfo.type !== 'page') return;
 
+    // Registered even when over the cap: its WindowProxy is live as soon as
+    // window.open returns, and a popup opened through it must still find a
+    // guarded opener — and so the cap — rather than fall through unjudged.
+    net.targets.set(targetInfo.targetId, { state: opener.state, inherited: true });
+
     const contextId = targetInfo.browserContextId ?? '';
     const live = net.popups.get(contextId) ?? new Set<string>();
     net.popups.set(contextId, live);
@@ -274,7 +279,6 @@ async function startBrowserNet(browser: Browser): Promise<BrowserNet> {
       return;
     }
     live.add(targetInfo.targetId);
-    net.targets.set(targetInfo.targetId, { state: opener.state, inherited: true });
   });
 
   cdp.on('Target.targetDestroyed', ({ targetId }) => {

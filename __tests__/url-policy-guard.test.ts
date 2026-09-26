@@ -99,7 +99,10 @@ describe('URL policy guard', () => {
               `<a id="redir-off" target="_blank" href="/to-offsite-tab">redir-off</a>` +
               `<a id="redir-meta" target="_blank" href="/to-metadata">redir-meta</a>` +
               `<a id="redir-ok" target="_blank" href="/to-final">redir-ok</a>` +
-              `<button id="many" onclick="for (let i = 0; i < ${MAX_POPUPS_PER_CONTEXT + 2}; i++) window.open('/final?popup=' + i)">many</button>`,
+              `<a id="popup-img" target="_blank" href="/offsite-image">popup-img</a>` +
+              `<button id="many" onclick="for (let i = 0; i < ${MAX_POPUPS_PER_CONTEXT + 2}; i++) window.open('/final?popup=' + i)">many</button>` +
+              // Opens one popup past the cap, then a popup FROM that one (#337 review).
+              `<button id="nested" onclick="let w; for (let i = 0; i <= ${MAX_POPUPS_PER_CONTEXT}; i++) w = window.open('/final?popup=' + i); w.open('/to-offsite-tab')">nested</button>`,
           ),
         );
       }
@@ -108,6 +111,10 @@ describe('URL policy guard', () => {
         return res.end(
           page('Home', '<a id="ok" href="/to-final">ok</a><a id="bad" href="/to-metadata">bad</a>'),
         );
+      }
+      if (url === '/offsite-image') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(page('Image', `<img alt="x" src="${OFFSITE}/early.gif">`));
       }
       if (url === '/offsite-script') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -715,6 +722,39 @@ describe('URL policy guard', () => {
       const opened = requestLog.filter((u) => u.startsWith('/final?popup='));
       expect(opened).toHaveLength(MAX_POPUPS_PER_CONTEXT);
       expect(context.pages()).toHaveLength(1 + MAX_POPUPS_PER_CONTEXT);
+    }, 60_000);
+
+    it("pins a popup's sub-resources before its own guard has attached", async () => {
+      // The popup's CDP session attaches after the 'page' event; its document
+      // can already be parsed and requesting assets by then. Those are judged by
+      // the opener's pin in the meantime.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      const [popup] = await Promise.all([
+        p.context().waitForEvent('page', { timeout: 15_000 }),
+        p.click('#popup-img'),
+      ]);
+      await popup.waitForLoadState('load').catch(() => {});
+      await popup.waitForTimeout(1000);
+
+      expect(requestLog).toContain('/offsite-image');
+      expect(offsiteLog).not.toContain('/early.gif');
+    }, 60_000);
+
+    it('does not let an over-cap popup open popups of its own', async () => {
+      // The over-cap popup is refused, but its WindowProxy is live the moment
+      // window.open returns. A popup opened through it must still count against
+      // the cap and still be judged — not fall through as having no guarded opener.
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin });
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      await p.click('#nested');
+      await p.waitForTimeout(3000);
+
+      expect(requestLog).not.toContain('/to-offsite-tab');
+      expect(offsiteLog).not.toContain('/escaped');
+      expect(context.pages().length).toBeLessThanOrEqual(1 + MAX_POPUPS_PER_CONTEXT);
     }, 60_000);
   });
 
