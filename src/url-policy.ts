@@ -68,8 +68,9 @@ function rangeList(v4: Array<[string, number]>, v6: Array<[string, number]>): Bl
 // canonicalises integer/hex/octal IPv4 and every IPv6 spelling first, so those
 // are covered. Local-use NAT64 embedding at /48-/64 is not decoded, only its
 // /96 layout; the whole prefix is private. A DNS name that *resolves* to
-// a blocked address (incl. DNS rebinding) is not. That needs a resolve-at-connect
-// control (the hosted egress layer), not string matching.
+// a blocked address (incl. DNS rebinding) is not: in hosted mode the egress
+// proxy (src/egress-proxy.ts, #336) checks the resolved address instead; local
+// mode has no resolve-at-connect control.
 
 /** Cloud-metadata / link-local — always blocked, never a legitimate navigation target. */
 const METADATA_HOSTS = new Set(['metadata.google.internal']);
@@ -123,6 +124,16 @@ function isLinkLocalOrMetadata(host: string): boolean {
 
 function isPrivateHost(host: string): boolean {
   return host === 'localhost' || host.endsWith('.localhost') || inRanges(host, PRIVATE_RANGES);
+}
+
+/**
+ * Whether a *resolved* IP address is one hosted mode refuses: metadata,
+ * link-local, loopback, private or reserved. The hosted egress proxy (#336)
+ * applies it after DNS, which is what this module's string checks cannot do.
+ */
+export function isBlockedAddress(address: string): boolean {
+  const host = normalizeHost(address);
+  return isLinkLocalOrMetadata(host) || isPrivateHost(host);
 }
 
 /**

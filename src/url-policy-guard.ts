@@ -197,7 +197,8 @@ function toHttpScheme(wsUrl: string): string {
  * Separate from the request guard because CDP's Fetch domain does not cover the
  * WebSocket handshake, so a direct, readable, bidirectional channel would
  * otherwise be exempt by accident. Page-level only: a worker's socket is not
- * routed here, which is the egress layer's job (#336).
+ * routed here. In hosted mode the egress proxy (src/egress-proxy.ts, #336) sees
+ * it; in local mode nothing does.
  */
 async function installWebSocketGuard(page: Page, state: GuardState): Promise<void> {
   // Match only the sockets to be refused, so an allowed one is never
