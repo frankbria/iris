@@ -125,3 +125,22 @@ Write/Edit, not as a pre-push afterthought.
 - A reviewer's crash claim ("no 'error' listener → uncaught") needs an out-of-process repro:
   Node 24 drops an IncomingMessage 'error' nobody listens to. Jest can't tell either way.
 - opencode/GLM stalled again (180s, no stream bytes); codex fallback answered.
+
+## 2026-09-26 — URL guard follow-ups (PR #377)
+- Before running a real-browser suite, look for orphaned test processes from earlier
+  sessions (`ps -eo pid,ppid,lstart,args | grep jest`; parent = init). One had been stuck for
+  73 minutes, adding exactly the host load #142 warns about, and a stale 0-byte
+  `.git/index.lock` sat beside it.
+- Playwright continues redirect hops inside its own Fetch handler, so no `route` ever sees
+  them. When a page-scoped hook is structurally too late, a browser-level CDP session
+  (`browser.newBrowserCDPSession()`) can `Fetch.enable` for all targets. `targetCreated.openerId`
+  arrives before the target's first request. codex claimed browser-level Fetch is rejected;
+  a 20-line experiment settled it before any rebuttal.
+- "Passes 3/3" is not the same as "structurally guaranteed". Two reviewers flagged a timing
+  window the test could not force. Disabling the layer that usually wins, then checking the
+  other layer still holds, turned it into evidence instead of luck.
+- This repo's Jest reporter prints no per-test lines, even with `--verbose`. For a demo's
+  per-test listing use `--json | jq '.testResults[].assertionResults[]'`.
+- The codex path was already in memory (nvm v24.12.0) and I still guessed another
+  version first. Read the memory note before invoking the fallback.
+

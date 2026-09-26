@@ -60,7 +60,7 @@ code is the ordering key.
 | `P0.7` | [#334](https://github.com/frankbria/iris/issues/334) | Hosted mode: URL policy defaults | P0.3 (#231), P0.6 (#333) | DONE ([#372](https://github.com/frankbria/iris/pull/372)) |
 | `P0.8` | [#335](https://github.com/frankbria/iris/issues/335) | Visual and a11y runners: URL policy integration | P0.7 (#334) | DONE ([#373](https://github.com/frankbria/iris/pull/373)) |
 | `P0.9` | [#336](https://github.com/frankbria/iris/issues/336) | Hosted browser: network egress layer | P0.4 (#331), P0.6 (#333) | DONE ([#374](https://github.com/frankbria/iris/pull/374)) |
-| `P0.10` | [#337](https://github.com/frankbria/iris/issues/337) | URL guard: follow-up items | P0.7 (#334) | TODO |
+| `P0.10` | [#337](https://github.com/frankbria/iris/issues/337) | URL guard: follow-up items | P0.7 (#334) | DONE ([#377](https://github.com/frankbria/iris/pull/377)) |
 
 **C. RPC server**
 
