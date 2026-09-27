@@ -206,3 +206,14 @@ Write/Edit, not as a pre-push afterthought.
 - PR #385: the CI reviewer's "pre-existing, not a regression" note (0/0 = NaN let the
   first paid call through a $0 budget) was a real bug behind a README promise. A
   reviewer's out-of-scope aside is still worth checking against the docs.
+- PR #387: `git checkout -q <tracked> <untracked>` fails as a WHOLE when one path is
+  untracked (the demo script lives in ignored tasks/). The tracked file I had swapped
+  for main's version stayed swapped and nearly got committed. Restore each file on its
+  own and run `git status --short` right after.
+- PR #387: a surviving mutant was a finding, not a weak test. Breaking the `-` boundary
+  changed nothing because the snapshot regex already anchored `-`, and that exposed the
+  whole "longest prefix" comparison as dead code. Ask why a mutant survives before
+  adding a test to kill it.
+- PR #387: "any `-suffix` inherits the family price" read as the natural answer to "fall back
+  by family" and was wrong in the unsafe direction (variants cost more). For a budget
+  gate, check every fallback against which way it errs.
