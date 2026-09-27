@@ -76,7 +76,7 @@ code is the ordering key.
 | `P0.13` | [#241](https://github.com/frankbria/iris/issues/241) | One data-dir resolver for history, cost ledger and vision cache; configurable budgets | P0.3 (#231) | DONE ([#384](https://github.com/frankbria/iris/pull/384)) |
 | `P0.14` | [#242](https://github.com/frankbria/iris/issues/242) | Meter and budget-gate text/agent LLM calls | P0.13 (#241) | DONE ([#385](https://github.com/frankbria/iris/pull/385)) |
 | `P0.15` | [#243](https://github.com/frankbria/iris/issues/243) | Unpriced or rescued model IDs must not record $0 | P0.14 (#242) | DONE ([#387](https://github.com/frankbria/iris/pull/387)) |
-| `P0.16` | [#244](https://github.com/frankbria/iris/issues/244) | Record every completed paid call; reserve budget before concurrent calls | P0.14 (#242) | TODO |
+| `P0.16` | [#244](https://github.com/frankbria/iris/issues/244) | Record every completed paid call; reserve budget before concurrent calls | P0.14 (#242) | DONE ([#389](https://github.com/frankbria/iris/pull/389)) |
 | `P0.17` | [#245](https://github.com/frankbria/iris/issues/245) | Honour the configured AI provider instead of a fixed fallback chain | — | TODO |
 
 **E. Reports**
