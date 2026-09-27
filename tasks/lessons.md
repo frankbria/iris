@@ -162,3 +162,17 @@ Write/Edit, not as a pre-push afterthought.
 - Moving auth into `verifyClient` turns a refusal from a 1008 close into an HTTP status. Every
   consumer of the old signal (tests, healthcheck comment, README) had to move with it; grep for
   the close code before changing the refusal path.
+
+## 2026-09-27 — Browser session lifecycle (PR #381)
+- One test's orphaned Chromium contaminates the next: a "kill the browser" test picked the
+  leaked pid from the previous test and passed on unfixed code. Read a RED run per test (`-t`),
+  not only as a whole file, before trusting which tests are red.
+- Chromium `close()` took 1.4-1.9s bare and up to 9s end to end on a loaded WSL host. Waits
+  for a process to exit need a long poll budget. An orphan never exits, so the budget costs
+  no signal. Don't read slow exits as a leak.
+- Playwright fires `disconnected` ~100ms after a SIGKILLed browser has left /proc. A test that
+  waits on the pid alone races it; wait on something the server reports (`hasPage`).
+- Ad hoc `ts-node` probes fail with TS5109 unless given `-P tsconfig.json` and run from the
+  repo root, not the scratchpad.
+- Wait for the machine to quiet down (`/proc/loadavg`) before a full run. At load 13-16 the
+  a11y/visual E2E suites failed 26 tests that pass at load <6. Cheaper than triaging them.
