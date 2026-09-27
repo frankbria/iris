@@ -172,11 +172,15 @@ describe('text LLM metering (#242)', () => {
     ]);
   });
 
-  it('still records the tokens when the model reply is unusable', async () => {
-    // The provider billed for the call whatever IRIS then made of the reply.
+  // The provider billed for the call whatever IRIS then made of the reply. Two
+  // shapes, because they leave the client by different return paths.
+  it.each([
+    ['not JSON', 'nope'],
+    ['an action of the wrong shape', JSON.stringify({ actions: [{ type: 'teleport' }] })],
+  ])('still records the tokens when the model reply is %s', async (_label, content) => {
     mockOpenAICreate.mockResolvedValue({
       ...openaiReply,
-      choices: [{ message: { content: 'nope' } }],
+      choices: [{ message: { content } }],
     });
     const client = await createResolvedAIClient(config({ apiKey: 'sk-test' }));
 
