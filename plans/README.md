@@ -32,7 +32,7 @@ launch surface is an **authenticated API + minimal portal**. P0.3
 | P0 | 51 |
 | P1 | 32 |
 | P2 | 13 |
-| P3 | 5 |
+| P3 | 6 |
 
 **Order:** working `P0.1 → … → P3.3` has no forward dependencies (validated
 before filing). Groups A–E are independent of the platform work in F–K and can
@@ -74,7 +74,7 @@ code is the ordering key.
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
 | `P0.13` | [#241](https://github.com/frankbria/iris/issues/241) | One data-dir resolver for history, cost ledger and vision cache; configurable budgets | P0.3 (#231) | DONE ([#384](https://github.com/frankbria/iris/pull/384)) |
-| `P0.14` | [#242](https://github.com/frankbria/iris/issues/242) | Meter and budget-gate text/agent LLM calls | P0.13 (#241) | TODO |
+| `P0.14` | [#242](https://github.com/frankbria/iris/issues/242) | Meter and budget-gate text/agent LLM calls | P0.13 (#241) | DONE ([#385](https://github.com/frankbria/iris/pull/385)) |
 | `P0.15` | [#243](https://github.com/frankbria/iris/issues/243) | Unpriced or rescued model IDs must not record $0 | P0.14 (#242) | TODO |
 | `P0.16` | [#244](https://github.com/frankbria/iris/issues/244) | Record every completed paid call; reserve budget before concurrent calls | P0.14 (#242) | TODO |
 | `P0.17` | [#245](https://github.com/frankbria/iris/issues/245) | Honour the configured AI provider instead of a fixed fallback chain | — | TODO |
@@ -215,6 +215,7 @@ code is the ordering key.
 | `P3.3` | [#365](https://github.com/frankbria/iris/issues/365) | Hygiene: comments and dead code in RPC and AI layers | — | TODO |
 | `P3.4` | [#382](https://github.com/frankbria/iris/issues/382) | egress-proxy test assumes 127.0.0.1:1 refuses; it blackholes on WSL | — | TODO |
 | `P3.5` | [#383](https://github.com/frankbria/iris/issues/383) | ActionExecutor.createPage is not reentrant: concurrent calls can orphan a browser | P0.12 (#240) | TODO |
+| `P3.6` | [#386](https://github.com/frankbria/iris/issues/386) | Deprecated createAIClient / AIClientFactory.create(…, 'text') return unmetered text clients | P0.14 (#242) | TODO |
 
 ---
 

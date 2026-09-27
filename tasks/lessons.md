@@ -196,3 +196,13 @@ Write/Edit, not as a pre-push afterthought.
   real ~/.iris/config.json reach the suite; the post-PR reviewer caught it, not me.
 - Building the image locally (~5 min) gave the one piece of evidence nothing else could:
   the read-only root filesystem refusing /app/.iris while /data took all three stores.
+- PR #385: mutation testing by `git checkout -- <file>` to revert also reverts any
+  UNCOMMITTED fix in that file. It silently wiped the warn-once fix. Commit before
+  mutating, or revert the mutation with the inverse edit.
+- PR #385: opencode's streamed output puts its final heading mid-line ("…checking:# Review"),
+  so `sed -n '/^# Review/,$p'` matched nothing and the PR got an empty review comment.
+  Slice from the heading text with no `^` anchor, and grep the comment for a finding
+  before posting it.
+- PR #385: the CI reviewer's "pre-existing, not a regression" note (0/0 = NaN let the
+  first paid call through a $0 budget) was a real bug behind a README promise. A
+  reviewer's out-of-scope aside is still worth checking against the docs.
