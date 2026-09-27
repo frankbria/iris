@@ -89,6 +89,8 @@ export interface CostEntry {
   cached: boolean;
   inputTokens?: number;
   outputTokens?: number;
+  /** Priced at the conservative default rate: no registered or family price (#243). */
+  estimated?: boolean;
 }
 
 /**
@@ -203,6 +205,18 @@ const DEFAULT_PRICING: ProviderPricing[] = [
 const FREE_PROVIDERS = new Set(['ollama']);
 
 /**
+ * Rates charged for a model with no registered price and no family match
+ * (issue #243): the dearest value in DEFAULT_PRICING, per field. The ledger
+ * gates a budget breaker, so an unknown model must over-report rather than
+ * record $0 and never trip it. Rows priced this way are flagged `estimated`.
+ */
+const ESTIMATED_PRICING = {
+  costPerImage: Math.max(...DEFAULT_PRICING.map((p) => p.costPerImage)),
+  input: Math.max(...DEFAULT_PRICING.map((p) => p.costPerInputToken ?? 0)),
+  output: Math.max(...DEFAULT_PRICING.map((p) => p.costPerOutputToken ?? 0)),
+};
+
+/**
  * provider:model pairs already warned about, so a hot loop warns once (issue
  * #126). Per process, not per tracker: text calls open a tracker per call
  * (#242), and a per-instance set would warn on every one of them.
@@ -266,7 +280,8 @@ export class CostTracker {
         cost REAL NOT NULL,
         cached INTEGER NOT NULL DEFAULT 0,
         input_tokens INTEGER,
-        output_tokens INTEGER
+        output_tokens INTEGER,
+        estimated INTEGER NOT NULL DEFAULT 0
       );
 
       CREATE INDEX IF NOT EXISTS idx_timestamp ON cost_tracking(timestamp);
@@ -285,6 +300,9 @@ export class CostTracker {
     }
     if (!names.has('output_tokens')) {
       this.db.exec('ALTER TABLE cost_tracking ADD COLUMN output_tokens INTEGER');
+    }
+    if (!names.has('estimated')) {
+      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0');
     }
   }
 
@@ -346,18 +364,37 @@ export class CostTracker {
     if (FREE_PROVIDERS.has(provider.toLowerCase())) {
       return false;
     }
-    const key = `${provider}:${model}`;
+    const key = this.resolveKey(provider, model);
+    if (key === undefined) {
+      return true; // never registered: assume billable
+    }
     // Metered pricing: per-call cost is unknown before the call, but it is paid.
     if (this.tokenPricing.has(key)) {
       return true;
     }
-    const flat = this.pricing.get(key);
     // Registered at exactly 0 is a deliberate "this is free" — Ollama runs
     // locally, and #68 requires it to proceed even with the breaker tripped.
-    if (flat !== undefined) {
-      return flat > 0;
+    return (this.pricing.get(key) ?? 0) > 0;
+  }
+
+  /**
+   * The registered `provider:model` key whose price applies to this model: the
+   * exact key, else the longest registered model of the same provider that
+   * this ID extends at a `-` boundary (issue #243). That is how dated and
+   * rescued IDs are named — `resolveModel` swaps a retired `claude-sonnet-5`
+   * pin for `claude-sonnet-5-20260514` — while `gpt-4oz` is not a `gpt-4o`.
+   * Undefined when nothing matches.
+   */
+  private resolveKey(provider: string, model: string): string | undefined {
+    const exact = `${provider}:${model}`;
+    if (this.pricing.has(exact)) return exact;
+    let best: string | undefined;
+    for (const key of this.pricing.keys()) {
+      if (exact.startsWith(`${key}-`) && (best === undefined || key.length > best.length)) {
+        best = key;
+      }
     }
-    return true; // never registered: assume billable
+    return best;
   }
 
   /**
@@ -383,7 +420,7 @@ export class CostTracker {
     usage?: TokenUsage,
     operation: CostOperation = 'vision-analysis',
   ): number {
-    const cost = this.computeCost(provider, model, cached, usage);
+    const { cost, estimated } = this.computeCost(provider, model, cached, usage);
 
     // Circuit breaker blocks billable operations (issue #68): cache hits and
     // free providers (Ollama) cost $0 and must always proceed. Checked before
@@ -404,29 +441,23 @@ export class CostTracker {
       }
     }
 
-    // Surface the accounting gap rather than silently under-reporting: this
-    // operation will be billed by the provider and recorded here as $0. Once
-    // per pair, so a hot loop cannot bury the warning it is trying to raise.
-    // Only when the pair is genuinely unregistered. A model registered with
-    // token rates but called without usage also lands at $0, but there the
-    // advice to "register it with setPricing()" is simply wrong — it IS
-    // registered; the gap is the provider not reporting usage.
+    // Surface the guess rather than silently over-reporting: this operation is
+    // recorded at the estimated rate. Once per pair, so a hot loop cannot bury
+    // the warning it is trying to raise. A family match is not a guess and does
+    // not warn.
     const key = `${provider}:${model}`;
-    const registered = this.tokenPricing.has(key) || this.pricing.has(key);
-    if (billable && cost === 0 && !registered) {
-      if (!unpricedWarned.has(key)) {
-        unpricedWarned.add(key);
-        console.warn(
-          `⚠️  No pricing registered for ${key}; its cost is recorded as $0 and will not count ` +
-            `against the budget. Register it with setPricing() for accurate accounting.`,
-        );
-      }
+    if (estimated && !unpricedWarned.has(key)) {
+      unpricedWarned.add(key);
+      console.warn(
+        `⚠️  No pricing registered for ${key}; its cost is estimated at the most expensive ` +
+          `known rate. Register it with setPricing() for accurate accounting.`,
+      );
     }
 
     // Record entry (persist token counts when provided)
     const stmt = this.db.prepare(`
-      INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cached, input_tokens, output_tokens)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cached, input_tokens, output_tokens, estimated)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       Date.now(),
@@ -437,6 +468,7 @@ export class CostTracker {
       cached ? 1 : 0,
       usage?.inputTokens ?? null,
       usage?.outputTokens ?? null,
+      estimated ? 1 : 0,
     );
 
     return cost;
@@ -444,22 +476,33 @@ export class CostTracker {
 
   /**
    * Compute the cost of an operation. Token-based when usage and per-token
-   * rates are available, flat per-image otherwise. Cached operations are free.
+   * rates are available, flat per-image otherwise. Cached operations and free
+   * providers cost nothing; a model with no registered or family price is
+   * charged ESTIMATED_PRICING and flagged `estimated` (issue #243).
    */
   private computeCost(
     provider: string,
     model: string,
     cached: boolean,
     usage?: TokenUsage,
-  ): number {
-    if (cached) return 0;
+  ): { cost: number; estimated: boolean } {
+    if (cached) return { cost: 0, estimated: false };
 
-    const tokenRates = this.tokenPricing.get(`${provider}:${model}`);
+    const key = this.resolveKey(provider, model);
+    if (key === undefined && FREE_PROVIDERS.has(provider.toLowerCase())) {
+      return { cost: 0, estimated: false };
+    }
+    const estimated = key === undefined;
+    const tokenRates = estimated ? ESTIMATED_PRICING : this.tokenPricing.get(key);
     if (usage && tokenRates && this.isValidUsage(usage)) {
-      return usage.inputTokens * tokenRates.input + usage.outputTokens * tokenRates.output;
+      return {
+        cost: usage.inputTokens * tokenRates.input + usage.outputTokens * tokenRates.output,
+        estimated,
+      };
     }
 
-    return this.getPricing(provider, model);
+    const flat = estimated ? ESTIMATED_PRICING.costPerImage : (this.pricing.get(key) ?? 0);
+    return { cost: flat, estimated };
   }
 
   /**
