@@ -1,4 +1,4 @@
-import { Browser, Page } from 'playwright';
+import { Browser, Page, errors } from 'playwright';
 import { Action } from './translator';
 import {
   launchBrowser,
@@ -66,6 +66,8 @@ export class ActionExecutor {
     urlPolicy: UrlPolicyOptions;
   };
   private browser: Browser | null = null;
+  /** A launch still in progress, so `cleanup()` can wait for it and close what it yields. */
+  private launching: Promise<Browser> | null = null;
 
   constructor(options: ActionExecutorOptions = {}) {
     this.options = {
@@ -82,9 +84,25 @@ export class ActionExecutor {
    * Launch a new browser instance.
    */
   async launchBrowser(): Promise<Browser> {
+    const launching = this.launch();
+    this.launching = launching;
     try {
-      this.browser = await launchBrowser(this.options.browserOptions);
-      return this.browser;
+      return await launching;
+    } finally {
+      if (this.launching === launching) this.launching = null;
+    }
+  }
+
+  private async launch(): Promise<Browser> {
+    try {
+      const browser = await launchBrowser(this.options.browserOptions);
+      this.browser = browser;
+      // A crashed or killed Chromium must not stay bound: the next createPage()
+      // launches a fresh one instead of failing against the dead one (#240).
+      browser.on('disconnected', () => {
+        if (this.browser === browser) this.browser = null;
+      });
+      return browser;
     } catch (error) {
       const wrapped = new Error(
         `Browser launch failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -233,6 +251,9 @@ export class ActionExecutor {
    * Clean up browser resources.
    */
   async cleanup(): Promise<void> {
+    // A cleanup that lands mid-launch would otherwise find no browser yet and
+    // leave the one about to arrive running with nothing to close it (#240).
+    await this.launching?.catch(() => undefined);
     if (this.browser) {
       try {
         await closeBrowser(this.browser);
@@ -352,14 +373,17 @@ export class ActionExecutor {
 
   /**
    * Whether a locator becomes visible within `timeout`. A timeout means "not
-   * visible", which is an answer, not an error.
+   * visible", which is an answer, not an error. Anything else — a closed page,
+   * a malformed selector — is an error: read as "not visible" it made
+   * `element_absent` pass against a dead page (#240).
    */
   private async isVisible(locator: ReturnType<Page['locator']>, timeout: number): Promise<boolean> {
     try {
       await locator.waitFor({ state: 'visible', timeout });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (error instanceof errors.TimeoutError) return false;
+      throw error;
     }
   }
 

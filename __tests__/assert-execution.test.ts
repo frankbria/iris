@@ -87,6 +87,15 @@ describe('assert action execution', () => {
         false,
       );
     });
+
+    // A dead page has no elements, which used to read as "absent" (#240).
+    it('errors, rather than passes, on a closed page', async () => {
+      await page.close();
+      const r = await run({ type: 'assert', kind: 'element_absent', target: '#go' });
+      expect(r.success).toBe(false);
+      expect(r.error).not.toMatch(/Assertion failed/);
+      expect(r.error).toMatch(/closed/);
+    });
   });
 
   describe('url_matches', () => {

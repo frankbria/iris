@@ -87,6 +87,7 @@ describe('ActionExecutor', () => {
       close: jest.fn().mockResolvedValue(undefined),
       newPage: jest.fn(),
       contexts: jest.fn().mockReturnValue([]),
+      on: jest.fn(),
     } as any;
 
     // The URL-policy guard vets requests through a CDP Fetch session rather than
