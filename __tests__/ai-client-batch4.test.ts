@@ -9,7 +9,10 @@ import {
   createCostTracker,
   createSmartClient,
   SmartAIVisionClient,
+  SmartClientConfig,
 } from '../src/ai-client';
+import { AIResponseRejectedError } from '../src/ai-client/base';
+import { BudgetExceededError } from '../src/ai-client/cost-tracker';
 import { AIClientFactory } from '../src/ai-client/factory';
 import { DEFAULT_MODELS, ModelUnavailableError } from '../src/ai-client/models';
 import { ImagePreprocessor } from '../src/ai-client/preprocessor';
@@ -262,6 +265,19 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       tracker.close();
     });
 
+    /**
+     * Record exactly the $5 daily limit (2M gpt-4o input tokens at $2.50/1M),
+     * so the breaker is tripped. Recording never throws (#244): the breaker
+     * refuses the next `reserve()`, before a call, not the record after one.
+     */
+    const spendTheDay = () => {
+      tracker.trackOperation('openai', 'gpt-4o', false, {
+        inputTokens: 2_000_000,
+        outputTokens: 0,
+      });
+      expect(tracker.getBudgetStatus().circuitBreakerTriggered).toBe(true);
+    };
+
     it('should create tracker with default pricing', () => {
       expect(tracker.getPricing('openai', 'gpt-4o')).toBe(0.002);
       expect(tracker.getPricing('anthropic', 'claude-sonnet-5')).toBe(0.0015);
@@ -333,26 +349,13 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
     });
 
     it('should trigger circuit breaker at 100%', () => {
-      // Track operations but catch circuit breaker exceptions
-      // Each operation costs 0.002, budget is 5.0
-      let operations = 0;
-      let circuitBreakerHit = false;
+      // 2600 * $0.002 = $5.20 against a $5.00 limit. Every completed call is
+      // recorded, including those past the limit: that spend happened (#244).
+      for (let i = 0; i < 2600; i++) tracker.trackOperation('openai', 'gpt-4o', false);
 
-      try {
-        // Try to exceed budget
-        for (let i = 0; i < 3000; i++) {
-          tracker.trackOperation('openai', 'gpt-4o', false);
-          operations++;
-        }
-      } catch {
-        circuitBreakerHit = true;
-      }
-
-      expect(circuitBreakerHit).toBe(true);
-      expect(operations).toBeGreaterThan(2400); // Should have tracked most operations
-
-      const status = tracker.getBudgetStatus();
-      expect(status.circuitBreakerTriggered).toBe(true);
+      expect(tracker.getDailyCost()).toBeCloseTo(5.2, 5);
+      expect(tracker.getBudgetStatus().circuitBreakerTriggered).toBe(true);
+      expect(() => tracker.reserve('openai', 'gpt-4o')).toThrow(/circuit breaker/i);
     });
 
     // Regression tests for issue #126: a provider:model pair absent from the
@@ -380,23 +383,20 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       });
 
       it('blocks an unpriced paid model once the breaker has tripped', () => {
-        expect(() => {
-          for (let i = 0; i < 3000; i++) tracker.trackOperation('openai', 'gpt-4o', false);
-        }).toThrow(/circuit breaker/i);
+        spendTheDay();
 
         // The bug: this used to sail through, because its computed cost was 0.
-        expect(() => tracker.trackOperation('openai', 'some-unreleased-model', false)).toThrow(
+        expect(() => tracker.reserve('openai', 'some-unreleased-model')).toThrow(
           /Budget limit exceeded/,
         );
       });
 
       it('still lets cache hits and free providers through after tripping', () => {
-        expect(() => {
-          for (let i = 0; i < 3000; i++) tracker.trackOperation('openai', 'gpt-4o', false);
-        }).toThrow(/circuit breaker/i);
+        spendTheDay();
 
         // Issue #68 must survive this change: neither of these costs anything.
         expect(tracker.trackOperation('openai', 'some-unreleased-model', true)).toBe(0);
+        expect(() => tracker.reserve('ollama', 'llava')).not.toThrow();
         expect(tracker.trackOperation('ollama', 'llava', false)).toBe(0);
       });
 
@@ -437,11 +437,10 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       });
 
       it('lets an unregistered local model through after the breaker has tripped', () => {
-        expect(() => {
-          for (let i = 0; i < 3000; i++) tracker.trackOperation('openai', 'gpt-4o', false);
-        }).toThrow(/circuit breaker/i);
+        spendTheDay();
 
         // Would have been blocked by the first version of this fix.
+        expect(() => tracker.reserve('ollama', 'moondream')).not.toThrow();
         expect(tracker.trackOperation('ollama', 'moondream', false)).toBe(0);
       });
 
@@ -527,9 +526,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         const big = { inputTokens: 1_000_000, outputTokens: 0 };
         expect(tracker.trackOperation('openai', 'o9-ultra', false, big)).toBeGreaterThanOrEqual(5);
         expect(tracker.getBudgetStatus().circuitBreakerTriggered).toBe(true);
-        expect(() => tracker.trackOperation('openai', 'o9-ultra', false, big)).toThrow(
-          /Budget limit exceeded/,
-        );
+        expect(() => tracker.reserve('openai', 'o9-ultra')).toThrow(/Budget limit exceeded/);
       });
 
       it('keeps every model on a free provider at $0', () => {
@@ -631,21 +628,13 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
       /**
        * Record spend "in the future", then put the clock back where it was.
-       *
-       * The breaker tripping *during* the loop is expected and correct — while
-       * the clock is ahead it is self-consistent, so the sum is right. The bug
-       * only appears once the clock moves back, which is what we assert after.
+       * The bug only appears once the clock moves back, which is what we
+       * assert after.
        */
       const trackWithClockAhead = (aheadMs: number, operations: number) => {
         const spy = jest.spyOn(Date, 'now').mockReturnValue(noon + aheadMs);
         try {
-          for (let i = 0; i < operations; i++) {
-            try {
-              tracker.trackOperation('openai', 'gpt-4o', false);
-            } catch {
-              break; // budget reached; enough spend is on the books
-            }
-          }
+          for (let i = 0; i < operations; i++) tracker.trackOperation('openai', 'gpt-4o', false);
         } finally {
           spy.mockReturnValue(noon); // the clock jumps back
         }
@@ -671,7 +660,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         expect(status.dailyPercent).toBeGreaterThanOrEqual(1.0);
         expect(status.circuitBreakerTriggered).toBe(true);
         // And the breaker actually blocks the next paid operation.
-        expect(() => tracker.trackOperation('openai', 'gpt-4o', false)).toThrow();
+        expect(() => tracker.reserve('openai', 'gpt-4o')).toThrow(/circuit breaker/i);
       });
 
       it('leaves getCostForPeriod range queries bounded as before', () => {
@@ -688,30 +677,140 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
     // Regression tests for issue #68: the breaker must block only paid
     // operations — $0 cache hits and free providers always proceed.
     describe('circuit breaker with free operations (issue #68)', () => {
-      const tripBreaker = () => {
-        expect(() => {
-          for (let i = 0; i < 3000; i++) {
-            tracker.trackOperation('openai', 'gpt-4o', false);
-          }
-        }).toThrow(/circuit breaker/i);
-        expect(tracker.getBudgetStatus().circuitBreakerTriggered).toBe(true);
-      };
-
       it('allows cached operations after the breaker has tripped', () => {
-        tripBreaker();
+        spendTheDay();
         expect(tracker.trackOperation('openai', 'gpt-4o', true)).toBe(0);
       });
 
       it('allows free-provider (ollama) operations after the breaker has tripped', () => {
-        tripBreaker();
+        spendTheDay();
+        expect(() => tracker.reserve('ollama', 'llava')).not.toThrow();
         expect(tracker.trackOperation('ollama', 'llava', false)).toBe(0);
       });
 
       it('still blocks paid operations after the breaker has tripped', () => {
-        tripBreaker();
-        expect(() => tracker.trackOperation('openai', 'gpt-4o', false)).toThrow(
-          /Budget limit exceeded/,
+        spendTheDay();
+        expect(() => tracker.reserve('openai', 'gpt-4o')).toThrow(/Budget limit exceeded/);
+      });
+    });
+
+    // Issue #244. The breaker used to be checked when a call was *recorded*,
+    // i.e. after it was paid for: the throw dropped the row and discarded the
+    // answer. And the pre-call check was check-then-act across the provider's
+    // await, so N concurrent calls all saw "under budget". The budget is now
+    // held before the call (reserve) and corrected after it (settle/release).
+    describe('reserve-then-settle (issue #244)', () => {
+      // A three-image Sonnet 5 analysis near the top of what one call can use.
+      const bigVision = { inputTokens: 6000, outputTokens: 1000 };
+      const bigVisionCost = 6000 * 3e-6 + 1000 * 1.5e-5;
+
+      it('holds an estimate at least as large as a real call, counted against the budget', () => {
+        tracker.reserve('anthropic', 'claude-sonnet-5');
+        expect(tracker.getDailyCost()).toBeGreaterThanOrEqual(bigVisionCost);
+      });
+
+      it('settles a reservation to the actual cost and token counts', () => {
+        const id = tracker.reserve('anthropic', 'claude-sonnet-5');
+        expect(tracker.settle(id, { inputTokens: 1000, outputTokens: 100 })).toBeCloseTo(
+          0.0045,
+          10,
         );
+
+        expect(tracker.getDailyCost()).toBeCloseTo(0.0045, 10);
+        const stats = tracker.getStats();
+        expect(stats.operationCount).toBe(1);
+        expect(stats.costByModel['claude-sonnet-5']).toBeCloseTo(0.0045, 10);
+      });
+
+      it('settles a reply without usage at the flat per-call price', () => {
+        const id = tracker.reserve('openai', 'gpt-4o');
+        expect(tracker.settle(id)).toBe(0.002);
+      });
+
+      it('releases a reservation for a call that got no reply, leaving no row', () => {
+        const id = tracker.reserve('openai', 'gpt-4o');
+        tracker.release(id);
+        expect(tracker.getDailyCost()).toBe(0);
+        expect(tracker.getStats().operationCount).toBe(0);
+      });
+
+      it('records the operation the reservation was made for', () => {
+        const id = tracker.reserve('openai', 'gpt-4o', 'agent_turn');
+        tracker.settle(id, { inputTokens: 100, outputTokens: 10 });
+        const row = (tracker as unknown as { db: Database.Database }).db
+          .prepare('SELECT operation, pending FROM cost_tracking')
+          .get();
+        expect(row).toEqual({ operation: 'agent_turn', pending: 0 });
+      });
+
+      it('refuses a reservation once spend plus open reservations reach the limit', () => {
+        // Nothing is settled yet: the reservations alone must stop admission,
+        // which is what bounds calls that are all in flight at once.
+        const admitted: number[] = [];
+        expect(() => {
+          for (let i = 0; i < 1000; i++)
+            admitted.push(tracker.reserve('anthropic', 'claude-sonnet-5'));
+        }).toThrow(BudgetExceededError);
+
+        // Every admitted call then costs as much as a call can. Spend stays
+        // within the limit plus one call.
+        for (const id of admitted) tracker.settle(id, bigVision);
+        expect(tracker.getDailyCost()).toBeLessThanOrEqual(5 + bigVisionCost);
+        expect(admitted.length).toBeGreaterThan(1);
+      });
+
+      it('records a completed paid call even when the breaker is already tripped', () => {
+        // The first half of the bug: a paid reply was thrown away unrecorded.
+        spendTheDay();
+        expect(tracker.trackOperation('openai', 'gpt-4o', false)).toBe(0.002);
+        expect(tracker.getDailyCost()).toBeCloseTo(5.002, 10);
+      });
+
+      it('never refuses when the circuit breaker is disabled', () => {
+        tracker.updateBudget({ enableCircuitBreaker: false });
+        tracker.trackOperation('openai', 'gpt-4o', false, {
+          inputTokens: 4_000_000,
+          outputTokens: 0,
+        });
+        expect(() => tracker.reserve('openai', 'gpt-4o')).not.toThrow();
+      });
+
+      it('sees reservations made through another connection to the same ledger', () => {
+        // The text client opens a tracker per call (#242), so concurrent calls
+        // hold separate connections. A reservation must be visible to all of them.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-reserve-'));
+        const file = path.join(dir, 'ledger.db');
+        const a = new CostTracker(file, { dailyLimit: 0.05, monthlyLimit: 100 });
+        const b = new CostTracker(file, { dailyLimit: 0.05, monthlyLimit: 100 });
+        try {
+          a.reserve('anthropic', 'claude-sonnet-5');
+          a.reserve('anthropic', 'claude-sonnet-5');
+          expect(() => b.reserve('anthropic', 'claude-sonnet-5')).toThrow(BudgetExceededError);
+        } finally {
+          a.close();
+          b.close();
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
+      it('adds the pending column to a ledger created before it existed', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-pending-'));
+        const file = path.join(dir, 'ledger.db');
+        const old = new Database(file);
+        old.exec(`CREATE TABLE cost_tracking (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL,
+          provider TEXT NOT NULL, model TEXT NOT NULL, operation TEXT NOT NULL,
+          cost REAL NOT NULL, cached INTEGER NOT NULL DEFAULT 0)`);
+        old.close();
+
+        const upgraded = new CostTracker(file);
+        try {
+          const id = upgraded.reserve('openai', 'gpt-4o');
+          expect(upgraded.settle(id)).toBe(0.002);
+        } finally {
+          upgraded.close();
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
       });
     });
 
@@ -1060,6 +1159,131 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
           processedSize: 1,
         } as never),
       );
+
+    // Issue #244: a provider call that completed is paid for, whatever IRIS
+    // does next. Recording it must not depend on the breaker, the reply
+    // parsing, or the cache, and concurrent calls must not all pass a budget
+    // check that only one of them fits in.
+    describe('every completed paid call is recorded (issue #244)', () => {
+      const sonnet: IrisConfig = {
+        ...mockConfig,
+        ai: { provider: 'anthropic', model: 'claude-sonnet-5', apiKey: 'sk-ant-test' },
+      };
+      const verdict = { severity: 'minor', confidence: 0.9, reasoning: 'r', categories: ['color'] };
+      // Three images and a full reply on Sonnet 5: $0.033.
+      const usage = { inputTokens: 6000, outputTokens: 1000 };
+      const callCost = 6000 * 3e-6 + 1000 * 1.5e-5;
+
+      const client = (dailyLimit: number, opts: SmartClientConfig = {}) =>
+        createSmartClient(sonnet, {
+          fallbackChain: ['anthropic', 'openai'],
+          cacheConfig: { dbPath: ':memory:' },
+          costConfig: { dbPath: ':memory:', dailyLimit, monthlyLimit: 100 },
+          ...opts,
+        });
+
+      // Every provider in the chain gets the same fake, so a second paid call
+      // on "the next vendor" shows up as a second call on this spy.
+      const provider = (analyzeVisualDiff: jest.Mock) =>
+        jest.spyOn(AIClientFactory, 'create').mockReturnValue({
+          analyzeVisualDiff,
+          isAvailable: jest.fn().mockResolvedValue(true),
+        } as never);
+
+      const request = (n = 0) => ({
+        baseline: Buffer.from(`base-${n}`),
+        current: Buffer.from('cur'),
+      });
+
+      beforeEach(() => {
+        stubPreprocess();
+      });
+
+      afterEach(() => {
+        jest.restoreAllMocks();
+      });
+
+      it('returns and records a paid answer that takes spend past the limit', async () => {
+        // The bug: recording threw once this answer crossed the limit, so it was
+        // discarded unrecorded and the next vendor was paid to answer again.
+        const analyze = jest.fn().mockResolvedValue({ ...verdict, usage });
+        provider(analyze);
+        const smart = client(0.01);
+
+        await expect(smart.analyzeVisualDiff(request())).resolves.toMatchObject(verdict);
+
+        expect(analyze).toHaveBeenCalledTimes(1);
+        expect(smart.getBudgetStatus()?.dailyUsed).toBeCloseTo(callCost, 10);
+        smart.close();
+      });
+
+      it('records a reply the provider billed but IRIS rejected', async () => {
+        const analyze = jest
+          .fn()
+          .mockRejectedValue(new AIResponseRejectedError('Invalid JSON from model', usage));
+        provider(analyze);
+        const smart = client(10, { enableFallback: false });
+
+        await expect(smart.analyzeVisualDiff(request())).rejects.toThrow(/Invalid JSON/);
+
+        expect(smart.getBudgetStatus()?.dailyUsed).toBeCloseTo(callCost, 10);
+        expect(smart.getCostStats()?.operationCount).toBe(1);
+        smart.close();
+      });
+
+      it('leaves no row for a call that failed before the provider replied', async () => {
+        provider(jest.fn().mockRejectedValue(new Error('ECONNRESET')));
+        const smart = client(10, { enableFallback: false });
+
+        await expect(smart.analyzeVisualDiff(request())).rejects.toThrow(/ECONNRESET/);
+
+        expect(smart.getBudgetStatus()?.dailyUsed).toBe(0);
+        expect(smart.getCostStats()?.operationCount).toBe(0);
+        smart.close();
+      });
+
+      it('logs a cache-write failure instead of paying another vendor', async () => {
+        const analyze = jest.fn().mockResolvedValue({ ...verdict, usage });
+        provider(analyze);
+        jest.spyOn(AIVisionCache.prototype, 'set').mockImplementation(() => {
+          throw new Error('SQLITE_FULL: database or disk is full');
+        });
+        const warn = jest.spyOn(console, 'warn').mockImplementation();
+        const smart = client(10);
+
+        await expect(smart.analyzeVisualDiff(request())).resolves.toMatchObject(verdict);
+
+        expect(analyze).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls.map((c) => c.join(' ')).join('\n')).toMatch(/SQLITE_FULL/);
+        expect(smart.getBudgetStatus()?.dailyUsed).toBeCloseTo(callCost, 10);
+        smart.close();
+      });
+
+      it('keeps N parallel analyses within the limit plus one call', async () => {
+        // All ten are in flight together, so none has settled when the others
+        // ask. Without reservations every one of them saw $0 spent.
+        const analyze = jest.fn(async () => {
+          await sleep(20);
+          return { ...verdict, usage };
+        });
+        provider(analyze);
+        const limit = 0.05;
+        const smart = client(limit, { enableFallback: false });
+
+        const results = await Promise.allSettled(
+          Array.from({ length: 10 }, (_, i) => smart.analyzeVisualDiff(request(i))),
+        );
+
+        const refused = results.filter((r) => r.status === 'rejected');
+        expect(refused.length).toBeGreaterThan(0);
+        for (const r of refused) {
+          expect((r as PromiseRejectedResult).reason.message).toMatch(/Budget limit exceeded/);
+        }
+        expect(analyze).toHaveBeenCalledTimes(10 - refused.length);
+        expect(smart.getBudgetStatus()!.dailyUsed).toBeLessThanOrEqual(limit + callCost);
+        smart.close();
+      });
+    });
 
     // Issue #124. Two things have to hold at once here: the diff buffer must
     // survive the smart client's field-by-field rebuild of the provider request

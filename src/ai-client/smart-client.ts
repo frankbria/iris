@@ -1,7 +1,13 @@
 import * as path from 'path';
 import { DEFAULT_BUDGET_LIMITS, IrisConfig, ProviderCredentials, resolveBudget } from '../config';
 import { resolveDataDir } from '../data-dir';
-import { AIVisionClient, AIVisionRequest, AIVisionResponse } from './base';
+import {
+  AIResponseRejectedError,
+  AIVisionClient,
+  AIVisionRequest,
+  AIVisionResponse,
+  formatError,
+} from './base';
 import { AIClientFactory } from './factory';
 import { AIVisionCache } from './cache';
 import { CostTracker } from './cost-tracker';
@@ -219,6 +225,10 @@ export class SmartAIVisionClient {
         }
       }
 
+      // Held from before the call until its reply is recorded (#244), so the
+      // budget counts calls still in flight.
+      let reservation: number | undefined;
+      let result: AIVisionResponse;
       try {
         // Get or create client for this provider
         const client = this.getClient(providerName, model);
@@ -229,42 +239,26 @@ export class SmartAIVisionClient {
           continue;
         }
 
-        // Check budget before making API call — billable operations only (issue
-        // #68): free providers (Ollama, registered at 0) proceed regardless.
-        //
-        // `isBudgetGated` rather than `getPricing() > 0` (issue #126): the
-        // latter treats a model nobody priced as free, which is the one case
-        // where guessing wrong costs real money. Token-rate-only registrations
-        // now count as billable too — the per-call price is unknown before the
-        // call, but the model is still paid.
-        if (this.costTracker && this.costTracker.isBudgetGated(providerName, model)) {
-          const budgetStatus = this.costTracker.getBudgetStatus();
-          if (budgetStatus.circuitBreakerTriggered) {
-            throw new Error('Budget limit exceeded - circuit breaker activated');
-          }
-        }
+        // Refuses a billable call once spend plus open reservations reaches the
+        // limit; free providers (#68) and unpriced-but-paid models (#126) are
+        // judged inside the tracker.
+        reservation = this.costTracker?.reserve(providerName, model);
 
-        // Make API call
-        const result = await client.analyzeVisualDiff({
+        result = await client.analyzeVisualDiff({
           baseline: baselineProcessed.buffer,
           current: currentProcessed.buffer,
           ...(diffProcessed ? { diff: diffProcessed.buffer } : {}),
           context: request.context,
         });
-
-        // Track cost using real token usage when the provider reported it
-        // (falls back to flat per-image pricing inside trackOperation).
-        if (this.costTracker) {
-          this.costTracker.trackOperation(providerName, model, false, result.usage);
-        }
-
-        // Cache result
-        if (this.cache && cacheKey) {
-          this.cache.set(cacheKey, result, providerName, model);
-        }
-
-        return result;
       } catch (error) {
+        // A reply IRIS rejected was still billed; anything else never got one.
+        if (reservation !== undefined) {
+          if (error instanceof AIResponseRejectedError) {
+            this.costTracker!.settle(reservation, error.usage);
+          } else {
+            this.costTracker!.release(reservation);
+          }
+        }
         // "That model does not exist" is the user's to fix, and stepping to the
         // next vendor only reprints it as "all providers failed" (#184). Keep
         // the guard here at the swallow site, not only where it is thrown.
@@ -273,6 +267,22 @@ export class SmartAIVisionClient {
         // Continue to next provider in fallback chain
         continue;
       }
+
+      // From here on the call is paid for and answered. Nothing below may send
+      // it to the next vendor, which would pay for the same answer twice.
+      if (reservation !== undefined) {
+        this.costTracker!.settle(reservation, result.usage);
+      }
+
+      if (this.cache && cacheKey) {
+        try {
+          this.cache.set(cacheKey, result, providerName, model);
+        } catch (error) {
+          console.warn('⚠️  Could not cache the vision result:', formatError(error));
+        }
+      }
+
+      return result;
     }
 
     // All providers failed

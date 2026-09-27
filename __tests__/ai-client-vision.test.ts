@@ -16,6 +16,7 @@ import {
   AnthropicVisionClient,
   OllamaVisionClient,
 } from '../src/ai-client/vision';
+import { AIResponseRejectedError } from '../src/ai-client/base';
 
 // --- OpenAI SDK mock ---
 const mockOpenAICreate = jest.fn();
@@ -606,6 +607,84 @@ describe('vision clients', () => {
   // Issue #183: the default was claude-3-5-sonnet-20241022, which 404s — the
   // whole claude-3 family is retired. Assert the request carries a model the
   // account can actually reach when the user configures none.
+  // Issue #244. A reply that fails validation was still billed. It used to
+  // throw a bare parse error with the usage discarded, so the call never
+  // reached the ledger.
+  describe('a billed reply IRIS rejects carries its usage', () => {
+    it('OpenAI: invalid JSON', async () => {
+      mockOpenAICreate.mockResolvedValue({
+        choices: [{ message: { content: 'not json' } }],
+        usage: { prompt_tokens: 1500, completion_tokens: 40, total_tokens: 1540 },
+      });
+      const client = new OpenAIVisionClient({ provider: 'openai', apiKey: 'k', model: 'gpt-4o' });
+
+      const error = await client.analyzeVisualDiff(request).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(AIResponseRejectedError);
+      expect((error as AIResponseRejectedError).usage).toEqual({
+        inputTokens: 1500,
+        outputTokens: 40,
+        totalTokens: 1540,
+      });
+    });
+
+    it('OpenAI: an empty reply', async () => {
+      mockOpenAICreate.mockResolvedValue({
+        choices: [{ message: { content: '' } }],
+        usage: { prompt_tokens: 1500, completion_tokens: 0, total_tokens: 1500 },
+      });
+      const client = new OpenAIVisionClient({ provider: 'openai', apiKey: 'k', model: 'gpt-4o' });
+
+      await expect(client.analyzeVisualDiff(request)).rejects.toMatchObject({
+        name: 'AIResponseRejectedError',
+        usage: { inputTokens: 1500, outputTokens: 0 },
+      });
+    });
+
+    it('Anthropic: a severity outside the schema', async () => {
+      mockAnthropicCreate.mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ ...parsed, severity: 'catastrophic' }) }],
+        usage: { input_tokens: 2000, output_tokens: 60 },
+      });
+      const client = new AnthropicVisionClient({
+        provider: 'anthropic',
+        apiKey: 'k',
+        model: 'claude-sonnet-5',
+      });
+
+      await expect(client.analyzeVisualDiff(request)).rejects.toMatchObject({
+        name: 'AIResponseRejectedError',
+        usage: { inputTokens: 2000, outputTokens: 60 },
+      });
+    });
+
+    it('Ollama: invalid JSON', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ response: 'nope', prompt_eval_count: 700, eval_count: 5 }),
+      });
+      const client = new OllamaVisionClient({
+        provider: 'ollama',
+        endpoint: 'http://localhost:11434',
+        model: 'llava',
+      });
+
+      await expect(client.analyzeVisualDiff(request)).rejects.toMatchObject({
+        name: 'AIResponseRejectedError',
+        usage: { inputTokens: 700, outputTokens: 5 },
+      });
+    });
+
+    it('a request that never got a reply is not marked as billed', async () => {
+      mockOpenAICreate.mockRejectedValue(Object.assign(new Error('bad key'), { status: 401 }));
+      const client = new OpenAIVisionClient({ provider: 'openai', apiKey: 'k', model: 'gpt-4o' });
+
+      const error = await client.analyzeVisualDiff(request).catch((e: unknown) => e);
+
+      expect(error).not.toBeInstanceOf(AIResponseRejectedError);
+    });
+  });
+
   describe('default model when none is configured (issue #183)', () => {
     it('requests a current Anthropic model', async () => {
       mockAnthropicCreate.mockResolvedValue({

@@ -162,6 +162,23 @@ export interface AITokenUsage {
 }
 
 /**
+ * The provider answered, so the call was billed, but IRIS rejected the answer
+ * (empty, not JSON, outside the schema). Carries the reply's usage so the cost
+ * is still recorded (issue #244); a plain error means no reply came back.
+ */
+export class AIResponseRejectedError extends Error {
+  readonly name = 'AIResponseRejectedError';
+
+  constructor(
+    message: string,
+    readonly usage?: AITokenUsage,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+  }
+}
+
+/**
  * Response from AI vision analysis
  */
 export interface AIVisionResponse extends VisionClassification {
