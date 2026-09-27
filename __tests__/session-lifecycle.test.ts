@@ -163,6 +163,7 @@ describe('browser crash', () => {
     expect((await call(ws, 'executeBrowserAction', navigate())).result.success).toBe(true);
 
     const [pid] = chromiumChildren();
+    expect(pid).toBeDefined();
     process.kill(pid, 'SIGKILL');
     // Playwright notices a little after the process is gone; a request in
     // that window gets a "browser has been closed" error, which is clear enough.
