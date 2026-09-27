@@ -89,6 +89,7 @@ __tests__/
 ├── egress-proxy.test.ts           # Proxy over real sockets: resolved-address refusals, rebinding pin, positive controls (#336)
 ├── egress-proxy-browser.test.ts   # Hosted Chromium: worker/SharedWorker/WebSocket egress and WebRTC UDP (#336)
 ├── protocol-limits.test.ts        # RPC limits over real sockets: payload, connections, sessions, actions, clamps, heartbeat (#338)
+├── session-lifecycle.test.ts      # Real Chromium, counted in /proc: launch-time disconnect, crash relaunch, busy sweep (#240)
 ├── container-config.test.ts       # Compose hardening, seccomp profile, token file + healthcheck (#332)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
@@ -352,6 +353,27 @@ operator sizes a box by: `--max-payload`, `--max-connections`, `--max-sessions`,
   a phantom session holding a `maxSessions` slot for 30 minutes, and the second
   launches a Chromium nothing reclaims. Tests hold the fake Ollama answer to open
   that window on demand.
+
+### Browser Session Lifecycle (issue #240)
+
+- **`ActionExecutor.cleanup()` waits for an in-flight launch**, then closes what
+  it yields. A cleanup that landed mid-launch used to find no browser yet; if
+  page creation then failed, that Chromium ran with nothing to close it.
+- **A dead browser is dropped, not reused.** The executor clears it on
+  `disconnected`, and the protocol clears a `session.page` that `isClosed()`,
+  so the next action relaunches. Playwright notices a kill ~100ms after the
+  process is gone; a request in that window gets "browser has been closed".
+- **`session.busy` counts in-flight requests.** The sweeper skips a busy session,
+  and `lastActivity` is refreshed when a request ends, not only when it starts.
+  The sweep runs every `min(5 min, sessionTimeout)`.
+- **`cleanupSession` deletes only its own map entry**: a launch may have replaced
+  it during the await.
+- **`isVisible` returns false only on `TimeoutError`.** Anything else (closed
+  page, bad selector) is an error, so `element_absent` cannot pass on a dead page.
+- ws `close`/`error` stay outside the `SessionGate` on purpose: the gate would
+  make a dead client's browser wait for in-flight actions before being reclaimed.
+- Chromium `close()` takes 1.4-1.9s on a loaded dev host. Process-exit waits in
+  tests get a long poll budget; an orphan never exits, so it costs no signal.
 
 ### A Red Suite May Be the Machine, Not the Diff (issue #142)
 

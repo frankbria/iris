@@ -122,7 +122,9 @@ export class ActionExecutor {
    */
   async createPage(): Promise<Page> {
     try {
-      if (!this.browser) {
+      // isConnected() as well as the 'disconnected' listener: a death before
+      // the listener was attached would otherwise stay bound forever.
+      if (!this.browser?.isConnected()) {
         await this.launchBrowser();
       }
 
@@ -254,13 +256,15 @@ export class ActionExecutor {
     // A cleanup that lands mid-launch would otherwise find no browser yet and
     // leave the one about to arrive running with nothing to close it (#240).
     await this.launching?.catch(() => undefined);
-    if (this.browser) {
+    const browser = this.browser;
+    if (browser) {
       try {
-        await closeBrowser(this.browser);
+        await closeBrowser(browser);
       } catch {
         // Ignore cleanup errors
       } finally {
-        this.browser = null;
+        // Not a browser launched while this one was closing.
+        if (this.browser === browser) this.browser = null;
       }
     }
   }
@@ -359,6 +363,10 @@ export class ActionExecutor {
    * means "it never matched", which is an answer, not an error.
    */
   private async urlBecomes(page: Page, substring: string, timeout: number): Promise<boolean> {
+    // A closed page still reports its last URL, which would pass (#240).
+    if (page.isClosed()) {
+      throw new Error('url_matches: page has been closed');
+    }
     if (page.url().includes(substring)) {
       return true; // already there — skip the wait entirely
     }
@@ -366,8 +374,9 @@ export class ActionExecutor {
     try {
       await page.waitForURL((url) => url.href.includes(substring), { timeout });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (error instanceof errors.TimeoutError) return false;
+      throw error;
     }
   }
 
