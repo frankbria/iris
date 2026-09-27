@@ -36,7 +36,21 @@ export interface IrisConfig {
     headless: boolean;
     timeout: number;
   };
+  /** AI spend limits in USD; see `resolveBudget()`. */
+  budget?: Partial<BudgetLimits>;
 }
+
+/** Daily and monthly AI spend limits, in USD. */
+export interface BudgetLimits {
+  dailyLimit: number;
+  monthlyLimit: number;
+}
+
+/** What an unconfigured install gets. The circuit breaker blocks paid calls past these. */
+export const DEFAULT_BUDGET_LIMITS: Readonly<BudgetLimits> = Object.freeze({
+  dailyLimit: 10,
+  monthlyLimit: 200,
+});
 
 const DEFAULT_CONFIG: IrisConfig = {
   ai: {
@@ -218,6 +232,40 @@ function loadConfigFile(): Partial<IrisConfig> {
     return {};
   }
   return parsed as Partial<IrisConfig>;
+}
+
+/**
+ * AI spend limits, per field: `IRIS_DAILY_BUDGET_USD` / `IRIS_MONTHLY_BUDGET_USD`,
+ * then `budget` in `~/.iris/config.json`, then `DEFAULT_BUDGET_LIMITS` (#241).
+ * An exported variable outranks the file for the same reason `<PROVIDER>_MODEL`
+ * does: it is the user saying so for this run.
+ *
+ * A malformed value throws. Falling back quietly would run under a limit the
+ * user did not ask for. 0 is valid and means "free providers only".
+ */
+export function resolveBudget(): BudgetLimits {
+  const file = loadConfigFile().budget ?? {};
+  const pick = (key: keyof BudgetLimits, envVar: string): number => {
+    const raw = process.env[envVar];
+    if (raw !== undefined) {
+      if (!/^\d+(\.\d+)?$/.test(raw.trim())) {
+        throw new Error(`${envVar} must be a non-negative number of US dollars, got "${raw}"`);
+      }
+      return Number(raw);
+    }
+    const value = file[key];
+    if (value === undefined) return DEFAULT_BUDGET_LIMITS[key];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      throw new Error(
+        `budget.${key} in ${getConfigPath()} must be a non-negative number, got ${JSON.stringify(value)}`,
+      );
+    }
+    return value;
+  };
+  return {
+    dailyLimit: pick('dailyLimit', 'IRIS_DAILY_BUDGET_USD'),
+    monthlyLimit: pick('monthlyLimit', 'IRIS_MONTHLY_BUDGET_USD'),
+  };
 }
 
 export function saveConfig(config: IrisConfig): void {

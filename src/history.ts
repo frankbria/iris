@@ -11,8 +11,7 @@
  * user's history. `watcher.ts` persists at the same layer for the same reason.
  */
 
-import * as path from 'path';
-import * as os from 'os';
+import { resolveDbPath } from './data-dir';
 import {
   initializeDatabase,
   insertA11yTestResult,
@@ -22,11 +21,6 @@ import {
 import { calculateAccessibilityScore } from './a11y/a11y-runner';
 import type { AccessibilityTestResult } from './a11y/a11y-runner';
 import type { VisualTestResult as VisualRunResult } from './visual/visual-runner';
-
-/** Same location and override the watcher uses, so all history lands in one file. */
-function resolveDbPath(): string {
-  return process.env.IRIS_DB_PATH || path.join(os.homedir(), '.iris', 'iris.db');
-}
 
 /**
  * Open the history database, hand it to `write`, and always close it.

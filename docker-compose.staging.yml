@@ -33,6 +33,9 @@ services:
       IRIS_CONNECT_TOKEN_FILE: /run/secrets/connect_token
       # Keep run history inside the named volume rather than the container layer.
       IRIS_DB_PATH: /data/iris.db
+      # The cost ledger and vision cache too (#241). The root filesystem is
+      # read-only, so a path left under /app fails with EROFS.
+      IRIS_DATA_DIR: /data
 
     # A bind mount, so the container sees the host file's own owner and mode:
     # it must be readable by pwuser (uid 1001). Keep it inside a 0700 directory

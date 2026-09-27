@@ -13,7 +13,7 @@ import { AIVisualClassifier } from './visual/ai-classifier';
 import type { AIProvider } from './visual/ai-classifier';
 import type { ProviderCredentials } from './config';
 import * as path from 'path';
-import * as os from 'os';
+import { resolveDbPath } from './data-dir';
 import { pathToFileURL } from 'url';
 
 export interface WatchOptions {
@@ -696,7 +696,7 @@ export class FileWatcher {
 
       // Persist to database
       try {
-        const dbPath = process.env.IRIS_DB_PATH || path.join(os.homedir(), '.iris', 'iris.db');
+        const dbPath = resolveDbPath();
         const db = initializeDatabase(dbPath);
 
         try {
