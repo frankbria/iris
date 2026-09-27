@@ -32,7 +32,7 @@ launch surface is an **authenticated API + minimal portal**. P0.3
 | P0 | 51 |
 | P1 | 32 |
 | P2 | 13 |
-| P3 | 3 |
+| P3 | 5 |
 
 **Order:** working `P0.1 → … → P3.3` has no forward dependencies (validated
 before filing). Groups A–E are independent of the platform work in F–K and can
@@ -213,6 +213,8 @@ code is the ordering key.
 | `P3.1` | [#325](https://github.com/frankbria/iris/issues/325) | Test trust: AI client fakes must return usage; cover the persistent cache | P0.16 (#244) | TODO |
 | `P3.2` | [#364](https://github.com/frankbria/iris/issues/364) | Test suite: protocol test configuration | P0.24 (#341) | TODO |
 | `P3.3` | [#365](https://github.com/frankbria/iris/issues/365) | Hygiene: comments and dead code in RPC and AI layers | — | TODO |
+| `P3.4` | [#382](https://github.com/frankbria/iris/issues/382) | egress-proxy test assumes 127.0.0.1:1 refuses; it blackholes on WSL | — | TODO |
+| `P3.5` | [#383](https://github.com/frankbria/iris/issues/383) | ActionExecutor.createPage is not reentrant: concurrent calls can orphan a browser | P0.12 (#240) | TODO |
 
 ---
 
