@@ -203,6 +203,13 @@ const DEFAULT_PRICING: ProviderPricing[] = [
 const FREE_PROVIDERS = new Set(['ollama']);
 
 /**
+ * provider:model pairs already warned about, so a hot loop warns once (issue
+ * #126). Per process, not per tracker: text calls open a tracker per call
+ * (#242), and a per-instance set would warn on every one of them.
+ */
+const unpricedWarned = new Set<string>();
+
+/**
  * Default budget configuration
  */
 const DEFAULT_BUDGET: Required<BudgetConfig> = {
@@ -223,8 +230,6 @@ export class CostTracker {
   private budget: Required<BudgetConfig>;
   private pricing: Map<string, number>;
   private tokenPricing: Map<string, TokenRates>;
-  /** provider:model pairs already warned about, so a hot loop warns once (issue #126). */
-  private unpricedWarned: Set<string> = new Set();
 
   constructor(dbPath: string = ':memory:', budget: BudgetConfig = {}) {
     ensureDatabaseDir(dbPath);
@@ -409,8 +414,8 @@ export class CostTracker {
     const key = `${provider}:${model}`;
     const registered = this.tokenPricing.has(key) || this.pricing.has(key);
     if (billable && cost === 0 && !registered) {
-      if (!this.unpricedWarned.has(key)) {
-        this.unpricedWarned.add(key);
+      if (!unpricedWarned.has(key)) {
+        unpricedWarned.add(key);
         console.warn(
           `⚠️  No pricing registered for ${key}; its cost is recorded as $0 and will not count ` +
             `against the budget. Register it with setPricing() for accurate accounting.`,

@@ -17,7 +17,8 @@ import type { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { createResolvedAIClient } from '../src/ai-client';
+import { createResolvedAIClient, CostTracker } from '../src/ai-client';
+import { translate } from '../src/translator';
 import { IrisConfig } from '../src/config';
 import { resolveDataDir } from '../src/data-dir';
 
@@ -66,23 +67,19 @@ function rows(): Row[] {
   }
 }
 
-/** Spend today's whole budget, so the breaker is tripped before the call under test. */
-function exhaustBudget(): void {
-  process.env.IRIS_DAILY_BUDGET_USD = '1';
-  fs.mkdirSync(path.dirname(ledgerPath()), { recursive: true });
-  const db = new Database(ledgerPath());
+/**
+ * Spend the whole budget named by `envVar` ($1), so the breaker is tripped
+ * before the call under test. Seeded through CostTracker itself, so the row
+ * has whatever shape production writes.
+ */
+function exhaustBudget(envVar = 'IRIS_DAILY_BUDGET_USD'): void {
+  process.env[envVar] = '1';
+  const tracker = new CostTracker(ledgerPath());
   try {
-    db.exec(`CREATE TABLE IF NOT EXISTS cost_tracking (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL,
-      provider TEXT NOT NULL, model TEXT NOT NULL, operation TEXT NOT NULL,
-      cost REAL NOT NULL, cached INTEGER NOT NULL DEFAULT 0,
-      input_tokens INTEGER, output_tokens INTEGER)`);
-    db.prepare(
-      `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost)
-       VALUES (?, 'openai', 'gpt-4o', 'vision-analysis', 5)`,
-    ).run(Date.now());
+    // gpt-4o input at $2.50/1M: $2.50 of spend.
+    tracker.trackOperation('openai', 'gpt-4o', false, { inputTokens: 1_000_000, outputTokens: 0 });
   } finally {
-    db.close();
+    tracker.close();
   }
 }
 
@@ -121,11 +118,15 @@ describe('text LLM metering (#242)', () => {
     jest.clearAllMocks();
     ollamaHits = 0;
     delete process.env.IRIS_DAILY_BUDGET_USD;
+    delete process.env.IRIS_MONTHLY_BUDGET_USD;
+    delete process.env.OLLAMA_ENDPOINT;
     fs.rmSync(ledgerPath(), { force: true });
   });
 
   afterAll(() => {
     delete process.env.IRIS_DAILY_BUDGET_USD;
+    delete process.env.IRIS_MONTHLY_BUDGET_USD;
+    delete process.env.OLLAMA_ENDPOINT;
   });
 
   it('records an OpenAI translation as a `text` row priced from its token usage', async () => {
@@ -191,17 +192,20 @@ describe('text LLM metering (#242)', () => {
     expect(rows()[0]).toMatchObject({ input_tokens: 1000, output_tokens: 200 });
   });
 
-  it('refuses a paid text call before contacting the provider once the budget is spent', async () => {
-    exhaustBudget();
-    mockOpenAICreate.mockResolvedValue(openaiReply);
-    const client = await createResolvedAIClient(config({ apiKey: 'sk-test' }));
+  it.each(['IRIS_DAILY_BUDGET_USD', 'IRIS_MONTHLY_BUDGET_USD'])(
+    'refuses a paid text call before contacting the provider once %s is spent',
+    async (envVar) => {
+      exhaustBudget(envVar);
+      mockOpenAICreate.mockResolvedValue(openaiReply);
+      const client = await createResolvedAIClient(config({ apiKey: 'sk-test' }));
 
-    await expect(client.translateInstruction({ instruction: 'click go' })).rejects.toThrow(
-      /circuit breaker/,
-    );
-    expect(mockOpenAICreate).not.toHaveBeenCalled();
-    expect(rows()).toHaveLength(1); // only the seeded spend
-  });
+      await expect(client.translateInstruction({ instruction: 'click go' })).rejects.toThrow(
+        /circuit breaker/,
+      );
+      expect(mockOpenAICreate).not.toHaveBeenCalled();
+      expect(rows()).toHaveLength(1); // only the seeded spend
+    },
+  );
 
   it('refuses a paid call whose model was never priced (unknown is billable)', async () => {
     exhaustBudget();
@@ -243,5 +247,39 @@ describe('text LLM metering (#242)', () => {
 
     expect(plan.confidence).toBe(0);
     expect(rows()).toEqual([]);
+  });
+
+  // The path users actually take: `iris run`, the RPC `instruction` method and
+  // the watcher all call translate(). Testing only createResolvedAIClient would
+  // stay green if translate() went back to building an unmetered client.
+  it('meters a translate() call that falls through to the model', async () => {
+    process.env.OLLAMA_ENDPOINT = ollamaEndpoint;
+
+    const result = await translate('make sure the order total is shown');
+
+    expect(result.method).toBe('ai');
+    expect(rows()).toEqual([
+      expect.objectContaining({ provider: 'ollama', operation: 'text', input_tokens: 321 }),
+    ]);
+  });
+
+  // Each call opens its own tracker, so a per-instance "already warned" set
+  // would print the unpriced-model warning on every translation.
+  it('warns about an unpriced model once, not once per call', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation();
+    mockAnthropicCreate.mockResolvedValue({
+      content: [{ type: 'text', text: PLAN }],
+      usage: { input_tokens: 10, output_tokens: 10 },
+    });
+    const client = await createResolvedAIClient(
+      config({ provider: 'anthropic', apiKey: 'sk-ant-test', model: 'claude-unpriced-8' }),
+    );
+
+    await client.translateInstruction({ instruction: 'click go' });
+    await client.translateInstruction({ instruction: 'click go' });
+
+    const hits = warn.mock.calls.filter((c) => String(c[0]).includes('claude-unpriced-8'));
+    expect(hits).toHaveLength(1);
+    warn.mockRestore();
   });
 });
