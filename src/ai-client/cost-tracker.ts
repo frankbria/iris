@@ -598,8 +598,12 @@ export class CostTracker {
     const dailyCost = this.getDailyCost();
     const monthlyCost = this.getMonthlyCost();
 
-    const dailyPercent = dailyCost / this.budget.dailyLimit;
-    const monthlyPercent = monthlyCost / this.budget.monthlyLimit;
+    // A limit of 0 means "free providers only", so it is spent before anything
+    // is: 0/0 is NaN, and NaN >= 1 is false, which let the first paid call
+    // through a $0 budget.
+    const fraction = (used: number, limit: number) => (limit > 0 ? used / limit : Infinity);
+    const dailyPercent = fraction(dailyCost, this.budget.dailyLimit);
+    const monthlyPercent = fraction(monthlyCost, this.budget.monthlyLimit);
 
     const warningTriggered =
       dailyPercent >= this.budget.warningThreshold ||

@@ -282,4 +282,18 @@ describe('text LLM metering (#242)', () => {
     expect(hits).toHaveLength(1);
     warn.mockRestore();
   });
+
+  // A $0 budget is documented as "free providers only". With an empty ledger
+  // the spend fraction was 0/0 = NaN, and NaN >= 1 is false, so the first paid
+  // call went through.
+  it('treats a $0 budget as spent before the first paid call', async () => {
+    process.env.IRIS_DAILY_BUDGET_USD = '0';
+    mockOpenAICreate.mockResolvedValue(openaiReply);
+    const client = await createResolvedAIClient(config({ apiKey: 'sk-test' }));
+
+    await expect(client.translateInstruction({ instruction: 'click go' })).rejects.toThrow(
+      /circuit breaker/,
+    );
+    expect(mockOpenAICreate).not.toHaveBeenCalled();
+  });
 });
