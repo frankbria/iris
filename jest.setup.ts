@@ -110,14 +110,18 @@ for (const key of [
   delete process.env[key];
 }
 
-// The cost ledger and vision cache live in the data dir (#241). Fresh per test
-// file and removed after it: a shared or reused ledger carries spend from one
-// file (or yesterday's run) into the next, and the budget breaker then trips in
-// a test that never spent a cent. Unconditional for the same reason as
+// The cost ledger and vision cache live in the data dir (#241). Emptied at the
+// start of every test file: a reused ledger carries spend from one file (or
+// yesterday's run) into the next, and the budget breaker then trips in a test
+// that never spent a cent. Emptied here, not in an afterAll: a setup file's
+// afterAll runs BEFORE the test file's own, which may still be writing to it.
+// Keyed by worker pid: a worker runs files one at a time, and a second jest
+// run on the machine has other pids. Unconditional for the same reason as
 // IRIS_DOTENV_DIR: an exported value aimed at a real ~/.iris is the leak.
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-jest-data-'));
+const dataDir = path.join(os.tmpdir(), `iris-jest-data-${process.pid}`);
+fs.rmSync(dataDir, { recursive: true, force: true });
+fs.mkdirSync(dataDir, { mode: 0o700 });
 process.env.IRIS_DATA_DIR = dataDir;
-afterAll(() => fs.rmSync(dataDir, { recursive: true, force: true }));
 
 // Mock console methods to reduce noise in test output while preserving error logging
 const originalError = console.error;

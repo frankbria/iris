@@ -247,11 +247,15 @@ export function resolveBudget(): BudgetLimits {
   const file = loadConfigFile().budget ?? {};
   const pick = (key: keyof BudgetLimits, envVar: string): number => {
     const raw = process.env[envVar];
-    if (raw !== undefined) {
-      if (!/^\d+(\.\d+)?$/.test(raw.trim())) {
+    // Empty counts as unset, as it does for IRIS_HOSTED: compose's `${X:-}` yields it.
+    if (raw !== undefined && raw.trim() !== '') {
+      const value = Number(raw);
+      // isFinite as well: 309 digits pass the pattern and parse to Infinity,
+      // which is no limit at all.
+      if (!/^\d+(\.\d+)?$/.test(raw.trim()) || !Number.isFinite(value)) {
         throw new Error(`${envVar} must be a non-negative number of US dollars, got "${raw}"`);
       }
-      return Number(raw);
+      return value;
     }
     const value = file[key];
     if (value === undefined) return DEFAULT_BUDGET_LIMITS[key];

@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { IrisConfig, ProviderCredentials, resolveBudget } from '../config';
+import { DEFAULT_BUDGET_LIMITS, IrisConfig, ProviderCredentials, resolveBudget } from '../config';
 import { resolveDataDir } from '../data-dir';
 import { AIVisionClient, AIVisionRequest, AIVisionResponse } from './base';
 import { AIClientFactory } from './factory';
@@ -78,7 +78,7 @@ function defaultConfig(): ResolvedConfig {
     },
     costConfig: {
       dbPath: path.join(cacheDir, 'cost-tracking.db'),
-      ...resolveBudget(),
+      ...DEFAULT_BUDGET_LIMITS,
     },
   };
 }
@@ -117,7 +117,13 @@ export class SmartAIVisionClient {
       ...defaults,
       ...smartConfig,
       cacheConfig: { ...defaults.cacheConfig, ...smartConfig.cacheConfig },
-      costConfig: { ...defaults.costConfig, ...smartConfig.costConfig },
+      costConfig: {
+        ...defaults.costConfig,
+        // Only when it can matter: a malformed variable should not break a
+        // client that tracks no cost, or one given both limits explicitly.
+        ...(this.needsBudget(smartConfig) ? resolveBudget() : {}),
+        ...smartConfig.costConfig,
+      },
     };
     this.irisConfig = irisConfig;
     this.clients = new Map();
@@ -136,6 +142,13 @@ export class SmartAIVisionClient {
         monthlyLimit: this.config.costConfig.monthlyLimit,
       });
     }
+  }
+
+  private needsBudget({ enableCostTracking = true, costConfig }: SmartClientConfig): boolean {
+    return (
+      enableCostTracking &&
+      (costConfig?.dailyLimit === undefined || costConfig?.monthlyLimit === undefined)
+    );
   }
 
   /**

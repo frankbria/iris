@@ -92,6 +92,11 @@ describe('resolveDbPath', () => {
     expect(resolveDbPath()).toBe(path.join(tmp, 'x', 'history.db'));
   });
 
+  test('a relative IRIS_DB_PATH is made absolute, so it cannot follow the cwd', () => {
+    process.env.IRIS_DB_PATH = 'rel/history.db';
+    expect(resolveDbPath()).toBe(path.resolve('rel/history.db'));
+  });
+
   test('otherwise iris.db inside the data dir', () => {
     process.env.IRIS_DATA_DIR = path.join(tmp, 'data');
     expect(resolveDbPath()).toBe(path.join(tmp, 'data', 'iris.db'));
@@ -142,12 +147,26 @@ describe('resolveBudget', () => {
     expect(resolveBudget()).toEqual({ dailyLimit: 1.5, monthlyLimit: 40 });
   });
 
+  test("an empty variable counts as unset, like compose's ${X:-}", () => {
+    process.env.IRIS_DAILY_BUDGET_USD = '';
+    expect(resolveBudget().dailyLimit).toBe(10);
+  });
+
+  test('a malformed variable does not break a client that tracks no cost', () => {
+    process.env.IRIS_DATA_DIR = path.join(tmp, 'data');
+    process.env.IRIS_DAILY_BUDGET_USD = 'abc';
+    expect(() =>
+      new SmartAIVisionClient(IRIS, { enableCostTracking: false }).close(),
+    ).not.toThrow();
+    expect(() => new SmartAIVisionClient(IRIS).close()).toThrow(/IRIS_DAILY_BUDGET_USD/);
+  });
+
   test('0 is a real limit: free providers only', () => {
     process.env.IRIS_MONTHLY_BUDGET_USD = '0';
     expect(resolveBudget().monthlyLimit).toBe(0);
   });
 
-  test.each(['abc', '-1', '', 'Infinity', '10usd'])(
+  test.each(['abc', '-1', 'Infinity', '10usd', '9'.repeat(400)])(
     'refuses %p rather than running without the limit the user meant',
     (value) => {
       process.env.IRIS_DAILY_BUDGET_USD = value;

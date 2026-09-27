@@ -22,7 +22,12 @@ export function resolveDataDir(): string {
   return path.join(os.homedir(), '.iris');
 }
 
-/** The history database: `IRIS_DB_PATH` names the file outright, else `<data dir>/iris.db`. */
+/**
+ * The history database: `IRIS_DB_PATH` names the file outright, else
+ * `<data dir>/iris.db`. Absolute for the same reason as the data dir.
+ */
 export function resolveDbPath(): string {
-  return process.env.IRIS_DB_PATH || path.join(resolveDataDir(), 'iris.db');
+  return process.env.IRIS_DB_PATH
+    ? path.resolve(process.env.IRIS_DB_PATH)
+    : path.join(resolveDataDir(), 'iris.db');
 }
