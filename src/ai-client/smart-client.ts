@@ -1,4 +1,6 @@
-import { IrisConfig, ProviderCredentials } from '../config';
+import * as path from 'path';
+import { DEFAULT_BUDGET_LIMITS, IrisConfig, ProviderCredentials, resolveBudget } from '../config';
+import { resolveDataDir } from '../data-dir';
 import { AIVisionClient, AIVisionRequest, AIVisionResponse } from './base';
 import { AIClientFactory } from './factory';
 import { AIVisionCache } from './cache';
@@ -49,31 +51,37 @@ export interface SmartClientConfig {
   };
 }
 
-/**
- * Default smart client configuration
- */
-const DEFAULT_CONFIG: Required<Omit<SmartClientConfig, 'cacheConfig' | 'costConfig'>> & {
+type ResolvedConfig = Required<Omit<SmartClientConfig, 'cacheConfig' | 'costConfig'>> & {
   cacheConfig: { maxMemoryEntries: number; ttlMs: number; dbPath: string };
   costConfig: { dbPath: string; dailyLimit: number; monthlyLimit: number };
-} = {
-  enableCache: true,
-  enableCostTracking: true,
-  enableFallback: true,
-  fallbackChain: ['ollama', 'openai', 'anthropic'],
-  // These live under `.iris/` alongside baselines/screenshots/reports: it is
-  // already gitignored, whereas the previous `./data/` default was not — users
-  // would have committed their cache and cost history (issue #111).
-  cacheConfig: {
-    maxMemoryEntries: 100,
-    ttlMs: 30 * 24 * 60 * 60 * 1000,
-    dbPath: '.iris/cache/vision-cache.db',
-  },
-  costConfig: {
-    dbPath: '.iris/cache/cost-tracking.db',
-    dailyLimit: 10.0,
-    monthlyLimit: 200.0,
-  },
 };
+
+/**
+ * Default smart client configuration, resolved when a client is built rather
+ * than at import, so it follows the environment of the moment.
+ *
+ * The cache and cost ledger live in the data dir, not the cwd (#241): a
+ * cwd-relative ledger gave every directory its own fresh daily budget, and in
+ * the read-only container it resolved under /app.
+ */
+function defaultConfig(): ResolvedConfig {
+  const cacheDir = path.join(resolveDataDir(), 'cache');
+  return {
+    enableCache: true,
+    enableCostTracking: true,
+    enableFallback: true,
+    fallbackChain: ['ollama', 'openai', 'anthropic'],
+    cacheConfig: {
+      maxMemoryEntries: 100,
+      ttlMs: 30 * 24 * 60 * 60 * 1000,
+      dbPath: path.join(cacheDir, 'vision-cache.db'),
+    },
+    costConfig: {
+      dbPath: path.join(cacheDir, 'cost-tracking.db'),
+      ...DEFAULT_BUDGET_LIMITS,
+    },
+  };
+}
 
 /**
  * Smart AI vision client with caching, cost tracking, and fallback
@@ -85,7 +93,7 @@ const DEFAULT_CONFIG: Required<Omit<SmartClientConfig, 'cacheConfig' | 'costConf
  * 4. Track costs and enforce budget limits
  */
 export class SmartAIVisionClient {
-  private config: typeof DEFAULT_CONFIG;
+  private config: ResolvedConfig;
   private cache?: AIVisionCache;
   private costTracker?: CostTracker;
   private preprocessor: ImagePreprocessor;
@@ -104,11 +112,18 @@ export class SmartAIVisionClient {
   private irisConfig: IrisConfig;
 
   constructor(irisConfig: IrisConfig, smartConfig: SmartClientConfig = {}) {
+    const defaults = defaultConfig();
     this.config = {
-      ...DEFAULT_CONFIG,
+      ...defaults,
       ...smartConfig,
-      cacheConfig: { ...DEFAULT_CONFIG.cacheConfig, ...smartConfig.cacheConfig },
-      costConfig: { ...DEFAULT_CONFIG.costConfig, ...smartConfig.costConfig },
+      cacheConfig: { ...defaults.cacheConfig, ...smartConfig.cacheConfig },
+      costConfig: {
+        ...defaults.costConfig,
+        // Only when it can matter: a malformed variable should not break a
+        // client that tracks no cost, or one given both limits explicitly.
+        ...(this.needsBudget(smartConfig) ? resolveBudget() : {}),
+        ...smartConfig.costConfig,
+      },
     };
     this.irisConfig = irisConfig;
     this.clients = new Map();
@@ -127,6 +142,13 @@ export class SmartAIVisionClient {
         monthlyLimit: this.config.costConfig.monthlyLimit,
       });
     }
+  }
+
+  private needsBudget({ enableCostTracking = true, costConfig }: SmartClientConfig): boolean {
+    return (
+      enableCostTracking &&
+      (costConfig?.dailyLimit === undefined || costConfig?.monthlyLimit === undefined)
+    );
   }
 
   /**

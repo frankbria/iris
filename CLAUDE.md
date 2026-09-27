@@ -405,6 +405,13 @@ Three guards live there, all for the same reason — a test must not behave
 differently because of an untracked file or an exported shell variable:
 
 - `IRIS_DB_PATH` -> a per-worker temp DB, so runs never write to `~/.iris/iris.db`
+- `IRIS_DATA_DIR` -> a per-worker-pid temp dir, emptied at the start of every test file
+  (#241). Not an `afterAll`: a setup file's `afterAll` runs before the test file's own.
+  Assigned unconditionally: a reused ledger carries spend between files and trips
+  the budget breaker in a test that spent nothing
+- `IRIS_CONFIG_PATH` -> `<that dir>/config.json`, which never exists, so the developer's
+  real `~/.iris/config.json` (budgets, provider) never reaches a test. `config.test.ts`
+  unsets it to test the default location
 - `IRIS_MODEL_PROBE=0` -> no provider model-list lookups (#184)
 - `IRIS_DOTENV_DIR` -> a per-worker temp directory, created 0700 and swept of any stray
   `.env`, so `loadDotenv()` finds nothing (#185). Assigned **unconditionally** — unlike
@@ -422,6 +429,22 @@ exercise provider resolution.
 
 Adding a new variable that IRIS reads from the environment? Add it to the scrub
 list too, or the suite silently becomes machine-dependent again.
+
+### Data Directory and Budgets (issue #241)
+
+- `resolveDataDir()` (src/data-dir.ts): `IRIS_DATA_DIR` > `dirname(IRIS_DB_PATH)` >
+  `~/.iris`, always absolute. History (`resolveDbPath()`), the cost ledger and the
+  vision cache (`<data dir>/cache/`) all use it. The ledger used to be cwd-relative,
+  so every directory had its own fresh daily budget.
+- The smart client resolves paths and limits **when constructed**, not at import,
+  so tests and long-lived processes follow the environment of the moment.
+- `resolveBudget()` (src/config.ts): `IRIS_DAILY_BUDGET_USD` / `IRIS_MONTHLY_BUDGET_USD`
+  > `budget` in `~/.iris/config.json` > `DEFAULT_BUDGET_LIMITS` ($10 / $200), per field.
+  Malformed values throw. An explicit `costConfig` passed to the client still wins.
+- Container: compose sets `IRIS_DATA_DIR: /data`, the only durable writable path
+  under the read-only root filesystem.
+- Under Jest, `process.env.HOME` does not move `os.homedir()` (the env is a copy);
+  spy on `os.homedir` instead.
 
 ### Configuration Layering (issue #184)
 

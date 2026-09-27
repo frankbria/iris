@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { ensureDatabaseDir } from '../db';
+import { DEFAULT_BUDGET_LIMITS } from '../config';
 
 /**
  * AI provider pricing configuration
@@ -199,8 +200,7 @@ const FREE_PROVIDERS = new Set(['ollama']);
  * Default budget configuration
  */
 const DEFAULT_BUDGET: Required<BudgetConfig> = {
-  dailyLimit: 10.0, // $10/day
-  monthlyLimit: 200.0, // $200/month
+  ...DEFAULT_BUDGET_LIMITS,
   warningThreshold: 0.8, // 80%
   criticalThreshold: 0.95, // 95%
   enableCircuitBreaker: true,

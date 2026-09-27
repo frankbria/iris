@@ -1101,6 +1101,17 @@ Performance baselines:
   a row per page) to `$IRIS_DB_PATH`, defaulting to `~/.iris/iris.db`. Persistence
   failures are logged and never fail the test run.
 
+**Data directory and AI budgets** (`src/data-dir.ts`, `resolveBudget()` in `src/config.ts`)
+- Run history, the AI cost ledger and the vision cache share one data directory:
+  `$IRIS_DATA_DIR`, else the directory of `$IRIS_DB_PATH`, else `~/.iris`. The
+  ledger and cache sit in `<data dir>/cache/`. The directory you run from does not matter.
+- AI spend limits default to **$10/day and $200/month**. Override with
+  `IRIS_DAILY_BUDGET_USD` / `IRIS_MONTHLY_BUDGET_USD`, or in `~/.iris/config.json`:
+  `{ "budget": { "dailyLimit": 5, "monthlyLimit": 100 } }`. A variable beats the file.
+  `0` allows free providers (Ollama) only. A malformed value is an error, not a
+  silent fallback.
+- `IRIS_CONFIG_PATH` moves the config file itself (default `~/.iris/config.json`).
+
 ---
 
 ## Documentation

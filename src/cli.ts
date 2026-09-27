@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import * as path from 'path';
-import * as os from 'os';
+import { resolveDbPath } from './data-dir';
 import { once } from 'events';
 import { loadDotenv, loadConfig } from './config';
 import type { IrisConfig, ProviderCredentials } from './config';
@@ -384,7 +383,7 @@ program
         // Persist to database (graceful degradation: never crash the run on a DB hiccup)
         try {
           const { initializeDatabase, insertTestRun } = await import('./db');
-          const dbPath = process.env.IRIS_DB_PATH || path.join(os.homedir(), '.iris', 'iris.db');
+          const dbPath = resolveDbPath();
 
           // initializeDatabase creates the parent dir (mode 0o700) if needed.
           const db = initializeDatabase(dbPath);

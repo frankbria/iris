@@ -11,6 +11,9 @@ jest.mock('os');
 const mockFs = fs as jest.Mocked<typeof fs>;
 const mockOs = os as jest.Mocked<typeof os>;
 
+// This file tests the default ~/.iris location, which jest.setup redirects.
+delete process.env.IRIS_CONFIG_PATH;
+
 describe('Config System', () => {
   beforeEach(() => {
     jest.clearAllMocks();

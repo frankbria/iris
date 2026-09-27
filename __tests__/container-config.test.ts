@@ -113,6 +113,13 @@ describe('Dockerfile and deploy wiring (issue #332)', () => {
     expect(read('Dockerfile')).toMatch(/^RUN install -d -o pwuser -g pwuser \/data$/m);
   });
 
+  // History, the cost ledger and the vision cache all resolve from here (#241).
+  // The root filesystem is read-only, so anything left cwd-relative under /app
+  // would fail with EROFS; the volume is the only durable writable place.
+  it('points the data dir at the /data volume', () => {
+    expect(read('docker-compose.staging.yml')).toMatch(/^\s+IRIS_DATA_DIR: \/data$/m);
+  });
+
   it('ships the seccomp profile and the token file to the host, and not the token in .env', () => {
     const ci = read('.github/workflows/ci.yml');
     expect(ci).toMatch(/docker\/seccomp-chromium\.json/);
