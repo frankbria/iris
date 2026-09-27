@@ -497,8 +497,9 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         expect(tracker.trackOperation('anthropic', 'claude-sonnet-5-20260514', false)).toBe(0.0015);
       });
 
-      it('picks the longest registered family prefix', () => {
-        // gpt-4o is also a prefix of this ID; the mini rate is the right one.
+      it('resolves a snapshot to its own family, not a shorter prefix', () => {
+        // gpt-4o is also a prefix of this ID, but "-mini-2024-07-18" is not a
+        // snapshot suffix, so only gpt-4o-mini matches.
         expect(
           tracker.trackOperation('openai', 'gpt-4o-mini-2024-07-18', false, usage),
         ).toBeCloseTo(1000 * 1.5e-7 + 1000 * 6e-7, 12);
