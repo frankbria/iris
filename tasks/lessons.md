@@ -217,3 +217,12 @@ Write/Edit, not as a pre-push afterthought.
 - PR #387: "any `-suffix` inherits the family price" read as the natural answer to "fall back
   by family" and was wrong in the unsafe direction (variants cost more). For a budget
   gate, check every fallback against which way it errs.
+- PR #389: `import … from '../src/ai-client'` resolves to the deprecated `src/ai-client.ts`
+  re-export file, not `src/ai-client/index.ts`. A new export added only to the index reads
+  as "no exported member" in tests. Import new symbols from their own module.
+- PR #389: the cross-family reviewer's Major rested on wrong token math (OpenAI high detail
+  without the 768px downscale). Verifying before fixing split it: the vision half was
+  rebutted, while the text half was real (an uncapped instruction) and got fixed.
+- PR #389: fault injection that closes a SQLite handle breaks the reads that run before the
+  step under test. To fail only writes, use a trigger:
+  `CREATE TRIGGER … BEFORE INSERT … SELECT RAISE(FAIL, 'database or disk is full')`.
