@@ -67,7 +67,7 @@ code is the ordering key.
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
 | `P0.11` | [#338](https://github.com/frankbria/iris/issues/338) | RPC server: configurable limits | P0.2 (#330) | DONE ([#380](https://github.com/frankbria/iris/pull/380)) |
-| `P0.12` | [#240](https://github.com/frankbria/iris/issues/240) | Browser session lifecycle: orphans, crashes, sweeper killing mid-action | P0.2 (#330) | TODO |
+| `P0.12` | [#240](https://github.com/frankbria/iris/issues/240) | Browser session lifecycle: orphans, crashes, sweeper killing mid-action | P0.2 (#330) | DONE ([#381](https://github.com/frankbria/iris/pull/381)) |
 
 **D. AI spend tracking**
 
