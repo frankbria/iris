@@ -105,20 +105,23 @@ class MeteredTextClient implements AIClient {
       resolveBudget(),
     );
     try {
-      // Refused before the provider is contacted: a breaker that only fired on
-      // recording would let the over-budget call through and then drop its row.
-      if (
-        tracker.isBudgetGated(this.provider, this.model) &&
-        tracker.getBudgetStatus().circuitBreakerTriggered
-      ) {
-        throw new Error('Budget limit exceeded - circuit breaker activated');
+      // Refused before the provider is contacted, counting calls already in
+      // flight (#244): a check that ran before the await let N concurrent
+      // calls all pass it.
+      const reservation = tracker.reserve(this.provider, this.model, this.operation);
+      let response: AITranslationResponse;
+      try {
+        response = await this.inner.translateInstruction(request);
+      } catch (error) {
+        tracker.release(reservation);
+        throw error;
       }
-
-      const response = await this.inner.translateInstruction(request);
       // No usage means the request failed before the provider answered, so
       // there is nothing billed to record.
       if (response.usage) {
-        tracker.trackOperation(this.provider, this.model, false, response.usage, this.operation);
+        tracker.settle(reservation, response.usage);
+      } else {
+        tracker.release(reservation);
       }
       return response;
     } finally {

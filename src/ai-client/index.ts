@@ -17,6 +17,7 @@ export {
   VisionClassification,
   BaseAIClient,
   BaseAIVisionClient,
+  AIResponseRejectedError,
 } from './base';
 
 // Text client implementations
@@ -39,6 +40,7 @@ export { AIVisionCache, CacheConfig, CacheEntry, CacheStats, createCache } from 
 // Cost tracker
 export {
   CostTracker,
+  BudgetExceededError,
   ProviderPricing,
   BudgetConfig,
   CostEntry,

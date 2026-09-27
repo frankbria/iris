@@ -1,5 +1,7 @@
 import { IrisConfig } from '../config';
 import {
+  AIResponseRejectedError,
+  AITokenUsage,
   BaseAIVisionClient,
   parseModelJson,
   AITranslationRequest,
@@ -70,6 +72,20 @@ function detectImageMimeType(buffer: Buffer): 'image/jpeg' | 'image/png' | 'imag
     return 'image/webp';
   }
   return 'image/png';
+}
+
+/**
+ * Validate a reply the provider has already billed for. A rejection is
+ * rethrown as {@link AIResponseRejectedError} carrying the usage, so the call
+ * still reaches the ledger (issue #244).
+ */
+function acceptReply<T>(usage: AITokenUsage | undefined, validate: () => T): T {
+  try {
+    return validate();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new AIResponseRejectedError(message, usage, { cause: error });
+  }
 }
 
 /**
@@ -198,15 +214,6 @@ Compare the baseline (first image) with the current (second image) and identify 
         this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
       );
 
-      const content = response.choices[0]?.message?.content;
-      if (!content) {
-        throw new Error('No response from OpenAI vision API');
-      }
-
-      // Validate before use: invalid/empty severity throws (surfacing through
-      // handleVisionError) rather than silently degrading to severity:'none'.
-      const parsed = AIVisionResponseSchema.parse(parseModelJson(content));
-
       // Attach token usage (defensive: may be absent) so downstream cost
       // tracking reflects real high-detail token consumption, not a flat rate.
       const usage = response.usage
@@ -216,6 +223,16 @@ Compare the baseline (first image) with the current (second image) and identify 
             totalTokens: response.usage.total_tokens,
           }
         : undefined;
+
+      // Validate before use: invalid/empty severity throws (surfacing through
+      // handleVisionError) rather than silently degrading to severity:'none'.
+      const parsed = acceptReply(usage, () => {
+        const content = response.choices[0]?.message?.content;
+        if (!content) {
+          throw new Error('No response from OpenAI vision API');
+        }
+        return AIVisionResponseSchema.parse(parseModelJson(content));
+      });
 
       return usage ? { ...parsed, usage } : parsed;
     } catch (error) {
@@ -356,14 +373,6 @@ Respond with JSON:
         this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
       );
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        throw new Error('Unexpected response type from Anthropic');
-      }
-
-      // Validate before use (see OpenAI path): invalid severity throws.
-      const parsed = AIVisionResponseSchema.parse(parseModelJson(content.text));
-
       // Attach token usage (defensive: may be absent) for real cost accounting.
       const usage = response.usage
         ? {
@@ -371,6 +380,15 @@ Respond with JSON:
             outputTokens: response.usage.output_tokens ?? 0,
           }
         : undefined;
+
+      // Validate before use (see OpenAI path): invalid severity throws.
+      const parsed = acceptReply(usage, () => {
+        const content = response.content[0];
+        if (content?.type !== 'text') {
+          throw new Error('Unexpected response type from Anthropic');
+        }
+        return AIVisionResponseSchema.parse(parseModelJson(content.text));
+      });
 
       return usage ? { ...parsed, usage } : parsed;
     } catch (error) {
@@ -478,9 +496,6 @@ Respond with JSON only:
         return response.json();
       }, this.config.retryConfig ?? DEFAULT_RETRY_CONFIG);
 
-      // Validate before use (see OpenAI path): invalid severity throws.
-      const parsed = AIVisionResponseSchema.parse(parseModelJson(data.response));
-
       // Ollama reports token counts via prompt_eval_count/eval_count when
       // present. If absent, leave usage undefined — the cost tracker falls back
       // to the flat per-image price (Ollama pricing is zero anyway).
@@ -491,6 +506,11 @@ Respond with JSON only:
               outputTokens: data.eval_count ?? 0,
             }
           : undefined;
+
+      // Validate before use (see OpenAI path): invalid severity throws.
+      const parsed = acceptReply(usage, () =>
+        AIVisionResponseSchema.parse(parseModelJson(data.response)),
+      );
 
       return usage ? { ...parsed, usage } : parsed;
     } catch (error) {

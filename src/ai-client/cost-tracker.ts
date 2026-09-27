@@ -223,6 +223,29 @@ const FREE_PROVIDERS = new Set(['ollama']);
 const SNAPSHOT_SUFFIX = /^-(\d{8}|\d{4}-\d{2}-\d{2}|latest)$/;
 
 /**
+ * The most one call is assumed to use, for the budget held while it is in
+ * flight (issue #244). Every provider call caps its reply at 1000 tokens, and
+ * 8000 input tokens covers three size-capped images plus the prompt.
+ *
+ * ponytail: a fixed ceiling; a call larger than this (an agent turn carrying a
+ * very large page) can overshoot the limit by the difference. Size the
+ * reservation from the request if that shows up.
+ */
+const RESERVATION_CEILING: TokenUsage = { inputTokens: 8000, outputTokens: 1000 };
+
+/**
+ * A paid call refused before it was made: spend plus the calls already in
+ * flight has reached a budget limit.
+ */
+export class BudgetExceededError extends Error {
+  readonly name = 'BudgetExceededError';
+
+  constructor() {
+    super('Budget limit exceeded - circuit breaker activated. No further API calls allowed.');
+  }
+}
+
+/**
  * provider:model pairs already warned about, so a hot loop warns once (issue
  * #126). Per process, not per tracker: text calls open a tracker per call
  * (#242), and a per-instance set would warn on every one of them.
@@ -287,7 +310,8 @@ export class CostTracker {
         cached INTEGER NOT NULL DEFAULT 0,
         input_tokens INTEGER,
         output_tokens INTEGER,
-        estimated INTEGER NOT NULL DEFAULT 0
+        estimated INTEGER NOT NULL DEFAULT 0,
+        pending INTEGER NOT NULL DEFAULT 0
       );
 
       CREATE INDEX IF NOT EXISTS idx_timestamp ON cost_tracking(timestamp);
@@ -309,6 +333,9 @@ export class CostTracker {
     }
     if (!names.has('estimated')) {
       this.db.exec('ALTER TABLE cost_tracking ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!names.has('pending')) {
+      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN pending INTEGER NOT NULL DEFAULT 0');
     }
   }
 
@@ -420,11 +447,15 @@ export class CostTracker {
   }
 
   /**
-   * Track an AI operation (vision analysis by default)
+   * Record a completed AI operation (vision analysis by default).
    *
    * Cost is computed from real token usage when both usage and per-token rates
    * are available; otherwise it falls back to the flat per-image price. Cached
    * operations are always free.
+   *
+   * Never refuses: by the time a call is recorded it has been paid for, and
+   * dropping the row is how spend went missing (issue #244). The breaker
+   * decision belongs before the call, in {@link reserve}.
    *
    * @param provider - Provider name
    * @param model - Model identifier
@@ -432,8 +463,6 @@ export class CostTracker {
    * @param usage - Optional token usage from the provider
    * @param operation - What the call was for; recorded on the ledger row
    * @returns Cost of operation
-   * @throws Error if circuit breaker is triggered and the operation is paid
-   *   (cost > 0); cached and free-provider operations always succeed
    */
   trackOperation(
     provider: string,
@@ -443,30 +472,100 @@ export class CostTracker {
     operation: CostOperation = 'vision-analysis',
   ): number {
     const { cost, estimated } = this.computeCost(provider, model, cached, usage);
+    this.warnIfEstimated(provider, model, estimated);
+    this.db
+      .prepare(
+        `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cached, input_tokens, output_tokens, estimated)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        Date.now(),
+        provider,
+        model,
+        operation,
+        cost,
+        cached ? 1 : 0,
+        usage?.inputTokens ?? null,
+        usage?.outputTokens ?? null,
+        estimated ? 1 : 0,
+      );
+    return cost;
+  }
 
-    // Circuit breaker blocks billable operations (issue #68): cache hits and
-    // free providers (Ollama) cost $0 and must always proceed. Checked before
-    // recording, so paid enforcement is not bypassed.
-    //
-    // Gated on `isBudgetGated`, not on `cost > 0` (issue #126). A paid model
-    // that nobody priced computes a cost of 0, so the old test read it as free
-    // and waved it through a tripped breaker — exactly the operation the
-    // breaker exists to stop.
-    const billable = !cached && this.isBudgetGated(provider, model);
+  /**
+   * Hold budget for a call about to be made (issue #244).
+   *
+   * Inserts a pending row at the call's worst-case cost
+   * ({@link RESERVATION_CEILING}), so calls already in flight count against
+   * the budget: checking, awaiting the provider, then recording let N
+   * concurrent calls all pass one check. The check and the insert share an
+   * IMMEDIATE transaction, which also serialises them across connections and
+   * processes on the same ledger file.
+   *
+   * A paid call is admitted while spend plus reservations is under the limit,
+   * so spend ends within the limit plus one call. Free providers and
+   * zero-priced models (#68) are never refused.
+   *
+   * @returns The reservation id, for {@link settle} or {@link release}
+   * @throws {BudgetExceededError} when the call is billable and a limit is reached
+   */
+  reserve(provider: string, model: string, operation: CostOperation = 'vision-analysis'): number {
+    return this.db
+      .transaction(() => {
+        if (this.isBudgetGated(provider, model) && this.getBudgetStatus().circuitBreakerTriggered) {
+          throw new BudgetExceededError();
+        }
+        const { cost } = this.computeCost(provider, model, false, RESERVATION_CEILING);
+        const { lastInsertRowid } = this.db
+          .prepare(
+            `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, pending)
+             VALUES (?, ?, ?, ?, ?, 1)`,
+          )
+          .run(Date.now(), provider, model, operation, cost);
+        return Number(lastInsertRowid);
+      })
+      .immediate();
+  }
 
-    if (billable && this.budget.enableCircuitBreaker) {
-      const status = this.getBudgetStatus();
-      if (status.circuitBreakerTriggered) {
-        throw new Error(
-          'Budget limit exceeded - circuit breaker activated. No further API calls allowed.',
-        );
-      }
-    }
+  /**
+   * Replace a reservation's estimate with what the call actually cost. Called
+   * for every call the provider answered, including answers IRIS rejected.
+   *
+   * @param usage - Token usage from the reply; flat per-call price when absent
+   * @returns Cost of the call
+   */
+  settle(id: number, usage?: TokenUsage): number {
+    const row = this.db
+      .prepare('SELECT provider, model FROM cost_tracking WHERE id = ? AND pending = 1')
+      .get(id) as { provider: string; model: string } | undefined;
+    if (!row) throw new Error(`No open cost reservation ${id}`);
 
-    // Surface the guess rather than silently over-reporting: this operation is
-    // recorded at the estimated rate. Once per pair, so a hot loop cannot bury
-    // the warning it is trying to raise. A family match is not a guess and does
-    // not warn.
+    const { cost, estimated } = this.computeCost(row.provider, row.model, false, usage);
+    this.warnIfEstimated(row.provider, row.model, estimated);
+    this.db
+      .prepare(
+        `UPDATE cost_tracking
+         SET cost = ?, input_tokens = ?, output_tokens = ?, estimated = ?, pending = 0
+         WHERE id = ?`,
+      )
+      .run(cost, usage?.inputTokens ?? null, usage?.outputTokens ?? null, estimated ? 1 : 0, id);
+    return cost;
+  }
+
+  /**
+   * Drop a reservation for a call that got no reply, so nothing was billed.
+   */
+  release(id: number): void {
+    this.db.prepare('DELETE FROM cost_tracking WHERE id = ? AND pending = 1').run(id);
+  }
+
+  /**
+   * Surface the guess rather than silently over-reporting: this operation is
+   * recorded at the estimated rate. Once per pair, so a hot loop cannot bury
+   * the warning it is trying to raise. A family match is not a guess and does
+   * not warn.
+   */
+  private warnIfEstimated(provider: string, model: string, estimated: boolean): void {
     const key = `${provider}:${model}`;
     if (estimated && !unpricedWarned.has(key)) {
       unpricedWarned.add(key);
@@ -475,25 +574,6 @@ export class CostTracker {
           `known rate. Register it with setPricing() for accurate accounting.`,
       );
     }
-
-    // Record entry (persist token counts when provided)
-    const stmt = this.db.prepare(`
-      INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cached, input_tokens, output_tokens, estimated)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(
-      Date.now(),
-      provider,
-      model,
-      operation,
-      cost,
-      cached ? 1 : 0,
-      usage?.inputTokens ?? null,
-      usage?.outputTokens ?? null,
-      estimated ? 1 : 0,
-    );
-
-    return cost;
   }
 
   /**
