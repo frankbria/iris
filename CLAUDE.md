@@ -162,6 +162,7 @@ plans/
 **Pricing (default, configurable):**
 - Cost is computed from provider-returned token usage when available; the flat per-image rate below is the fallback (cache hits, Ollama, missing usage)
 - GPT-4o: $2.50/1M input + $10/1M output tokens (fallback $0.002/image)
+- GPT-4o launch snapshot `gpt-4o-2024-05-13`: $5/1M input + $15/1M output tokens (fallback $0.004/image) — it kept its launch price, so it must not inherit gpt-4o's rate (#243)
 - Claude Sonnet 5: $3/1M input + $15/1M output tokens (fallback $0.0015/image) — the vision default
 - Claude Haiku 4.5: $1/1M input + $5/1M output tokens (fallback $0.0005/image) — what the `ANTHROPIC_API_KEY` env path selects, so it is the model an out-of-the-box Anthropic user actually requests
 - Claude Opus 5: $5/1M input + $25/1M output tokens (fallback $0.004/image)
@@ -539,7 +540,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1509/1510 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1521/1522 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation
