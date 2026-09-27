@@ -133,8 +133,9 @@ export function loadDotenv(cwd: string = process.env.IRIS_DOTENV_DIR || process.
   }
 }
 
+/** `IRIS_CONFIG_PATH`, else `~/.iris/config.json`. */
 export function getConfigPath(): string {
-  return path.join(os.homedir(), '.iris', 'config.json');
+  return process.env.IRIS_CONFIG_PATH || path.join(os.homedir(), '.iris', 'config.json');
 }
 
 /**

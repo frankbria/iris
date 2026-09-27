@@ -55,10 +55,7 @@ process.env.IRIS_MODEL_PROBE = process.env.IRIS_MODEL_PROBE ?? '0';
 // and a11y-cli.test.ts did not, and nothing stops the next file from forgetting.
 // A dedicated directory rather than os.tmpdir() itself — a stray /tmp/.env
 // would quietly reopen the hole.
-const dotenvFreeDir = path.join(
-  os.tmpdir(),
-  `iris-jest-no-dotenv-${process.env.JEST_WORKER_ID || '0'}`,
-);
+const dotenvFreeDir = path.join(os.tmpdir(), `iris-jest-no-dotenv-${process.env.JEST_WORKER_ID || '0'}`);
 fs.mkdirSync(dotenvFreeDir, { recursive: true, mode: 0o700 });
 // `mode` is ignored when the directory already exists, so tighten it explicitly:
 // a world-writable path would let anything drop a .env into the one place this
@@ -123,6 +120,12 @@ fs.rmSync(dataDir, { recursive: true, force: true });
 fs.mkdirSync(dataDir, { mode: 0o700 });
 process.env.IRIS_DATA_DIR = dataDir;
 
+// And the config file: a budget or provider in the developer's real
+// ~/.iris/config.json would otherwise reach every test that loads config or
+// builds a smart client. Inside the data dir, which was just emptied, so it is
+// guaranteed absent. Tests of the default location unset it.
+process.env.IRIS_CONFIG_PATH = path.join(dataDir, 'config.json');
+
 // Mock console methods to reduce noise in test output while preserving error logging
 const originalError = console.error;
 const originalWarn = console.warn;
@@ -165,9 +168,9 @@ declare global {
 // Custom Jest matchers for Phase 2 testing
 expect.extend({
   toBeValidImage(received: string) {
-    const pass =
-      fs.existsSync(received) &&
-      ['.png', '.jpg', '.jpeg', '.webp'].some((ext) => received.toLowerCase().endsWith(ext));
+    const pass = fs.existsSync(received) && ['.png', '.jpg', '.jpeg', '.webp'].some(ext =>
+      received.toLowerCase().endsWith(ext)
+    );
 
     if (pass) {
       return {
@@ -188,18 +191,16 @@ expect.extend({
 
     if (pass) {
       return {
-        message: () =>
-          expected !== undefined
-            ? `expected ${violationCount} violations not to equal ${expected}`
-            : `expected no accessibility violations but found ${violationCount}`,
+        message: () => expected !== undefined
+          ? `expected ${violationCount} violations not to equal ${expected}`
+          : `expected no accessibility violations but found ${violationCount}`,
         pass: true,
       };
     } else {
       return {
-        message: () =>
-          expected !== undefined
-            ? `expected ${violationCount} violations to equal ${expected}`
-            : `expected accessibility violations but found none`,
+        message: () => expected !== undefined
+          ? `expected ${violationCount} violations to equal ${expected}`
+          : `expected accessibility violations but found none`,
         pass: false,
       };
     }
@@ -216,8 +217,7 @@ expect.extend({
       };
     } else {
       return {
-        message: () =>
-          `expected ${received} to be within ${threshold} of ${expected}, but difference was ${difference}`,
+        message: () => `expected ${received} to be within ${threshold} of ${expected}, but difference was ${difference}`,
         pass: false,
       };
     }
@@ -232,7 +232,7 @@ if (!fs.existsSync(testFixturesDir)) {
 
 // Create subdirectories for different types of test fixtures
 const fixtureSubdirs = ['images', 'data', 'screenshots', 'baselines'];
-fixtureSubdirs.forEach((subdir) => {
+fixtureSubdirs.forEach(subdir => {
   const subdirPath = path.join(testFixturesDir, subdir);
   if (!fs.existsSync(subdirPath)) {
     fs.mkdirSync(subdirPath, { recursive: true });
@@ -245,12 +245,7 @@ global.testHelpers = {
    * Create a temporary test database file
    */
   createTempDb: () => {
-    const tempPath = path.join(
-      __dirname,
-      '__tests__',
-      'temp',
-      `test-${Date.now()}-${Math.random()}.db`,
-    );
+    const tempPath = path.join(__dirname, '__tests__', 'temp', `test-${Date.now()}-${Math.random()}.db`);
     const tempDir = path.dirname(tempPath);
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
@@ -262,7 +257,7 @@ global.testHelpers = {
    * Clean up temporary test files
    */
   cleanupTempFiles: (patterns: string[]) => {
-    patterns.forEach((pattern) => {
+    patterns.forEach(pattern => {
       const files = require('glob').sync(pattern);
       files.forEach((file: string) => {
         if (fs.existsSync(file)) {
@@ -278,15 +273,14 @@ global.testHelpers = {
   createMockImageBuffer: (width: number = 100, height: number = 100) => {
     // Create a minimal PNG buffer for testing
     // This is a simple 1x1 transparent PNG encoded as base64
-    const base64PNG =
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChAGA60e6kgAAAABJRU5ErkJggg==';
+    const base64PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChAGA60e6kgAAAABJRU5ErkJggg==';
     return Buffer.from(base64PNG, 'base64');
   },
 
   /**
    * Wait for a specified amount of time
    */
-  wait: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+  wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
 
   /**
    * Generate test data with consistent structure
@@ -299,7 +293,7 @@ global.testHelpers = {
       threshold: 0.1,
       disableAnimations: true,
       fullPage: false,
-      ...overrides,
+      ...overrides
     }),
 
     a11yTestConfig: (overrides: any = {}) => ({
@@ -308,10 +302,10 @@ global.testHelpers = {
       rules: {
         wcag2a: true,
         wcag2aa: true,
-        wcag2aaa: false,
+        wcag2aaa: false
       },
       timeout: 10000,
-      ...overrides,
+      ...overrides
     }),
 
     performanceMetric: (overrides: any = {}) => ({
@@ -320,9 +314,9 @@ global.testHelpers = {
       unit: 'ms',
       timestamp: new Date(),
       category: 'timing',
-      ...overrides,
-    }),
-  },
+      ...overrides
+    })
+  }
 };
 
 // Declare global test helpers type
@@ -345,7 +339,7 @@ afterEach(() => {
   const tempDir = path.join(__dirname, '__tests__', 'temp');
   if (fs.existsSync(tempDir)) {
     const tempFiles = fs.readdirSync(tempDir);
-    tempFiles.forEach((file) => {
+    tempFiles.forEach(file => {
       const filePath = path.join(tempDir, file);
       if (fs.statSync(filePath).isFile()) {
         fs.unlinkSync(filePath);

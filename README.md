@@ -1110,6 +1110,7 @@ Performance baselines:
   `{ "budget": { "dailyLimit": 5, "monthlyLimit": 100 } }`. A variable beats the file.
   `0` allows free providers (Ollama) only. A malformed value is an error, not a
   silent fallback.
+- `IRIS_CONFIG_PATH` moves the config file itself (default `~/.iris/config.json`).
 
 ---
 

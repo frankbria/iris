@@ -19,6 +19,7 @@ import type { AccessibilityTestResult } from '../src/a11y/a11y-runner';
 const VARS = [
   'IRIS_DATA_DIR',
   'IRIS_DB_PATH',
+  'IRIS_CONFIG_PATH',
   'IRIS_DAILY_BUDGET_USD',
   'IRIS_MONTHLY_BUDGET_USD',
 ] as const;
@@ -134,6 +135,14 @@ describe('all three stores land in the data dir, whatever the cwd', () => {
 describe('resolveBudget', () => {
   test('defaults are $10/day and $200/month', () => {
     expect(resolveBudget()).toEqual({ dailyLimit: 10, monthlyLimit: 200 });
+  });
+
+  test('IRIS_CONFIG_PATH moves the config file (the test suite points it at nothing)', () => {
+    const elsewhere = path.join(tmp, 'elsewhere.json');
+    fs.writeFileSync(elsewhere, JSON.stringify({ budget: { dailyLimit: 4 } }));
+    writeConfigFile({ budget: { dailyLimit: 3 } });
+    process.env.IRIS_CONFIG_PATH = elsewhere;
+    expect(resolveBudget().dailyLimit).toBe(4);
   });
 
   test('the config file sets them', () => {

@@ -405,9 +405,13 @@ Three guards live there, all for the same reason — a test must not behave
 differently because of an untracked file or an exported shell variable:
 
 - `IRIS_DB_PATH` -> a per-worker temp DB, so runs never write to `~/.iris/iris.db`
-- `IRIS_DATA_DIR` -> a fresh `mkdtemp` per test file, removed in `afterAll` (#241).
-  Assigned unconditionally: a shared ledger carries spend between files and trips
+- `IRIS_DATA_DIR` -> a per-worker-pid temp dir, emptied at the start of every test file
+  (#241). Not an `afterAll`: a setup file's `afterAll` runs before the test file's own.
+  Assigned unconditionally: a reused ledger carries spend between files and trips
   the budget breaker in a test that spent nothing
+- `IRIS_CONFIG_PATH` -> `<that dir>/config.json`, which never exists, so the developer's
+  real `~/.iris/config.json` (budgets, provider) never reaches a test. `config.test.ts`
+  unsets it to test the default location
 - `IRIS_MODEL_PROBE=0` -> no provider model-list lookups (#184)
 - `IRIS_DOTENV_DIR` -> a per-worker temp directory, created 0700 and swept of any stray
   `.env`, so `loadDotenv()` finds nothing (#185). Assigned **unconditionally** — unlike
