@@ -1110,6 +1110,11 @@ Performance baselines:
   `{ "budget": { "dailyLimit": 5, "monthlyLimit": 100 } }`. A variable beats the file.
   `0` allows free providers (Ollama) only. A malformed value is an error, not a
   silent fallback.
+- The budget covers every AI call, not just vision: `iris run` translations, the RPC
+  `instruction` method, watcher translations and each `--agent` turn are recorded in
+  the same ledger (operation `text` / `agent_turn` / `vision-analysis`) with the
+  provider's token counts. Once the budget is spent, a paid call is refused before
+  the provider is contacted.
 - `IRIS_CONFIG_PATH` moves the config file itself (default `~/.iris/config.json`).
 
 ---
