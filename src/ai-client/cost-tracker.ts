@@ -228,10 +228,10 @@ const SNAPSHOT_SUFFIX = /^-(\d{8}|\d{4}-\d{2}-\d{2}|latest)$/;
  * 8000 input tokens covers three size-capped images plus the prompt.
  *
  * ponytail: a fixed ceiling; a call larger than this (an agent turn carrying a
- * very large page) can overshoot the limit by the difference. Size the
- * reservation from the request if that shows up.
+ * very large page) can overshoot the limit by the difference. Callers that
+ * know their input is larger pass their own ceiling to `reserve()`.
  */
-const RESERVATION_CEILING: TokenUsage = { inputTokens: 8000, outputTokens: 1000 };
+export const RESERVATION_CEILING: TokenUsage = { inputTokens: 8000, outputTokens: 1000 };
 
 /**
  * A paid call refused before it was made: spend plus the calls already in
@@ -506,16 +506,22 @@ export class CostTracker {
    * so spend ends within the limit plus one call. Free providers and
    * zero-priced models (#68) are never refused.
    *
+   * @param ceiling - The most this call can use; the estimate is priced from it
    * @returns The reservation id, for {@link settle} or {@link release}
    * @throws {BudgetExceededError} when the call is billable and a limit is reached
    */
-  reserve(provider: string, model: string, operation: CostOperation = 'vision-analysis'): number {
+  reserve(
+    provider: string,
+    model: string,
+    operation: CostOperation = 'vision-analysis',
+    ceiling: TokenUsage = RESERVATION_CEILING,
+  ): number {
     return this.db
       .transaction(() => {
         if (this.isBudgetGated(provider, model) && this.getBudgetStatus().circuitBreakerTriggered) {
           throw new BudgetExceededError();
         }
-        const { cost } = this.computeCost(provider, model, false, RESERVATION_CEILING);
+        const { cost } = this.computeCost(provider, model, false, ceiling);
         const { lastInsertRowid } = this.db
           .prepare(
             `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, pending)

@@ -325,4 +325,26 @@ describe('text LLM metering (#242)', () => {
     const spent = rows().reduce((sum, r) => sum + r.cost, 0);
     expect(spent).toBeLessThanOrEqual(limit + callCost);
   });
+
+  // The instruction is the one input with no cap short of the RPC payload
+  // limit, so a fixed per-call estimate under-holds a long one: the next call
+  // would be admitted against budget the first is about to spend.
+  it('holds budget in proportion to a long instruction while it is in flight', async () => {
+    process.env.IRIS_DAILY_BUDGET_USD = '0.05';
+    let answer: (() => void) | undefined;
+    mockOpenAICreate.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = () => resolve(openaiReply))),
+    );
+    const client = await createResolvedAIClient(config({ apiKey: 'sk-test' }));
+
+    // ~400k characters: at gpt-4o-mini's input rate, more than the whole budget.
+    const long = client.translateInstruction({ instruction: 'click go '.repeat(45_000) });
+    await new Promise((r) => setImmediate(r));
+
+    await expect(client.translateInstruction({ instruction: 'click go' })).rejects.toThrow(
+      /Budget limit exceeded/,
+    );
+    answer!();
+    await long;
+  });
 });

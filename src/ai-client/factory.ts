@@ -2,7 +2,7 @@ import * as path from 'path';
 import { IrisConfig, resolveBudget } from '../config';
 import { resolveDataDir } from '../data-dir';
 import { AIClient, AIVisionClient, AITranslationRequest, AITranslationResponse } from './base';
-import { CostOperation, CostTracker } from './cost-tracker';
+import { CostOperation, CostTracker, RESERVATION_CEILING } from './cost-tracker';
 import { OpenAITextClient, AnthropicTextClient, OllamaTextClient } from './text';
 import { OpenAIVisionClient, AnthropicVisionClient, OllamaVisionClient } from './vision';
 import { resolveModel } from './models';
@@ -108,7 +108,14 @@ class MeteredTextClient implements AIClient {
       // Refused before the provider is contacted, counting calls already in
       // flight (#244): a check that ran before the await let N concurrent
       // calls all pass it.
-      const reservation = tracker.reserve(this.provider, this.model, this.operation);
+      //
+      // The instruction is uncapped short of the RPC payload limit, so it is
+      // reserved at up to one token per character on top of the fixed ceiling.
+      // Over-holding one call never refuses it; it only holds back the next.
+      const reservation = tracker.reserve(this.provider, this.model, this.operation, {
+        ...RESERVATION_CEILING,
+        inputTokens: RESERVATION_CEILING.inputTokens + JSON.stringify(request).length,
+      });
       let response: AITranslationResponse;
       try {
         response = await this.inner.translateInstruction(request);
@@ -145,8 +152,8 @@ class MeteredTextClient implements AIClient {
  * that does not exist. `loadConfig()` stays synchronous; only the two async
  * call sites that build a client pay for the check.
  *
- * Each call throws when the budget's circuit breaker is tripped and the
- * provider is a paid one; local Ollama always proceeds.
+ * Each call on a paid provider throws `BudgetExceededError` once spend plus
+ * calls already in flight reaches the budget (#244); local Ollama always proceeds.
  *
  * @throws {ModelUnavailableError} when the configured model is not served.
  */
