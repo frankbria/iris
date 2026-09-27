@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import Database from 'better-sqlite3';
 import {
   AIVisionCache,
   CostTracker,
@@ -399,7 +400,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         expect(tracker.trackOperation('ollama', 'llava', false)).toBe(0);
       });
 
-      it('warns once per pair when a billable operation records $0', () => {
+      it('warns once per pair when a billable operation is estimated', () => {
         const warn = jest.spyOn(console, 'warn').mockImplementation();
 
         tracker.trackOperation('openai', 'some-unreleased-model', false);
@@ -468,6 +469,152 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         // model was the one going unpriced.
         expect(tracker.getPricing('openai', 'gpt-4o-mini')).toBeGreaterThan(0);
         expect(tracker.isBudgetGated('openai', 'gpt-4o-mini')).toBe(true);
+      });
+    });
+
+    // Issue #243. #126 made unknown models *gated*, but they still *accrued* $0,
+    // so they could never trip the breaker. A dated or rescued successor
+    // (`resolveModel` picks `claude-sonnet-5-20260514` for a retired
+    // `claude-sonnet-5` pin) and any model nobody priced both hit that hole.
+    describe('pricing fallback (issue #243)', () => {
+      const usage = { inputTokens: 1000, outputTokens: 1000 };
+      let warn: jest.SpyInstance;
+
+      // Estimated calls warn by design; keep that out of the test output.
+      beforeEach(() => {
+        warn = jest.spyOn(console, 'warn').mockImplementation();
+      });
+
+      afterEach(() => {
+        warn.mockRestore();
+      });
+
+      it('prices a dated Anthropic ID at its family rate', () => {
+        // Sonnet 5: 1000 * $3/1M + 1000 * $15/1M
+        expect(
+          tracker.trackOperation('anthropic', 'claude-sonnet-5-20260514', false, usage),
+        ).toBeCloseTo(0.018, 10);
+        expect(tracker.trackOperation('anthropic', 'claude-sonnet-5-20260514', false)).toBe(0.0015);
+      });
+
+      it('resolves a snapshot to its own family, not a shorter prefix', () => {
+        // gpt-4o is also a prefix of this ID, but "-mini-2024-07-18" is not a
+        // snapshot suffix, so only gpt-4o-mini matches.
+        expect(
+          tracker.trackOperation('openai', 'gpt-4o-mini-2024-07-18', false, usage),
+        ).toBeCloseTo(1000 * 1.5e-7 + 1000 * 6e-7, 12);
+      });
+
+      it('matches a family only at a "-" boundary', () => {
+        // `gpt-4oz` is not a gpt-4o snapshot, so it gets the estimated rate,
+        // which is above gpt-4o's.
+        expect(tracker.trackOperation('openai', 'gpt-4oz', false, usage)).toBeGreaterThan(
+          1000 * 2.5e-6 + 1000 * 1e-5,
+        );
+      });
+
+      it('charges an unknown model at least the most expensive known rate', () => {
+        // Opus 5 is the dearest row: $5/1M in, $25/1M out, $0.004 flat.
+        expect(tracker.trackOperation('openai', 'o9-ultra', false, usage)).toBeGreaterThanOrEqual(
+          0.03,
+        );
+        expect(tracker.trackOperation('mystery', 'model', false)).toBeGreaterThanOrEqual(0.004);
+      });
+
+      it('counts unknown-price calls toward the budget until the breaker trips', () => {
+        // $5 daily limit. Each call below is estimated at >= $5, so the first
+        // one spends the day and the second is refused.
+        const big = { inputTokens: 1_000_000, outputTokens: 0 };
+        expect(tracker.trackOperation('openai', 'o9-ultra', false, big)).toBeGreaterThanOrEqual(5);
+        expect(tracker.getBudgetStatus().circuitBreakerTriggered).toBe(true);
+        expect(() => tracker.trackOperation('openai', 'o9-ultra', false, big)).toThrow(
+          /Budget limit exceeded/,
+        );
+      });
+
+      it('keeps every model on a free provider at $0', () => {
+        expect(tracker.trackOperation('ollama', 'gemma3', false, usage)).toBe(0);
+      });
+
+      it('flags estimated rows on the ledger, and only those', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-243-'));
+        const dbPath = path.join(dir, 'ledger.db');
+        const fileTracker = createCostTracker(dbPath);
+        try {
+          fileTracker.trackOperation('openai', 'o9-ultra', false, usage);
+          fileTracker.trackOperation('anthropic', 'claude-sonnet-5-20260514', false, usage);
+          fileTracker.trackOperation('ollama', 'gemma3', false, usage);
+          fileTracker.trackOperation('openai', 'o9-ultra', true);
+
+          const db = new Database(dbPath, { readonly: true });
+          const flags = db
+            .prepare('SELECT model, cached, estimated FROM cost_tracking ORDER BY id')
+            .all();
+          db.close();
+          expect(flags).toEqual([
+            { model: 'o9-ultra', cached: 0, estimated: 1 },
+            { model: 'claude-sonnet-5-20260514', cached: 0, estimated: 0 },
+            { model: 'gemma3', cached: 0, estimated: 0 },
+            { model: 'o9-ultra', cached: 1, estimated: 0 },
+          ]);
+        } finally {
+          fileTracker.close();
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
+      it('adds the estimated column to a ledger created before it existed', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-243-'));
+        const dbPath = path.join(dir, 'ledger.db');
+        const old = new Database(dbPath);
+        old.exec(`CREATE TABLE cost_tracking (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL,
+          provider TEXT NOT NULL, model TEXT NOT NULL, operation TEXT NOT NULL,
+          cost REAL NOT NULL, cached INTEGER NOT NULL DEFAULT 0)`);
+        old.close();
+        const upgraded = createCostTracker(dbPath);
+        try {
+          expect(upgraded.trackOperation('openai', 'o9-ultra', false)).toBeGreaterThan(0);
+        } finally {
+          upgraded.close();
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
+      it('does not warn for a family match', () => {
+        tracker.trackOperation('anthropic', 'claude-sonnet-5-20260514', false, usage);
+        expect(warn).not.toHaveBeenCalled();
+      });
+
+      // Review of this change: a variant is not a snapshot. `gpt-4o-realtime-*`
+      // costs more than gpt-4o, so inheriting gpt-4o's rate would under-report.
+      it('inherits a family rate only for a dated or -latest suffix', () => {
+        const gpt4o = 1000 * 2.5e-6 + 1000 * 1e-5;
+        expect(
+          tracker.trackOperation('openai', 'gpt-4o-realtime-preview', false, usage),
+        ).toBeGreaterThan(gpt4o);
+        expect(tracker.trackOperation('openai', 'gpt-4o-2024-08-06', false, usage)).toBeCloseTo(
+          gpt4o,
+          12,
+        );
+        expect(tracker.trackOperation('anthropic', 'claude-opus-5-latest', false)).toBe(0.004);
+      });
+
+      it('prices the gpt-4o launch snapshot at its own, higher rate', () => {
+        // gpt-4o-2024-05-13 is $5/$15 per 1M, not gpt-4o's $2.50/$10.
+        expect(tracker.trackOperation('openai', 'gpt-4o-2024-05-13', false, usage)).toBeCloseTo(
+          1000 * 5e-6 + 1000 * 1.5e-5,
+          12,
+        );
+      });
+
+      it('raises the estimate when a dearer model is registered', () => {
+        tracker.setPricing('custom', 'pro', 0.5, 1.5e-4, 6e-4);
+        expect(tracker.trackOperation('mystery', 'model', false, usage)).toBeCloseTo(
+          1000 * 1.5e-4 + 1000 * 6e-4,
+          12,
+        );
+        expect(tracker.trackOperation('mystery', 'model', false)).toBe(0.5);
       });
     });
 
