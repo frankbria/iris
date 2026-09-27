@@ -82,6 +82,8 @@ export interface BrowserSession {
   pageCreationPromise: Promise<Page> | null;
   isActive: boolean;
   lastActivity: number;
+  /** Requests running on this session; the inactivity sweep skips it while any are (#240). */
+  busy: number;
 }
 
 export interface BrowserStatus {
@@ -193,13 +195,14 @@ export function startServer(
     () => {
       const now = Date.now();
       for (const [ws, session] of sessions.entries()) {
-        if (now - session.lastActivity > sessionTimeout) {
+        if (session.busy === 0 && now - session.lastActivity > sessionTimeout) {
           cleanupSession(ws, sessions);
         }
       }
     },
-    5 * 60 * 1000,
-  ); // Check every 5 minutes
+    // Every 5 minutes, or more often when the timeout itself is shorter.
+    Math.min(5 * 60 * 1000, sessionTimeout),
+  );
   cleanupInterval.unref();
 
   // Heartbeat: a half-open peer (vanished without a FIN) otherwise pins its
@@ -551,6 +554,7 @@ function createBrowserSession(browserOptions?: ActionExecutorOptions): BrowserSe
     pageCreationPromise: null,
     isActive: true,
     lastActivity: Date.now(),
+    busy: 0,
   };
 
   return session;
@@ -572,9 +576,11 @@ async function executeBrowserActions(
   translationResult?: any;
   error?: string;
 }> {
+  // Busy for the whole request, not just its start: a long action used to be
+  // swept mid-flight once it outlasted the idle timeout (#240).
+  session.busy++;
+  session.lastActivity = Date.now();
   try {
-    session.lastActivity = Date.now();
-
     let actionsToExecute: Action[] = [];
     let translationResult = null;
 
@@ -622,6 +628,9 @@ async function executeBrowserActions(
     // createPage() via the cached promise instead of each creating a page
     // (check-then-act race, issue #69). The promise is cleared once settled so
     // a failed creation can be retried.
+    // The page dies with a crashed browser, or on its own window.close(). Drop
+    // it, and createPage() relaunches if the browser went too (#240).
+    if (session.page?.isClosed()) session.page = null;
     if (!session.page) {
       if (!session.pageCreationPromise) {
         session.pageCreationPromise = session.executor.createPage().finally(() => {
@@ -654,6 +663,9 @@ async function executeBrowserActions(
       results: [],
       error: error instanceof Error ? error.message : 'Unknown error',
     };
+  } finally {
+    session.busy--;
+    session.lastActivity = Date.now();
   }
 }
 
@@ -671,7 +683,7 @@ async function getBrowserSessionStatus(session?: BrowserSession): Promise<Browse
 
   const status: BrowserStatus = {
     isActive: session.isActive,
-    hasPage: session.page !== null,
+    hasPage: session.page !== null && !session.page.isClosed(),
     lastActivity: session.lastActivity,
   };
 
@@ -708,7 +720,9 @@ async function cleanupSession(
     } catch {
       // Ignore cleanup errors
     }
-    sessions.delete(ws);
+    // Only our own entry: a launch may have replaced it during the await, and
+    // deleting that would drop a live session from the map and from the cap.
+    if (sessions.get(ws) === session) sessions.delete(ws);
   }
 }
 

@@ -28,9 +28,10 @@ describe('assert action execution', () => {
     browser = await chromium.launch();
   }, 60000);
 
+  // close() takes seconds on a loaded host (#240); beforeAll has the same budget.
   afterAll(async () => {
     await browser?.close();
-  });
+  }, 60000);
 
   beforeEach(async () => {
     page = await browser.newPage();
@@ -87,9 +88,26 @@ describe('assert action execution', () => {
         false,
       );
     });
+
+    // A dead page has no elements, which used to read as "absent" (#240).
+    it('errors, rather than passes, on a closed page', async () => {
+      await page.close();
+      const r = await run({ type: 'assert', kind: 'element_absent', target: '#go' });
+      expect(r.success).toBe(false);
+      expect(r.error).not.toMatch(/Assertion failed/);
+      expect(r.error).toMatch(/closed/);
+    });
   });
 
   describe('url_matches', () => {
+    it('errors, rather than passes, on a closed page', async () => {
+      await page.close();
+      const r = await run({ type: 'assert', kind: 'url_matches', target: 'text/html' });
+      expect(r.success).toBe(false);
+      expect(r.error).not.toMatch(/Assertion failed/);
+      expect(r.error).toMatch(/closed/);
+    });
+
     it('passes on a substring of the current url', async () => {
       expect(
         (await run({ type: 'assert', kind: 'url_matches', target: 'text/html' })).success,
