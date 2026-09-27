@@ -478,6 +478,16 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
     // `claude-sonnet-5` pin) and any model nobody priced both hit that hole.
     describe('pricing fallback (issue #243)', () => {
       const usage = { inputTokens: 1000, outputTokens: 1000 };
+      let warn: jest.SpyInstance;
+
+      // Estimated calls warn by design; keep that out of the test output.
+      beforeEach(() => {
+        warn = jest.spyOn(console, 'warn').mockImplementation();
+      });
+
+      afterEach(() => {
+        warn.mockRestore();
+      });
 
       it('prices a dated Anthropic ID at its family rate', () => {
         // Sonnet 5: 1000 * $3/1M + 1000 * $15/1M
@@ -571,10 +581,39 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       });
 
       it('does not warn for a family match', () => {
-        const warn = jest.spyOn(console, 'warn').mockImplementation();
         tracker.trackOperation('anthropic', 'claude-sonnet-5-20260514', false, usage);
         expect(warn).not.toHaveBeenCalled();
-        warn.mockRestore();
+      });
+
+      // Review of this change: a variant is not a snapshot. `gpt-4o-realtime-*`
+      // costs more than gpt-4o, so inheriting gpt-4o's rate would under-report.
+      it('inherits a family rate only for a dated or -latest suffix', () => {
+        const gpt4o = 1000 * 2.5e-6 + 1000 * 1e-5;
+        expect(
+          tracker.trackOperation('openai', 'gpt-4o-realtime-preview', false, usage),
+        ).toBeGreaterThan(gpt4o);
+        expect(tracker.trackOperation('openai', 'gpt-4o-2024-08-06', false, usage)).toBeCloseTo(
+          gpt4o,
+          12,
+        );
+        expect(tracker.trackOperation('anthropic', 'claude-opus-5-latest', false)).toBe(0.004);
+      });
+
+      it('prices the gpt-4o launch snapshot at its own, higher rate', () => {
+        // gpt-4o-2024-05-13 is $5/$15 per 1M, not gpt-4o's $2.50/$10.
+        expect(tracker.trackOperation('openai', 'gpt-4o-2024-05-13', false, usage)).toBeCloseTo(
+          1000 * 5e-6 + 1000 * 1.5e-5,
+          12,
+        );
+      });
+
+      it('raises the estimate when a dearer model is registered', () => {
+        tracker.setPricing('custom', 'pro', 0.5, 1.5e-4, 6e-4);
+        expect(tracker.trackOperation('mystery', 'model', false, usage)).toBeCloseTo(
+          1000 * 1.5e-4 + 1000 * 6e-4,
+          12,
+        );
+        expect(tracker.trackOperation('mystery', 'model', false)).toBe(0.5);
       });
     });
 

@@ -147,6 +147,16 @@ const DEFAULT_PRICING: ProviderPricing[] = [
     costPerInputToken: 1.5e-7,
     costPerOutputToken: 6e-7,
   },
+  // The gpt-4o launch snapshot kept its launch price ($5/1M in, $15/1M out)
+  // after gpt-4o itself dropped, so the family fallback (#243) must not give it
+  // the cheaper gpt-4o rate.
+  {
+    provider: 'openai',
+    model: 'gpt-4o-2024-05-13',
+    costPerImage: 0.004,
+    costPerInputToken: 5e-6,
+    costPerOutputToken: 1.5e-5,
+  },
   { provider: 'openai', model: 'gpt-4-vision-preview', costPerImage: 0.003 },
 
   // Anthropic Claude Sonnet 5: $3/1M input tokens, $15/1M output tokens — the
@@ -205,16 +215,12 @@ const DEFAULT_PRICING: ProviderPricing[] = [
 const FREE_PROVIDERS = new Set(['ollama']);
 
 /**
- * Rates charged for a model with no registered price and no family match
- * (issue #243): the dearest value in DEFAULT_PRICING, per field. The ledger
- * gates a budget breaker, so an unknown model must over-report rather than
- * record $0 and never trip it. Rows priced this way are flagged `estimated`.
+ * Suffixes that name a snapshot or alias of a model rather than a different
+ * model: `-20260514`, `-2024-08-06`, `-latest`. Only these inherit the family's
+ * rate (#243). A variant such as `gpt-4o-realtime-preview` is priced
+ * differently, so it gets the estimate instead of gpt-4o's cheaper rate.
  */
-const ESTIMATED_PRICING = {
-  costPerImage: Math.max(...DEFAULT_PRICING.map((p) => p.costPerImage)),
-  input: Math.max(...DEFAULT_PRICING.map((p) => p.costPerInputToken ?? 0)),
-  output: Math.max(...DEFAULT_PRICING.map((p) => p.costPerOutputToken ?? 0)),
-};
+const SNAPSHOT_SUFFIX = /^-(\d{8}|\d{4}-\d{2}-\d{2}|latest)$/;
 
 /**
  * provider:model pairs already warned about, so a hot loop warns once (issue
@@ -379,22 +385,38 @@ export class CostTracker {
 
   /**
    * The registered `provider:model` key whose price applies to this model: the
-   * exact key, else the longest registered model of the same provider that
-   * this ID extends at a `-` boundary (issue #243). That is how dated and
-   * rescued IDs are named — `resolveModel` swaps a retired `claude-sonnet-5`
-   * pin for `claude-sonnet-5-20260514` — while `gpt-4oz` is not a `gpt-4o`.
-   * Undefined when nothing matches.
+   * exact key, else the registered model of the same provider that this ID
+   * extends by one snapshot suffix (issue #243, SNAPSHOT_SUFFIX). That is how
+   * dated and rescued IDs are named — `resolveModel` swaps a retired
+   * `claude-sonnet-5` pin for `claude-sonnet-5-20260514` — while `gpt-4oz` and
+   * `gpt-4o-realtime-preview` are not gpt-4o. Undefined when nothing matches.
    */
   private resolveKey(provider: string, model: string): string | undefined {
     const exact = `${provider}:${model}`;
     if (this.pricing.has(exact)) return exact;
-    let best: string | undefined;
-    for (const key of this.pricing.keys()) {
-      if (exact.startsWith(`${key}-`) && (best === undefined || key.length > best.length)) {
-        best = key;
-      }
-    }
-    return best;
+    // At most one key can match: the remainder must be a single snapshot token,
+    // so a shorter key would leave two. No "longest" comparison is needed.
+    return [...this.pricing.keys()].find(
+      (key) => exact.startsWith(key) && SNAPSHOT_SUFFIX.test(exact.slice(key.length)),
+    );
+  }
+
+  /**
+   * Rates charged for a model with no registered or family price (#243): the
+   * dearest registered value, per field, including anything added through
+   * `setPricing`. The ledger gates a budget breaker, so an unknown model must
+   * over-report rather than record $0 and never trip it.
+   *
+   * ponytail: capped at the dearest *known* rate; a model priced above every
+   * registered one (o1-pro class) still under-reports until it gets a row.
+   */
+  private estimatedRates(): TokenRates & { costPerImage: number } {
+    const tokens = [...this.tokenPricing.values()];
+    return {
+      costPerImage: Math.max(0, ...this.pricing.values()),
+      input: Math.max(0, ...tokens.map((r) => r.input)),
+      output: Math.max(0, ...tokens.map((r) => r.output)),
+    };
   }
 
   /**
@@ -478,7 +500,7 @@ export class CostTracker {
    * Compute the cost of an operation. Token-based when usage and per-token
    * rates are available, flat per-image otherwise. Cached operations and free
    * providers cost nothing; a model with no registered or family price is
-   * charged ESTIMATED_PRICING and flagged `estimated` (issue #243).
+   * charged `estimatedRates()` and flagged `estimated` (issue #243).
    */
   private computeCost(
     provider: string,
@@ -493,16 +515,22 @@ export class CostTracker {
       return { cost: 0, estimated: false };
     }
     const estimated = key === undefined;
-    const tokenRates = estimated ? ESTIMATED_PRICING : this.tokenPricing.get(key);
-    if (usage && tokenRates && this.isValidUsage(usage)) {
+    const rates = estimated
+      ? this.estimatedRates()
+      : { ...this.tokenPricing.get(key), costPerImage: this.pricing.get(key) ?? 0 };
+    if (
+      usage &&
+      rates.input !== undefined &&
+      rates.output !== undefined &&
+      this.isValidUsage(usage)
+    ) {
       return {
-        cost: usage.inputTokens * tokenRates.input + usage.outputTokens * tokenRates.output,
+        cost: usage.inputTokens * rates.input + usage.outputTokens * rates.output,
         estimated,
       };
     }
 
-    const flat = estimated ? ESTIMATED_PRICING.costPerImage : (this.pricing.get(key) ?? 0);
-    return { cost: flat, estimated };
+    return { cost: rates.costPerImage, estimated };
   }
 
   /**
