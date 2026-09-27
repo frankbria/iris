@@ -552,7 +552,7 @@ export class CostTracker {
       .prepare(
         `UPDATE cost_tracking
          SET cost = ?, input_tokens = ?, output_tokens = ?, estimated = ?, pending = 0
-         WHERE id = ?`,
+         WHERE id = ? AND pending = 1`,
       )
       .run(cost, usage?.inputTokens ?? null, usage?.outputTokens ?? null, estimated ? 1 : 0, id);
     return cost;
