@@ -23,7 +23,10 @@ jest.mock('../src/translator', () => ({
 }));
 
 // Mock config
+// The real module underneath, so exports this file does not stub (resolveBudget,
+// read by the smart client since #241) behave as they do in production.
 jest.mock('../src/config', () => ({
+  ...jest.requireActual('../src/config'),
   loadConfig: jest.fn().mockReturnValue({
     watch: {
       // Mirrors the real default in config.ts. It previously omitted html/css,
