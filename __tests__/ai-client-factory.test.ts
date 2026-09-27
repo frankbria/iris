@@ -105,9 +105,10 @@ describe('AIClientFactory', () => {
     it('builds a client on the resolved model, replacing a retired pin', async () => {
       mockFetch.mockResolvedValue(listing('claude-haiku-4-5-20260101', 'claude-sonnet-5'));
 
-      const client = (await createResolvedAIClient(
+      // The provider client sits inside the budget meter (#242).
+      const { inner: client } = (await createResolvedAIClient(
         cfg('anthropic', DEFAULT_MODELS.text.anthropic),
-      )) as AnthropicTextClient & { config: { model: string } };
+      )) as unknown as { inner: AnthropicTextClient & { config: { model: string } } };
 
       expect(client).toBeInstanceOf(AnthropicTextClient);
       expect(client.config.model).toBe('claude-haiku-4-5-20260101');
@@ -124,9 +125,9 @@ describe('AIClientFactory', () => {
     it('still builds a client when the probe cannot run', async () => {
       mockFetch.mockRejectedValue(new Error('fetch failed'));
 
-      const client = (await createResolvedAIClient(
+      const { inner: client } = (await createResolvedAIClient(
         cfg('anthropic', 'claude-private-build'),
-      )) as AnthropicTextClient & { config: { model: string } };
+      )) as unknown as { inner: AnthropicTextClient & { config: { model: string } } };
 
       expect(client.config.model).toBe('claude-private-build');
     });

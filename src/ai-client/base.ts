@@ -110,6 +110,11 @@ export interface AITranslationResponse {
   actions: Action[];
   confidence: number;
   reasoning?: string;
+  /**
+   * Tokens the provider billed for, whenever it answered — including when the
+   * answer was then unusable. Absent when the request failed before a reply.
+   */
+  usage?: AITokenUsage;
 }
 
 /**

@@ -154,6 +154,7 @@ plans/
 - **ImagePreprocessor**: Resizes images to API limits (2048x2048), optimizes quality (85% JPEG), calculates SHA-256 hashes
 - **AIVisionCache**: Two-tier caching (LRU memory + SQLite), tracks hit rates, automatic TTL expiration. Key identity = provider + model + baseline hash + current hash + optional diff hash + optional context, so a diff-aware verdict is never served for a diff-less request (issue #124)
 - **CostTracker**: Real-time cost calculation, budget enforcement with circuit breaker (blocks paid operations only — cache hits and free providers like Ollama always proceed, issue #68), alert thresholds (80%/95%/100%)
+- **Text and agent turns are metered too (issue #242).** `createResolvedAIClient(config, { operation })` returns a `MeteredTextClient` (src/ai-client/factory.ts), the one place every text call is built (translator → `iris run`/RPC/watcher; agent loop with `agent_turn`). It checks the breaker *before* the provider call and records the reply's `usage` to the same ledger as vision, so one budget covers all AI spend. It opens a tracker per call and closes it afterwards, because the RPC server is long-lived; for that reason the unpriced-model "warn once" set is module-level, not per instance. Text clients return `usage` on every reply the provider sent, including ones IRIS then rejects. A reply with no usage (the request failed before the provider billed) writes no row. The deprecated sync `createAIClient()` is still unmetered
 - **SmartAIVisionClient**: Intelligent provider selection, cache-first strategy, automatic fallback on failure
 - **Diff-aware vision requests**: when the caller supplies a computed pixel diff, it travels as an optional third image (`AIVisionRequest.diff`) to OpenAI, Anthropic, and Ollama alongside a prompt sentence pointing at it. Absent a diff, provider payloads and cache keys are byte-identical to the two-image form. Expect ~30-50% more input tokens per call when it is present (issue #124)
   - The diff mask is preprocessed as **lossless PNG**, not the JPEG used for screenshots: pixelmatch marks unchanged pixels transparent, and JPEG has no alpha channel and blurs the region edges that make the mask worth sending. An empty diff buffer is treated as no diff
@@ -538,7 +539,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1496/1497 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1509/1510 passing, 1 skipped, 0 failing — identical with and without a repo-root `.env`)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

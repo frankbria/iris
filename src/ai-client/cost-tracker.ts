@@ -71,6 +71,12 @@ export interface BudgetConfig {
 }
 
 /**
+ * What a ledger row paid for. Text and agent turns are metered too (issue #242):
+ * before them only vision calls reached the tracker.
+ */
+export type CostOperation = 'vision-analysis' | 'text' | 'agent_turn';
+
+/**
  * Cost tracking entry
  */
 export interface CostEntry {
@@ -78,7 +84,7 @@ export interface CostEntry {
   timestamp: number;
   provider: string;
   model: string;
-  operation: 'vision-analysis';
+  operation: CostOperation;
   cost: number;
   cached: boolean;
   inputTokens?: number;
@@ -197,6 +203,13 @@ const DEFAULT_PRICING: ProviderPricing[] = [
 const FREE_PROVIDERS = new Set(['ollama']);
 
 /**
+ * provider:model pairs already warned about, so a hot loop warns once (issue
+ * #126). Per process, not per tracker: text calls open a tracker per call
+ * (#242), and a per-instance set would warn on every one of them.
+ */
+const unpricedWarned = new Set<string>();
+
+/**
  * Default budget configuration
  */
 const DEFAULT_BUDGET: Required<BudgetConfig> = {
@@ -217,8 +230,6 @@ export class CostTracker {
   private budget: Required<BudgetConfig>;
   private pricing: Map<string, number>;
   private tokenPricing: Map<string, TokenRates>;
-  /** provider:model pairs already warned about, so a hot loop warns once (issue #126). */
-  private unpricedWarned: Set<string> = new Set();
 
   constructor(dbPath: string = ':memory:', budget: BudgetConfig = {}) {
     ensureDatabaseDir(dbPath);
@@ -350,7 +361,7 @@ export class CostTracker {
   }
 
   /**
-   * Track a vision analysis operation
+   * Track an AI operation (vision analysis by default)
    *
    * Cost is computed from real token usage when both usage and per-token rates
    * are available; otherwise it falls back to the flat per-image price. Cached
@@ -360,6 +371,7 @@ export class CostTracker {
    * @param model - Model identifier
    * @param cached - Whether result was cached
    * @param usage - Optional token usage from the provider
+   * @param operation - What the call was for; recorded on the ledger row
    * @returns Cost of operation
    * @throws Error if circuit breaker is triggered and the operation is paid
    *   (cost > 0); cached and free-provider operations always succeed
@@ -369,6 +381,7 @@ export class CostTracker {
     model: string,
     cached: boolean = false,
     usage?: TokenUsage,
+    operation: CostOperation = 'vision-analysis',
   ): number {
     const cost = this.computeCost(provider, model, cached, usage);
 
@@ -401,8 +414,8 @@ export class CostTracker {
     const key = `${provider}:${model}`;
     const registered = this.tokenPricing.has(key) || this.pricing.has(key);
     if (billable && cost === 0 && !registered) {
-      if (!this.unpricedWarned.has(key)) {
-        this.unpricedWarned.add(key);
+      if (!unpricedWarned.has(key)) {
+        unpricedWarned.add(key);
         console.warn(
           `⚠️  No pricing registered for ${key}; its cost is recorded as $0 and will not count ` +
             `against the budget. Register it with setPricing() for accurate accounting.`,
@@ -419,7 +432,7 @@ export class CostTracker {
       Date.now(),
       provider,
       model,
-      'vision-analysis',
+      operation,
       cost,
       cached ? 1 : 0,
       usage?.inputTokens ?? null,
@@ -585,8 +598,12 @@ export class CostTracker {
     const dailyCost = this.getDailyCost();
     const monthlyCost = this.getMonthlyCost();
 
-    const dailyPercent = dailyCost / this.budget.dailyLimit;
-    const monthlyPercent = monthlyCost / this.budget.monthlyLimit;
+    // A limit of 0 means "free providers only", so it is spent before anything
+    // is: 0/0 is NaN, and NaN >= 1 is false, which let the first paid call
+    // through a $0 budget.
+    const fraction = (used: number, limit: number) => (limit > 0 ? used / limit : Infinity);
+    const dailyPercent = fraction(dailyCost, this.budget.dailyLimit);
+    const monthlyPercent = fraction(monthlyCost, this.budget.monthlyLimit);
 
     const warningTriggered =
       dailyPercent >= this.budget.warningThreshold ||

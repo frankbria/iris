@@ -153,6 +153,18 @@ describe('agent loop', () => {
       expect(second.context.currentPage).toContain('URL:');
     });
 
+    // Each turn is a paid model call; the ledger has to be able to tell it
+    // apart from a one-shot `iris run` translation (#242).
+    it('meters its turns as agent_turn', async () => {
+      scriptAI([[{ type: 'assert', kind: 'text_visible', target: 'Your cart' }]]);
+
+      await runAgentLoop({ instruction: 'check the cart', executor, page, maxTurns: 1 });
+
+      expect(aiClient.createResolvedAIClient).toHaveBeenCalledWith(expect.anything(), {
+        operation: 'agent_turn',
+      });
+    });
+
     // Capping the digest is not enough on its own: context.url is interpolated
     // into every provider prompt verbatim, so an uncapped value there smuggles
     // the whole encoded data: URL back into the request.
