@@ -176,3 +176,23 @@ Write/Edit, not as a pre-push afterthought.
   repo root, not the scratchpad.
 - Wait for the machine to quiet down (`/proc/loadavg`) before a full run. At load 13-16 the
   a11y/visual E2E suites failed 26 tests that pass at load <6. Cheaper than triaging them.
+
+## 2026-09-27 — Data dir and budgets (PR #384)
+- `pkill -f "<pattern>"` matches the shell running it when the pattern appears in that
+  same command line. The call died with exit 144 and none of the edits after it ran. Stop
+  background jobs with TaskStop, or `pgrep` then kill by pid in a separate call.
+- `prettier --write` on a file outside `format:check`'s scope (jest.setup.ts) reformatted
+  ~60 unrelated lines, and the reviewer flagged the noise. Only run `--write` on files
+  inside the CI format scope; hand-format the rest.
+- Under Jest, `process.env.HOME = …` does not move `os.homedir()`: the test env's
+  process.env is a copy the native call never reads. Spy on `os.homedir` instead.
+- A `jest.mock('../src/config', () => ({ loadConfig: … }))` that replaces the whole
+  module breaks the moment the code under test imports a new export. Seven watcher tests
+  failed with "resolveBudget is not a function". Spread `jest.requireActual` under stubs.
+- A setup file's `afterAll` runs BEFORE the test file's own `afterAll` (registration
+  order), so cleanup there can pull a directory out from under a test still writing to it.
+  Clean up at the start of the next file instead.
+- Any new env or config input needs its hermetic guard in the same PR. Budgets made the
+  real ~/.iris/config.json reach the suite; the post-PR reviewer caught it, not me.
+- Building the image locally (~5 min) gave the one piece of evidence nothing else could:
+  the read-only root filesystem refusing /app/.iris while /data took all three stores.
