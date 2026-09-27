@@ -4,6 +4,7 @@ import {
   BaseAIClient,
   AITranslationRequest,
   AITranslationResponse,
+  AITokenUsage,
   formatError,
   parseModelJson,
   redactFenceMarkers,
@@ -82,6 +83,7 @@ ${
     : ''
 }`;
 
+    let usage: AITokenUsage | undefined;
     try {
       const response = await withRetry(
         () =>
@@ -97,6 +99,13 @@ ${
         this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
       );
 
+      if (response.usage) {
+        usage = {
+          inputTokens: response.usage.prompt_tokens,
+          outputTokens: response.usage.completion_tokens,
+        };
+      }
+
       const content = response.choices[0]?.message?.content;
       if (!content) {
         throw new Error('No response from OpenAI');
@@ -111,6 +120,7 @@ ${
           actions: [],
           confidence: 0,
           reasoning: `Invalid AI response: ${validated.reason}`,
+          usage,
         };
       }
       return {
@@ -119,6 +129,7 @@ ${
         // legitimate confidence of 0 (|| would corrupt it to 0.5).
         confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
         reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : undefined,
+        usage,
       };
     } catch (error) {
       console.error('OpenAI translation error:', formatError(error));
@@ -126,6 +137,7 @@ ${
         actions: [],
         confidence: 0,
         reasoning: `Failed to translate: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        usage,
       };
     }
   }
@@ -208,6 +220,7 @@ ${
     : ''
 }`;
 
+    let usage: AITokenUsage | undefined;
     try {
       const response = await withRetry(
         () =>
@@ -220,6 +233,13 @@ ${
           }),
         this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
       );
+
+      if (response.usage) {
+        usage = {
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+        };
+      }
 
       const content = response.content[0];
       if (!content || content.type !== 'text') {
@@ -234,6 +254,7 @@ ${
           actions: [],
           confidence: 0,
           reasoning: `Invalid AI response: ${validated.reason}`,
+          usage,
         };
       }
       return {
@@ -242,6 +263,7 @@ ${
         // legitimate confidence of 0 (|| would corrupt it to 0.5).
         confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
         reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : undefined,
+        usage,
       };
     } catch (error) {
       console.error('Anthropic translation error:', formatError(error));
@@ -249,6 +271,7 @@ ${
         actions: [],
         confidence: 0,
         reasoning: `Failed to translate: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        usage,
       };
     }
   }
@@ -271,6 +294,7 @@ export class OllamaTextClient extends BaseAIClient {
       throw new Error('Ollama endpoint not configured');
     }
 
+    let usage: AITokenUsage | undefined;
     try {
       const data = await withRetry(async () => {
         const response = await fetchWithTimeout(
@@ -330,6 +354,10 @@ Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
         return response.json();
       }, this.config.retryConfig ?? DEFAULT_RETRY_CONFIG);
 
+      if (typeof data.prompt_eval_count === 'number' && typeof data.eval_count === 'number') {
+        usage = { inputTokens: data.prompt_eval_count, outputTokens: data.eval_count };
+      }
+
       const parsed = parseModelJson(data.response);
 
       const validated = parseActions(parsed.actions ?? []);
@@ -338,6 +366,7 @@ Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
           actions: [],
           confidence: 0,
           reasoning: `Invalid AI response: ${validated.reason}`,
+          usage,
         };
       }
 
@@ -347,6 +376,7 @@ Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
         // legitimate confidence of 0 (|| would corrupt it to 0.5).
         confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
         reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : undefined,
+        usage,
       };
     } catch (error) {
       console.error('Ollama translation error:', formatError(error));
@@ -354,6 +384,7 @@ Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
         actions: [],
         confidence: 0,
         reasoning: `Failed to translate with Ollama: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        usage,
       };
     }
   }

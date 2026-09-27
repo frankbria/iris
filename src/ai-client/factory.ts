@@ -1,5 +1,8 @@
-import { IrisConfig } from '../config';
-import { AIClient, AIVisionClient } from './base';
+import * as path from 'path';
+import { IrisConfig, resolveBudget } from '../config';
+import { resolveDataDir } from '../data-dir';
+import { AIClient, AIVisionClient, AITranslationRequest, AITranslationResponse } from './base';
+import { CostOperation, CostTracker } from './cost-tracker';
 import { OpenAITextClient, AnthropicTextClient, OllamaTextClient } from './text';
 import { OpenAIVisionClient, AnthropicVisionClient, OllamaVisionClient } from './vision';
 import { resolveModel } from './models';
@@ -78,8 +81,59 @@ export function createAIClient(config: IrisConfig): AIClient {
 }
 
 /**
+ * A text client whose every call is budget-gated and recorded (issue #242).
+ *
+ * Before this only vision calls reached the ledger, so `iris run`, the RPC
+ * `instruction` method, the watcher and every agent-loop turn spent tokens
+ * that no budget saw. It writes to the same ledger as the vision client, so one
+ * budget covers all AI spend.
+ *
+ * The tracker is opened per call and closed after it: the RPC server lives for
+ * days, and a handle kept per client would leak one per translation.
+ */
+class MeteredTextClient implements AIClient {
+  constructor(
+    private readonly inner: AIClient,
+    private readonly provider: string,
+    private readonly model: string,
+    private readonly operation: CostOperation,
+  ) {}
+
+  async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
+    const tracker = new CostTracker(
+      path.join(resolveDataDir(), 'cache', 'cost-tracking.db'),
+      resolveBudget(),
+    );
+    try {
+      // Refused before the provider is contacted: a breaker that only fired on
+      // recording would let the over-budget call through and then drop its row.
+      if (
+        tracker.isBudgetGated(this.provider, this.model) &&
+        tracker.getBudgetStatus().circuitBreakerTriggered
+      ) {
+        throw new Error('Budget limit exceeded - circuit breaker activated');
+      }
+
+      const response = await this.inner.translateInstruction(request);
+      // No usage means the request failed before the provider answered, so
+      // there is nothing billed to record.
+      if (response.usage) {
+        tracker.trackOperation(this.provider, this.model, false, response.usage, this.operation);
+      }
+      return response;
+    } finally {
+      tracker.close();
+    }
+  }
+
+  isAvailable(): Promise<boolean> {
+    return this.inner.isAvailable();
+  }
+}
+
+/**
  * Create a text client whose model has been checked against the provider's live
- * model list (#184).
+ * model list (#184), metered against the AI budget (#242).
  *
  * The synchronous {@link createAIClient} trusts `config.ai.model` verbatim,
  * which is how a pin the vendor retired reaches the wire and comes back as an
@@ -88,9 +142,15 @@ export function createAIClient(config: IrisConfig): AIClient {
  * that does not exist. `loadConfig()` stays synchronous; only the two async
  * call sites that build a client pay for the check.
  *
+ * Each call throws when the budget's circuit breaker is tripped and the
+ * provider is a paid one; local Ollama always proceeds.
+ *
  * @throws {ModelUnavailableError} when the configured model is not served.
  */
-export async function createResolvedAIClient(config: IrisConfig): Promise<AIClient> {
+export async function createResolvedAIClient(
+  config: IrisConfig,
+  { operation = 'text' }: { operation?: Extract<CostOperation, 'text' | 'agent_turn'> } = {},
+): Promise<AIClient> {
   const model = await resolveModel({
     provider: config.ai.provider,
     kind: 'text',
@@ -98,5 +158,6 @@ export async function createResolvedAIClient(config: IrisConfig): Promise<AIClie
     creds: { apiKey: config.ai.apiKey, endpoint: config.ai.endpoint },
   });
 
-  return AIClientFactory.create({ ...config, ai: { ...config.ai, model } }, 'text');
+  const client = AIClientFactory.create({ ...config, ai: { ...config.ai, model } }, 'text');
+  return new MeteredTextClient(client, config.ai.provider, model, operation);
 }

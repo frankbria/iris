@@ -71,6 +71,12 @@ export interface BudgetConfig {
 }
 
 /**
+ * What a ledger row paid for. Text and agent turns are metered too (issue #242):
+ * before them only vision calls reached the tracker.
+ */
+export type CostOperation = 'vision-analysis' | 'text' | 'agent_turn';
+
+/**
  * Cost tracking entry
  */
 export interface CostEntry {
@@ -78,7 +84,7 @@ export interface CostEntry {
   timestamp: number;
   provider: string;
   model: string;
-  operation: 'vision-analysis';
+  operation: CostOperation;
   cost: number;
   cached: boolean;
   inputTokens?: number;
@@ -350,7 +356,7 @@ export class CostTracker {
   }
 
   /**
-   * Track a vision analysis operation
+   * Track an AI operation (vision analysis by default)
    *
    * Cost is computed from real token usage when both usage and per-token rates
    * are available; otherwise it falls back to the flat per-image price. Cached
@@ -360,6 +366,7 @@ export class CostTracker {
    * @param model - Model identifier
    * @param cached - Whether result was cached
    * @param usage - Optional token usage from the provider
+   * @param operation - What the call was for; recorded on the ledger row
    * @returns Cost of operation
    * @throws Error if circuit breaker is triggered and the operation is paid
    *   (cost > 0); cached and free-provider operations always succeed
@@ -369,6 +376,7 @@ export class CostTracker {
     model: string,
     cached: boolean = false,
     usage?: TokenUsage,
+    operation: CostOperation = 'vision-analysis',
   ): number {
     const cost = this.computeCost(provider, model, cached, usage);
 
@@ -419,7 +427,7 @@ export class CostTracker {
       Date.now(),
       provider,
       model,
-      'vision-analysis',
+      operation,
       cost,
       cached ? 1 : 0,
       usage?.inputTokens ?? null,

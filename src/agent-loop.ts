@@ -172,7 +172,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
 
   let client;
   try {
-    client = await createResolvedAIClient(loadConfig());
+    client = await createResolvedAIClient(loadConfig(), { operation: 'agent_turn' });
   } catch (error) {
     // An unsupported provider or unreadable config is a reportable outcome, not
     // a rejected promise — every other failure mode here returns a result.
