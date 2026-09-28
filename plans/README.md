@@ -77,7 +77,7 @@ code is the ordering key.
 | `P0.14` | [#242](https://github.com/frankbria/iris/issues/242) | Meter and budget-gate text/agent LLM calls | P0.13 (#241) | DONE ([#385](https://github.com/frankbria/iris/pull/385)) |
 | `P0.15` | [#243](https://github.com/frankbria/iris/issues/243) | Unpriced or rescued model IDs must not record $0 | P0.14 (#242) | DONE ([#387](https://github.com/frankbria/iris/pull/387)) |
 | `P0.16` | [#244](https://github.com/frankbria/iris/issues/244) | Record every completed paid call; reserve budget before concurrent calls | P0.14 (#242) | DONE ([#389](https://github.com/frankbria/iris/pull/389)) |
-| `P0.17` | [#245](https://github.com/frankbria/iris/issues/245) | Honour the configured AI provider instead of a fixed fallback chain | — | TODO |
+| `P0.17` | [#245](https://github.com/frankbria/iris/issues/245) | Honour the configured AI provider instead of a fixed fallback chain | — | DONE ([#391](https://github.com/frankbria/iris/pull/391)) |
 
 **E. Reports**
 
