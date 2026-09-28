@@ -33,6 +33,8 @@ jobs:
       - run: npm run lint -w @iris/portal
       - run: npm test -w @iris/portal
       - run: npm run build -w @iris/portal
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
       - run: npm audit --omit=dev --audit-level=high
 
   # Build and deploy the container to staging (issue #192).
