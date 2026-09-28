@@ -14,9 +14,13 @@ const HTML_ENTITIES: Record<string, string> = {
   "'": '&#39;',
 };
 
-/** Escape text for an HTML element body or a quoted attribute value. */
+/**
+ * Escape text for an HTML element body or a quoted attribute value. Coerces its
+ * input: axe output is page-controlled, so a "string" field can arrive as anything,
+ * and a throw here would lose the whole report.
+ */
 export function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => HTML_ENTITIES[c]);
+  return String(text).replace(/[&<>"']/g, (c) => HTML_ENTITIES[c]);
 }
 
 // XML 1.0 `Char`: everything outside it (C0 controls other than TAB/LF/CR, lone
@@ -33,7 +37,7 @@ const XML_WHITESPACE: Record<string, string> = { '\t': '&#9;', '\n': '&#10;', '\
  * see something was replaced.
  */
 export function escapeXml(text: string): string {
-  return escapeHtml(text.replace(XML_ILLEGAL, '\uFFFD')).replace(
+  return escapeHtml(String(text).replace(XML_ILLEGAL, '\uFFFD')).replace(
     /[\t\n\r]/g,
     (c) => XML_WHITESPACE[c],
   );
@@ -46,16 +50,17 @@ export function escapeXml(text: string): string {
  * the value cannot start a new block such as a heading or a list item.
  *
  * A value placed right after a list marker still starts a block, so leading
- * whitespace (indented code) is dropped and a leading `-`, `+` or `1.`/`1)` (a
+ * whitespace (indented code) is dropped, as is trailing whitespace (two spaces
+ * before the template's newline would be a hard break) and a leading `-`, `+` or `1.`/`1)` (a
  * nested list or a thematic break) is escaped.
  *
  * ponytail: bare URLs are left as text, so GFM may still autolink them; the link
  * target is then the visible text, which deceives no one.
  */
 export function escapeMarkdown(text: string): string {
-  return text
+  return String(text)
     .replace(/\r\n|\r|\n/g, ' ')
-    .trimStart()
+    .trim()
     .replace(/[\\`*_[\]<>&!|~#]/g, '\\$&')
     .replace(/^[-+]/, '\\$&')
     .replace(/^(\d+)([.)])/, '$1\\$2');

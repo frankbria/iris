@@ -132,7 +132,7 @@ describe('report encoders', () => {
     expect(doc.attrs).toEqual([expected]);
   });
 
-  it.each(['- x', '+ x', '1. x', '1) x', '---', '***', '      indented', '# h', '> q'])(
+  it.each(['- x', '+ x', '1. x', '1) x', '---', '***', '      indented', '# h', '> q', 'x  '])(
     'escapeMarkdown(%j) after a list marker stays one plain list item',
     (value) => {
       // A suggestion is rendered as `  - <value>`, so the value starts a block:
@@ -148,9 +148,19 @@ describe('report encoders', () => {
         'list_item_close',
         'bullet_list_close',
       ]);
-      expect(mdText(`- ${escapeMarkdown(value)}`)).toBe(value.trimStart());
+      expect(mdText(`- ${escapeMarkdown(value)}`)).toBe(value.trim());
     },
   );
+
+  it('encoders coerce a non-string instead of throwing', () => {
+    // axe output is page-controlled: a tampered axe can put an object or a number
+    // where a string belongs, and a throw would lose the whole report.
+    for (const value of [{}, 42, null, undefined] as unknown as string[]) {
+      expect(escapeHtml(value)).toBe(String(value));
+      expect(escapeXml(value)).toBe(String(value));
+      expect(escapeMarkdown(value)).toBe(escapeMarkdown(String(value)));
+    }
+  });
 
   it('escapeHtml output parses to text in attributes and text', async () => {
     const doc = await parse(
@@ -315,7 +325,7 @@ describe('a11y reports', () => {
         violations: [
           {
             id: s,
-            impact: 'critical',
+            impact: s as 'critical',
             tags: [s],
             description: s,
             help: s,
