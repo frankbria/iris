@@ -242,7 +242,7 @@ export class SmartAIVisionClient {
         // Check if provider is available
         const available = await client.isAvailable();
         if (!available) {
-          lastError = new Error(`${providerName} is not available`);
+          lastError ??= new Error(`${providerName} is not available`);
           continue;
         }
 

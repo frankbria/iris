@@ -1727,6 +1727,21 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/^openai is not available$/);
     });
 
+    it("keeps the configured provider's real error when later vendors are merely unavailable", async () => {
+      jest.spyOn(AIClientFactory, 'create').mockImplementation(
+        (config) =>
+          ({
+            isAvailable: async () => config.ai.provider === 'openai',
+            analyzeVisualDiff: async () => {
+              throw new Error('401 invalid key');
+            },
+          }) as never,
+      );
+      const smart = createSmartClient(configFor(true), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/401 invalid key/);
+    });
+
     it('lets an explicit enableFallback: false override ai.fallback', async () => {
       failing.add('openai');
       const smart = createSmartClient(configFor(true), { ...smartOpts, enableFallback: false });
