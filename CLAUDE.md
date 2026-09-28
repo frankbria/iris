@@ -128,7 +128,7 @@ plans/
 3. ✅ Image preprocessing pipeline (resize, optimize, hash for caching)
 4. ✅ AI vision result caching (LRU memory + SQLite persistence, 30-day TTL)
 5. ✅ Cost tracking with budget management (daily/monthly limits, circuit breaker)
-6. ✅ Smart client with automatic fallback (Ollama → OpenAI → Anthropic)
+6. ✅ Smart client: configured provider first; cross-vendor fallback only on opt-in (`ai.fallback`, #245)
 
 **Completed: Sub-Phase 2B - Visual Classification Integration (Week 5-6)**
 1. ✅ AIVisualClassifier refactored to use Phase 2A infrastructure
@@ -157,7 +157,7 @@ plans/
 - **Text and agent turns are metered too (issue #242).** `createResolvedAIClient(config, { operation })` returns a `MeteredTextClient` (src/ai-client/factory.ts), the one place every text call is built (translator → `iris run`/RPC/watcher; agent loop with `agent_turn`). It reserves budget *before* the provider call and settles the reservation with the reply's `usage`, on the same ledger as vision, so one budget covers all AI spend. It opens a tracker per call and closes it afterwards, because the RPC server is long-lived; for that reason the unpriced-model "warn once" set is module-level, not per instance. Text clients return `usage` on every reply the provider sent, including ones IRIS then rejects. A reply with no usage (the request failed before the provider billed) writes no row. The deprecated sync `createAIClient()` is still unmetered
 - **Budget is reserved before a call and settled after it (issue #244).** `CostTracker.reserve()` checks the breaker and inserts a `pending = 1` row at the call's worst-case cost (8k in / 1k out tokens at the model's rate; text calls add one token per request character, since the instruction is uncapped short of the RPC payload limit) in one `BEGIN IMMEDIATE` transaction, so calls in flight count against the budget, across connections and processes. `settle(id, usage)` rewrites the row with the real cost; `release(id)` deletes it when no reply came back. Admission is "spend + reservations < limit", so N parallel calls end within the limit plus one call. `trackOperation()` never throws: a call that was answered is paid for, and dropping its row is how spend went missing. A pending row left by a crashed process keeps counting at its estimate (fails safe)
   - A reply the provider billed but IRIS rejected (empty, not JSON, outside the schema) throws `AIResponseRejectedError` carrying `usage`, and the smart client settles it before moving on. After a call is settled nothing may send it to the next vendor: a cache-write failure is logged, not treated as a provider failure
-- **SmartAIVisionClient**: Intelligent provider selection, cache-first strategy, automatic fallback on failure
+- **SmartAIVisionClient**: Cache-first; calls the configured provider only. Other vendors are tried (configured provider still first) only when `enableFallback` is passed or `ai.fallback === true` in the config (#245). The old default walked a fixed `ollama → openai → anthropic` chain, so an OpenAI user with a local Ollama got Ollama's answer and an outage billed a vendor, or a BYOK key, the user never chose. Strict `=== true`, because `config.json` is untyped and `"false"` is truthy
 - **Diff-aware vision requests**: when the caller supplies a computed pixel diff, it travels as an optional third image (`AIVisionRequest.diff`) to OpenAI, Anthropic, and Ollama alongside a prompt sentence pointing at it. Absent a diff, provider payloads and cache keys are byte-identical to the two-image form. Expect ~30-50% more input tokens per call when it is present (issue #124)
   - The diff mask is preprocessed as **lossless PNG**, not the JPEG used for screenshots: pixelmatch marks unchanged pixels transparent, and JPEG has no alpha channel and blurs the region edges that make the mask worth sending. An empty diff buffer is treated as no diff
 
@@ -542,7 +542,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1543/1544 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1557/1558 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

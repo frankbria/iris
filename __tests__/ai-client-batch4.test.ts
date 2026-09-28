@@ -1682,6 +1682,16 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       expect(calls).toEqual(['openai']);
     });
 
+    // config.json is untyped JSON: a quoted "false" is truthy, and treating it
+    // as an opt-in would bill the very vendors this issue is about.
+    it('treats a non-boolean ai.fallback (e.g. the string "false") as off', async () => {
+      failing.add('openai');
+      const smart = createSmartClient(configFor('false' as never), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/openai is down/);
+      expect(calls).toEqual(['openai']);
+    });
+
     it('with ai.fallback on, tries the configured provider first, then the chain', async () => {
       failing.add('openai');
       const smart = createSmartClient(configFor(true), smartOpts);

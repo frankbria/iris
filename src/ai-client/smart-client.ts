@@ -178,8 +178,9 @@ export class SmartAIVisionClient {
       : undefined;
 
     // The configured provider first, always; other vendors only on opt-in (#245).
+    // `=== true`: ai.fallback comes from untyped JSON, where "false" is truthy.
     const configured = this.irisConfig.ai.provider;
-    const fallback = this.config.enableFallback ?? this.irisConfig.ai.fallback ?? false;
+    const fallback = (this.config.enableFallback ?? this.irisConfig.ai.fallback) === true;
     const providers = fallback
       ? [configured, ...this.config.fallbackChain.filter((p) => p !== configured)]
       : [configured];
