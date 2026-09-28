@@ -64,7 +64,7 @@ JSON-RPC server and MCP stand.
 - ✅ Image preprocessing pipeline (resize, optimize, base64 encoding)
 - ✅ AI vision result caching (LRU memory + SQLite persistence)
 - ✅ Cost tracking with budget management and circuit breaker
-- ✅ Smart client with automatic fallback and cost optimization
+- ✅ Smart client: configured provider first, opt-in cross-vendor fallback, cost optimization
 
 **CLI & Reporting:**
 - ✅ CLI commands: `iris visual-diff` and `iris a11y`
@@ -756,27 +756,31 @@ provider per run.
 Set `IRIS_MODEL_PROBE=0` to skip the lookup entirely and trust the configured
 model verbatim.
 
-#### Automatic fallback across providers
+#### Fallback across providers (opt-in)
 
-The vision client tries providers in order (`ollama` → `openai` → `anthropic`),
-moving on when one is unavailable or errors. **Set more than one credential and the
-chain can actually cross vendors** — every key you export is retained, not just the
-one that wins primary selection.
+The vision client calls **only the provider you configured**. It never bills
+another vendor unless you ask it to, by setting `"fallback": true` under `ai` in
+`~/.iris/config.json`. With fallback on, the configured provider is still tried
+first; the client then moves on through the rest of `ollama` → `openai` →
+`anthropic` when a provider is unavailable or errors. **Set more than one
+credential and the chain can actually cross vendors** — every key you export is
+retained, not just the one that wins primary selection. Only a JSON `true`
+turns it on; `"false"`, `1` or `"yes"` leave it off.
 
 Exported keys and a config file coexist: the file no longer switches the
 environment off, so a `credentials` map in the file and keys in the environment
 merge, with the file winning per provider.
 
 ```bash
-export OLLAMA_ENDPOINT=http://localhost:11434   # tried first, free
-export OPENAI_API_KEY=sk-your-key               # used if Ollama is down
-export ANTHROPIC_API_KEY=sk-ant-your-key        # used if OpenAI fails
+export OPENAI_API_KEY=sk-your-key               # the provider (auto-detected first)
+export OLLAMA_ENDPOINT=http://localhost:11434   # with fallback on: used if OpenAI fails
+export ANTHROPIC_API_KEY=sk-ant-your-key        # with fallback on: used if Ollama fails
 ```
 
 Keys are strictly scoped to their own vendor — a fallback step never sends one
 provider's key to another's API. With only a single cloud key configured, the chain
-still works but effectively reduces to Ollama → that one provider, since the others
-have nothing to authenticate with and are skipped.
+reaches only Ollama besides it, since the others have nothing to authenticate with
+and are skipped.
 
 The same map can be set explicitly in the config file:
 
@@ -784,6 +788,7 @@ The same map can be set explicitly in the config file:
 {
   "ai": {
     "provider": "ollama",
+    "fallback": true,
     "credentials": {
       "openai": { "apiKey": "sk-..." },
       "anthropic": { "apiKey": "sk-ant-..." },

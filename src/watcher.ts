@@ -48,6 +48,7 @@ export interface WatchOptions {
     apiKey?: string;
     endpoint?: string;
     credentials?: ProviderCredentials;
+    fallback?: boolean;
   };
 }
 
@@ -174,6 +175,7 @@ export class FileWatcher {
         apiKey: this.options.ai.apiKey,
         baseURL: this.options.ai.endpoint,
         credentials: this.options.ai.credentials,
+        fallback: this.options.ai.fallback,
         maxTokens: 1024,
         temperature: 0.1,
       });

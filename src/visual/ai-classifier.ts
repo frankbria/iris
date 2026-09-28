@@ -40,6 +40,8 @@ export interface AIProviderConfig {
    * steps to a different vendor and simply skips it (#74).
    */
   credentials?: ProviderCredentials;
+  /** Try other vendors when `provider` fails. Off by default (#245). */
+  fallback?: boolean;
 }
 
 /**
@@ -130,12 +132,11 @@ export class AIVisualClassifier {
       format: 'jpeg',
     });
 
-    // Initialize smart client with default configuration
+    // Fallback is decided by `irisConfig.ai.fallback`: the configured provider
+    // is the one called unless the user opted in to others (#245).
     const smartConfig: SmartClientConfig = {
       enableCache: true,
       enableCostTracking: true,
-      enableFallback: true,
-      fallbackChain: ['ollama', 'openai', 'anthropic'],
     };
 
     this.smartClient = new SmartAIVisionClient(this.irisConfig, smartConfig);
@@ -192,6 +193,7 @@ export class AIVisualClassifier {
         // Carried through so the fallback chain can authenticate as a vendor
         // other than the primary one.
         credentials: config.credentials,
+        fallback: config.fallback,
       },
       watch: {
         patterns: ['**/*.{ts,tsx,js,jsx,html,css}'],

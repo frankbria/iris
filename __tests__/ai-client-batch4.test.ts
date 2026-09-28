@@ -1042,7 +1042,8 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
           return DEFAULT_MODELS.vision[provider as 'openai' | 'anthropic'];
         });
 
-        const client = createSmartClient(mockConfig, smartOpts);
+        // Falling through is opt-in since #245.
+        const client = createSmartClient(mockConfig, { ...smartOpts, enableFallback: true });
 
         await expect(client.analyzeVisualDiff(request)).resolves.toMatchObject({
           severity: 'minor',
@@ -1590,6 +1591,163 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       factorySpy.mockRestore();
       budgetSpy.mockRestore();
       preprocessSpy.mockRestore();
+    });
+  });
+
+  // Issue #245: the chain used to be a fixed ollama -> openai -> anthropic walk,
+  // so an OpenAI user with a local Ollama running was answered by Ollama, and an
+  // OpenAI outage billed Anthropic — a vendor (and, under BYOK, a key) the user
+  // never chose. Every vendor here is available and holds a key, so the only
+  // thing deciding who gets called is the provider selection under test.
+  describe('provider selection (issue #245)', () => {
+    const request = { baseline: Buffer.from('base'), current: Buffer.from('curr') };
+    const answer = (provider: string) => ({
+      classification: provider,
+      confidence: 0.9,
+      description: '',
+      severity: 'low' as const,
+      reasoning: '',
+    });
+    const configFor = (fallback?: boolean): IrisConfig => ({
+      ai: {
+        provider: 'openai',
+        apiKey: 'sk-openai',
+        model: 'gpt-4o',
+        ...(fallback === undefined ? {} : { fallback }),
+        credentials: {
+          ollama: { endpoint: 'http://localhost:11434' },
+          anthropic: { apiKey: 'sk-ant' },
+        },
+      },
+      watch: { patterns: [], debounceMs: 1000, ignore: [] },
+      browser: { headless: true, timeout: 30000 },
+    });
+    const smartOpts = { enableCache: false, enableCostTracking: false };
+
+    let calls: string[];
+    let failing: Set<string>;
+
+    beforeEach(() => {
+      calls = [];
+      failing = new Set();
+      jest
+        .spyOn(
+          SmartAIVisionClient.prototype as unknown as { resolveModel(p: string): Promise<string> },
+          'resolveModel',
+        )
+        .mockImplementation(async (p) => `${p}-model`);
+      jest
+        .spyOn(ImagePreprocessor.prototype, 'preprocess')
+        .mockImplementation(
+          async (input) => ({ buffer: input as Buffer, hash: String(input) }) as never,
+        );
+      jest.spyOn(AIClientFactory, 'create').mockImplementation(
+        (config) =>
+          ({
+            isAvailable: async () => true,
+            analyzeVisualDiff: async () => {
+              const provider = config.ai.provider;
+              calls.push(provider);
+              if (failing.has(provider)) throw new Error(`${provider} is down`);
+              return answer(provider);
+            },
+          }) as never,
+      );
+    });
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it('calls the configured provider, not the first one in the chain', async () => {
+      const smart = createSmartClient(configFor(), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).resolves.toMatchObject({
+        classification: 'openai',
+      });
+      expect(calls).toEqual(['openai']);
+    });
+
+    it('does not fall back to another vendor unless asked to', async () => {
+      failing.add('openai');
+      const smart = createSmartClient(configFor(), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/openai is down/);
+      expect(calls).toEqual(['openai']);
+    });
+
+    it('treats ai.fallback: false as off', async () => {
+      failing.add('openai');
+      const smart = createSmartClient(configFor(false), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/openai is down/);
+      expect(calls).toEqual(['openai']);
+    });
+
+    // config.json is untyped JSON: a quoted "false" is truthy, and treating it
+    // as an opt-in would bill the very vendors this issue is about.
+    it('treats a non-boolean ai.fallback (e.g. the string "false") as off', async () => {
+      failing.add('openai');
+      const smart = createSmartClient(configFor('false' as never), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/openai is down/);
+      expect(calls).toEqual(['openai']);
+    });
+
+    it('with ai.fallback on, tries the configured provider first, then the chain', async () => {
+      failing.add('openai');
+      const smart = createSmartClient(configFor(true), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).resolves.toMatchObject({
+        classification: 'ollama',
+      });
+      expect(calls).toEqual(['openai', 'ollama']);
+    });
+
+    it('puts the configured provider first in an explicit fallbackChain too', async () => {
+      failing.add('openai').add('ollama');
+      const smart = createSmartClient(configFor(), {
+        ...smartOpts,
+        enableFallback: true,
+        fallbackChain: ['ollama', 'anthropic', 'openai'],
+      });
+
+      await expect(smart.analyzeVisualDiff(request)).resolves.toMatchObject({
+        classification: 'anthropic',
+      });
+      expect(calls).toEqual(['openai', 'ollama', 'anthropic']);
+    });
+
+    it('names the configured provider when it is unavailable', async () => {
+      jest.spyOn(AIClientFactory, 'create').mockReturnValue({
+        isAvailable: async () => false,
+        analyzeVisualDiff: jest.fn(),
+      } as never);
+      const smart = createSmartClient(configFor(), smartOpts);
+
+      // One vendor was tried, so "All providers failed" would misdescribe it.
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/^openai is not available$/);
+    });
+
+    it("keeps the configured provider's real error when later vendors are merely unavailable", async () => {
+      jest.spyOn(AIClientFactory, 'create').mockImplementation(
+        (config) =>
+          ({
+            isAvailable: async () => config.ai.provider === 'openai',
+            analyzeVisualDiff: async () => {
+              throw new Error('401 invalid key');
+            },
+          }) as never,
+      );
+      const smart = createSmartClient(configFor(true), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/401 invalid key/);
+    });
+
+    it('lets an explicit enableFallback: false override ai.fallback', async () => {
+      failing.add('openai');
+      const smart = createSmartClient(configFor(true), { ...smartOpts, enableFallback: false });
+
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/openai is down/);
+      expect(calls).toEqual(['openai']);
     });
   });
 

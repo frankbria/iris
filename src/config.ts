@@ -26,6 +26,7 @@ export interface IrisConfig {
     timeout?: number; // Per-call timeout in ms (default 30000)
     retryConfig?: RetryConfig; // Transient-failure retry/backoff (default 2/500ms/2x)
     credentials?: ProviderCredentials; // Per-provider keys for cross-vendor fallback
+    fallback?: boolean; // Try other vendors when `provider` fails. Off by default (#245)
   };
   watch: {
     patterns: string[];

@@ -110,6 +110,24 @@ describe('AIVisualClassifier (real, backed by Phase 2A infrastructure)', () => {
       expect(classifier).toBeInstanceOf(AIVisualClassifier);
     });
 
+    // Issue #245: the classifier hardcoded enableFallback + an ollama-first
+    // chain, so it never called the vendor the user configured.
+    it('leaves fallback off unless the config opts in', () => {
+      new AIVisualClassifier({ provider: 'openai', apiKey: 'sk-test' });
+      const [irisConfig, smartConfig] = MockSmartAIVisionClient.mock.calls[0];
+
+      expect(irisConfig.ai.provider).toBe('openai');
+      expect(irisConfig.ai.fallback).toBeUndefined();
+      expect(smartConfig?.enableFallback).toBeUndefined();
+      expect(smartConfig?.fallbackChain).toBeUndefined();
+    });
+
+    it('forwards an explicit fallback opt-in', () => {
+      new AIVisualClassifier({ provider: 'openai', apiKey: 'sk-test', fallback: true });
+
+      expect(MockSmartAIVisionClient.mock.calls[0][0].ai.fallback).toBe(true);
+    });
+
     it('throws when OpenAI apiKey is missing', () => {
       expect(() => new AIVisualClassifier({ provider: 'openai' })).toThrow(/OpenAI API key/i);
     });

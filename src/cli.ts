@@ -713,6 +713,7 @@ function resolveSemanticAI(providerFlag?: string): {
   apiKey?: string;
   endpoint?: string;
   credentials?: ProviderCredentials;
+  fallback?: boolean;
 } {
   const config = loadConfig();
   const requested = providerFlag ?? detectProvider(config);
@@ -722,6 +723,8 @@ function resolveSemanticAI(providerFlag?: string): {
   // fallback chain can step to another vendor rather than skipping it (#74).
   // This is additive to the primary key resolved below and never overrides it.
   const credentials = config.ai.credentials;
+  // Other vendors are called only when the config opts in (#245).
+  const fallback = config.ai.fallback;
 
   // Ollama runs locally: no key, but it needs an endpoint or it throws at call
   // time. Only honor a configured endpoint when it was configured *for* ollama —
@@ -733,6 +736,7 @@ function resolveSemanticAI(providerFlag?: string): {
       provider,
       endpoint: configuredEndpoint || process.env.OLLAMA_ENDPOINT || DEFAULT_OLLAMA_ENDPOINT,
       credentials,
+      fallback,
     };
   }
 
@@ -742,7 +746,7 @@ function resolveSemanticAI(providerFlag?: string): {
       ? config.ai.apiKey
       : process.env[semanticKeyEnvVar(provider)];
 
-  return { provider, apiKey, credentials };
+  return { provider, apiKey, credentials, fallback };
 }
 
 /** Environment variable that supplies the key for a paid vision provider. */
@@ -865,6 +869,7 @@ program
           apiKey: ai?.apiKey,
           aiEndpoint: ai?.endpoint,
           aiCredentials: ai?.credentials,
+          aiFallback: ai?.fallback,
           antiAliasing: true,
           maxConcurrency: options.concurrency,
         },

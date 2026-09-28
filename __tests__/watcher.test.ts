@@ -1052,6 +1052,20 @@ describe('FileWatcher AI feedback mode', () => {
       expect(construct).toHaveBeenCalledTimes(1);
     });
 
+    it('builds the classifier with the configured provider and fallback opt-in (#245)', async () => {
+      const construct = jest.spyOn(classifierModule, 'AIVisualClassifier');
+      await startFeedbackWatcher({
+        ai: { provider: 'claude', apiKey: 'sk-ant', fallback: true },
+      });
+
+      changeCallback!('src/app.css');
+      await jest.advanceTimersByTimeAsync(60);
+
+      expect(construct).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'claude', apiKey: 'sk-ant', fallback: true }),
+      );
+    });
+
     it('closes the classifier on stop', async () => {
       const close = jest
         .spyOn(classifierModule.AIVisualClassifier.prototype, 'close')
