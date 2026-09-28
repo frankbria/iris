@@ -9,6 +9,9 @@ const config: Config.InitialOptions = {
     '!**/__tests__/**/bench-utils.ts',
     '!**/__tests__/**/report-generator.ts'
   ],
+  // Workspaces under apps/ run their own test runner (#247).
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/apps/'],
+  modulePathIgnorePatterns: ['<rootDir>/apps/'],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
   // pixelmatch 7, chokidar 5 and its readdirp dep are ESM-only. Node can
   // `require()` ESM natively —
@@ -41,7 +44,10 @@ const config: Config.InitialOptions = {
     // instrument. It is covered by the protocol test in __tests__/mcp/server.test.ts.
     // The tool logic it wires up (src/mcp/tools.ts) IS instrumented, in-process,
     // by __tests__/mcp/tools.test.ts — only this shell is exempt.
-    '!src/mcp/server.ts'
+    '!src/mcp/server.ts',
+    // Loads ESM-only better-auth, which Jest's sandbox cannot require; covered
+    // by a spawned Node process in __tests__/auth-config.test.ts (#247).
+    '!src/auth/config.ts'
   ],
   // Never instrument the browser-context a11y modules (see collectCoverageFrom).
   coveragePathIgnorePatterns: [

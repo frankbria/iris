@@ -17,6 +17,9 @@ coverage
 # Local IRIS state: baselines, screenshots, SQLite caches and cost history.
 .iris
 
+# The portal ships separately (#247); this image is the IRIS server only.
+apps
+
 __tests__
 plans
 docs

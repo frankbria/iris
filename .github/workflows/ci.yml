@@ -29,6 +29,10 @@ jobs:
       # so the suite keeps proving a real sandbox, not the opt-out.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: npm test
+      # apps/portal (#247). `next build` type-checks, so there is no separate step.
+      - run: npm run lint -w @iris/portal
+      - run: npm test -w @iris/portal
+      - run: npm run build -w @iris/portal
       - run: npm audit --omit=dev --audit-level=high
 
   # Build and deploy the container to staging (issue #192).
