@@ -236,3 +236,16 @@ Write/Edit, not as a pre-push afterthought.
 - PR #391: in a loaded full run the MCP suite failed on `npx tsc` ("Cannot find module
   '../../package.json'" inside npm itself). It passed 7/7 alone. Treat it as the host,
   like #142, and not as the diff.
+
+## #339 / PR #393 (2026-09-28)
+- A private-backlog issue ("see tasks/security-backlog.md") can't be verified from the repo. Ask first, then audit and put the audit list in the PR body for the maintainer to check against the backlog.
+- A red local run on an IO-bound WSL host (iowait 25-48%, load ~8 on 4 cores) timed out 45 browser tests the diff never touched. An A/B against a `main` worktree on the same subset settled it in minutes (main: 4/86 failed too). Do the A/B instead of arguing from the pattern.
+- Structure equivalence (benign vs hostile render parse to the same skeleton) catches injections that substring tests miss. Reviewers still found a hole in it: Markdown block syntax after a list marker. Test the encoder in every template context it lands in, not only in isolation.
+
+## #247 / PR #394 (2026-09-28)
+- The global Nova setup command is stale: the shadcn preset API rejects `baseColor=gray`/`theme=gray` (400; valid: neutral, stone, zinc, mauve, olive, mist, taupe…). The registry still serves `/r/colors/gray.json`. Scaffold with `neutral`, then apply its `cssVarsV4` tokens. Probe the preset URL with curl before running `shadcn create`: the CLI only reports "400".
+- The scaffold's own ESLint 10 crashes `eslint-config-next` (eslint-plugin-react peer ≤ ^9.7). Lint the pristine scaffold before blaming the workspace; pin ESLint 9 in the app.
+- Proving `require(esm)` needs a real Node process plus a control run (`--no-experimental-require-module` → ERR_REQUIRE_ESM). Jest's sandbox can't load ESM at all, so an in-process test proves nothing.
+- Built CSS reports `lab()`, not the `oklch()` in the source. Read chroma from the a/b axes when demoing theme tokens.
+- opencode stalled (outage signature) on both attempts; the codex fallback worked unchanged. The CI GLM bug-hunt still gave a GLM-family pass on the PR.
+- Scaffold code is code: the Nova theme-provider shipped a bare-key WCAG 2.1.4 violation. Review vendored scaffolds like our own diff.
