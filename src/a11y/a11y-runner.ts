@@ -18,6 +18,7 @@ import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
 import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
+import { escapeHtml, escapeXml, safeHref } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 
 export interface AccessibilityRunnerConfig {
@@ -549,25 +550,13 @@ export class AccessibilityRunner {
   }
 
   /**
-   * Escape a string for safe inclusion in HTML/XML text and attributes.
-   */
-  private escape(value: string): string {
-    return value
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  /**
    * Generate a self-contained HTML accessibility report.
    */
   private generateHtmlReport(
     results: AccessibilityTestResult['results'],
     summary: AccessibilityTestResult['summary'],
   ): string {
-    const esc = (v: string) => this.escape(v);
+    const esc = escapeHtml;
     const pages = results
       .map((r) => {
         const violations = r.axeResult.violations
@@ -576,7 +565,7 @@ export class AccessibilityRunner {
         <div class="violation ${esc(v.impact)}">
           <h4>${esc(v.id)} <span class="impact">${esc(v.impact)}</span></h4>
           <p>${esc(v.description)}</p>
-          <p><a href="${esc(v.helpUrl)}">${esc(v.help)}</a></p>
+          <p>${helpLink(v.help, v.helpUrl)}</p>
           <ul>${v.nodes
             .map((n) => `<li><code>${esc(n.html)}</code> — ${esc(n.target.join(', '))}</li>`)
             .join('')}</ul>
@@ -636,7 +625,7 @@ export class AccessibilityRunner {
     results: AccessibilityTestResult['results'],
     summary: AccessibilityTestResult['summary'],
   ): string {
-    const esc = (v: string) => this.escape(v);
+    const esc = escapeXml;
     // One testcase per violation, or a single passing testcase when a page is clean.
     const totalTests = results.reduce(
       (sum, r) => sum + Math.max(r.axeResult.violations.length, 1),
@@ -672,4 +661,16 @@ ${cases}
 ${suites}
 </testsuites>`;
   }
+}
+
+/**
+ * The rule's help text, linked to its help page only over http(s). axe runs
+ * inside the page under test, so a hostile page controls `helpUrl`; escaping keeps
+ * a `javascript:` URL inside its quotes but would still leave it clickable.
+ */
+function helpLink(help: string, helpUrl: string): string {
+  const href = safeHref(helpUrl);
+  return href
+    ? `<a href="${escapeHtml(href)}">${escapeHtml(help)}</a>`
+    : `${escapeHtml(help)} (${escapeHtml(helpUrl)})`;
 }

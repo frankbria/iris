@@ -71,11 +71,13 @@
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^24.13.3",
     "@types/picomatch": "^4.0.3",
     "@types/ws": "^8.18.1",
     "eslint": "^10.6.0",
     "jest": "^30.4.2",
+    "markdown-it": "^15.0.2",
     "prettier": "^3.8.4",
     "ts-jest": "^29.1.0",
     "ts-node": "^10.9.1",

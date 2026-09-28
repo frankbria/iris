@@ -83,7 +83,7 @@ code is the ordering key.
 
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
-| `P0.18` | [#339](https://github.com/frankbria/iris/issues/339) | Reports: output encoding | — | TODO |
+| `P0.18` | [#339](https://github.com/frankbria/iris/issues/339) | Reports: output encoding | — | DONE ([#393](https://github.com/frankbria/iris/pull/393)) |
 
 **F. Platform foundations (identity, tenancy, storage)**
 

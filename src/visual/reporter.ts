@@ -7,6 +7,8 @@
 
 import * as path from 'path';
 import * as fs from 'fs';
+import { pathToFileURL } from 'url';
+import { escapeHtml, escapeMarkdown, escapeXml } from '../report-encoding';
 import type { VisualTestResult } from './visual-runner';
 
 export interface ReportConfig {
@@ -100,7 +102,7 @@ export class VisualReporter {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${this.escapeHtml(this.config.title!)}</title>
+  <title>${escapeHtml(this.config.title!)}</title>
   <style>
     ${this.getHTMLStyles()}
   </style>
@@ -114,7 +116,7 @@ export class VisualReporter {
           <circle cx="12" cy="12" r="10"/>
           <circle cx="12" cy="12" r="3"/>
         </svg>
-        ${this.escapeHtml(this.config.title!)}
+        ${escapeHtml(this.config.title!)}
       </h1>
       <div class="meta">
         <span class="timestamp">${this.formatTimestamp(this.config.timestamp!)}</span>
@@ -243,7 +245,7 @@ export class VisualReporter {
       .filter((result) => this.config.includePassedTests || !result.passed)
       .map((result, _index) => {
         const statusClass = result.passed ? 'passed' : 'failed';
-        const severityClass = result.severity || '';
+        const severityClass = escapeHtml(result.severity || '');
 
         return `
         <div class="test-card ${statusClass} ${severityClass}" data-status="${statusClass}" data-severity="${severityClass}">
@@ -252,10 +254,10 @@ export class VisualReporter {
               <span class="status-icon ${statusClass}">
                 ${result.passed ? '✓' : '✗'}
               </span>
-              <h3>${this.escapeHtml(result.page)} - ${this.escapeHtml(result.device)}</h3>
+              <h3>${escapeHtml(result.page)} - ${escapeHtml(result.device)}</h3>
             </div>
             <div class="test-meta">
-              ${result.severity ? `<span class="severity-badge ${result.severity}">${result.severity}</span>` : ''}
+              ${result.severity ? `<span class="severity-badge ${severityClass}">${severityClass}</span>` : ''}
             </div>
           </div>
 
@@ -296,14 +298,14 @@ export class VisualReporter {
                     // description that is really an error string. Rendering it
                     // as a verdict would present an outage as a judgement.
                     `<div class="analysis-unavailable">
-                <strong>Analysis unavailable:</strong> ${this.escapeHtml(result.aiAnalysis.description)}
+                <strong>Analysis unavailable:</strong> ${escapeHtml(result.aiAnalysis.description)}
               </div>`
                   : `<div class="analysis-classification">
-                <strong>Classification:</strong> ${this.escapeHtml(result.aiAnalysis.classification)}
+                <strong>Classification:</strong> ${escapeHtml(result.aiAnalysis.classification)}
                 <span class="confidence">(${(result.aiAnalysis.confidence * 100).toFixed(0)}% confidence)</span>
               </div>
               <div class="analysis-description">
-                ${this.escapeHtml(result.aiAnalysis.description)}
+                ${escapeHtml(result.aiAnalysis.description)}
               </div>`
               }
               ${
@@ -318,7 +320,7 @@ export class VisualReporter {
               ${
                 !result.aiAnalysis.analysisFailed && result.aiAnalysis.reasoning
                   ? `<div class="analysis-reasoning">
-                <strong>Reasoning:</strong> ${this.escapeHtml(result.aiAnalysis.reasoning)}
+                <strong>Reasoning:</strong> ${escapeHtml(result.aiAnalysis.reasoning)}
               </div>`
                   : ''
               }
@@ -328,7 +330,7 @@ export class VisualReporter {
                 <strong>Suggestions:</strong>
                 <ul>
                   ${result.aiAnalysis.suggestions
-                    .map((suggestion) => `<li>${this.escapeHtml(suggestion)}</li>`)
+                    .map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`)
                     .join('\n                  ')}
                 </ul>
               </div>`
@@ -356,21 +358,21 @@ export class VisualReporter {
                   ? `
               <div class="image-container">
                 <div class="image-label">Baseline</div>
-                <img src="${this.getRelativePath(result.baselinePath!)}" alt="Baseline" class="comparison-image baseline">
+                <img src="${this.imageSrc(result.baselinePath!)}" alt="Baseline" class="comparison-image baseline">
               </div>
               `
                   : ''
               }
               <div class="image-container">
                 <div class="image-label">Current</div>
-                <img src="${this.getRelativePath(result.screenshotPath)}" alt="Current" class="comparison-image current">
+                <img src="${this.imageSrc(result.screenshotPath)}" alt="Current" class="comparison-image current">
               </div>
               ${
                 result.diffPath
                   ? `
               <div class="image-container">
                 <div class="image-label">Difference</div>
-                <img src="${this.getRelativePath(result.diffPath!)}" alt="Diff" class="comparison-image diff">
+                <img src="${this.imageSrc(result.diffPath!)}" alt="Diff" class="comparison-image diff">
               </div>
               `
                   : ''
@@ -430,27 +432,27 @@ export class VisualReporter {
     );
 
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="${this.escapeXml(this.config.title!)}" tests="${summary.totalComparisons}" failures="${summary.failed}" time="${(duration / 1000).toFixed(3)}">
+<testsuites name="${escapeXml(this.config.title!)}" tests="${summary.totalComparisons}" failures="${summary.failed}" time="${(duration / 1000).toFixed(3)}">
 ${Object.entries(testsuites)
   .map(([suiteName, tests]: [string, VisualTestResult['results']]) => {
     const suiteTests = tests;
     const suiteFailed = suiteTests.filter((t) => !t.passed).length;
     const suiteTime = duration / summary.totalComparisons / 1000;
 
-    return `  <testsuite name="${this.escapeXml(suiteName)}" tests="${suiteTests.length}" failures="${suiteFailed}" time="${suiteTime.toFixed(3)}">
+    return `  <testsuite name="${escapeXml(suiteName)}" tests="${suiteTests.length}" failures="${suiteFailed}" time="${suiteTime.toFixed(3)}">
 ${suiteTests
   .map((test, _index) => {
     const testName = `${test.page} [${test.device}]`;
     const testTime = (duration / summary.totalComparisons / 1000).toFixed(3);
 
-    return `    <testcase name="${this.escapeXml(testName)}" classname="${this.escapeXml(suiteName)}" time="${testTime}">
+    return `    <testcase name="${escapeXml(testName)}" classname="${escapeXml(suiteName)}" time="${testTime}">
 ${
   !test.passed
     ? `      <failure message="Visual regression detected" type="VisualDiff">
 Similarity: ${(test.similarity * 100).toFixed(2)}%
 Pixel Difference: ${(test.pixelDifference * 100).toFixed(2)}%
 Threshold: ${(test.threshold * 100).toFixed(2)}%
-Severity: ${test.severity || 'unknown'}
+Severity: ${escapeXml(test.severity || 'unknown')}
 ${
   test.aiAnalysis
     ? // Escaped: this is a <failure> element's body, and every field below is
@@ -458,17 +460,17 @@ ${
       // XML unparseable, which fails the CI job for the wrong reason. The
       // attributes above were already escaped; the body was not.
       (test.aiAnalysis.analysisFailed
-        ? `AI Analysis Unavailable: ${this.escapeXml(test.aiAnalysis.description)}`
-        : `AI Classification: ${this.escapeXml(test.aiAnalysis.classification)}
-AI Description: ${this.escapeXml(test.aiAnalysis.description)}`) +
+        ? `AI Analysis Unavailable: ${escapeXml(test.aiAnalysis.description)}`
+        : `AI Classification: ${escapeXml(test.aiAnalysis.classification)}
+AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
       `${
         !test.aiAnalysis.analysisFailed && test.aiAnalysis.reasoning
-          ? `\nAI Reasoning: ${this.escapeXml(test.aiAnalysis.reasoning)}`
+          ? `\nAI Reasoning: ${escapeXml(test.aiAnalysis.reasoning)}`
           : ''
       }${
         test.aiAnalysis.suggestions && test.aiAnalysis.suggestions.length > 0
           ? `\nAI Suggestions:\n${test.aiAnalysis.suggestions
-              .map((suggestion) => `  - ${this.escapeXml(suggestion)}`)
+              .map((suggestion) => `  - ${escapeXml(suggestion)}`)
               .join('\n')}`
           : ''
       }`
@@ -494,7 +496,7 @@ AI Description: ${this.escapeXml(test.aiAnalysis.description)}`) +
   private generateMarkdownReport(results: VisualTestResult): string {
     const { summary, results: testResults, duration } = results;
 
-    let markdown = `# ${this.config.title}\n\n`;
+    let markdown = `# ${escapeMarkdown(this.config.title!)}\n\n`;
     markdown += `**Generated:** ${this.formatTimestamp(this.config.timestamp!)}\n`;
     markdown += `**Duration:** ${this.formatDuration(duration)}\n\n`;
 
@@ -528,10 +530,10 @@ AI Description: ${this.escapeXml(test.aiAnalysis.description)}`) +
     markdown += `## Test Results\n\n`;
     testResults.forEach((result, _index) => {
       const statusEmoji = result.passed ? '✅' : '❌';
-      markdown += `### ${statusEmoji} ${result.page} [${result.device}]\n\n`;
+      markdown += `### ${statusEmoji} ${escapeMarkdown(result.page)} [${escapeMarkdown(result.device)}]\n\n`;
       markdown += `- **Status:** ${result.passed ? 'PASSED' : 'FAILED'}\n`;
       if (result.severity) {
-        markdown += `- **Severity:** ${result.severity.toUpperCase()}\n`;
+        markdown += `- **Severity:** ${escapeMarkdown(result.severity.toUpperCase())}\n`;
       }
       markdown += `- **Similarity:** ${(result.similarity * 100).toFixed(2)}%\n`;
       markdown += `- **Pixel Difference:** ${(result.pixelDifference * 100).toFixed(2)}%\n`;
@@ -544,25 +546,25 @@ AI Description: ${this.escapeXml(test.aiAnalysis.description)}`) +
         markdown += `\n**AI Analysis:**\n`;
         if (result.aiAnalysis.analysisFailed) {
           // Not a verdict: the classifier's fallback only looks like one.
-          markdown += `- Analysis unavailable: ${result.aiAnalysis.description}\n`;
+          markdown += `- Analysis unavailable: ${escapeMarkdown(result.aiAnalysis.description)}\n`;
         } else {
-          markdown += `- Classification: ${result.aiAnalysis.classification}\n`;
+          markdown += `- Classification: ${escapeMarkdown(result.aiAnalysis.classification)}\n`;
           markdown += `- Confidence: ${(result.aiAnalysis.confidence * 100).toFixed(0)}%\n`;
-          markdown += `- Description: ${result.aiAnalysis.description}\n`;
+          markdown += `- Description: ${escapeMarkdown(result.aiAnalysis.description)}\n`;
         }
         if (!result.aiAnalysis.analysisFailed && result.aiAnalysis.isIntentional !== undefined) {
           markdown += `- Looks intentional: ${result.aiAnalysis.isIntentional ? 'yes' : 'no'}\n`;
         }
         if (!result.aiAnalysis.analysisFailed && result.aiAnalysis.changeType) {
-          markdown += `- Change type: ${result.aiAnalysis.changeType}\n`;
+          markdown += `- Change type: ${escapeMarkdown(result.aiAnalysis.changeType)}\n`;
         }
         if (!result.aiAnalysis.analysisFailed && result.aiAnalysis.reasoning) {
-          markdown += `- Reasoning: ${result.aiAnalysis.reasoning}\n`;
+          markdown += `- Reasoning: ${escapeMarkdown(result.aiAnalysis.reasoning)}\n`;
         }
         if (result.aiAnalysis.suggestions && result.aiAnalysis.suggestions.length > 0) {
           markdown += `- Suggestions:\n`;
           for (const suggestion of result.aiAnalysis.suggestions) {
-            markdown += `  - ${suggestion}\n`;
+            markdown += `  - ${escapeMarkdown(suggestion)}\n`;
           }
         }
       }
@@ -635,6 +637,18 @@ AI Description: ${this.escapeXml(test.aiAnalysis.description)}`) +
       return absolutePath;
     }
     return path.relative(path.dirname(this.config.outputPath || ''), absolutePath);
+  }
+
+  /**
+   * An image path as an HTML attribute value: a URL (so `#`, `?`, `%` and spaces
+   * stay part of the file name), then attribute-escaped.
+   */
+  private imageSrc(filePath: string): string {
+    const target = this.getRelativePath(filePath);
+    const url = path.isAbsolute(target)
+      ? pathToFileURL(target).href
+      : target.split(path.sep).map(encodeURIComponent).join('/');
+    return escapeHtml(url);
   }
 
   /**
@@ -1108,27 +1122,6 @@ AI Description: ${this.escapeXml(test.aiAnalysis.description)}`) +
         });
       });
     `;
-  }
-
-  /**
-   * Utility: Escape HTML
-   */
-  private escapeHtml(text: string): string {
-    const map: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#039;',
-    };
-    return text.replace(/[&<>"']/g, (m) => map[m]);
-  }
-
-  /**
-   * Utility: Escape XML
-   */
-  private escapeXml(text: string): string {
-    return this.escapeHtml(text);
   }
 
   /**
