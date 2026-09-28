@@ -226,3 +226,13 @@ Write/Edit, not as a pre-push afterthought.
 - PR #389: fault injection that closes a SQLite handle breaks the reads that run before the
   step under test. To fail only writes, use a trigger:
   `CREATE TRIGGER … BEFORE INSERT … SELECT RAISE(FAIL, 'database or disk is full')`.
+- PR #391: my "report why a provider was skipped" change assigned `lastError` on the
+  unavailable path, so with fallback on, a later vendor's "not available" overwrote the
+  configured provider's real 401. The CI bot caught it. In a fallback loop, a note that
+  something was skipped must never replace a real error (`??=`, not `=`).
+- PR #391: the first demo run served scenarios B-D from the vision cache that scenario A
+  filled, so each vendor showed 0 requests. When a demo counts vendor hits through the
+  smart client, give every scenario its own images, or the cache answers instead.
+- PR #391: in a loaded full run the MCP suite failed on `npx tsc` ("Cannot find module
+  '../../package.json'" inside npm itself). It passed 7/7 alone. Treat it as the host,
+  like #142, and not as the diff.
