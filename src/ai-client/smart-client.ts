@@ -292,7 +292,8 @@ export class SmartAIVisionClient {
       return result;
     }
 
-    // All providers failed
+    // With fallback off only one vendor was tried; say what happened to it.
+    if (providers.length === 1 && lastError) throw lastError;
     throw new Error(`All providers failed. Last error: ${lastError?.message || 'Unknown error'}`);
   }
 

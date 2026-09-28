@@ -1723,7 +1723,8 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       } as never);
       const smart = createSmartClient(configFor(), smartOpts);
 
-      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/openai is not available/);
+      // One vendor was tried, so "All providers failed" would misdescribe it.
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/^openai is not available$/);
     });
 
     it('lets an explicit enableFallback: false override ai.fallback', async () => {
