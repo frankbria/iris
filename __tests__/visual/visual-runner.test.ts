@@ -547,6 +547,17 @@ describe('VisualTestRunner', () => {
       );
     });
 
+    it('should pass the fallback opt-in through to the AI classifier (#245)', () => {
+      new VisualTestRunner({
+        ...defaultConfig,
+        diff: { ...defaultConfig.diff, semanticAnalysis: true, apiKey: 'k', aiFallback: true },
+      });
+
+      expect(AIVisualClassifier).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fallback: true }),
+      );
+    });
+
     it('should honour an explicit aiModel override', () => {
       new VisualTestRunner({
         ...defaultConfig,

@@ -7,6 +7,7 @@ type MockedAiConfig = {
   apiKey?: string;
   model?: string;
   endpoint?: string;
+  fallback?: boolean;
   credentials?: Partial<
     Record<'openai' | 'anthropic' | 'ollama', { apiKey?: string; endpoint?: string }>
   >;
@@ -780,6 +781,26 @@ describe('visual-diff CLI command', () => {
         openai: { apiKey: 'sk-env-openai' },
         anthropic: { apiKey: 'sk-env-ant' },
       });
+    });
+
+    // Issue #245: `ai.fallback` in the config is the one switch that lets the
+    // classifier call a vendor other than the configured one.
+    it('forwards ai.fallback from the config to the runner', async () => {
+      process.env.OPENAI_API_KEY = 'sk-env-openai';
+      mockIrisConfig({ provider: 'openai', fallback: true });
+
+      const runnerCtor = await runVisualDiff(['--semantic']);
+
+      expect(diffConfigOf(runnerCtor).aiFallback).toBe(true);
+    });
+
+    it('leaves aiFallback unset when the config does not opt in', async () => {
+      process.env.OPENAI_API_KEY = 'sk-env-openai';
+      mockIrisConfig({ provider: 'openai' });
+
+      const runnerCtor = await runVisualDiff(['--semantic']);
+
+      expect(diffConfigOf(runnerCtor).aiFallback).toBeUndefined();
     });
 
     it('leaves aiCredentials undefined when the config has none', async () => {

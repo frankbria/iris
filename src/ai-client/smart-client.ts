@@ -29,12 +29,14 @@ export interface SmartClientConfig {
   enableCostTracking?: boolean;
 
   /**
-   * Enable automatic fallback (default: true)
+   * Try other vendors when the configured one fails. Default: `irisConfig.ai.fallback`,
+   * else off — a vendor the user did not choose is never billed unasked (#245).
    */
   enableFallback?: boolean;
 
   /**
-   * Fallback chain order (default: ['ollama', 'openai', 'anthropic'])
+   * Vendors to try after the configured provider, which always goes first
+   * (default: ['ollama', 'openai', 'anthropic'])
    */
   fallbackChain?: string[];
 
@@ -57,7 +59,10 @@ export interface SmartClientConfig {
   };
 }
 
-type ResolvedConfig = Required<Omit<SmartClientConfig, 'cacheConfig' | 'costConfig'>> & {
+type ResolvedConfig = Required<
+  Omit<SmartClientConfig, 'cacheConfig' | 'costConfig' | 'enableFallback'>
+> & {
+  enableFallback?: boolean;
   cacheConfig: { maxMemoryEntries: number; ttlMs: number; dbPath: string };
   costConfig: { dbPath: string; dailyLimit: number; monthlyLimit: number };
 };
@@ -75,7 +80,6 @@ function defaultConfig(): ResolvedConfig {
   return {
     enableCache: true,
     enableCostTracking: true,
-    enableFallback: true,
     fallbackChain: ['ollama', 'openai', 'anthropic'],
     cacheConfig: {
       maxMemoryEntries: 100,
@@ -92,10 +96,9 @@ function defaultConfig(): ResolvedConfig {
 /**
  * Smart AI vision client with caching, cost tracking, and fallback
  *
- * Implements intelligent provider selection and cost optimization:
  * 1. Check cache first
- * 2. Try local provider (Ollama) if available
- * 3. Fall back to cloud providers based on budget
+ * 2. Call the configured provider
+ * 3. Only if fallback is enabled, try the rest of the chain in order
  * 4. Track costs and enforce budget limits
  */
 export class SmartAIVisionClient {
@@ -174,10 +177,12 @@ export class SmartAIVisionClient {
       ? await this.diffPreprocessor.preprocess(request.diff)
       : undefined;
 
-    // Try provider chain with fallback
-    const providers = this.config.enableFallback
-      ? this.config.fallbackChain
-      : [this.irisConfig.ai.provider];
+    // The configured provider first, always; other vendors only on opt-in (#245).
+    const configured = this.irisConfig.ai.provider;
+    const fallback = this.config.enableFallback ?? this.irisConfig.ai.fallback ?? false;
+    const providers = fallback
+      ? [configured, ...this.config.fallbackChain.filter((p) => p !== configured)]
+      : [configured];
 
     // Context influences the analysis, so it is part of the cache identity.
     const contextKey = request.context ? JSON.stringify(request.context) : '';
@@ -236,6 +241,7 @@ export class SmartAIVisionClient {
         // Check if provider is available
         const available = await client.isAvailable();
         if (!available) {
+          lastError = new Error(`${providerName} is not available`);
           continue;
         }
 

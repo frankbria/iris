@@ -54,6 +54,8 @@ export interface VisualTestRunnerConfig {
      * fallback chain to cross vendors instead of skipping them (#74).
      */
     aiCredentials?: ProviderCredentials;
+    /** Let the classifier try other vendors when `aiProvider` fails. Off by default (#245). */
+    aiFallback?: boolean;
     antiAliasing: boolean;
     maxConcurrency: number;
   };
@@ -163,6 +165,7 @@ export class VisualTestRunner {
         model: config.diff.aiModel,
         baseURL: config.diff.aiEndpoint,
         credentials: config.diff.aiCredentials,
+        fallback: config.diff.aiFallback,
         maxTokens: 1024,
         temperature: 0.1,
       });
