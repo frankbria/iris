@@ -94,6 +94,10 @@ for (const key of [
   'IRIS_CONNECT_HOST',
   'IRIS_CONNECT_TOKEN',
   'IRIS_CONNECT_TOKEN_FILE', // #332
+  // #247: read by better-auth (src/auth/config.ts) when a caller omits them.
+  'BETTER_AUTH_SECRET',
+  'BETTER_AUTH_URL',
+  'BETTER_AUTH_TELEMETRY',
   // #331: '0' turns the Chromium sandbox off, which browser-hardening.test.ts
   // would then report as a missing sandbox.
   'IRIS_CHROMIUM_SANDBOX',
