@@ -1045,6 +1045,17 @@ npm test -- --coverage
 # instrumentation alone can tip a browser operation past its deadline.
 ```
 
+### Portal (`apps/portal`)
+
+The repo is an npm workspace: the IRIS package stays at the root (published
+unchanged), and the hosted portal lives in `apps/portal` (Next.js, shadcn Nova).
+
+```bash
+npm run dev   -w @iris/portal
+npm test      -w @iris/portal
+npm run build -w @iris/portal
+```
+
 ### Run Benchmarks
 
 ```bash

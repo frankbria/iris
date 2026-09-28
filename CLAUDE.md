@@ -28,6 +28,12 @@ npm start
 npm start run "natural language instruction"
 npm start watch [target]
 npm start connect
+
+# Portal workspace (apps/portal, #247) — run from the repo root
+npm run dev   -w @iris/portal
+npm test      -w @iris/portal
+npm run lint  -w @iris/portal
+npm run build -w @iris/portal   # next build also type-checks
 ```
 
 ## Architecture
@@ -69,6 +75,7 @@ src/
 ├── mcp/                   # MCP stdio server (experimental, spike scope)
 │   ├── server.ts          # `iris-mcp` bin — McpServer over StdioServerTransport
 │   └── tools.ts           # run_accessibility_test (axe violations only)
+├── auth/config.ts         # createAuth(): the BetterAuth config portal + API share (ADR 0001 §4, #247)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
@@ -93,6 +100,7 @@ __tests__/
 ├── session-lifecycle.test.ts      # Real Chromium, counted in /proc: launch-time disconnect, crash relaunch, busy sweep (#240)
 ├── container-config.test.ts       # Compose hardening, seccomp profile, token file + healthcheck (#332)
 ├── report-encoding.test.ts         # Every report format parsed for real (DOMParser, markdown-it): hostile input keeps the structure (#339)
+├── auth-config.test.ts            # Spawned Node loads src/auth/config via require(esm); Jest's sandbox can't (#247)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
@@ -100,6 +108,9 @@ __tests__/
 │   └── baseline.test.ts
 └── mcp/
     └── server.test.ts             # Protocol-level: spawns the built server over real stdio
+
+apps/
+└── portal/                        # @iris/portal: Next.js + shadcn Nova, own jest/eslint (#247)
 
 migrations/
 ├── 001_initial_schema.sql         # Phase 1 database schema
@@ -177,6 +188,29 @@ plans/
   - `resolveModel({provider, kind, model, creds})` returns a listed model as-is, rescues a **retired built-in pin** via longest-prefix match within the same family root, and throws `ModelUnavailableError` for a **user-named** model the provider does not serve. It needs no "was this explicit?" flag: a missing model that equals the pin is our rot, one that differs is the user's typo
   - `SmartAIVisionClient` rethrows `ModelUnavailableError` instead of stepping to the next vendor — that swallow is what made a retired model read as "all providers failed". Text clients resolve via `createResolvedAIClient()`; `loadConfig()` stays synchronous
   - `CostTracker` prices a model with no exact row by its family (#243), but only when the rest of the ID is one snapshot suffix (`-20260514`, `-2024-08-06`, `-latest`): a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) or dated snapshot gets its family's rate, while a variant (`gpt-4o-realtime-preview`, `gpt-4oz`) does not, because variants are priced differently. A snapshot that kept a different price needs its own row (`gpt-4o-2024-05-13`). Anything unmatched is charged the dearest registered rate per field (including `setPricing` rows), recorded with `estimated = 1` on its ledger row, and warned about once per pair. It used to record $0, which a budget breaker never trips on. A model dearer than every registered row still under-reports until it gets one. Free providers (Ollama) stay $0 for every model
+
+### Workspaces and the Portal (issue #247)
+
+The root `package.json` declares `"workspaces": ["apps/*"]`. The IRIS package stays
+at the root and publishes exactly as before; `apps/portal` (`@iris/portal`) is
+private. Things that are easy to break:
+
+- **Root Jest ignores `apps/`** (`testPathIgnorePatterns` and
+  `modulePathIgnorePatterns`). The portal has its own `next/jest` config.
+- **The portal pins ESLint 9.** `eslint-config-next` pulls in `eslint-plugin-react`,
+  which crashes on ESLint 10 (`getFilename is not a function`). The root keeps 10,
+  and npm nests the portal's copy.
+- **`gray` is gone from the shadcn preset API** (400). The portal was scaffolded
+  with `neutral` and its tokens replaced with shadcn's registry gray
+  (`/r/colors/gray.json`). Adding components with `npx shadcn add` is unaffected.
+- **`better-auth` is ESM-only**, and `src/auth/config.ts` loads it from the
+  CommonJS build through `require(esm)`. `tsc` resolves its subpaths through the
+  package's `typesVersions`. Jest cannot load it in-process: test through a spawned
+  Node (see `auth-config.test.ts`), or add the whole dependency tree to
+  `transformIgnorePatterns`. `createAuth()` requires `secret` and `baseURL`, because
+  otherwise better-auth falls back to `BETTER_AUTH_*` or, outside production, to a
+  built-in secret. Those variables are on the `jest.setup.ts` scrub list.
+- **`.dockerignore` excludes `apps/`**, so the image never carries portal packages.
 
 ### Container Deployment (issue #192)
 
@@ -566,7 +600,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1591/1592 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1592/1593 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation
