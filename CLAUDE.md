@@ -74,6 +74,7 @@ src/
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
 ├── url-policy-guard.ts    # Makes that stick per-request (CDP Fetch): redirect hops, sub-resources, popups (#337)
 ├── egress-proxy.ts        # Hosted: resolve-and-pin HTTP/CONNECT proxy under all Chromium traffic (#336)
+├── report-encoding.ts     # One encoder per report format: HTML, XML (JUnit), Markdown, safe hrefs (#339)
 ├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
 └── config.ts              # Configuration types and validation
 
@@ -91,6 +92,7 @@ __tests__/
 ├── protocol-limits.test.ts        # RPC limits over real sockets: payload, connections, sessions, actions, clamps, heartbeat (#338)
 ├── session-lifecycle.test.ts      # Real Chromium, counted in /proc: launch-time disconnect, crash relaunch, busy sweep (#240)
 ├── container-config.test.ts       # Compose hardening, seccomp profile, token file + healthcheck (#332)
+├── report-encoding.test.ts         # Every report format parsed for real (DOMParser, markdown-it): hostile input keeps the structure (#339)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
@@ -305,6 +307,28 @@ dials the address it vetted, so a rebinding resolver gets no second lookup.
   that goes through the same proxy. A refused target must leave no hit on the server.
 - Not covered: a container-level egress firewall, and names Chromium resolves for DNS
   prefetch (a lookup, no connection).
+
+### Report Output Encoding (issue #339)
+
+Every report field that is not a number may hold text the page under test
+controls: page names, axe output (axe runs *inside* the page) and model output
+quoting the page. Both report writers route every interpolation through
+`src/report-encoding.ts`; do not add a local escaper.
+
+- **XML**: characters XML 1.0 forbids (C0 controls, lone surrogates, U+FFFE/FFFF)
+  have no escape; `escapeXml` replaces them with U+FFFD. TAB/LF/CR go out as
+  character references so attribute values keep them.
+- **Markdown**: inline punctuation is backslash-escaped and newlines fold, but a
+  value placed after a list marker still starts a block, so leading whitespace is
+  dropped and a leading `-`, `+`, `1.` is escaped. Bare URLs may still autolink
+  under GFM; the target is then the visible text.
+- **Links**: `safeHref()` allows http(s) only. Attribute escaping does not make a
+  `javascript:` URL inert.
+- **Tests** assert *structure equivalence*: one report rendered with benign and
+  with hostile strings must parse (Chromium DOMParser, markdown-it) to the same
+  element/token sequence. Substring checks pass on half-escaped documents.
+- Writing `\u....` escapes through a tool call can land as the raw character on
+  disk. Check with `cat -A` when editing a regex or fixture that uses them.
 
 ### RPC Server Error Policy (issue #330)
 
