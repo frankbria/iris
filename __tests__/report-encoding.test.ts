@@ -125,8 +125,32 @@ describe('report encoders', () => {
     );
     expect(doc.error).toBeNull();
     // Illegal characters become U+FFFD: visible, and the document stays readable.
-    expect(doc.text).toBe(lf(HOSTILE + XML_ILLEGAL.replace(/[^a-h]/g, '\uFFFD')));
+    // TAB/LF/CR go out as character references, so they survive exactly, even in
+    // an attribute, where a raw one would be normalised to a space.
+    const expected = HOSTILE + XML_ILLEGAL.replace(/[^a-h]/g, '\uFFFD');
+    expect(doc.text).toBe(expected);
+    expect(doc.attrs).toEqual([expected]);
   });
+
+  it.each(['- x', '+ x', '1. x', '1) x', '---', '***', '      indented', '# h', '> q'])(
+    'escapeMarkdown(%j) after a list marker stays one plain list item',
+    (value) => {
+      // A suggestion is rendered as `  - <value>`, so the value starts a block:
+      // a leading marker would nest a list, `---` would become a rule, and
+      // indentation a code block.
+      const types = md.parse(`- ${escapeMarkdown(value)}`, {}).map((t) => t.type);
+      expect(types).toEqual([
+        'bullet_list_open',
+        'list_item_open',
+        'paragraph_open',
+        'inline',
+        'paragraph_close',
+        'list_item_close',
+        'bullet_list_close',
+      ]);
+      expect(mdText(`- ${escapeMarkdown(value)}`)).toBe(value.trimStart());
+    },
+  );
 
   it('escapeHtml output parses to text in attributes and text', async () => {
     const doc = await parse(
@@ -201,11 +225,16 @@ describe('visual reports', () => {
     duration: 1,
   });
 
-  const render = async (format: 'html' | 'markdown' | 'junit' | 'json', s: string) => {
+  const render = async (
+    format: 'html' | 'markdown' | 'junit' | 'json',
+    s: string,
+    relativePaths = true,
+  ) => {
     const reporter = new VisualReporter({
       format,
       title: s,
       includeScreenshots: true,
+      relativePaths,
       outputPath: path.join(tempDir, `report-${format}`),
     });
     const { reportPath } = await reporter.generateReport(results(s));
@@ -220,9 +249,9 @@ describe('visual reports', () => {
     expect(hostile.text).toContain(lf(`${HOSTILE} - ${HOSTILE}`));
   });
 
-  it('HTML: image paths are URL-encoded, so # ? % and spaces still name the file', async () => {
+  it.each([true, false])('HTML: image paths are URL-encoded (relativePaths: %s)', async (rel) => {
     const name = 'a b#c?d%e';
-    const content = await render('html', name);
+    const content = await render('html', name, rel);
     const doc = await parse(content, 'text/html');
     const srcs = doc.attrs.filter((v) => v.endsWith('.png'));
 
@@ -357,5 +386,7 @@ describe('a11y reports', () => {
     expect(hostile.error).toBeNull();
     expect(hostile.skeleton).toEqual(benign.skeleton);
     expect(hostile.text).toContain(HOSTILE.slice(0, 40));
+    // Every illegal character is replaced, not dropped.
+    expect(hostile.text).toContain(XML_ILLEGAL.replace(/[^a-h]/g, '\uFFFD'));
   });
 });
