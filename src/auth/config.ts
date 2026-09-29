@@ -33,13 +33,15 @@ export interface AuthEmail {
  * - rate limits in every environment (BetterAuth turns them on only in production).
  *   Its built-in rules cover the auth routes: sign-in/up 3 per 10s, reset and
  *   verification mail 3 per 60s.
- * - Secure cookies whenever `baseURL` is https. Otherwise BetterAuth ties the flag to
- *   `NODE_ENV`. httpOnly and SameSite=Lax are BetterAuth's defaults.
+ *
+ * Session cookies are httpOnly and SameSite=Lax, and Secure whenever `baseURL` is https.
+ * Those are BetterAuth's defaults given a `baseURL`, which is why `baseURL` is required.
+ * The test pins them.
  *
  * ponytail: in-memory rate-limit counters, correct for one portal process. Use
  * `storage: 'database'` (a new migration) once the portal runs several (#316).
  */
-function accountPolicy(baseURL: string, sendEmail: (email: AuthEmail) => Promise<void>) {
+function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
   return {
     emailAndPassword: {
       enabled: true,
@@ -63,7 +65,6 @@ function accountPolicy(baseURL: string, sendEmail: (email: AuthEmail) => Promise
         }),
     },
     rateLimit: { enabled: true },
-    advanced: { useSecureCookies: new URL(baseURL).protocol === 'https:' },
   } satisfies Partial<BetterAuthOptions>;
 }
 
@@ -78,7 +79,7 @@ export function createAuth(
   const { sendEmail, ...rest } = options;
   return betterAuth({
     ...rest,
-    ...accountPolicy(rest.baseURL, sendEmail),
+    ...accountPolicy(sendEmail),
     plugins: [organization(), apiKey({ references: 'organization' })],
   });
 }
