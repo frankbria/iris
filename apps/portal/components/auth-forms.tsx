@@ -22,12 +22,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { authClient } from "@/lib/auth-client"
 
-type AuthError = { status: number; message?: string } | null
+type AuthError = { status: number; code?: string; message?: string } | null
 
 /** What a person should read for a failed auth call. Never says whether an account exists. */
 function describe(error: NonNullable<AuthError>): string {
-  if (error.status === 403)
-    return "Verify your email address first. We sent the link when you signed up."
+  if (error.code === "EMAIL_NOT_VERIFIED")
+    return "Verify your email address first. We sent you a new link."
   if (error.status === 429)
     return "Too many attempts. Wait a minute and try again."
   if (error.status === 401) return "Invalid email or password."
@@ -161,7 +161,7 @@ export function SignUpForm() {
             name: text(form, "name"),
             email,
             password: text(form, "password"),
-            callbackURL: "/dashboard",
+            callbackURL: "/login?verified=1",
           })
         )
         if (ok) setSentTo(email)
@@ -188,13 +188,13 @@ export function SignUpForm() {
   )
 }
 
-export function LogInForm({ passwordReset }: { passwordReset: boolean }) {
+export function LogInForm({ notice }: { notice: string | null }) {
   const router = useRouter()
   const { busy, error, run } = useAuthAction()
   return (
     <AuthCard
       title="Log in to IRIS"
-      notice={passwordReset && "Password changed. Log in with the new one."}
+      notice={notice}
       submit="Log in"
       busy={busy}
       error={error}
@@ -203,6 +203,8 @@ export function LogInForm({ passwordReset }: { passwordReset: boolean }) {
           authClient.signIn.email({
             email: text(form, "email"),
             password: text(form, "password"),
+            // Where the fresh verification link leads if the address is unverified.
+            callbackURL: "/dashboard",
           })
         )
         if (ok) router.push("/dashboard")
@@ -311,16 +313,28 @@ export function ResetPasswordForm({ token }: { token: string | null }) {
 
 export function LogOutButton() {
   const router = useRouter()
+  const [error, setError] = useState<string | null>(null)
   return (
-    <Button
-      variant="outline"
-      onClick={async () => {
-        await authClient.signOut()
-        router.push("/login")
-        router.refresh()
-      }}
-    >
-      Log out
-    </Button>
+    <div className="flex flex-col gap-2">
+      <Button
+        variant="outline"
+        className="self-start"
+        onClick={async () => {
+          // On a shared machine, landing on /login while the session survives is worse
+          // than staying put with an error.
+          const { error } = await authClient.signOut()
+          if (error) return setError(describe(error))
+          router.push("/login")
+          router.refresh()
+        }}
+      >
+        Log out
+      </Button>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
   )
 }

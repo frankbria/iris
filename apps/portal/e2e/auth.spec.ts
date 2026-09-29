@@ -60,15 +60,20 @@ test("sign up, verify, log in, log out", async ({ page, context }) => {
   await page.getByRole("button", { name: "Create account" }).click()
   await expect(page.getByText(`We sent a link to ${email}`)).toBeVisible()
 
-  // No session until the address is verified.
+  // No session until the address is verified. Trying mails a fresh link, so a
+  // lost or expired one (or a failed send) is not a dead end.
   await logIn(page, email, PASSWORD)
   await expect(
-    page.getByRole("alert").filter({ hasText: "Verify your email" })
+    page.getByRole("alert").filter({ hasText: "We sent you a new link" })
   ).toBeVisible()
   await expect(page).toHaveURL(/\/login$/)
+  const fresh = await linkFromMail(email, "Verify", 2)
 
-  // The link in the mail verifies the address and signs the user in.
-  await page.goto(await linkFromMail(email, "Verify"))
+  // Following the link verifies the address but does not sign in (login CSRF).
+  await page.goto(fresh)
+  await expect(page).toHaveURL(/\/login$/)
+
+  await logIn(page, email, PASSWORD)
   await expect(page).toHaveURL(/\/dashboard$/)
   await expect(page.getByText(email)).toBeVisible()
 
@@ -79,6 +84,11 @@ test("sign up, verify, log in, log out", async ({ page, context }) => {
 
   await page.getByRole("button", { name: "Log out" }).click()
   await expect(page).toHaveURL(/\/login$/)
+  await page.goto("/dashboard")
+  await expect(page).toHaveURL(/\/login$/)
+
+  // Logging out revoked the session on the server, not only the browser's copy.
+  await context.addCookies([session!])
   await page.goto("/dashboard")
   await expect(page).toHaveURL(/\/login$/)
 

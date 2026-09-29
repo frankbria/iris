@@ -5,12 +5,14 @@ import { e2eEnv } from "./env"
 const { mailpitUrl } = e2eEnv()
 
 /**
- * The first link in the newest mail to `to` whose subject contains `subject`.
- * Polls: the portal sends asynchronously to the request that triggers the mail.
+ * The first link in the newest mail to `to` whose subject contains `subject`, once at
+ * least `count` such mails have arrived. Polls, because the mail can arrive after the
+ * response to the request that sent it.
  */
 export async function linkFromMail(
   to: string,
-  subject: string
+  subject: string,
+  count = 1
 ): Promise<string> {
   let text = ""
   await expect
@@ -21,7 +23,7 @@ export async function linkFromMail(
         const { messages } = (await res.json()) as {
           messages: { ID: string }[]
         }
-        if (!messages.length) return false
+        if (messages.length < count) return false
         const msg = await fetch(
           `${mailpitUrl}/api/v1/message/${messages[0].ID}`
         )

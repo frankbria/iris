@@ -25,6 +25,7 @@ const { createAuth } = require('./src/auth/config.ts');
     sendEmail: async () => {},
     // A caller trying to relax the policy: createAuth must not let it through.
     emailAndPassword: { enabled: true, requireEmailVerification: false },
+    emailVerification: { autoSignInAfterVerification: true },
     rateLimit: { enabled: false },
   });
   const ctx = await auth.$context;
@@ -35,6 +36,8 @@ const { createAuth } = require('./src/auth/config.ts');
     rateLimit: ctx.rateLimit.enabled,
     requireEmailVerification: ctx.options.emailAndPassword.requireEmailVerification,
     sendOnSignUp: ctx.options.emailVerification.sendOnSignUp,
+    sendOnSignIn: ctx.options.emailVerification.sendOnSignIn,
+    autoSignInAfterVerification: ctx.options.emailVerification.autoSignInAfterVerification,
     revokeSessionsOnPasswordReset: ctx.options.emailAndPassword.revokeSessionsOnPasswordReset,
   }));
 })().catch((e) => { console.error(e); process.exit(1); });
@@ -72,6 +75,10 @@ describe('shared auth config (require(esm))', () => {
       rateLimit: true,
       requireEmailVerification: true,
       sendOnSignUp: true,
+      // A lost link is recoverable: signing in again mails a fresh one.
+      sendOnSignIn: true,
+      // A mailed link must not sign a browser in (login CSRF).
+      autoSignInAfterVerification: false,
       revokeSessionsOnPasswordReset: true,
     });
   }, 30_000);

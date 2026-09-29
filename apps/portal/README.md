@@ -11,7 +11,36 @@ npm run dev   -w @iris/portal
 npm test      -w @iris/portal
 npm run lint  -w @iris/portal
 npm run build -w @iris/portal   # also type-checks
+npm run e2e   -w @iris/portal   # Playwright; needs the build and the services below
 ```
+
+## Accounts (#249)
+
+Email + password through BetterAuth. The policy lives in the shared
+`createAuth()` (`src/auth/config.ts`), which the portal imports directly and the API
+also uses. A session requires a verified address, account mail goes over SMTP, and
+the auth routes are rate-limited. The server reads:
+
+| Variable | Meaning |
+|---|---|
+| `BETTER_AUTH_SECRET` | Signs sessions |
+| `BETTER_AUTH_URL` | Public origin. With `https`, the session cookie is `Secure` |
+| `DATABASE_URL` / `DATABASE_URL_FILE` | Postgres, migrated with `npm run db:migrate` |
+| `SMTP_URL`, `SMTP_FROM` | Mail transport (e.g. `smtps://user:pass@host`) and sender |
+
+They are read on first request, so `next build` needs none of them. For local
+development, `docker compose -f docker-compose.dev.yml up -d --wait` starts Postgres
+and Mailpit. Point `SMTP_URL` at `smtp://127.0.0.1:51025` and read the mail at
+http://127.0.0.1:58025.
+
+The E2E suite (`e2e/`) runs `next start` over the build against a fresh
+`iris_portal_e2e` database and reads every mail from Mailpit. It needs
+`IRIS_TEST_DATABASE_URL`, an admin URL.
+- Each test sends its own random `X-Forwarded-For`. The limiter counts per client
+  IP, so without that header the tests would share one counter.
+- On WSL, a connect to a closed port on 127.0.0.1 hangs instead of being
+  refused. Playwright's check for a server already on the port therefore costs about
+  2 minutes before the run starts.
 
 Add UI components from this directory with `npx shadcn@latest add <name>`.
 
