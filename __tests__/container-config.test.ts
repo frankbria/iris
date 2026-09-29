@@ -130,6 +130,31 @@ describe('Dockerfile and deploy wiring (issue #332)', () => {
   });
 });
 
+describe('staging Postgres and migrations (issue #248)', () => {
+  const postgres = compose.slice(compose.indexOf('\n  postgres:'), compose.indexOf('\nvolumes:'));
+
+  it('keeps Postgres off the host: no published port', () => {
+    expect(postgres).toMatch(/^\s+image: postgres:/m);
+    expect(postgres).not.toMatch(/^\s+ports:/m);
+  });
+
+  it('passes the password and the URL as secret files, never as env values', () => {
+    expect(postgres).toMatch(/^\s+POSTGRES_PASSWORD_FILE: \/run\/secrets\/pg_password$/m);
+    expect(compose).toMatch(/^\s+DATABASE_URL_FILE: \/run\/secrets\/database_url$/m);
+    expect(compose).not.toMatch(/^\s+(DATABASE_URL|POSTGRES_PASSWORD):/m);
+  });
+
+  it('migrates from the new image after pull and before up, and stops the deploy if it fails', () => {
+    const ci = read('.github/workflows/ci.yml');
+    expect(ci).toMatch(
+      /docker compose pull --quiet \\\s+&& docker compose run --rm --entrypoint node iris dist\/db\/migrate\.js \\\s+&& docker compose up -d/,
+    );
+    // Generated once on the box: a new password per deploy would not match the
+    // one the existing volume was initialised with.
+    expect(ci).toMatch(/if \[ ! -s pg_password \]; then/);
+  });
+});
+
 describe('docker/healthcheck.js reads IRIS_CONNECT_TOKEN_FILE (issue #332)', () => {
   let wss: WebSocketServer;
   let port: number;

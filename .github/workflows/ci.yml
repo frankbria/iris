@@ -7,6 +7,20 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # The hosted database (#248): the migration runner and the Postgres suite run
+    # against a real server. Credentials are throwaway, like the container.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: iris
+          POSTGRES_PASSWORD: iris
+          POSTGRES_DB: iris
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U iris -d iris"
+          --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -28,7 +42,15 @@ jobs:
       # sandbox!"). Lift the restriction rather than set IRIS_CHROMIUM_SANDBOX=0,
       # so the suite keeps proving a real sandbox, not the opt-out.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Twice: the second run must apply nothing (idempotency on a real database).
+      - run: npm run db:migrate && npm run db:migrate
+        env:
+          DATABASE_URL: postgres://iris:iris@localhost:5432/iris
+      # IRIS_TEST_DATABASE_URL is an admin URL; the suite creates a database per
+      # file. Required under CI, so a missing service fails rather than skips.
       - run: npm test
+        env:
+          IRIS_TEST_DATABASE_URL: postgres://iris:iris@localhost:5432/postgres
       # apps/portal (#247). `next build` type-checks, so there is no separate step.
       - run: npm run lint -w @iris/portal
       - run: npm test -w @iris/portal
@@ -348,6 +370,25 @@ jobs:
             chmod 400 /opt/iris/secrets/connect_token
           '
 
+          # Postgres credentials (#248), generated ON the box so the password never
+          # travels. Once: postgres reads POSTGRES_PASSWORD_FILE only when it first
+          # initialises its volume, so a new password on every deploy would lock
+          # the server out of its own database. The URL is derived every time.
+          # Owners follow the bind mount: postgres runs as uid 70 in the alpine
+          # image, pwuser as 1001.
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" '
+            set -eu
+            umask 077
+            cd /opt/iris/secrets
+            if [ ! -s pg_password ]; then
+              head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n" > pg_password
+            fi
+            printf "postgres://iris:%s@postgres:5432/iris" "$(cat pg_password)" > database_url
+            chown 70:70 pg_password
+            chown 1001:1001 database_url
+            chmod 400 pg_password database_url
+          '
+
           # The box has to authenticate to GHCR: a newly published package is
           # private by default even for a public repo, so an anonymous pull fails
           # with "unauthorized".
@@ -371,8 +412,15 @@ jobs:
           #
           # `|| :` on the logout so a registry hiccup at teardown cannot fail an
           # otherwise-good deploy; the credential is short-lived regardless.
+          #
+          # Migrations run between pull and up, from the NEW image (#248, ADR 0001
+          # §2): a failed migration stops the deploy while the old container keeps
+          # serving. `run` starts postgres first and waits for it to be healthy
+          # (the iris service's depends_on). Idempotent, so a re-run applies nothing.
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            'cd /opt/iris && docker compose pull --quiet && docker compose up -d --force-recreate --remove-orphans; \
+            'cd /opt/iris && docker compose pull --quiet \
+             && docker compose run --rm --entrypoint node iris dist/db/migrate.js \
+             && docker compose up -d --force-recreate --remove-orphans; \
              rc=$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit $rc'
 
           # Smoke test: wait for the container's own healthcheck to report

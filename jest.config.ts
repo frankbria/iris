@@ -7,7 +7,7 @@ const config: Config.InitialOptions = {
     '**/__tests__/**/*.test.ts',
     '!**/__tests__/**/*.bench.ts',
     '!**/__tests__/**/bench-utils.ts',
-    '!**/__tests__/**/report-generator.ts'
+    '!**/__tests__/**/report-generator.ts',
   ],
   // Workspaces under apps/ run their own test runner (#247).
   testPathIgnorePatterns: ['/node_modules/', '<rootDir>/apps/'],
@@ -21,7 +21,8 @@ const config: Config.InitialOptions = {
   //
   // Narrow allowlist rather than transforming all of node_modules, which would
   // be slow and would drag in every dependency's build output.
-  transformIgnorePatterns: ['/node_modules/(?!(pixelmatch|chokidar|readdirp)/)'],
+  // kysely (#248) is ESM-only too.
+  transformIgnorePatterns: ['/node_modules/(?!(pixelmatch|chokidar|readdirp|kysely)/)'],
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {}],
     // pixelmatch ships .js ESM; ts-jest can downlevel it to CJS for the sandbox.
@@ -47,23 +48,23 @@ const config: Config.InitialOptions = {
     '!src/mcp/server.ts',
     // Loads ESM-only better-auth, which Jest's sandbox cannot require; covered
     // by a spawned Node process in __tests__/auth-config.test.ts (#247).
-    '!src/auth/config.ts'
+    '!src/auth/config.ts',
   ],
   // Never instrument the browser-context a11y modules (see collectCoverageFrom).
   coveragePathIgnorePatterns: [
     '/node_modules/',
     '<rootDir>/src/a11y/keyboard-tester.ts',
     '<rootDir>/src/a11y/a11y-runner.ts',
-    '<rootDir>/src/mcp/server.ts'
+    '<rootDir>/src/mcp/server.ts',
   ],
   coverageThreshold: {
     global: {
       branches: 80,
       functions: 80,
       lines: 80,
-      statements: 80
-    }
-  }
+      statements: 80,
+    },
+  },
 };
 
 export default config;

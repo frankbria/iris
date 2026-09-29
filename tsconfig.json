@@ -26,7 +26,10 @@
     "paths": {
       "@iris/visual": ["./src/visual/index"],
       "@iris/a11y": ["./src/a11y/index"],
-      "@iris/utils": ["./src/utils/index"]
+      "@iris/utils": ["./src/utils/index"],
+      // Types only: `node10` resolution ignores `exports`, and kysely has no
+      // typesVersions for its subpaths. Node resolves the require() itself (#248).
+      "kysely/migration": ["./node_modules/kysely/dist/migration/index.d.ts"]
     }
   },
   "include": ["src/**/*"],
