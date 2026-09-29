@@ -36,12 +36,20 @@ services:
       # The cost ledger and vision cache too (#241). The root filesystem is
       # read-only, so a path left under /app fails with EROFS.
       IRIS_DATA_DIR: /data
+      # The hosted database (#248). A file, like the token: the URL carries the
+      # password. Nothing reads it at boot yet; the deploy's migration step does.
+      DATABASE_URL_FILE: /run/secrets/database_url
+
+    depends_on:
+      postgres:
+        condition: service_healthy
 
     # A bind mount, so the container sees the host file's own owner and mode:
     # it must be readable by pwuser (uid 1001). Keep it inside a 0700 directory
     # so that on a shared host, whoever holds uid 1001 there cannot reach it.
     secrets:
       - connect_token
+      - database_url
 
     volumes:
       - iris-data:/data
@@ -116,10 +124,49 @@ services:
         max-size: '10m'
         max-file: '3'
 
+  # Hosted tenant data (#248, ADR 0001 §2). No `ports:` on purpose: only the
+  # services on this compose network reach it, and the shared host's own 5432
+  # stays untouched. The schema comes from the deploy's migration step, never
+  # from the server at boot.
+  postgres:
+    image: postgres:17-alpine
+    container_name: iris-staging-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: iris
+      POSTGRES_DB: iris
+      # Read at first init only; the volume keeps it after that, which is why the
+      # deploy generates the file once and never rotates it by accident.
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets:
+      - pg_password
+    volumes:
+      - iris-pg:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U iris -d iris']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
 volumes:
   iris-data:
+  iris-pg:
 
 # Written by the deploy (ci.yml) to /opt/iris/secrets/connect_token. Never commit it.
 secrets:
   connect_token:
     file: ./secrets/connect_token
+  # Also written by the deploy: the password once (postgres, uid 70), the URL
+  # built from it on every deploy (pwuser, uid 1001).
+  pg_password:
+    file: ./secrets/pg_password
+  database_url:
+    file: ./secrets/database_url

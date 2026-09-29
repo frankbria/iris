@@ -1,0 +1,32 @@
+# Local Postgres for hosted-mode development and the Postgres test suite (#248).
+#
+#   docker compose -f docker-compose.dev.yml up -d --wait
+#   export DATABASE_URL=postgres://iris:iris@127.0.0.1:55432/iris
+#   npm run db:migrate
+#
+# The tests take an admin URL instead and create a throwaway database per file:
+#   IRIS_TEST_DATABASE_URL=postgres://iris:iris@127.0.0.1:55432/postgres npm test
+#
+# Development only: the password is in this file. Staging keeps its own in a
+# secret file (docker-compose.staging.yml).
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: iris
+      POSTGRES_PASSWORD: iris
+      POSTGRES_DB: iris
+    # Loopback, and not 5432: the shared host may already run a Postgres there.
+    ports:
+      - '127.0.0.1:${IRIS_PG_PORT:-55432}:5432'
+    volumes:
+      - iris-pg-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U iris -d iris']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  iris-pg-dev:
