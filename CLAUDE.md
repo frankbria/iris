@@ -76,6 +76,10 @@ src/
 │   ├── server.ts          # `iris-mcp` bin — McpServer over StdioServerTransport
 │   └── tools.ts           # run_accessibility_test (axe violations only)
 ├── auth/config.ts         # createAuth(): the BetterAuth config portal + API share (ADR 0001 §4, #247)
+├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
+│   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
+│   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
@@ -101,6 +105,7 @@ __tests__/
 ├── container-config.test.ts       # Compose hardening, seccomp profile, token file + healthcheck (#332)
 ├── report-encoding.test.ts         # Every report format parsed for real (DOMParser, markdown-it): hostile input keeps the structure (#339)
 ├── auth-config.test.ts            # Spawned Node loads src/auth/config via require(esm); Jest's sandbox can't (#247)
+├── db/postgres.test.ts            # Real Postgres: migrate, idempotency, org_id catalog check, BetterAuth round trip (#248)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
@@ -212,6 +217,44 @@ private. Things that are easy to break:
   otherwise better-auth falls back to `BETTER_AUTH_*` or, outside production, to a
   built-in secret. Those variables are on the `jest.setup.ts` scrub list.
 - **`.dockerignore` excludes `apps/`**, so the image never carries portal packages.
+
+### Hosted Postgres and Migrations (issue #248)
+
+Hosted tenant data lives in Postgres through Kysely + `pg` (ADR 0001 §2). SQLite
+stays the local-mode store. `docker-compose.dev.yml` runs a dev Postgres on
+`127.0.0.1:55432`.
+
+- **Migrations** are `src/db/migrations/NNNN_<what>.ts`, registered by hand in the
+  `MIGRATIONS` map in `src/db/migrate.ts`. The map replaces a directory scan, so
+  resolution is the same under ts-node, `dist/` and the image. The Kysely Migrator
+  applies migrations in name order, records them in `kysely_migration`, and on
+  Postgres runs the whole pending batch in **one** transaction. Never edit an
+  applied migration; add a new one.
+- **Every IRIS table gets `org_id NOT NULL` and an index that leads with it.**
+  `__tests__/db/postgres.test.ts` checks this against the catalog, so a new table
+  without them fails there. A table that references a run uses the composite key
+  `(org_id, run_id) → runs (org_id, id)`, so a row cannot point at another org's
+  run. BetterAuth's tables are exempt and keep its own column names.
+- **BetterAuth's schema comes from its CLI.** It lives in migration 0001, the output
+  of `npx auth@<better-auth version> generate` run over `createAuth()`. Adding a
+  plugin to `createAuth()` means generating again and committing the difference as a
+  new migration. Never run `auth migrate` against a deployed database.
+- **`kysely/migration` is resolved by a types-only `paths` entry in tsconfig.**
+  Kysely 0.29 moved `Migrator` there. `node10` resolution ignores `exports`, and at
+  runtime Node resolves the subpath itself. Kysely is ESM-only, so it is also on
+  Jest's transform allowlist.
+- **Tests need `IRIS_TEST_DATABASE_URL`**, an admin URL. Each file creates and drops
+  its own database. The Postgres tests are required under `CI` (the build job has a
+  service container) and skipped locally when the variable is unset.
+- **The pool has a 10s connect timeout.** Without it, `pg` waits forever on a host
+  that accepts connections and never answers, and a deploy step hangs instead of
+  failing.
+- **Deploy order** (ci.yml): `pull`, then `up -d --wait postgres`, then migrate
+  from the new image, then force-recreate `iris` only. A failed migration leaves the
+  old container serving. The Postgres password is generated on the box **once**,
+  because the volume keeps the password it was initialised with. The URL is rebuilt
+  on every deploy. Both are secret files (`pg_password` for uid 70,
+  `database_url` for uid 1001). Postgres publishes no port.
 
 ### Container Deployment (issue #192)
 
@@ -601,7 +644,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1592/1593 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1606/1607 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

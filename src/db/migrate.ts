@@ -26,6 +26,10 @@ export async function migrateToLatest(db: Kysely<unknown>): Promise<MigrationRes
   return results;
 }
 
+// The process entry below runs only as a spawned `node`, which Jest cannot
+// instrument; __tests__/db/postgres.test.ts spawns it (current, bad password,
+// silent server). Same exemption as src/mcp/server.ts.
+/* istanbul ignore next */
 /**
  * `node dist/db/migrate.js` (or `npm run db:migrate`): the deploy step. Runs as
  * its own process, never at server boot (ADR 0001 §2). Exits 1 on failure.
@@ -41,6 +45,7 @@ async function main(): Promise<void> {
   }
 }
 
+/* istanbul ignore next */
 if (require.main === module) {
   main().catch((err) => {
     // Message or code only: an inspected error can carry the URL, password included.
