@@ -415,12 +415,14 @@ jobs:
           #
           # Migrations run between pull and up, from the NEW image (#248, ADR 0001
           # §2): a failed migration stops the deploy while the old container keeps
-          # serving. `run` starts postgres first and waits for it to be healthy
-          # (the iris service's depends_on). Idempotent, so a re-run applies nothing.
+          # serving. Idempotent, so a re-run applies nothing. Postgres is brought up
+          # on its own and recreated only when its config changed; --force-recreate
+          # applies to iris alone, so a deploy does not bounce the database.
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
             'cd /opt/iris && docker compose pull --quiet \
-             && docker compose run --rm --entrypoint node iris dist/db/migrate.js \
-             && docker compose up -d --force-recreate --remove-orphans; \
+             && docker compose up -d --wait postgres \
+             && docker compose run --rm --no-deps --entrypoint node iris dist/db/migrate.js \
+             && docker compose up -d --force-recreate --no-deps --remove-orphans iris; \
              rc=$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit $rc'
 
           # Smoke test: wait for the container's own healthcheck to report

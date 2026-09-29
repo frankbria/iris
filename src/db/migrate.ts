@@ -13,8 +13,8 @@ const MIGRATIONS = { '0001_initial': initial };
 /**
  * Applies every pending migration (ADR 0001 §2, #248). Idempotent: applied names
  * are recorded in `kysely_migration`, and the Migrator holds a lock, so two
- * concurrent runs cannot both apply one. On Postgres each migration runs in a
- * transaction, so a failed one leaves nothing half-applied.
+ * concurrent runs cannot both apply one. On Postgres the pending batch runs in
+ * one transaction, so a failure applies none of it.
  *
  * @returns the migrations this call applied (empty when already current)
  * @throws the first migration's error, after its transaction rolled back
@@ -43,7 +43,10 @@ async function main(): Promise<void> {
 
 if (require.main === module) {
   main().catch((err) => {
-    console.error('migration failed:', err instanceof Error ? err.message : err);
+    // Message or code only: an inspected error can carry the URL, password included.
+    // A refused connection is an AggregateError whose message is empty.
+    const e = err as { message?: string; code?: string };
+    console.error('migration failed:', e?.message || e?.code || String(err));
     process.exit(1);
   });
 }

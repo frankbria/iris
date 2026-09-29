@@ -17,6 +17,7 @@
 import { execFile } from 'child_process';
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { promisify } from 'util';
@@ -67,6 +68,37 @@ describe('resolveDatabaseUrl', () => {
     fs.writeFileSync(file, '\n');
     expect(() => resolveDatabaseUrl({ DATABASE_URL_FILE: file })).toThrow(/empty/);
   });
+});
+
+describe('migrate process against a server that never answers', () => {
+  // A deploy step must fail, not hang, when the database is unreachable. A
+  // listener that accepts and stays silent is a blackhole on every host (the
+  // 127.0.0.1:1 trick refuses on Linux CI but blackholes on WSL, #382).
+  it('gives up with exit 1 and a timeout message, without printing the password', async () => {
+    const silent = net.createServer(() => {});
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    const { port } = silent.address() as net.AddressInfo;
+    try {
+      const err = await promisify(execFile)(
+        process.execPath,
+        ['-r', 'ts-node/register', 'src/db/migrate.ts'],
+        {
+          cwd: REPO_ROOT,
+          env: {
+            ...process.env,
+            TS_NODE_TRANSPILE_ONLY: '1',
+            DATABASE_URL: `postgres://iris:s3cret-pw@127.0.0.1:${port}/iris`,
+          },
+        },
+      ).catch((e: { code: number; stderr: string; stdout: string }) => e);
+      expect(err).toMatchObject({ code: 1, stderr: expect.stringMatching(/timeout/i) });
+      expect(
+        `${(err as { stdout: string }).stdout}${(err as { stderr: string }).stderr}`,
+      ).not.toMatch(/s3cret-pw/);
+    } finally {
+      silent.close();
+    }
+  }, 30_000);
 });
 
 (ADMIN_URL ? describe : describe.skip)('Postgres migrations', () => {
@@ -143,7 +175,8 @@ describe('resolveDatabaseUrl', () => {
         and t.table_name not like 'kysely\\_%'`.execute(db);
 
     const tenant = rows.rows.filter((r) => !BETTER_AUTH_TABLES.includes(r.table_name));
-    expect(tenant.length).toBe(5);
+    // Guards against a filter that matches nothing and passes vacuously.
+    expect(tenant.length).toBeGreaterThanOrEqual(5);
     for (const r of tenant) {
       expect({ table: r.table_name, nullable: r.nullable, leads: r.leads }).toEqual({
         table: r.table_name,

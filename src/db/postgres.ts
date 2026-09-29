@@ -21,7 +21,13 @@ export function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string
   return fromFile;
 }
 
-/** A Kysely instance over a `pg` pool. The caller owns it: `destroy()` ends the pool. */
+/**
+ * A Kysely instance over a `pg` pool. The caller owns it: `destroy()` ends the pool.
+ *
+ * `pg` waits forever for a server that accepts and never answers, so a deploy's
+ * migration step against a blackholed host would hang instead of failing.
+ */
 export function createPostgresDb<DB = unknown>(connectionString: string): Kysely<DB> {
-  return new Kysely<DB>({ dialect: new PostgresDialect({ pool: new Pool({ connectionString }) }) });
+  const pool = new Pool({ connectionString, connectionTimeoutMillis: 10_000 });
+  return new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
 }

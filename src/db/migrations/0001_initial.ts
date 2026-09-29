@@ -44,7 +44,6 @@ const IRIS = [
     kind text not null check (kind in ('a11y', 'visual')),
     status text not null default 'queued'
       check (status in ('queued', 'running', 'succeeded', 'failed', 'canceled')),
-    api_key_id text references apikey (id) on delete set null,
     created_at timestamptz not null default now(),
     started_at timestamptz,
     finished_at timestamptz,
@@ -62,7 +61,8 @@ const IRIS = [
   )`,
   `create index run_results_org_id_run_id_idx on run_results (org_id, run_id)`,
   // Written in the same transaction as the work it meters; the idempotency key
-  // makes a retried write a conflict, not a second charge (ADR 0001 §6).
+  // makes a retried write a conflict, not a second charge (ADR 0001 §6). A billing
+  // record: its run cannot be deleted under it until #349 decides retention.
   `create table usage_events (
     id uuid primary key default gen_random_uuid(),
     org_id text not null references organization (id),
