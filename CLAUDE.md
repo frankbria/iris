@@ -256,6 +256,51 @@ stays the local-mode store. `docker-compose.dev.yml` runs a dev Postgres on
   on every deploy. Both are secret files (`pg_password` for uid 70,
   `database_url` for uid 1001). Postgres publishes no port.
 
+### Portal Accounts (issue #249)
+
+Sign-up, verification, login and password reset run through BetterAuth in
+`apps/portal`, over the shared `createAuth()`.
+
+- **The account policy is in `createAuth()` and is spread *after* the caller's
+  `emailAndPassword` / `emailVerification` / `rateLimit`**, so neither the portal nor
+  the API can relax those. It does not lock `advanced` or `trustedOrigins`.
+  - Verification is required, and verification mail goes out on sign-up **and on each
+    correct-password sign-in of an unverified account**. BetterAuth only logs a failed
+    send, so the re-send on sign-in is the recovery path for a lost or failed mail.
+  - **No sign-in on verification** (login CSRF: a mailed link must not sign a browser
+    into the sender's account).
+  - Sessions are revoked on reset.
+  - Rate limits are on in every environment (BetterAuth's defaults turn them on only in
+    production).
+  - `sendEmail` is required. Secure/httpOnly/SameSite=Lax cookies are BetterAuth's defaults *given* an
+  https `baseURL`. Do not add `advanced` to the policy spread: it would replace a
+  caller's `advanced` (e.g. `trustedProxies`).
+- **The portal imports `../../../src/...` directly.** Turbopack finds the workspace
+  root from the root lockfile, and `pg` is on Next's default server-external list. No
+  `transpilePackages` or workspace package is needed.
+- **`getAuth()` is lazy, and a server page must `await headers()` before calling it.**
+  If `getAuth()` runs first, Next prerenders the page at build time and the build
+  fails for want of `SMTP_URL`.
+- **Submit buttons stay disabled until hydration** (`useSyncExternalStore`). Before
+  hydration, a native submit is a GET with the password in the query string. The E2E
+  test pins this with JavaScript disabled.
+- **Rate limits are per client IP from `X-Forwarded-For`**, stored in memory (one
+  portal process). BetterAuth trusts a single-value header, and `next start` passes a
+  client's header through. Until the ingress (#347) overwrites it, a client can pick its
+  own counter.
+- **E2E** (`apps/portal/e2e`, `npm run e2e -w @iris/portal` after a build): real
+  Postgres plus Mailpit, from docker-compose.dev.yml or the CI services. Things that bit:
+  - The global setup runs `src/db/migrate.ts` as a child process, because Playwright's
+    loader cannot link the ESM `kysely/migration`.
+  - Each test sends a random `X-Forwarded-For`, not a counter: Playwright restarts
+    the worker after a failure, which resets module state.
+  - After a client-side link click, wait for the URL before `getByLabel(...)`. The old
+    page may have a field with the same label.
+  - Next's route announcer is also `role="alert"`. Match an alert by its text.
+- **WSL: a connect to a closed 127.0.0.1 port hangs** (no RST, ~2 min) instead of being
+  refused. `[::1]` refuses at once. It is the same blackhole as #382, and Playwright's
+  already-running check pays it before every local E2E run.
+
 ### Container Deployment (issue #192)
 
 `Dockerfile`, `.dockerignore`, `docker-compose.staging.yml` and
