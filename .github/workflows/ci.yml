@@ -64,6 +64,9 @@ jobs:
       - run: npm run build -w @iris/portal
         env:
           NEXT_TELEMETRY_DISABLED: '1'
+      # The portal's @playwright/test may need a different Chromium build than the
+      # root's playwright once a bump moves one of them; this is a no-op when equal.
+      - run: npx -w @iris/portal playwright install chromium
       # Sign up, verify by mail, log in/out, reset, rate limits: the build above,
       # real Postgres, real SMTP (#249).
       - run: npm run e2e -w @iris/portal

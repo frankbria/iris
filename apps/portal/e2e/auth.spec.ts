@@ -43,7 +43,9 @@ async function signUpVerified(request: APIRequestContext, email: string) {
   const verify = await request.get(await linkFromMail(email, "Verify"), {
     maxRedirects: 0,
   })
+  // A bad token redirects too, to `?error=INVALID_TOKEN`: check where it went.
   expect(verify.status()).toBe(302)
+  expect(verify.headers().location).toBe("/dashboard")
 }
 
 test("sign up, verify, log in, log out", async ({ page, context }) => {
