@@ -17,11 +17,68 @@ import { organization } from 'better-auth/plugins';
  * `require(esm)`, which the `engines` floor enables by default. Jest's sandboxed
  * `require` does not implement that, so the test spawns a real Node process.
  */
+/** One outgoing account email: verification or password reset. */
+export interface AuthEmail {
+  to: string;
+  subject: string;
+  text: string;
+}
+
+/**
+ * Account policy (#249, ADR 0001 §4). It is applied after the caller's options, so a
+ * caller cannot relax it:
+ * - email + password, and no session until the address is verified
+ * - verification mail on sign-up, signed in once the link is followed
+ * - a password reset revokes every other session
+ * - rate limits in every environment (BetterAuth turns them on only in production).
+ *   Its built-in rules cover the auth routes: sign-in/up 3 per 10s, reset and
+ *   verification mail 3 per 60s.
+ * - Secure cookies whenever `baseURL` is https. Otherwise BetterAuth ties the flag to
+ *   `NODE_ENV`. httpOnly and SameSite=Lax are BetterAuth's defaults.
+ *
+ * ponytail: in-memory rate-limit counters, correct for one portal process. Use
+ * `storage: 'database'` (a new migration) once the portal runs several (#316).
+ */
+function accountPolicy(baseURL: string, sendEmail: (email: AuthEmail) => Promise<void>) {
+  return {
+    emailAndPassword: {
+      enabled: true,
+      requireEmailVerification: true,
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: ({ user, url }: { user: { email: string }; url: string }) =>
+        sendEmail({
+          to: user.email,
+          subject: 'Reset your IRIS password',
+          text: `Someone asked to reset the password for this IRIS account.\n\nSet a new one here: ${url}\n\nIf that was not you, ignore this email and the password stays as it is.`,
+        }),
+    },
+    emailVerification: {
+      sendOnSignUp: true,
+      autoSignInAfterVerification: true,
+      sendVerificationEmail: ({ user, url }: { user: { email: string }; url: string }) =>
+        sendEmail({
+          to: user.email,
+          subject: 'Verify your IRIS email address',
+          text: `Confirm this address to finish creating your IRIS account:\n\n${url}\n\nIf you did not sign up, ignore this email.`,
+        }),
+    },
+    rateLimit: { enabled: true },
+    advanced: { useSecureCookies: new URL(baseURL).protocol === 'https:' },
+  } satisfies Partial<BetterAuthOptions>;
+}
+
 export function createAuth(
-  options: Omit<BetterAuthOptions, 'plugins'> & { secret: string; baseURL: string },
+  options: Omit<BetterAuthOptions, 'plugins'> & {
+    secret: string;
+    baseURL: string;
+    /** Delivers verification and password-reset mail. Required: no mail means no accounts. */
+    sendEmail: (email: AuthEmail) => Promise<void>;
+  },
 ) {
+  const { sendEmail, ...rest } = options;
   return betterAuth({
-    ...options,
+    ...rest,
+    ...accountPolicy(rest.baseURL, sendEmail),
     plugins: [organization(), apiKey({ references: 'organization' })],
   });
 }

@@ -18,29 +18,72 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 
 const PROBE = `
 const { createAuth } = require('./src/auth/config.ts');
-const auth = createAuth({ secret: process.env.PROBE_SECRET, baseURL: 'http://localhost:3000' });
-process.stdout.write(JSON.stringify({
-  handler: typeof auth.handler,
-  createOrganization: typeof auth.api.createOrganization,
-}));
+(async () => {
+  const auth = createAuth({
+    secret: process.env.PROBE_SECRET,
+    baseURL: process.env.PROBE_BASE_URL,
+    sendEmail: async () => {},
+    // A caller trying to relax the policy: createAuth must not let it through.
+    emailAndPassword: { enabled: true, requireEmailVerification: false },
+    rateLimit: { enabled: false },
+  });
+  const ctx = await auth.$context;
+  process.stdout.write(JSON.stringify({
+    handler: typeof auth.handler,
+    createOrganization: typeof auth.api.createOrganization,
+    cookie: ctx.authCookies.sessionToken.attributes,
+    rateLimit: ctx.rateLimit.enabled,
+    requireEmailVerification: ctx.options.emailAndPassword.requireEmailVerification,
+    sendOnSignUp: ctx.options.emailVerification.sendOnSignUp,
+    revokeSessionsOnPasswordReset: ctx.options.emailAndPassword.revokeSessionsOnPasswordReset,
+  }));
+})().catch((e) => { console.error(e); process.exit(1); });
 `;
+
+async function probe(baseURL: string) {
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    ['-r', 'ts-node/register', '-e', PROBE],
+    {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        TS_NODE_TRANSPILE_ONLY: '1',
+        BETTER_AUTH_TELEMETRY: '0',
+        PROBE_SECRET: randomBytes(32).toString('hex'),
+        PROBE_BASE_URL: baseURL,
+      },
+    },
+  );
+  return JSON.parse(stdout);
+}
 
 describe('shared auth config (require(esm))', () => {
   it('loads better-auth and its organization plugin from CommonJS', async () => {
-    const { stdout } = await promisify(execFile)(
-      process.execPath,
-      ['-r', 'ts-node/register', '-e', PROBE],
-      {
-        cwd: REPO_ROOT,
-        env: {
-          ...process.env,
-          TS_NODE_TRANSPILE_ONLY: '1',
-          BETTER_AUTH_TELEMETRY: '0',
-          PROBE_SECRET: randomBytes(32).toString('hex'),
-        },
-      },
-    );
+    const out = await probe('http://localhost:3000');
+    expect(out).toMatchObject({ handler: 'function', createOrganization: 'function' });
+  }, 30_000);
 
-    expect(JSON.parse(stdout)).toEqual({ handler: 'function', createOrganization: 'function' });
+  // #249: the account policy lives in the shared config, so the portal and the
+  // API cannot disagree about it, and a caller's options cannot relax it.
+  it('requires email verification, rate-limits in every environment, revokes sessions on reset', async () => {
+    const out = await probe('http://localhost:3000');
+    expect(out).toMatchObject({
+      rateLimit: true,
+      requireEmailVerification: true,
+      sendOnSignUp: true,
+      revokeSessionsOnPasswordReset: true,
+    });
+  }, 30_000);
+
+  it('issues an httpOnly, SameSite=Lax session cookie, Secure whenever the portal is served over https', async () => {
+    const [https, http] = await Promise.all([
+      probe('https://portal.example.com'),
+      probe('http://localhost:3000'),
+    ]);
+    expect(https.cookie).toMatchObject({ httpOnly: true, sameSite: 'lax', secure: true });
+    // Browsers drop a Secure cookie set over plain http, so local dev keeps it off.
+    expect(http.cookie).toMatchObject({ httpOnly: true, sameSite: 'lax' });
+    expect(http.cookie.secure).toBeFalsy();
   }, 30_000);
 });
