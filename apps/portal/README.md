@@ -17,5 +17,5 @@ Add UI components from this directory with `npx shadcn@latest add <name>`.
 
 - The preset API no longer offers `gray`. The color tokens in `app/globals.css` are
   shadcn's registry `gray` values (`https://ui.shadcn.com/r/colors/gray.json`).
-- ESLint is pinned to 9: `eslint-plugin-react` (via `eslint-config-next`) crashes
-  on ESLint 10.
+- `eslint.config.mjs` pins `settings.react.version` to the installed React. Without
+  it, `eslint-plugin-react` (via `eslint-config-next`) crashes on ESLint 10.

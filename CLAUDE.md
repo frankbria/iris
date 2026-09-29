@@ -197,9 +197,10 @@ private. Things that are easy to break:
 
 - **Root Jest ignores `apps/`** (`testPathIgnorePatterns` and
   `modulePathIgnorePatterns`). The portal has its own `next/jest` config.
-- **The portal pins ESLint 9.** `eslint-config-next` pulls in `eslint-plugin-react`,
-  which crashes on ESLint 10 (`getFilename is not a function`). The root keeps 10,
-  and npm nests the portal's copy.
+- **The portal's ESLint config pins `settings.react.version`.** `eslint-config-next`
+  sets it to `"detect"`, and detection is the one path in `eslint-plugin-react`
+  (peer range stops at ESLint ^9.7) that calls `getFilename()`, removed in ESLint 10.
+  Remove the pin and ESLint 10 crashes (`getFilename is not a function`).
 - **`gray` is gone from the shadcn preset API** (400). The portal was scaffolded
   with `neutral` and its tokens replaced with shadcn's registry gray
   (`/r/colors/gray.json`). Adding components with `npx shadcn add` is unaffected.
