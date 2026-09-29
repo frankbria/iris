@@ -90,7 +90,7 @@ code is the ordering key.
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
 | `P0.19` | [#247](https://github.com/frankbria/iris/issues/247) | Monorepo workspaces + scaffold `apps/portal` (Next.js, Nova preset) | P0.3 (#231) | DONE ([#394](https://github.com/frankbria/iris/pull/394)) |
-| `P0.20` | [#248](https://github.com/frankbria/iris/issues/248) | PostgreSQL service + migration runner for hosted data | P0.3 (#231), P0.19 (#247) | TODO |
+| `P0.20` | [#248](https://github.com/frankbria/iris/issues/248) | PostgreSQL service + migration runner for hosted data | P0.3 (#231), P0.19 (#247) | DONE ([#402](https://github.com/frankbria/iris/pull/402)) |
 | `P0.21` | [#249](https://github.com/frankbria/iris/issues/249) | Portal: signup, login and email verification (BetterAuth) | P0.19 (#247), P0.20 (#248) | TODO |
 | `P0.22` | [#250](https://github.com/frankbria/iris/issues/250) | Portal: organizations, membership and roles | P0.21 (#249) | TODO |
 | `P0.23` | [#340](https://github.com/frankbria/iris/issues/340) | Portal: API key management | P0.22 (#250) | TODO |
