@@ -11,8 +11,8 @@ import { getAuth } from "@/lib/auth"
  * membership on every call.
  *
  * BetterAuth clears the active org when a read of it is refused (the user was removed,
- * or a request named an org they are not in). With none, the session moves to an org
- * the user still belongs to.
+ * or a request named an org they are not in), and answers 400 for one that no longer
+ * exists. Either way the session moves to an org the user still belongs to.
  *
  * ponytail: `getFullOrganization` returns the first 100 members. Page it when an org
  * outgrows that.
@@ -28,7 +28,11 @@ export async function requireOrg() {
     auth.api
       .getFullOrganization({ headers: requestHeaders })
       .catch((error: unknown) => {
-        if (isAPIError(error) && error.status === "FORBIDDEN") return null
+        if (
+          isAPIError(error) &&
+          (error.status === "FORBIDDEN" || error.status === "BAD_REQUEST")
+        )
+          return null
         throw error
       })
   const orgs = await auth.api.listOrganizations({ headers: requestHeaders })

@@ -87,8 +87,6 @@ export function createAuth(
 ) {
   const { sendEmail, ...rest } = options;
   const policy = accountPolicy(sendEmail);
-  // Bound after `auth` exists: the session hook runs inside it and needs its API.
-  let activeOrgFor: (userId: string) => Promise<string>;
   // Key by key, policy last: a caller cannot relax a pinned setting, and its other
   // keys (a shorter link lifetime, shared rate-limit storage for #316) survive.
   const auth = betterAuth({
@@ -100,6 +98,7 @@ export function createAuth(
       session: {
         create: {
           before: async (session) => ({
+            // Defined below `auth`, whose API it needs; the hook only runs at sign-in.
             data: { ...session, activeOrganizationId: await activeOrgFor(session.userId) },
           }),
         },
@@ -130,9 +129,11 @@ export function createAuth(
    * retried at the next sign-in rather than leaving a user with no tenant.
    *
    * ponytail: any membership will do. Remember the last active org per user once people
-   * belong to several.
+   * belong to several. Two first sign-ins at the same moment can each create an org;
+   * that grants nothing BetterAuth's own `create` endpoint does not, and a cap on orgs
+   * per user belongs to entitlements (#260).
    */
-  activeOrgFor = async (userId) => {
+  const activeOrgFor = async (userId: string): Promise<string> => {
     const ctx = await auth.$context;
     const member = await ctx.adapter.findOne<{ organizationId: string }>({
       model: 'member',

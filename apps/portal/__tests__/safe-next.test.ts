@@ -14,7 +14,14 @@ describe("safeNext", () => {
     "/\\evil.example/",
     "/\t/evil.example/",
     "/\n/evil.example/",
+    // Dot-segments collapse into a protocol-relative path.
+    "/.//evil.example/",
+    "/%2e//evil.example/",
+    "/a/..//evil.example/",
     "javascript:alert(1)",
+    // Unparseable, and a repeated ?next= (Next passes an array).
+    "//%",
+    ["/org", "/dashboard"],
     "dashboard",
   ])("sends %j to the dashboard", (next) => {
     expect(safeNext(next)).toBe("/dashboard")

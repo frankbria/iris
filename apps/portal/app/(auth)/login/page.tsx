@@ -13,7 +13,7 @@ export default async function LogInPage({
     reset?: string
     verified?: string
     error?: string
-    next?: string
+    next?: string | string[]
   }>
 }) {
   const params = await searchParams
