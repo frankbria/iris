@@ -249,3 +249,20 @@ Write/Edit, not as a pre-push afterthought.
 - Built CSS reports `lab()`, not the `oklch()` in the source. Read chroma from the a/b axes when demoing theme tokens.
 - opencode stalled (outage signature) on both attempts; the codex fallback worked unchanged. The CI GLM bug-hunt still gave a GLM-family pass on the PR.
 - Scaffold code is code: the Nova theme-provider shipped a bare-key WCAG 2.1.4 violation. Review vendored scaffolds like our own diff.
+
+## #248 / PR #402 (2026-09-29)
+- Kysely 0.29 moved `Migrator` to `kysely/migration`; the root export is a `KyselyTypeError` stub. Under `node10` resolution the subpath needs a types-only tsconfig `paths` entry; Node resolves it at runtime via `exports`.
+- `pg` has no connect timeout: a host that accepts and never answers hangs forever (WSL blackholes 127.0.0.1:1, #382). The demo found it, not the tests. Test timeouts with a silent `net.createServer`, which blackholes on every host.
+- `pkill -f "<pattern>"` inside a Bash tool call matches the tool's own shell command line and kills it (exit 144). Use `pgrep -af` to inspect, and kill by PID.
+- A local deploy rehearsal is cheap and worth it: extract the remote script from ci.yml verbatim, run the root parts in an alpine container (no sudo), and run the compose sequence against a locally built image. It caught the "every deploy recreates Postgres" issue in the order it would happen.
+- `jest -t` skips the setup tests a later test depends on (here: migrate before the catalog check), so a mutation "caught" under `-t` can fail for the wrong reason. Run the whole file and read which test failed.
+- opencode stalled again (3rd run in a row); codex fallback + the CI GLM workflow covered it.
+
+## #249 / PR #403 (2026-09-29)
+- Repeated the #248 `pkill -f` self-kill. The lesson was on disk but uncommitted, so nothing surfaced it. Commit lessons at merge time, not "later".
+- `cmd > log; tail log` in a background task reports tail's exit code. The "exit 0" notice hid a failing test. Read the `Tests:` line, never the exit status.
+- A Python regex edit over Prettier-wrapped JSX removed half a two-line `if` and left an unconditional `return`. tsc, ESLint and `next build` all passed; only the E2E caught it. After a scripted edit, re-read the function, or edit with exact multi-line matches.
+- A cross-family reviewer given a pasted diff while commits keep landing reviews a stale diff, and a concurrent `next build` gives it stale results. Freeze the branch while a review runs, or accept that it reviews HEAD.
+- Playwright restarts the worker after a failed test, which resets module-level state (an IP counter). Each test's isolation key must be random or derived from test info.
+- An E2E "flake" that passed alone was a real race: /login and /forgot-password both have an "Email" field, and the test filled the old one mid-navigation. Wait for the URL after a client-side link click.
+- Demo evidence must be checked before it is written. A note claimed session revocation before any query had run, and `$RANDOM` made invalid IP octets. Run the query, then write the claim.
