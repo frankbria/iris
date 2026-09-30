@@ -234,7 +234,7 @@ describe('migrate process against a server that never answers', () => {
           secret: process.env.PROBE_SECRET,
           baseURL: 'http://localhost:3000',
           database: pool,
-          emailAndPassword: { enabled: true },
+          sendEmail: async () => {},
         });
         const { user } = await auth.api.signUpEmail({
           body: { email: 'probe@example.com', password: 'correct-horse-battery', name: 'Probe' },

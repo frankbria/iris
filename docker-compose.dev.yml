@@ -7,6 +7,10 @@
 # The tests take an admin URL instead and create a throwaway database per file:
 #   IRIS_TEST_DATABASE_URL=postgres://iris:iris@127.0.0.1:55432/postgres npm test
 #
+# Mailpit catches the portal's account mail (#249). Its web UI and API are on
+# http://127.0.0.1:58025, and the portal sends to it with
+#   SMTP_URL=smtp://127.0.0.1:51025
+#
 # Development only: the password is in this file. Staging keeps its own in a
 # secret file (docker-compose.staging.yml).
 
@@ -27,6 +31,12 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - '127.0.0.1:${IRIS_SMTP_PORT:-51025}:1025'
+      - '127.0.0.1:${IRIS_MAILPIT_PORT:-58025}:8025'
 
 volumes:
   iris-pg-dev:
