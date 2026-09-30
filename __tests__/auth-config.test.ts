@@ -25,8 +25,8 @@ const { createAuth } = require('./src/auth/config.ts');
     sendEmail: async () => {},
     // A caller trying to relax the policy: createAuth must not let it through.
     emailAndPassword: { enabled: true, requireEmailVerification: false },
-    emailVerification: { autoSignInAfterVerification: true },
-    rateLimit: { enabled: false },
+    emailVerification: { autoSignInAfterVerification: true, expiresIn: 600 },
+    rateLimit: { enabled: false, storage: 'database' },
   });
   const ctx = await auth.$context;
   process.stdout.write(JSON.stringify({
@@ -34,6 +34,8 @@ const { createAuth } = require('./src/auth/config.ts');
     createOrganization: typeof auth.api.createOrganization,
     cookie: ctx.authCookies.sessionToken.attributes,
     rateLimit: ctx.rateLimit.enabled,
+    rateLimitStorage: ctx.options.rateLimit.storage,
+    verificationExpiresIn: ctx.options.emailVerification.expiresIn,
     requireEmailVerification: ctx.options.emailAndPassword.requireEmailVerification,
     sendOnSignUp: ctx.options.emailVerification.sendOnSignUp,
     sendOnSignIn: ctx.options.emailVerification.sendOnSignIn,
@@ -81,6 +83,13 @@ describe('shared auth config (require(esm))', () => {
       autoSignInAfterVerification: false,
       revokeSessionsOnPasswordReset: true,
     });
+  }, 30_000);
+
+  // The policy pins its keys and nothing else: a caller's other keys (a shorter link
+  // lifetime, shared rate-limit storage for #316) must survive, not be dropped.
+  it("keeps the caller's keys the policy does not pin", async () => {
+    const out = await probe('http://localhost:3000');
+    expect(out).toMatchObject({ verificationExpiresIn: 600, rateLimitStorage: 'database' });
   }, 30_000);
 
   it('issues an httpOnly, SameSite=Lax session cookie, Secure whenever the portal is served over https', async () => {

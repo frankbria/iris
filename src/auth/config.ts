@@ -10,8 +10,9 @@ export interface AuthEmail {
 }
 
 /**
- * Account policy (#249, ADR 0001 §4), applied over the caller's `emailAndPassword`,
- * `emailVerification` and `rateLimit`, so a caller cannot relax those three. It does
+ * Account policy (#249, ADR 0001 §4). It is merged key by key into the caller's
+ * `emailAndPassword`, `emailVerification` and `rateLimit`, with the policy's keys
+ * winning, so a caller cannot relax the settings below but can add others. It does
  * not lock `advanced` or `trustedOrigins`; #347 needs `advanced.ipAddress`.
  * - email + password; no session until the address is verified
  * - a verification mail on sign-up, and a fresh one on each correct-password sign-in
@@ -85,9 +86,14 @@ export function createAuth(
   },
 ) {
   const { sendEmail, ...rest } = options;
+  const policy = accountPolicy(sendEmail);
+  // Key by key, policy last: a caller cannot relax a pinned setting, and its other
+  // keys (a shorter link lifetime, shared rate-limit storage for #316) survive.
   return betterAuth({
     ...rest,
-    ...accountPolicy(sendEmail),
+    emailAndPassword: { ...rest.emailAndPassword, ...policy.emailAndPassword },
+    emailVerification: { ...rest.emailVerification, ...policy.emailVerification },
+    rateLimit: { ...rest.rateLimit, ...policy.rateLimit },
     plugins: [organization(), apiKey({ references: 'organization' })],
   });
 }

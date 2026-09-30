@@ -261,9 +261,11 @@ stays the local-mode store. `docker-compose.dev.yml` runs a dev Postgres on
 Sign-up, verification, login and password reset run through BetterAuth in
 `apps/portal`, over the shared `createAuth()`.
 
-- **The account policy is in `createAuth()` and is spread *after* the caller's
-  `emailAndPassword` / `emailVerification` / `rateLimit`**, so neither the portal nor
-  the API can relax those. It does not lock `advanced` or `trustedOrigins`.
+- **The account policy is in `createAuth()` and is merged key by key into the caller's
+  `emailAndPassword` / `emailVerification` / `rateLimit`, policy last.** Neither the
+  portal nor the API can relax a pinned key, and a caller's other keys survive (e.g.
+  `rateLimit.storage` for #316). A whole-object spread would silently drop them. The
+  policy does not lock `advanced` or `trustedOrigins`.
   - Verification is required, and verification mail goes out on sign-up **and on each
     correct-password sign-in of an unverified account**. BetterAuth only logs a failed
     send, so the re-send on sign-in is the recovery path for a lost or failed mail.

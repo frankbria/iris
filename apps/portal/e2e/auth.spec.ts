@@ -99,6 +99,21 @@ test("sign up, verify, log in, log out", async ({ page, context }) => {
   await expect(page.getByText(email)).toBeVisible()
 })
 
+test("a bad verification link is not reported as a success", async ({
+  page,
+}) => {
+  // BetterAuth sends a failed verification back to the sign-up callbackURL with
+  // `&error=...` appended, i.e. next to its `verified=1`.
+  await page.goto(
+    "/api/auth/verify-email?token=not-a-token&callbackURL=%2Flogin%3Fverified%3D1"
+  )
+  await expect(page).toHaveURL(/\/login\?verified=1&error=/)
+  await expect(page.getByRole("status")).toContainText(
+    "That link has expired or was already used"
+  )
+  await expect(page.getByText("Email verified")).toHaveCount(0)
+})
+
 test("a wrong password is refused", async ({ page, context }) => {
   const email = unique()
   await signUpVerified(context.request, email)
