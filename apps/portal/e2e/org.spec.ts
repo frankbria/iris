@@ -212,3 +212,49 @@ test("login ignores a next that leaves the portal", async ({
   await page.getByRole("button", { name: "Log in" }).click()
   await expect(page).toHaveURL(/\/dashboard$/)
 })
+
+test("an invitation goes to the org the form showed, even after a switch in another tab", async ({
+  page,
+  context,
+}) => {
+  const owner = unique()
+  const invitee = unique()
+  await signUpVerified(context.request, owner, "Tess")
+  await logIn(page, owner, PASSWORD)
+  await expect(page).toHaveURL(/\/dashboard$/)
+  const [shown] = await (
+    await context.request.get("/api/auth/organization/list")
+  ).json()
+
+  await page.goto("/org")
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "Tess's organization"
+  )
+  // Another tab creates and switches to a second org Tess also owns.
+  const other = await context.request.post("/api/auth/organization/create", {
+    headers: sameOrigin,
+    data: { name: "Other org", slug: `other-${Date.now()}` },
+  })
+  expect(other.ok()).toBe(true)
+  const otherId = (await other.json()).id
+  const switched = await context.request.post(
+    "/api/auth/organization/set-active",
+    { headers: sameOrigin, data: { organizationId: otherId } }
+  )
+  expect(switched.ok()).toBe(true)
+
+  await page.getByLabel("Email").fill(invitee)
+  await page.getByRole("button", { name: "Send invitation" }).click()
+  await expect(page.getByText(`Invitation sent to ${invitee}.`)).toBeVisible()
+
+  const invitations = async (organizationId: string) =>
+    (
+      (await (
+        await context.request.get(
+          `/api/auth/organization/list-invitations?organizationId=${organizationId}`
+        )
+      ).json()) as { email: string }[]
+    ).map((i) => i.email)
+  expect(await invitations(shown.id)).toContain(invitee)
+  expect(await invitations(otherId)).not.toContain(invitee)
+})

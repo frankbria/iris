@@ -8,7 +8,8 @@ import { getAuth } from "@/lib/auth"
  * The signed-in user, their active org and their role in it (#250). Every portal page
  * that shows tenant data starts here, and takes the org from here only: the org is
  * never read from the request. BetterAuth resolves the session's active org and checks
- * membership on every call.
+ * membership on every call. A form the page renders for that org sends its id back, so
+ * it acts on the org the user saw even if another tab switched since.
  *
  * BetterAuth clears the active org when a read of it is refused (the user was removed,
  * or a request named an org they are not in), and answers 400 for one that no longer

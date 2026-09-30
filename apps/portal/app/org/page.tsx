@@ -46,7 +46,7 @@ export default async function OrgPage() {
         )}
       </section>
       {role === "owner" || role === "admin" ? (
-        <InviteForm />
+        <InviteForm organizationId={org.id} />
       ) : (
         <p className="text-sm text-muted-foreground">
           Only owners and admins can invite people.

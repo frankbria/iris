@@ -17,8 +17,12 @@ const explain = (error: { status: number; message?: string }) =>
 const selectClass =
   "h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30"
 
-/** Invites someone to the active org. BetterAuth checks the inviter's role. */
-export function InviteForm() {
+/**
+ * Invites someone to the org the page showed. Its id is sent, not left to the session:
+ * another tab may have switched the active org since. BetterAuth checks the inviter's
+ * role in that org.
+ */
+export function InviteForm({ organizationId }: { organizationId: string }) {
   const router = useRouter()
   const { busy, error, run } = useAuthAction(explain)
   const [sentTo, setSentTo] = useState<string | null>(null)
@@ -34,6 +38,7 @@ export function InviteForm() {
         const email = text(form, "email")
         const ok = await run(() =>
           authClient.organization.inviteMember({
+            organizationId,
             email,
             role: text(form, "role") as "member" | "admin",
           })

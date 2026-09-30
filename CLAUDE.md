@@ -316,8 +316,10 @@ The org is the tenant (ADR 0001 §4). The organization plugin's options live in
   the next sign-in. BetterAuth sets no active org on sign-in by itself. `createAuth()`
   therefore takes no `databaseHooks` from its caller.
 - **Portal pages get their org from `requireOrg()`** (`apps/portal/lib/org.ts`), which
-  calls BetterAuth with the session headers and no org id. Never pass an org id taken
-  from the request.
+  calls BetterAuth with the session headers and no org id. Never read an org id from
+  the request. A form rendered for that org sends its id back (`InviteForm`), because
+  another tab may switch the session's active org between render and submit.
+  BetterAuth still checks the caller's role in that org.
 - **A refused org read clears the session's active org** (BetterAuth,
   `crud-org.mjs`). A request that names another tenant's org id therefore leaves the
   session with none, and `requireOrg()` moves it back to an org the user belongs to.
