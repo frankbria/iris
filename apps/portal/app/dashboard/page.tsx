@@ -1,14 +1,11 @@
-import { headers } from "next/headers"
-import { redirect } from "next/navigation"
+import Link from "next/link"
 
 import { LogOutButton } from "@/components/auth-forms"
-import { getAuth } from "@/lib/auth"
+import { OrgSwitcher } from "@/components/org-forms"
+import { requireOrg } from "@/lib/org"
 
 export default async function DashboardPage() {
-  // headers() first: it makes the page dynamic before getAuth() needs its secrets.
-  const requestHeaders = await headers()
-  const session = await getAuth().api.getSession({ headers: requestHeaders })
-  if (!session) redirect("/login")
+  const { session, org, orgs, role } = await requireOrg()
   return (
     <main className="flex min-h-svh flex-col gap-4 p-6">
       <h1 className="font-heading text-lg font-medium">IRIS portal</h1>
@@ -16,6 +13,11 @@ export default async function DashboardPage() {
         Signed in as{" "}
         <span className="text-foreground">{session.user.email}</span>
       </p>
+      <OrgSwitcher orgs={orgs} activeId={org.id} />
+      <p className="text-sm text-muted-foreground">Your role: {role}</p>
+      <Link href="/org" className="text-sm underline">
+        Members
+      </Link>
       <div>
         <LogOutButton />
       </div>

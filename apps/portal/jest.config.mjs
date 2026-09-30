@@ -5,5 +5,5 @@ const createJestConfig = nextJest({ dir: "./" })
 
 export default createJestConfig({
   testEnvironment: "jsdom",
-  testMatch: ["<rootDir>/__tests__/**/*.test.tsx"],
+  testMatch: ["<rootDir>/__tests__/**/*.test.ts?(x)"],
 })
