@@ -15,8 +15,8 @@ import { getAuth } from "@/lib/auth"
  * or a request named an org they are not in), and answers 400 for one that no longer
  * exists. Either way the session moves to an org the user still belongs to.
  *
- * ponytail: `getFullOrganization` returns the first 100 members. Page it when an org
- * outgrows that.
+ * ponytail: `getFullOrganization` returns the first 100 members, so `/org` lists only
+ * those. Page it when an org outgrows that.
  */
 export async function requireOrg() {
   // headers() first: it makes the page dynamic before getAuth() needs its secrets.
@@ -51,6 +51,10 @@ export async function requireOrg() {
     await auth.api.signOut({ headers: requestHeaders })
     redirect("/login")
   }
-  const role = org.members.find((m) => m.userId === session.user.id)?.role
+  // Asked for directly: `org.members` is capped (below), and the caller may be past it.
+  const { role } = await auth.api.getActiveMemberRole({
+    headers: requestHeaders,
+    query: { organizationId: org.id },
+  })
   return { session, org, orgs, role }
 }
