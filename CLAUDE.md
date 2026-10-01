@@ -218,6 +218,12 @@ private. Things that are easy to break:
   otherwise better-auth falls back to `BETTER_AUTH_*` or, outside production, to a
   built-in secret. Those variables are on the `jest.setup.ts` scrub list.
 - **`.dockerignore` excludes `apps/`**, so the image never carries portal packages.
+- **The root `package.json` pins `overrides.next`.** better-auth lists `next` as an
+  optional peer, and npm installed a separate root copy for it that stayed on a
+  vulnerable version after the portal moved (GHSA-vcvr-r3jv-pc5j). Bump the override
+  together with `apps/portal`'s `next` and `eslint-config-next`: npm refuses
+  (`EOVERRIDE`) when they disagree. Do not "fix" a stray copy with `npm dedupe`, which
+  rewrote 4,000 lockfile lines and pulled a 12-hour-old release.
 
 ### Hosted Postgres and Migrations (issue #248)
 
