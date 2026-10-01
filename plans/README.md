@@ -92,7 +92,7 @@ code is the ordering key.
 | `P0.19` | [#247](https://github.com/frankbria/iris/issues/247) | Monorepo workspaces + scaffold `apps/portal` (Next.js, Nova preset) | P0.3 (#231) | DONE ([#394](https://github.com/frankbria/iris/pull/394)) |
 | `P0.20` | [#248](https://github.com/frankbria/iris/issues/248) | PostgreSQL service + migration runner for hosted data | P0.3 (#231), P0.19 (#247) | DONE ([#402](https://github.com/frankbria/iris/pull/402)) |
 | `P0.21` | [#249](https://github.com/frankbria/iris/issues/249) | Portal: signup, login and email verification (BetterAuth) | P0.19 (#247), P0.20 (#248) | DONE ([#403](https://github.com/frankbria/iris/pull/403)) |
-| `P0.22` | [#250](https://github.com/frankbria/iris/issues/250) | Portal: organizations, membership and roles | P0.21 (#249) | IN REVIEW |
+| `P0.22` | [#250](https://github.com/frankbria/iris/issues/250) | Portal: organizations, membership and roles | P0.21 (#249) | DONE ([#407](https://github.com/frankbria/iris/pull/407)) |
 | `P0.23` | [#340](https://github.com/frankbria/iris/issues/340) | Portal: API key management | P0.22 (#250) | TODO |
 | `P0.24` | [#341](https://github.com/frankbria/iris/issues/341) | Server: per-tenant API key authentication | P0.11 (#338), P0.23 (#340) | TODO |
 | `P0.25` | [#342](https://github.com/frankbria/iris/issues/342) | Server: per-key rate limits and session caps | P0.24 (#341) | TODO |
@@ -187,6 +187,7 @@ code is the ordering key.
 | `P1.33` | [#375](https://github.com/frankbria/iris/issues/375) | Hosted egress: prove WebTransport and QUIC cannot bypass the proxy | P0.9 (#336) | TODO |
 | `P1.34` | [#376](https://github.com/frankbria/iris/issues/376) | Container egress firewall for the hosted deployment | P0.9 (#336), P1.33 (#375) | TODO |
 | `P1.35` | [#379](https://github.com/frankbria/iris/issues/379) | Egress proxy timeouts, configurable popup cap, per-session page cap | P0.11 (#338) | TODO |
+| `P1.36` | [#408](https://github.com/frankbria/iris/issues/408) | Portal: remove members, change roles, leave an org | P0.22 (#250) | TODO |
 
 ### P2 — Post-launch fast-follow
 
@@ -218,6 +219,7 @@ code is the ordering key.
 | `P3.6` | [#386](https://github.com/frankbria/iris/issues/386) | Deprecated createAIClient / AIClientFactory.create(…, 'text') return unmetered text clients | P0.14 (#242) | TODO |
 | `P3.7` | [#388](https://github.com/frankbria/iris/issues/388) | Cost tracker pricing edges left by #243: ceiling above the table, flat-only parents, getPricing | P0.15 (#243) | TODO |
 | `P3.8` | [#390](https://github.com/frankbria/iris/issues/390) | Cost ledger follow-ups from #244: stale reservations, typed budget error, settle/close race | P0.16 (#244) | TODO |
+| `P3.9` | [#409](https://github.com/frankbria/iris/issues/409) | Portal org UX follow-ups from #250 | P0.22 (#250) | TODO |
 
 ---
 
