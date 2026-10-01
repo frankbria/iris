@@ -34,7 +34,7 @@ function describe(error: NonNullable<AuthError>): string {
   return error.message || "Something went wrong. Try again."
 }
 
-function Field({
+export function Field({
   label,
   ...props
 }: { label: string } & React.ComponentProps<typeof Input>) {
@@ -61,7 +61,7 @@ function useHydrated() {
   )
 }
 
-function AuthCard(props: {
+export function AuthCard(props: {
   title: string
   description?: ReactNode
   error?: string | null
@@ -115,7 +115,7 @@ function AuthCard(props: {
 }
 
 /** Runs one auth call, holding the busy flag and turning a failure into a message. */
-function useAuthAction() {
+export function useAuthAction(explain = describe) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const run = async (call: () => Promise<{ error: AuthError }>) => {
@@ -123,13 +123,14 @@ function useAuthAction() {
     setError(null)
     const { error } = await call()
     setBusy(false)
-    if (error) setError(describe(error))
+    if (error) setError(explain(error))
     return !error
   }
   return { busy, error, run }
 }
 
-const text = (form: FormData, name: string) => String(form.get(name) ?? "")
+export const text = (form: FormData, name: string) =>
+  String(form.get(name) ?? "")
 
 export function SignUpForm() {
   const { busy, error, run } = useAuthAction()
@@ -188,7 +189,14 @@ export function SignUpForm() {
   )
 }
 
-export function LogInForm({ notice }: { notice: string | null }) {
+export function LogInForm({
+  notice,
+  next = "/dashboard",
+}: {
+  notice: string | null
+  /** Where to go after logging in; the page has already checked it stays on this site. */
+  next?: string
+}) {
   const router = useRouter()
   const { busy, error, run } = useAuthAction()
   return (
@@ -203,11 +211,12 @@ export function LogInForm({ notice }: { notice: string | null }) {
           authClient.signIn.email({
             email: text(form, "email"),
             password: text(form, "password"),
-            // Where the fresh verification link leads if the address is unverified.
-            callbackURL: "/dashboard",
+            // BetterAuth's client navigates here after signing in, and a fresh
+            // verification link (for an unverified address) leads here too.
+            callbackURL: next,
           })
         )
-        if (ok) router.push("/dashboard")
+        if (ok) router.push(next)
       }}
       footer={
         <div className="flex w-full justify-between text-sm text-muted-foreground">

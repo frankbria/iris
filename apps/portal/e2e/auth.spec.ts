@@ -1,12 +1,12 @@
-import { randomBytes } from "node:crypto"
+import { expect, test } from "@playwright/test"
 
 import {
-  expect,
-  test,
-  type APIRequestContext,
-  type Page,
-} from "@playwright/test"
-
+  logIn,
+  ownRateLimitBucket,
+  PASSWORD,
+  signUpVerified,
+  unique,
+} from "./accounts"
 import { linkFromMail } from "./mailpit"
 
 /**
@@ -14,39 +14,10 @@ import { linkFromMail } from "./mailpit"
  * Postgres, real SMTP. Every mail is read from Mailpit, so the link the test follows
  * is the one a user would receive.
  *
- * BetterAuth rate-limits sign-in to 3 per 10s per client IP. Each test sends its own
- * X-Forwarded-For so that it gets a counter of its own. The limit test depends on the
- * same behavior.
+ * Each test gets its own rate-limit counter (see `ownRateLimitBucket`). The limit
+ * test depends on that.
  */
-test.beforeEach(async ({ context }) => {
-  // Random, not a counter: Playwright restarts the worker after a failure, which
-  // would reset a counter and put the next test in an already-spent bucket.
-  const [a, b, c] = randomBytes(3)
-  await context.setExtraHTTPHeaders({ "x-forwarded-for": `10.${a}.${b}.${c}` })
-})
-
-const unique = () => `e2e-${randomBytes(4).toString("hex")}@iris.test`
-const PASSWORD = "correct-horse-battery-staple"
-
-async function logIn(page: Page, email: string, password: string) {
-  await page.goto("/login")
-  await page.getByLabel("Email").fill(email)
-  await page.getByLabel("Password").fill(password)
-  await page.getByRole("button", { name: "Log in" }).click()
-}
-
-async function signUpVerified(request: APIRequestContext, email: string) {
-  const res = await request.post("/api/auth/sign-up/email", {
-    data: { email, password: PASSWORD, name: "E2E", callbackURL: "/dashboard" },
-  })
-  expect(res.ok()).toBe(true)
-  const verify = await request.get(await linkFromMail(email, "Verify"), {
-    maxRedirects: 0,
-  })
-  // A bad token redirects too, to `?error=INVALID_TOKEN`: check where it went.
-  expect(verify.status()).toBe(302)
-  expect(verify.headers().location).toBe("/dashboard")
-}
+test.beforeEach(({ context }) => ownRateLimitBucket(context))
 
 test("sign up, verify, log in, log out", async ({ page, context }) => {
   const email = unique()

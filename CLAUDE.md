@@ -105,6 +105,7 @@ __tests__/
 ├── container-config.test.ts       # Compose hardening, seccomp profile, token file + healthcheck (#332)
 ├── report-encoding.test.ts         # Every report format parsed for real (DOMParser, markdown-it): hostile input keeps the structure (#339)
 ├── auth-config.test.ts            # Spawned Node loads src/auth/config via require(esm); Jest's sandbox can't (#247)
+├── auth-org.test.ts               # Real Postgres: personal org on sign-in, invitations, roles, org A cannot read org B (#250)
 ├── db/postgres.test.ts            # Real Postgres: migrate, idempotency, org_id catalog check, BetterAuth round trip (#248)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
@@ -217,6 +218,12 @@ private. Things that are easy to break:
   otherwise better-auth falls back to `BETTER_AUTH_*` or, outside production, to a
   built-in secret. Those variables are on the `jest.setup.ts` scrub list.
 - **`.dockerignore` excludes `apps/`**, so the image never carries portal packages.
+- **The root `package.json` pins `overrides.next`.** better-auth lists `next` as an
+  optional peer, and npm installed a separate root copy for it that stayed on a
+  vulnerable version after the portal moved (GHSA-vcvr-r3jv-pc5j). Bump the override
+  together with `apps/portal`'s `next` and `eslint-config-next`: npm refuses
+  (`EOVERRIDE`) when they disagree. Do not "fix" a stray copy with `npm dedupe`, which
+  rewrote 4,000 lockfile lines and pulled a 12-hour-old release.
 
 ### Hosted Postgres and Migrations (issue #248)
 
@@ -302,6 +309,36 @@ Sign-up, verification, login and password reset run through BetterAuth in
 - **WSL: a connect to a closed 127.0.0.1 port hangs** (no RST, ~2 min) instead of being
   refused. `[::1]` refuses at once. It is the same blackhole as #382, and Playwright's
   already-running check pays it before every local E2E run.
+
+### Portal Organizations (issue #250)
+
+The org is the tenant (ADR 0001 §4). The organization plugin's options live in
+`createAuth()`; its tables were already in migration 0001.
+
+- **The personal org is made when a session is created, not at sign-up.** A
+  `databaseHooks.session.create.before` hook sets `activeOrganizationId` to one of the
+  user's orgs, creating one they own if they have none. Sessions need a verified
+  address, so an abandoned sign-up leaves no org, and a failed creation is retried at
+  the next sign-in. BetterAuth sets no active org on sign-in by itself. `createAuth()`
+  therefore takes no `databaseHooks` from its caller.
+- **Portal pages get their org from `requireOrg()`** (`apps/portal/lib/org.ts`), which
+  calls BetterAuth with the session headers and no org id. Never read an org id from
+  the request. A form rendered for that org sends its id back (`InviteForm`), because
+  another tab may switch the session's active org between render and submit.
+  BetterAuth still checks the caller's role in that org.
+- **A refused org read clears the session's active org** (BetterAuth,
+  `crud-org.mjs`). A request that names another tenant's org id therefore leaves the
+  session with none, and `requireOrg()` moves it back to an org the user belongs to.
+- **Refusals have different codes.** A non-member inviting into an org gets
+  `400 MEMBER_NOT_FOUND`, not 403. Tests assert the error code, so a call refused for
+  another reason (a missing `Origin` on a cookie POST, a validation error) cannot pass
+  as a membership refusal.
+- **BetterAuth's client follows `signIn`'s `callbackURL` after a successful sign-in.**
+  The login form passes `?next=` (checked by `safeNext()`) as that URL. `new URL()`
+  collapses dot-segments, so `/.//host` parses to the path `//host`, and `safeNext()`
+  checks the parsed path as well as the origin.
+- Org deletion is disabled (`disableOrganizationDeletion`) until offboarding (#349):
+  `runs`, `usage_events` and the other tenant tables reference the org with no cascade.
 
 ### Container Deployment (issue #192)
 
