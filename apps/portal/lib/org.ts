@@ -45,11 +45,12 @@ export async function requireOrg() {
     })
     org = await readActive()
   }
-  // Sign-in creates an org for a user with none, so this is someone who left them all.
-  if (!org)
-    throw new Error(
-      "This account is not in any organization. Log out and in again to get one."
-    )
+  // Sign-in creates an org for a user with none, so end this session and send them
+  // to log in again. An error page here would also take away the logout button.
+  if (!org) {
+    await auth.api.signOut({ headers: requestHeaders })
+    redirect("/login")
+  }
   const role = org.members.find((m) => m.userId === session.user.id)?.role
   return { session, org, orgs, role }
 }

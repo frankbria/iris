@@ -111,7 +111,7 @@ export function createAuth(
           sendEmail({
             to: email,
             subject: `Join ${org.name} on IRIS`,
-            text: `${inviter.user.name} invited you to the ${org.name} organization on IRIS.\n\nLog in, or create an account with this address, then open: ${new URL(`/accept-invitation/${id}`, rest.baseURL)}\n\nIf you were not expecting this, ignore this email.`,
+            text: `${inviter.user.name} invited you to join ${org.name} on IRIS.\n\nLog in, or create an account with this address, then open: ${new URL(`/accept-invitation/${id}`, rest.baseURL)}\n\nIf you were not expecting this, ignore this email.`,
           }),
         requireEmailVerificationOnInvitation: true,
         cancelPendingInvitationsOnReInvite: true,

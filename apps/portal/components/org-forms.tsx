@@ -110,13 +110,13 @@ export function OrgSwitcher({
         defaultValue={activeId}
         disabled={busy}
         onChange={async (event) => {
-          const organizationId = event.target.value
-          if (
-            await run(() =>
-              authClient.organization.setActive({ organizationId })
-            )
+          const select = event.currentTarget
+          const ok = await run(() =>
+            authClient.organization.setActive({ organizationId: select.value })
           )
-            router.refresh()
+          // On failure, show the org the session is still in, not the one picked.
+          if (ok) router.refresh()
+          else select.value = activeId
         }}
       >
         {orgs.map((org) => (

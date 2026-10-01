@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test"
+import { Client } from "pg"
 
 import {
   logIn,
@@ -257,4 +258,30 @@ test("an invitation goes to the org the form showed, even after a switch in anot
     ).map((i) => i.email)
   expect(await invitations(shown.id)).toContain(invitee)
   expect(await invitations(otherId)).not.toContain(invitee)
+})
+
+test("a user left in no org is sent to log in again, which gives them one", async ({
+  page,
+  context,
+}) => {
+  const email = unique()
+  await signUpVerified(context.request, email, "Nora")
+  await logIn(page, email, PASSWORD)
+  await expect(page).toHaveURL(/\/dashboard$/)
+
+  // Removed from every org (only possible behind BetterAuth's back today, e.g. by an
+  // operator): the session still exists but has no tenant.
+  const db = new Client({ connectionString: e2eEnv().databaseUrl })
+  await db.connect()
+  await db.query(
+    `delete from member where "userId" = (select id from "user" where email = $1)`,
+    [email]
+  )
+  await db.end()
+
+  await page.goto("/dashboard")
+  await expect(page).toHaveURL(/\/login$/)
+  await logIn(page, email, PASSWORD)
+  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(page.getByText("Your role: owner")).toBeVisible()
 })
