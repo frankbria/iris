@@ -266,3 +266,12 @@ Write/Edit, not as a pre-push afterthought.
 - Playwright restarts the worker after a failed test, which resets module-level state (an IP counter). Each test's isolation key must be random or derived from test info.
 - An E2E "flake" that passed alone was a real race: /login and /forgot-password both have an "Email" field, and the test filled the old one mid-navigation. Wait for the URL after a client-side link click.
 - Demo evidence must be checked before it is written. A note claimed session revocation before any query had run, and `$RANDOM` made invalid IP octets. Run the query, then write the claim.
+
+## #250 / PR #407 (2026-10-01)
+- Two new advisories landed mid-PR (brace-expansion high, then a Next critical) and failed CI's `npm audit` gate on code the diff never touched. Run `npm audit --omit=dev --audit-level=high` locally before each push; fix it in the PR, since the gate blocks every branch.
+- For a security bump, take the oldest patched release, not the newest: the Next advisory range ended at 16.3.5, so 16.3.6 (8 days old) beat 16.3.8 (12 hours old). `npm dedupe` "fixed" a stray vulnerable peer copy by rewriting 4,000 lockfile lines; a root `overrides` pin changed only Next's tree.
+- An authorization test must assert the refusal's code, not "not ok". The first E2E draft for "member cannot invite" would have passed on BetterAuth's CSRF Origin refusal. A non-member invite is 400 `MEMBER_NOT_FOUND`, not 403.
+- A cross-family reviewer re-run after each fix round paid off: passes 2 and 3 found a P1 (the invite form followed the session's active org, not the rendered one) and two P2s that pass 1 and the internal review missed.
+- BetterAuth's client follows `signIn`'s `callbackURL` itself, so a `router.push(next)` after it never mattered. Read what the client does before layering navigation on top.
+- A session restart wiped the scratchpad, including the saved PR body. GitHub is the durable copy: `gh pr view --json body` before editing.
+- opencode stalled for the 4th run in a row; codex plus the CI GLM workflow covered review.
