@@ -327,3 +327,9 @@ Write/Edit, not as a pre-push afterthought.
 - A fail-closed rule has to live in the exported seam (`translate()`), not in one caller's wrapper: the next caller (BYOK, job APIs) will not copy the wrapper.
 - A "null means none" contract needs `undefined` handled too: untyped lookups resolve `undefined`.
 
+## #344 / PR #430 (2026-10-02)
+- A forged-request E2E test needs a positive control. My first "member's forged server-action post is refused" test passed vacuously: a hydrated form's `outerHTML` has no server-action fields, so the post never reached the action. An authorised session making the same post must change state first.
+- To forge a Next server-action post, take the hidden `$ACTION_REF_*` / `$ACTION_*:*` / `$ACTION_KEY` fields from the **server-rendered** HTML (`context.request.get(page)`), pick the right form (a Remove form can come first), and POST them as multipart with the page's Origin.
+- A red-first test can be red for the wrong reason: the strict-base64 test first passed on the old code because the bad character made the key 31 bytes. Write the failing input so it reaches exactly the check being added, and give each refusal a distinct message.
+- agent-browser refs reset on every page load: take a fresh `snapshot -i` before filling, or the fill goes nowhere and the step looks like a successful no-op.
+
