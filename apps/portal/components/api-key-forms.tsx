@@ -39,6 +39,16 @@ export function CreateApiKeyForm({
             organizationId,
           })
           key = res.data?.key ?? null
+          // The reply is the only copy: a create that returned no key must not
+          // look like a success.
+          if (!res.error && !key)
+            return {
+              error: {
+                status: 500,
+                message:
+                  "The key was created but not shown. Revoke it and create another.",
+              },
+            }
           return res
         })
         if (ok) {
