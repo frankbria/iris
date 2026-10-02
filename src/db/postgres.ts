@@ -26,8 +26,32 @@ export function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string
  *
  * `pg` waits forever for a server that accepts and never answers, so a deploy's
  * migration step against a blackholed host would hang instead of failing.
+ *
+ * `queryTimeoutMs` also bounds each query, for callers on a request path (#341):
+ * the server cancels a slow statement, and the client gives up on a connection
+ * that stopped answering mid-query, which the connect timeout does not cover.
+ * Unset by default, because a migration may legitimately run long.
  */
-export function createPostgresDb<DB = unknown>(connectionString: string): Kysely<DB> {
-  const pool = new Pool({ connectionString, connectionTimeoutMillis: 10_000 });
+export function createPostgresDb<DB = unknown>(
+  connectionString: string,
+  options: { queryTimeoutMs?: number } = {},
+): Kysely<DB> {
+  const { queryTimeoutMs } = options;
+  const pool = new Pool({
+    connectionString,
+    connectionTimeoutMillis: 10_000,
+    ...(queryTimeoutMs && {
+      statement_timeout: queryTimeoutMs,
+      // A little later than the server's own cancel, so a live server answers first.
+      query_timeout: queryTimeoutMs + 1_000,
+    }),
+  });
+  // An idle connection the server ends (a restart, an admin kill) is reported here
+  // and dropped from the pool, which opens a new one on the next query. Without a
+  // listener, `pg`'s 'error' event is an uncaught exception that takes the process
+  // down (#341: the hosted RPC server exited when Postgres restarted).
+  pool.on('error', (err) => {
+    console.error(`[iris] idle Postgres connection lost; the pool replaces it: ${err.message}`);
+  });
   return new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
 }

@@ -1,4 +1,5 @@
 import WebSocket, { WebSocketServer } from 'ws';
+import { IncomingMessage } from 'http';
 import { timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { translateSync, translate, Action, ActionSchema } from './translator';
@@ -84,7 +85,22 @@ export interface BrowserSession {
   lastActivity: number;
   /** Requests running on this session; the inactivity sweep skips it while any are (#240). */
   busy: number;
+  /** The tenant whose key opened the connection (#341); unset under the shared token. */
+  principal?: Principal;
 }
+
+/** Who a connection acts for: the org that owns its API key, and the key (#341). */
+export interface Principal {
+  orgId: string;
+  keyId: string;
+}
+
+/**
+ * Checks a connection's `Authorization` header (#341). Resolves to the tenant on a
+ * valid key and to `null` on any other header. Throws only when it cannot decide
+ * (the key store is unreachable), which the server answers with 503, not 401.
+ */
+export type Authenticator = (authorization: string | undefined) => Promise<Principal | null>;
 
 export interface BrowserStatus {
   isActive: boolean;
@@ -148,17 +164,30 @@ export function startServer(
     sessionTimeout?: number;
     host?: string;
     allowedOrigins?: string[];
+    /** Local mode: one shared bearer token. */
     authToken?: string;
+    /** Hosted mode: per-tenant API keys (#341). Exclusive with `authToken`. */
+    authenticate?: Authenticator;
+    /** How often a connected key is verified again, so revoking it ends the connection. */
+    authRecheckMs?: number;
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
     limits?: Partial<ServerLimits>;
   },
 ): WebSocketServer {
+  const authenticate = options?.authenticate;
+  if (authenticate && options?.authToken) {
+    throw new Error('Pass authToken or authenticate, one at a time');
+  }
   const host = options?.host ?? '127.0.0.1';
   const limits: ServerLimits = { ...DEFAULT_SERVER_LIMITS, ...options?.limits };
   const allowedOrigins = options?.allowedOrigins ?? [];
   const ActionParams = ExecuteBrowserActionParams.extend({
     actions: z.array(ActionSchema).max(limits.maxActionsPerRequest).optional(),
   });
+  /** Verified upgrades, read back by the 'connection' handler. */
+  const verified = new WeakMap<IncomingMessage, Principal>();
+  /** Upgrades whose key is still being verified; they count against the connection cap. */
+  let verifying = 0;
 
   const wss: WebSocketServer = new WebSocketServer({
     port,
@@ -166,8 +195,9 @@ export function startServer(
     maxPayload: limits.maxPayloadBytes,
     // Every check runs before the upgrade completes, so a refused client never
     // holds a socket, a message listener or a connection slot (#338). This used
-    // to accept first and close with 1008 after. Synchronous on purpose: the
-    // connection count read here cannot change before ws adds the new client.
+    // to accept first and close with 1008 after. Up to the key check everything is
+    // synchronous, so the connection count read here cannot change before ws adds
+    // the client; a key check is async, so upgrades in it are counted as `verifying`.
     verifyClient: ({ req }, done) => {
       // Reject cross-site WebSocket hijacking: a browser page connecting to
       // localhost sends an Origin header; trusted local tooling sends none.
@@ -179,12 +209,28 @@ export function startServer(
       if (options?.authToken && !hasValidToken(req.headers.authorization, options.authToken)) {
         return done(false, 401, 'Unauthorized');
       }
-      if (wss.clients.size >= limits.maxConnections) {
+      if (wss.clients.size + verifying >= limits.maxConnections) {
         return done(false, 503, 'Connection limit reached');
       }
-      done(true);
+      if (!authenticate) return done(true);
+      verifying++;
+      authenticate(req.headers.authorization).then(
+        (principal) => {
+          // Decrement right before done(): ws adds an accepted client synchronously.
+          verifying--;
+          if (!principal) return done(false, 401, 'Unauthorized');
+          verified.set(req, principal);
+          done(true);
+        },
+        () => {
+          verifying--;
+          done(false, 503, 'Authentication unavailable');
+        },
+      );
     },
   });
+  /** Each tenant connection's header, re-verified every `authRecheckMs`. */
+  const tenants = new Map<WebSocket, { principal: Principal; authorization?: string }>();
   const sessions = new Map<WebSocket, BrowserSession>();
   const sessionTimeout = options?.sessionTimeout || 30 * 60 * 1000; // 30 minutes default
   /** Server start, so `getStatus` can report real uptime rather than a constant (issue #80). */
@@ -222,7 +268,40 @@ export function startServer(
   }, limits.heartbeatIntervalMs);
   heartbeat.unref();
 
-  wss.on('connection', (ws) => {
+  // A key revoked or disabled in the portal must end the connections it opened,
+  // not only refuse new ones. On a timer rather than per message: an await ahead
+  // of the SessionGate would reorder pipelined messages (#128).
+  let rechecking = false;
+  const recheck = setInterval(async () => {
+    if (rechecking) return;
+    rechecking = true;
+    try {
+      await Promise.all(
+        [...tenants].map(async ([ws, { principal, authorization }]) => {
+          let now: Principal | null;
+          try {
+            now = await authenticate!(authorization);
+          } catch {
+            // ponytail: an unreachable key store keeps connections up; the next round decides.
+            return;
+          }
+          if (now?.orgId === principal.orgId && now.keyId === principal.keyId) return;
+          tenants.delete(ws);
+          ws.close(1008, 'API key no longer valid');
+          // Not waiting for the close handshake: the browser goes now.
+          cleanupSession(ws, sessions);
+        }),
+      );
+    } finally {
+      rechecking = false;
+    }
+  }, options?.authRecheckMs ?? 60_000);
+  recheck.unref();
+  if (!authenticate) clearInterval(recheck);
+
+  wss.on('connection', (ws, req) => {
+    const principal = verified.get(req);
+    if (principal) tenants.set(ws, { principal, authorization: req.headers.authorization });
     alive.add(ws);
     ws.on('pong', () => alive.add(ws));
 
@@ -320,7 +399,7 @@ export function startServer(
                   message: `Session limit reached (${limits.maxSessions}); try again later`,
                 };
               }
-              sessions.set(ws, createBrowserSession(launchOptions));
+              sessions.set(ws, createBrowserSession(launchOptions, principal));
               return {
                 success: true,
                 // Says what happened. This used to claim "Browser launched
@@ -402,7 +481,12 @@ export function startServer(
             res.result = {
               status: 'ready',
               uptimeMs: Date.now() - startedAt,
-              activeSessions: sessions.size,
+              // A tenant sees its own org's sessions only: another org's activity
+              // is not its business (#341).
+              activeSessions: principal
+                ? [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId)
+                    .length
+                : sessions.size,
               // Server-wide vs. this connection: a client asking "do I have a
               // browser?" was previously indistinguishable from "is anything alive?"
               hasSession: sessions.has(ws),
@@ -437,6 +521,7 @@ export function startServer(
     });
 
     ws.on('close', () => {
+      tenants.delete(ws);
       cleanupSession(ws, sessions);
     });
 
@@ -448,6 +533,7 @@ export function startServer(
   wss.on('close', () => {
     clearInterval(cleanupInterval);
     clearInterval(heartbeat);
+    clearInterval(recheck);
     // Cleanup all sessions
     for (const [ws] of sessions.entries()) {
       cleanupSession(ws, sessions);
@@ -545,7 +631,10 @@ function clampLaunchOptions(
  * Create a new browser session with ActionExecutor. Synchronous so the session
  * cap's check-then-insert has no await in it.
  */
-function createBrowserSession(browserOptions?: ActionExecutorOptions): BrowserSession {
+function createBrowserSession(
+  browserOptions?: ActionExecutorOptions,
+  principal?: Principal,
+): BrowserSession {
   const executor = new ActionExecutor(browserOptions);
 
   const session: BrowserSession = {
@@ -555,6 +644,7 @@ function createBrowserSession(browserOptions?: ActionExecutorOptions): BrowserSe
     isActive: true,
     lastActivity: Date.now(),
     busy: 0,
+    principal,
   };
 
   return session;

@@ -610,6 +610,28 @@ program
     // IRIS_CONNECT_TOKEN_FILE is the deployed form (#332): an env var shows up in
     // `docker inspect` and /proc/<pid>/environ, a mounted secret file does not.
     const tokenFile = process.env.IRIS_CONNECT_TOKEN_FILE;
+    const { isHostedMode } = await import('./hosted');
+    // Hosted mode (#341, ADR 0001 §4): tenants authenticate with their org's API
+    // keys, and the shared token is off. A token set anyway is refused rather than
+    // ignored: whoever set it expects it to be what guards the server.
+    let authenticate: import('./protocol').Authenticator | undefined;
+    if (isHostedMode()) {
+      if (tokenFile || process.env.IRIS_CONNECT_TOKEN) {
+        console.error(
+          'Hosted mode authenticates API keys; unset IRIS_CONNECT_TOKEN and IRIS_CONNECT_TOKEN_FILE',
+        );
+        process.exit(2); // Invalid usage
+        return;
+      }
+      try {
+        const { hostedAuthenticator } = await import('./api-key-auth');
+        authenticate = await hostedAuthenticator();
+      } catch (err) {
+        console.error(`Cannot start in hosted mode: ${(err as Error).message}`);
+        process.exit(3); // Environment/runtime error
+        return;
+      }
+    }
     if (tokenFile && process.env.IRIS_CONNECT_TOKEN) {
       console.error('Set IRIS_CONNECT_TOKEN and IRIS_CONNECT_TOKEN_FILE one at a time, not both');
       process.exit(2); // Invalid usage
@@ -632,7 +654,7 @@ program
         return;
       }
     }
-    const authToken = suppliedToken || randomBytes(32).toString('hex');
+    const authToken = authenticate ? undefined : suppliedToken || randomBytes(32).toString('hex');
 
     const limits = Object.fromEntries(
       Object.entries({
@@ -643,7 +665,10 @@ program
       }).filter(([, v]) => v !== undefined),
     );
 
-    const wss = startServer(port, { host, authToken, limits });
+    const wss = startServer(
+      port,
+      authenticate ? { host, authenticate, limits } : { host, authToken, limits },
+    );
     // Wait for the bind before claiming it. `listen` fails asynchronously, so
     // logging straight after startServer() announced a server that then died
     // on an unhandled 'error' event when the port was taken (#330). `once`
@@ -665,7 +690,7 @@ program
     console.log(`JSON-RPC server listening on ws://${host}:${port}`);
     // Only echo a token this process invented. Reprinting a supplied one tells
     // the operator what they already know and copies a secret into the logs.
-    if (!suppliedToken) {
+    if (authToken && !suppliedToken) {
       console.log(`Auth token (send as "Authorization: Bearer <token>"):\n  ${authToken}`);
     }
 

@@ -76,6 +76,7 @@ src/
 │   ├── server.ts          # `iris-mcp` bin — McpServer over StdioServerTransport
 │   └── tools.ts           # run_accessibility_test (axe violations only)
 ├── auth/config.ts         # createAuth(): the BetterAuth config portal + API share (ADR 0001 §4, #247)
+├── api-key-auth.ts        # Hosted `iris connect`: Bearer org API key -> { orgId, keyId } (#341)
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step
@@ -107,6 +108,8 @@ __tests__/
 ├── auth-config.test.ts            # Spawned Node loads src/auth/config via require(esm); Jest's sandbox can't (#247)
 ├── auth-org.test.ts               # Real Postgres: personal org on sign-in, invitations, roles, org A cannot read org B (#250)
 ├── auth-apikey.test.ts            # Real Postgres: org-owned keys hashed, roles, org A cannot touch org B's keys, verify, revoke (#340)
+├── protocol-auth.test.ts          # RPC upgrade auth seam: 401/503, pending upgrades vs cap, org-scoped status, revocation re-check (#341)
+├── api-key-auth.test.ts           # Real Postgres + spawned hosted `iris connect`: real keys, revoked/disabled 401, startup refusals (#341)
 ├── db/postgres.test.ts            # Real Postgres: migrate, idempotency, org_id catalog check, BetterAuth round trip (#248)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
@@ -257,6 +260,10 @@ stays the local-mode store. `docker-compose.dev.yml` runs a dev Postgres on
 - **The pool has a 10s connect timeout.** Without it, `pg` waits forever on a host
   that accepts connections and never answers, and a deploy step hangs instead of
   failing.
+- **The pool has an `error` listener** (#341). A Postgres restart ends every idle
+  pooled connection, and `pg` reports that as an `error` event on the pool. With no
+  listener it is an uncaught exception, and the process exits: the hosted RPC server
+  dropped every tenant in the #341 demo. The pool replaces the client by itself.
 - **Deploy order** (ci.yml): `pull`, then `up -d --wait postgres`, then migrate
   from the new image, then force-recreate `iris` only. A failed migration leaves the
   old container serving. The Postgres password is generated on the box **once**,
@@ -572,6 +579,39 @@ operator sizes a box by: `--max-payload`, `--max-connections`, `--max-sessions`,
   a phantom session holding a `maxSessions` slot for 30 minutes, and the second
   launches a Chromium nothing reclaims. Tests hold the fake Ollama answer to open
   that window on demand.
+
+### Hosted RPC Authentication (issue #341)
+
+Under `IRIS_HOSTED`, `iris connect` authenticates **org API keys**
+(`Authorization: Bearer iris_…`) through `startServer({ authenticate })`, and the shared
+`IRIS_CONNECT_TOKEN(_FILE)` is refused at startup (exit 2), not ignored. Missing
+`BETTER_AUTH_SECRET` / `BETTER_AUTH_URL` / `DATABASE_URL(_FILE)` exits 3.
+`hostedAuthenticator()` (src/api-key-auth.ts) builds the shared `createAuth()` over
+Kysely and calls `verifyApiKey`; the key's `referenceId` is the org.
+
+- **`verifyApiKey` cannot tell a backend failure from a bad key.** The plugin catches
+  every error (timeout, locked table, its write on a read-only database) and returns
+  `valid: false, code: INVALID_API_KEY` either way. So a refusal is believed only when
+  `keyIsUsable()`, a read-only lookup of the key's row by the plugin's own
+  `defaultKeyHasher`, agrees it is gone, disabled, expired or used up. Otherwise the
+  authenticator throws: `503` at the upgrade, "keep the connection" at a re-check. A
+  `select 1` is not enough: it succeeds while the `apikey` table is locked.
+- **The auth pool has a query timeout** (`createPostgresDb(url, { queryTimeoutMs })`):
+  a stalled query would otherwise hold an upgrade slot and stall every later re-check.
+  Migrations keep the unbounded default. Hosted startup probes the database (exit 3).
+- **The check is async inside `verifyClient`.** Upgrades still being verified count
+  against `maxConnections` (`verifying`), or a burst of slow checks would all be
+  admitted. Decrement right before `done()`: ws adds the client synchronously.
+- **Revocation ends live connections** on a timer (`authRecheckMs`, default 60 s),
+  closing with `1008` and reclaiming the browser at once. Not per message: an await
+  ahead of the `SessionGate` would reorder pipelined messages (#128).
+- The principal rides on the connection and its `BrowserSession`. Hosted `getStatus`
+  counts only the caller's org sessions. `maxSessions` stays server-wide; per-key
+  caps are #342.
+- `startServer` itself does not enforce hosted mode: `protocol.test.ts` runs under
+  `IRIS_HOSTED=1` with a token or no auth. `iris connect` is the enforcing caller.
+- Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`
+  (real Postgres, spawned hosted `iris connect`, keys made through BetterAuth).
 
 ### Browser Session Lifecycle (issue #240)
 
