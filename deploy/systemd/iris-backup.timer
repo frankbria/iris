@@ -1,0 +1,12 @@
+# Daily run of iris-backup.service (issue #274). Persistent: a run missed while the
+# box was down happens at the next boot.
+[Unit]
+Description=Daily IRIS production backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

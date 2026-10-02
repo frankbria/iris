@@ -52,6 +52,9 @@ jobs:
       - run: npm run format:check
       # Tests launch a real browser; install Chromium + its OS deps first.
       - run: npx playwright install --with-deps chromium
+      # age encrypts the backups in backup-script.test.ts (#274), as on the box.
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y --no-install-recommends age
       # IRIS launches Chromium sandboxed (#331), and ubuntu-24.04's AppArmor
       # blocks the unprivileged user namespaces the sandbox needs ("No usable
       # sandbox!"). Lift the restriction rather than set IRIS_CHROMIUM_SANDBOX=0,
@@ -706,10 +709,15 @@ jobs:
           # until deploy.sh's SMTP and migration gates pass (see deploy/deploy.sh).
           release="$DEPLOY_DIR/releases/$RELEASE_TAG-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           box "set -eu; umask 077; install -d -m 700 $DEPLOY_DIR/releases $DEPLOY_DIR/shared $DEPLOY_DIR/shared/secrets
-            install -d -m 700 $release $release/docker $release/secrets"
+            install -d -m 700 $release $release/docker $release/secrets $release/systemd"
           scp "${ssh_opts[@]}" docker-compose.production.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.yml"
           scp "${ssh_opts[@]}" docker/seccomp-chromium.json "$DEPLOY_USER@$DEPLOY_HOST:$release/docker/seccomp-chromium.json"
           scp "${ssh_opts[@]}" deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/deploy.sh"
+          # Backups (#274): shipped for the operator to review and install as root-owned
+          # copies; the deploy never runs or installs them (docs/runbook-production.md).
+          scp "${ssh_opts[@]}" deploy/backup.sh deploy/restore.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/"
+          scp "${ssh_opts[@]}" deploy/systemd/iris-backup.service deploy/systemd/iris-backup.timer \
+            deploy/systemd/iris-backup-failed.service "$DEPLOY_USER@$DEPLOY_HOST:$release/systemd/"
           # Host ports only when set (defaults 4000 / 3000, nginx's upstreams).
           {
             printf "PORTAL_URL='%s'\nSMTP_FROM='%s'\n" "$PORTAL_URL" "$SMTP_FROM"
@@ -742,6 +750,6 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | box "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
           # The refs were checked against ghcr.io/...@sha256:<64 hex> above, so they
           # are safe on this command line.
-          box "cd $release && chmod 700 deploy.sh \
+          box "cd $release && chmod 700 deploy.sh backup.sh restore.sh \
             && IRIS_IMAGE='$IRIS_IMAGE' PORTAL_IMAGE='$PORTAL_IMAGE' ./deploy.sh; \
             rc=\$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit \$rc"

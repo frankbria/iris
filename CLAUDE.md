@@ -126,6 +126,7 @@ __tests__/
 ├── auth-client-ip.test.ts         # Real Postgres: BetterAuth rate limits key on X-Real-IP, not a rotated X-Forwarded-For (#347)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── deploy-script.test.ts          # deploy/deploy.sh on local Docker + a throwaway registry: gates, rollback, rerun (#273)
+├── backup-script.test.ts          # backup.sh/restore.sh on real Postgres + age: encrypted, restore matches, retention, failure (#274)
 ├── portal-image.test.ts           # Built portal image (IRIS_TEST_PORTAL_IMAGE): SMTP check, /login, sign-up via _FILE secrets (#273)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
@@ -150,11 +151,14 @@ docs/                               # Detailed project documentation
 ├── phase2c_roadmap.md             # Phase 2C roadmap (ROADMAP — not started)
 ├── integration-surfaces.md        # Which integration surfaces exist and why (decision record)
 ├── adr/0001-hosted-architecture.md # Hosted SaaS architecture — anchors every Cycle 4 platform issue
-├── runbook-production.md          # Production setup, promote, rollback (#273)
+├── runbook-production.md          # Production setup, promote, rollback (#273); backups, restore, drill log (#274)
 └── archive/                       # Superseded planning docs (historical)
 
 deploy/
 ├── deploy.sh                      # On-box deploy by digest: SMTP + migration gates, rollback (#273)
+├── backup.sh                      # Daily age-encrypted pg_dump + master key, retention, rclone copy (#274)
+├── restore.sh                     # Decrypt + pg_restore in a disposable pinned postgres container (#274)
+├── systemd/iris-backup*.{service,timer} # Daily schedule + failure alert, installed by the operator (#274)
 └── nginx/iris.conf                # TLS ingress site template for the host's nginx (#347)
 
 plans/
@@ -504,6 +508,46 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   `deploy.sh` during a run.
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
+
+### Backups (issue #274)
+
+`deploy/backup.sh` (daily, `deploy/systemd/iris-backup.timer`, as root) and
+`deploy/restore.sh`; setup, restore and the drill log are in `docs/runbook-production.md`.
+The deploy job ships both scripts and the units into each release directory; it never
+runs or installs them. Object storage is #445.
+
+- **Root runs only root-owned files outside the deploy tree.** The unit runs
+  `/usr/local/sbin/iris-backup`, a reviewed copy the operator installs; settings,
+  recipients, rclone config and the failure hook are in `/etc/iris`, backups in
+  `/var/backups/iris`. The deploy user owns `/opt/iris-production`, so a root timer
+  running `current/backup.sh` would be a root code path for the deploy key. The script
+  finds postgres by compose labels (`docker exec`), not via a release's compose file.
+- **`age` to public keys only**; the identity stays off the box. No recipients: it
+  refuses, it never writes plaintext. The master key is backed up as its own file.
+- **Atomic and fail-closed**: `pg_dump | age` into `<name>.tmp` under pipefail, renamed on
+  success, the temp file removed by an EXIT trap. Retention runs only after a success:
+  per kind the newest `BACKUP_KEEP_MIN` stay whatever their age (clock jumps), the rest
+  go once older than `BACKUP_KEEP_DAYS`; both validated (`10#`, >= 1) before anything.
+  rclone copies the whole directory (`--include` the two patterns), so a failed copy is
+  retried by the next run.
+- **Restore replaces the `public` schema in one transaction**: `begin; drop schema public
+  cascade; create schema public;` then `pg_restore -f -` (SQL) into `psql`, and `commit`
+  only if pg_restore succeeded (`psql --single-transaction` would commit at EOF even
+  after pg_restore died). So a dump older than the schema leaves no later tables and the
+  dump's `kysely_migration`. The file is decrypted to /dev/null first.
+- **The serving-database check compares server identity, not URL text**:
+  `system_identifier` from `pg_control_system()` plus `current_database()`, queried on
+  both connections inside the container (libpq honours `%69ris`, `?dbname=`, addresses).
+  An unreadable `database_url` or an unidentifiable database refuses without `--force`.
+  URLs reach the container as files in a 0700 temp dir mounted read-only (`-e` would
+  show in `docker inspect`); the password moves to `PGPASSWORD` inside.
+- **`pg_dump -Fc` compresses**, so a plaintext marker is absent from an unencrypted dump
+  too. The test checks the `PGDMP` magic instead, and the restore checks content.
+- **`backup-script.test.ts`**: the Postgres healthcheck uses `-h 127.0.0.1`: the image's
+  init-time server listens on the socket only and then restarts, so a socket check goes
+  healthy early and the first connection is cut. `age` comes from PATH (CI installs the
+  apt package) or the pinned, checksummed release tarball cached in the temp dir. Each
+  restore is one container start (~30 s on a loaded WSL daemon).
 
 ### Container Deployment (issue #192)
 
