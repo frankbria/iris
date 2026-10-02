@@ -3,13 +3,17 @@
 # The host's nginx (deploy/nginx/iris.conf, #347) is the only public listener.
 #
 # Images are pinned by digest through IRIS_IMAGE / PORTAL_IMAGE, which
-# deploy/deploy.sh writes into .env: the deploy promotes the exact digests staging
+# deploy/deploy.sh writes into the release's .env: the deploy promotes the exact digests staging
 # ran, never a tag that could have moved. Hardening matches
 # docker-compose.staging.yml (#332); its comments explain each setting.
 #
-# Secrets are files under ./secrets (written by the deploy job), mounted at
-# /run/secrets. Readable by uid 1001 (pwuser in the IRIS image, `portal` in the
-# portal image) except pg_password (uid 70, postgres).
+# Each release is its own directory, <deploy dir>/releases/<id>/, holding this file,
+# the seccomp profile, settings.env and the release's own secrets (./secrets). The
+# secrets generated once on the box live in <deploy dir>/shared/secrets. Compose is
+# always run from the release's real path, so a container's bind mounts name its own
+# release's files and a restart never picks up another release's (deploy/deploy.sh).
+# Secret files are readable by uid 1001 (pwuser in the IRIS image, `portal` in the
+# portal image), except pg_password (uid 70, postgres).
 
 name: iris-production
 
@@ -85,6 +89,7 @@ services:
       IRIS_DB_PATH: /data/iris.db
       IRIS_DATA_DIR: /data
       DATABASE_URL_FILE: /run/secrets/database_url
+      IRIS_WORKER_HEARTBEAT_FILE: /tmp/iris-worker-heartbeat
     secrets:
       - database_url
     volumes:
@@ -113,7 +118,19 @@ services:
       options:
         max-size: '10m'
         max-file: '3'
-    # No listener, so no healthcheck: `up --wait` waits for it to be running.
+    # Liveness: the worker writes the heartbeat file at every poll and every 30s while
+    # a job runs (src/worker.ts), so a long scan stays healthy. 180s is 3x the longest
+    # gap (the 60s --poll-ms ceiling). It starts after the startup database probe.
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'test $$(( $$(date +%s) - $$(stat -c %Y /tmp/iris-worker-heartbeat) )) -lt 180',
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
 
   portal:
     image: ${PORTAL_IMAGE:?set PORTAL_IMAGE to the portal image by digest}
@@ -149,7 +166,7 @@ services:
     cpus: '1'
     pids_limit: 256
     stop_grace_period: 20s
-    # The image's HEALTHCHECK (GET /login) applies.
+    # The image's HEALTHCHECK applies: GET /api/health (auth, master key, database).
     logging:
       driver: json-file
       options:
@@ -158,7 +175,8 @@ services:
 
   # No `ports:`: only this compose network reaches it.
   postgres:
-    image: postgres:17-alpine
+    # Pinned by digest like the app images; bump tag and digest together.
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     restart: unless-stopped
     environment:
       POSTGRES_USER: iris
@@ -190,13 +208,15 @@ volumes:
 
 # Written by the deploy-production job (ci.yml). Never commit them.
 secrets:
-  pg_password:
-    file: ./secrets/pg_password
-  database_url:
-    file: ./secrets/database_url
+  # Per release: the values come from the production environment's secrets.
   better_auth_secret:
     file: ./secrets/better_auth_secret
-  master_key:
-    file: ./secrets/master_key
   smtp_url:
     file: ./secrets/smtp_url
+  # Shared: generated once on the box (password, master key); the URL is rebuilt.
+  pg_password:
+    file: ../../shared/secrets/pg_password
+  master_key:
+    file: ../../shared/secrets/master_key
+  database_url:
+    file: ../../shared/secrets/database_url

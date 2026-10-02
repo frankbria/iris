@@ -230,7 +230,23 @@ describe('docker-compose.production.yml (issue #273)', () => {
     expect(service('worker')).toMatch(/^\s+command: \['worker'\]$/m);
     expect(service('worker')).toMatch(/^\s+IRIS_HOSTED: '1'$/m);
     expect(service('portal')).toBeTruthy();
-    expect(service('postgres')).toMatch(/^\s+image: postgres:17-alpine$/m);
+    expect(service('postgres')).toMatch(/^\s+image: postgres:17-alpine@sha256:[0-9a-f]{64}$/m);
+  });
+
+  it('pins every image by digest: a literal @sha256 or a required digest env var', () => {
+    const images = [...file.matchAll(/^\s+image: (.*)$/gm)].map((m) => m[1]);
+    expect(images).toHaveLength(4);
+    for (const image of images) {
+      expect(image).toMatch(
+        /^(?:[^\s$]+@sha256:[0-9a-f]{64}|\$\{(?:IRIS|PORTAL)_IMAGE:\?[^}]*\})$/,
+      );
+    }
+  });
+
+  it('gives the worker a heartbeat liveness check its loop feeds (src/worker.ts)', () => {
+    const s = service('worker');
+    expect(s).toMatch(/^\s+IRIS_WORKER_HEARTBEAT_FILE: \/tmp\/iris-worker-heartbeat$/m);
+    expect(s).toMatch(/stat -c %Y \/tmp\/iris-worker-heartbeat\) \)\) -lt 180/);
   });
 
   it('takes every app image from a required env var, never a tag in the file', () => {
@@ -289,14 +305,15 @@ describe('docker-compose.production.yml (issue #273)', () => {
       expect(file).not.toMatch(new RegExp(`^\\s+${name}:`, 'm'));
     }
     expect(file).not.toMatch(/IRIS_CONNECT_TOKEN/);
-    for (const secret of [
-      'pg_password',
-      'database_url',
-      'better_auth_secret',
-      'master_key',
-      'smtp_url',
-    ]) {
+    // Per release (deploy.sh stages each release in its own directory) ...
+    for (const secret of ['better_auth_secret', 'smtp_url']) {
       expect(file).toMatch(new RegExp(`^  ${secret}:\\n\\s+file: \\./secrets/${secret}$`, 'm'));
+    }
+    // ... and generated once on the box, shared by every release.
+    for (const secret of ['pg_password', 'database_url', 'master_key']) {
+      expect(file).toMatch(
+        new RegExp(`^  ${secret}:\\n\\s+file: \\.\\./\\.\\./shared/secrets/${secret}$`, 'm'),
+      );
     }
   });
 });
@@ -309,6 +326,10 @@ describe('Dockerfile.portal (issue #273)', () => {
     expect(dockerfile).toMatch(/^USER portal$/m);
     expect(dockerfile).toMatch(/adduser -D -H -u 1001 portal/);
     expect(dockerfile).toMatch(/^CMD \["node", "apps\/portal\/server\.js"\]$/m);
+    // Readiness, not liveness: the deploy waits on this (#273).
+    expect(dockerfile).toMatch(
+      /^\s+CMD \["node", "-e", "fetch\('http:\/\/127\.0\.0\.1:3000\/api\/health'\)/m,
+    );
     expect(read('apps/portal/next.config.ts')).toMatch(/output: "standalone"/);
   });
 

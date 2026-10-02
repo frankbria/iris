@@ -3,12 +3,17 @@
  *
  * Test strategy: a throwaway registry on a loopback port, so the script deploys real
  * `@sha256:` digest refs and really pulls them. The images are busybox builds that
- * only model what the script depends on: a migration that exits 0 or 1
- * (`dist/db/migrate.js`), an SMTP check (`verify/.../verify-smtp.js`) and a
- * healthcheck that passes or fails. Their `node` is a shell wrapper, so those
- * "scripts" are shell; busybox keeps a push to a couple of seconds. The compose file is a test one with the
- * production file's service names; the production file itself is pinned by
- * container-config.test.ts.
+ * model only what the script depends on: a migration that exits 0 or 1
+ * (`dist/db/migrate.js`), an SMTP check that passes only when the release's mounted
+ * `smtp_url` secret says `ok`, healthchecks that pass or fail, and a worker that
+ * writes a heartbeat checked by the production compose file's own command. Their
+ * `node` is a shell wrapper, so those "scripts" are shell.
+ *
+ * Each case stages a release directory the way the deploy job does
+ * (<root>/releases/<id>/ with its compose file, settings.env and secrets/, shared
+ * secrets in <root>/shared/secrets) and runs the script from it. The cases share one
+ * registry and one compose project, and run in order: each starts from the state the
+ * previous one left.
  *
  * Docker is required under CI and skipped (with a warning) locally without it.
  */
@@ -18,7 +23,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-const SCRIPT = path.resolve(__dirname, '..', 'deploy', 'deploy.sh');
+const ROOT = path.resolve(__dirname, '..');
+const SCRIPT = path.join(ROOT, 'deploy', 'deploy.sh');
 const BASE = 'busybox:1.37';
 
 function dockerAvailable(): boolean {
@@ -47,6 +53,15 @@ const docker = (...args: string[]) =>
     env: { ...process.env, BUILDX_BUILDER: 'default' },
   }).trim();
 
+/** The production worker healthcheck, with a 3s threshold instead of 180s. */
+const WORKER_CHECK = (() => {
+  const m = fs
+    .readFileSync(path.join(ROOT, 'docker-compose.production.yml'), 'utf8')
+    .match(/'(test \$\$\(\( .*iris-worker-heartbeat\) \)\) -lt )180'/);
+  if (!m) throw new Error('worker healthcheck not found in docker-compose.production.yml');
+  return `${m[1]}3`;
+})();
+
 const COMPOSE = `
 name: iris-deploy-test
 x-app: &app
@@ -57,7 +72,7 @@ x-app: &app
     test: ['CMD-SHELL', 'exit $$(cat /app/health)']
     interval: 1s
     timeout: 2s
-    retries: 2
+    retries: 1
   depends_on:
     postgres:
       condition: service_healthy
@@ -72,17 +87,33 @@ services:
   iris:
     <<: *app
     image: \${IRIS_IMAGE:?}
+    environment:
+      MARK: \${MARK:?}
+    secrets: [shared]
   worker:
     <<: *app
     image: \${IRIS_IMAGE:?}
+    command: ['sh', '/app/worker.sh']
+    healthcheck:
+      test: ['CMD-SHELL', '${WORKER_CHECK}']
+      interval: 1s
+      timeout: 2s
+      retries: 2
   portal:
     <<: *app
     image: \${PORTAL_IMAGE:?}
+    secrets: [smtp_url]
+secrets:
+  smtp_url:
+    file: ./secrets/smtp_url
+  shared:
+    file: ../../shared/secrets/shared
 `;
 
 (DOCKER ? describe : describe.skip)('deploy/deploy.sh', () => {
   const registry = `iris-deploy-test-registry-${process.pid}`;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-deploy-'));
+  const root = path.join(dir, 'box');
   const refs: Record<string, string> = {};
   let repo = '';
 
@@ -98,8 +129,15 @@ services:
     };
     put('node', '#!/bin/sh\nexec sh "$@"\n', 0o755);
     put('app/dist/db/migrate.js', `exit ${migrate}\n`);
-    put('app/verify/apps/portal/scripts/verify-smtp.js', 'exit 0\n');
+    put(
+      'app/verify/apps/portal/scripts/verify-smtp.js',
+      '[ "$(cat /run/secrets/smtp_url)" = ok ]\n',
+    );
     put('app/health', `${health}\n`);
+    put(
+      'app/worker.sh',
+      'while :; do [ "$(cat /app/health)" = 0 ] && touch /tmp/iris-worker-heartbeat; sleep 1; done\n',
+    );
     put('app/version', `${name}\n`);
     put('Dockerfile', `FROM ${BASE}\nCOPY node /bin/node\nCOPY app /app\nWORKDIR /app\n`);
     const tag = `${repo}:${name}`;
@@ -110,55 +148,103 @@ services:
     return digest;
   }
 
-  function deploy(iris: string, portal: string) {
+  /** A release directory as the deploy job stages it. */
+  function stage(id: string, { smtp = 'ok', mark = 'a' } = {}): string {
+    const release = path.join(root, 'releases', id);
+    fs.mkdirSync(path.join(release, 'secrets'), { recursive: true });
+    fs.writeFileSync(path.join(release, 'docker-compose.yml'), COMPOSE);
+    fs.writeFileSync(path.join(release, 'settings.env'), `DB_IMAGE=${refs.db}\nMARK=${mark}\n`);
+    fs.writeFileSync(path.join(release, 'secrets', 'smtp_url'), smtp);
+    return release;
+  }
+
+  function deploy(release: string, iris: string, portal: string) {
     const r = spawnSync('bash', [SCRIPT], {
-      cwd: dir,
+      cwd: release,
       encoding: 'utf8',
       env: {
         ...process.env,
         IRIS_IMAGE: iris,
         PORTAL_IMAGE: portal,
-        DB_IMAGE: refs.db,
         DEPLOY_WAIT_TIMEOUT: '30',
+        DEPLOY_KEEP_RELEASES: '2',
       },
     });
     return { status: r.status, out: `${r.stdout}${r.stderr}` };
   }
 
-  /** service -> [image ref, container id] of what is running now. */
-  function running(): Record<string, [string, string]> {
-    const out: Record<string, [string, string]> = {};
+  const current = () => {
+    try {
+      return fs.realpathSync(path.join(root, 'current'));
+    } catch {
+      return null;
+    }
+  };
+
+  /** service -> what its container runs: image ref, id, MARK, and bind mount sources. */
+  function running() {
+    const out: Record<string, { image: string; id: string; mark: string; mounts: string }> = {};
     for (const service of ['iris', 'worker', 'portal']) {
-      const id = execFileSync('docker', ['compose', 'ps', '-q', service], {
-        cwd: dir,
-        encoding: 'utf8',
-        env: { ...process.env, IRIS_IMAGE: 'x', PORTAL_IMAGE: 'x', DB_IMAGE: 'x' },
-      }).trim();
-      out[service] = [id && docker('inspect', '-f', '{{.Config.Image}}', id), id];
+      const id = docker(
+        'ps',
+        '-q',
+        '--filter',
+        'label=com.docker.compose.project=iris-deploy-test',
+        '--filter',
+        `label=com.docker.compose.service=${service}`,
+      );
+      const [image, mark, mounts] = id
+        ? docker(
+            'inspect',
+            '-f',
+            '{{.Config.Image}}|{{range .Config.Env}}{{.}} {{end}}|{{range .Mounts}}{{.Source}} {{end}}',
+            id,
+          ).split('|')
+        : ['', '', ''];
+      out[service] = { image, id, mark: /MARK=(\S+)/.exec(mark)?.[1] ?? '', mounts };
     }
     return out;
   }
 
-  const down = () =>
-    spawnSync('docker', ['compose', 'down', '-v', '--remove-orphans', '-t', '1'], {
-      cwd: dir,
-      env: { ...process.env, IRIS_IMAGE: 'x', PORTAL_IMAGE: 'x', DB_IMAGE: 'x' },
-    });
+  /** Every file under a release directory, by relative path. */
+  function snapshot(release: string): Record<string, string> {
+    const files: Record<string, string> = {};
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else files[path.relative(release, p)] = fs.readFileSync(p, 'utf8');
+      }
+    };
+    walk(release);
+    return files;
+  }
 
-  const envFile = () => fs.readFileSync(path.join(dir, '.env'), 'utf8');
+  const down = () =>
+    spawnSync('docker', [
+      'compose',
+      '-p',
+      'iris-deploy-test',
+      'down',
+      '-v',
+      '--remove-orphans',
+      '-t',
+      '1',
+    ]);
 
   beforeAll(() => {
     docker('pull', '-q', BASE);
     docker('run', '-d', '--name', registry, '-p', '127.0.0.1::5000', 'registry:2');
     const port = docker('port', registry, '5000/tcp').split(':').pop();
     repo = `127.0.0.1:${port}/iris-deploy-test`;
-    fs.writeFileSync(path.join(dir, 'docker-compose.yml'), COMPOSE);
+    fs.mkdirSync(path.join(root, 'shared', 'secrets'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'shared', 'secrets', 'shared'), 'shared');
     refs.db = image('db');
     refs.v1 = image('v1');
     refs.v2 = image('v2');
     refs.badMigration = image('bad-migration', { migrate: 1 });
     refs.unhealthy = image('unhealthy', { health: 1 });
-  }, 120_000);
+  }, 180_000);
 
   afterAll(() => {
     down();
@@ -167,42 +253,79 @@ services:
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('first deploy of an unhealthy image: fails, and says there is nothing to roll back to', () => {
-    const r = deploy(refs.unhealthy, refs.unhealthy);
-    expect(r.status).not.toBe(0);
-    expect(r.out).toMatch(/no previous images to roll back to/);
+  it('first deploy of an unhealthy release: fails, with nothing to roll back to', () => {
+    const r = deploy(stage('r0'), refs.unhealthy, refs.unhealthy);
+    expect(r.out).toMatch(/no previous release to roll back to/);
+    expect(r.status).toBe(1);
+    expect(current()).toBeNull();
     down();
   }, 90_000);
 
-  it('deploys by digest, .env names what runs, and a rerun of the same digests succeeds', () => {
-    for (let run = 0; run < 2; run++) {
-      const r = deploy(refs.v2, refs.v1);
+  it('deploys by digest; a second release of the same digests succeeds; old releases are pruned', () => {
+    for (const id of ['r1', 'r2']) {
+      const release = stage(id);
+      const r = deploy(release, refs.v2, refs.v1);
       expect(r.out).toMatch(/healthy/);
       expect(r.status).toBe(0);
+      expect(current()).toBe(fs.realpathSync(release));
       const now = running();
-      expect([now.iris[0], now.worker[0], now.portal[0]]).toEqual([refs.v2, refs.v2, refs.v1]);
-      expect(envFile()).toContain(`IRIS_IMAGE=${refs.v2}\nPORTAL_IMAGE=${refs.v1}\n`);
+      expect([now.iris.image, now.worker.image, now.portal.image]).toEqual([
+        refs.v2,
+        refs.v2,
+        refs.v1,
+      ]);
+      // Bind mounts name this release's own files, not `current`.
+      expect(now.portal.mounts).toContain(
+        path.join(fs.realpathSync(release), 'secrets', 'smtp_url'),
+      );
     }
-  }, 120_000);
+    // DEPLOY_KEEP_RELEASES=2: the failed r0 is gone.
+    expect(fs.readdirSync(path.join(root, 'releases')).sort()).toEqual(['r1', 'r2']);
+  }, 150_000);
 
-  it('a failed migration changes nothing: same containers, same images, exit 1', () => {
-    const before = running();
-    const r = deploy(refs.badMigration, refs.badMigration);
-    expect(r.status).toBe(1);
-    expect(r.out).toMatch(/migration failed/);
-    expect(running()).toEqual(before);
-    expect(envFile()).toContain(`IRIS_IMAGE=${refs.v2}\nPORTAL_IMAGE=${refs.v1}\n`);
+  /** Runs a release that must fail before the switch, and checks nothing changed. */
+  function expectUntouched(
+    id: string,
+    iris: string,
+    portal: string,
+    opts: { smtp?: string },
+    why: RegExp,
+  ) {
+    const serving = current()!;
+    const before = { files: snapshot(serving), running: running() };
+    const r = deploy(stage(id, { ...opts, mark: 'new' }), iris, portal);
+    expect(r.out).toMatch(why);
+    expect(r.status).not.toBe(0);
+    expect(current()).toBe(serving);
+    expect(snapshot(serving)).toEqual(before.files);
+    expect(running()).toEqual(before.running);
+  }
+
+  it('a failing SMTP check changes nothing: same release, same files, same containers', () => {
+    expectUntouched('r3', refs.v1, refs.v1, { smtp: 'bad' }, /SMTP check failed/);
   }, 90_000);
 
-  it('an unhealthy release rolls back to the recorded images and exits 1', () => {
-    const r = deploy(refs.unhealthy, refs.unhealthy);
-    expect(r.status).toBe(1);
+  it('a failed pull changes nothing', () => {
+    expectUntouched('r4', `${repo}@sha256:${'0'.repeat(64)}`, refs.v1, {}, /./);
+  }, 90_000);
+
+  it('a failed migration changes nothing', () => {
+    expectUntouched('r5', refs.badMigration, refs.badMigration, {}, /migration failed/);
+  }, 90_000);
+
+  it('an unhealthy release rolls back to the previous release: its images, settings and files', () => {
+    const serving = current()!;
+    const r = deploy(stage('r6', { mark: 'b' }), refs.unhealthy, refs.unhealthy);
     expect(r.out).toMatch(/rolled back/);
+    expect(r.status).toBe(1);
+    expect(current()).toBe(serving);
     const now = running();
-    expect([now.iris[0], now.worker[0], now.portal[0]]).toEqual([refs.v2, refs.v2, refs.v1]);
-    expect(envFile()).toContain(`IRIS_IMAGE=${refs.v2}\nPORTAL_IMAGE=${refs.v1}\n`);
-    expect(fs.readFileSync(path.join(dir, 'deploy-state', 'previous'), 'utf8')).toBe(
-      `IRIS_IMAGE=${refs.v2}\nPORTAL_IMAGE=${refs.v1}\n`,
-    );
-  }, 120_000);
+    expect([now.iris.image, now.worker.image, now.portal.image]).toEqual([
+      refs.v2,
+      refs.v2,
+      refs.v1,
+    ]);
+    expect(now.iris.mark).toBe('a'); // the previous release's settings, not r6's
+    expect(now.portal.mounts).toContain(path.join(serving, 'secrets', 'smtp_url'));
+  }, 150_000);
 });
