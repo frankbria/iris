@@ -149,11 +149,11 @@ secrets:
   }
 
   /** A release directory as the deploy job stages it. */
-  function stage(id: string, { smtp = 'ok', mark = 'a' } = {}): string {
+  function stage(id: string, { smtp = 'ok', mark = 'a', db = refs.db } = {}): string {
     const release = path.join(root, 'releases', id);
     fs.mkdirSync(path.join(release, 'secrets'), { recursive: true });
     fs.writeFileSync(path.join(release, 'docker-compose.yml'), COMPOSE);
-    fs.writeFileSync(path.join(release, 'settings.env'), `DB_IMAGE=${refs.db}\nMARK=${mark}\n`);
+    fs.writeFileSync(path.join(release, 'settings.env'), `DB_IMAGE=${db}\nMARK=${mark}\n`);
     fs.writeFileSync(path.join(release, 'secrets', 'smtp_url'), smtp);
     return release;
   }
@@ -240,6 +240,7 @@ secrets:
     fs.mkdirSync(path.join(root, 'shared', 'secrets'), { recursive: true });
     fs.writeFileSync(path.join(root, 'shared', 'secrets', 'shared'), 'shared');
     refs.db = image('db');
+    refs.db2 = image('db2');
     refs.v1 = image('v1');
     refs.v2 = image('v2');
     refs.badMigration = image('bad-migration', { migrate: 1 });
@@ -374,5 +375,24 @@ secrets:
     ]);
     expect(now.iris.mark).toBe('a'); // the previous release's settings, not r6's
     expect(now.portal.mounts).toContain(path.join(serving, 'secrets', 'smtp_url'));
+  }, 150_000);
+  // A bumped Postgres digest (a security release) must reach the running database;
+  // an unchanged one must leave it alone (#273 review).
+  it('recreates postgres only when its image changed', () => {
+    const pg = () =>
+      docker(
+        'ps',
+        '-q',
+        '--filter',
+        'label=com.docker.compose.project=iris-deploy-test',
+        '--filter',
+        'label=com.docker.compose.service=postgres',
+      );
+    const before = pg();
+    expect(deploy(stage('r7'), refs.v2, refs.v1).status).toBe(0);
+    expect(pg()).toBe(before);
+    expect(deploy(stage('r8', { db: refs.db2 }), refs.v2, refs.v1).status).toBe(0);
+    expect(pg()).not.toBe(before);
+    expect(docker('inspect', '-f', '{{.Config.Image}}', pg())).toBe(refs.db2);
   }, 150_000);
 });

@@ -463,7 +463,9 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
 - **One directory per release** (`releases/<tag>-<run>-<attempt>/`: compose, settings.env,
   per-release secrets); `shared/secrets/` holds pg_password, master_key, database_url
   (rewritten only if it differs: serving containers mount it). `current` is switched only
-  after the SMTP and migration gates, and only ever names a release that became healthy;
+  once the new release is healthy (after the gates and the health wait), so a deploy cut
+  off mid-way keeps its rollback target. Postgres is recreated only when its pinned digest
+  changed (a deliberate upgrade, before the gates, not rolled back);
   rollback runs compose from the previous release's directory (its files, settings,
   images). Compose always runs from a release's **real path**, so bind mounts name that
   release's files; via the `current` link a restart would follow the link.

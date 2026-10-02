@@ -151,15 +151,17 @@ health checks are the first run of that combination.
 
 ### What `deploy.sh` does
 
-1. It pulls the new images, and starts `postgres` if it is not running. It never
-   recreates postgres at this point.
+1. It pulls the new images and starts `postgres`. Compose recreates postgres only
+   when its definition changed, which in practice means you bumped its pinned digest
+   (a security release). That restart happens before the gates and is not rolled back.
 2. It runs the SMTP check from the new portal image.
 3. It runs the migrations from the new iris image.
-4. It points `current` at the new release, recreates `iris`, `worker` and `portal`,
-   and waits for their healthchecks.
+4. It recreates `iris`, `worker` and `portal` and waits for their healthchecks. Only
+   once they are healthy does it point `current` at the new release, so a deploy that
+   is cut off (job cancelled, host rebooted) leaves `current` on the last good one.
 5. If they stay unhealthy, it recreates them from the previous release's directory
-   (its compose file, settings, secrets and images), points `current` back, and exits
-   non-zero.
+   (its compose file, settings, secrets and images), leaves `current` where it was,
+   and exits non-zero.
 
 If step 1, 2 or 3 fails, the script exits non-zero and nothing has changed: the serving
 release's files and containers are untouched. The first deploy has no previous

@@ -9,12 +9,13 @@
 #
 # <deploy dir>/current points at the release that is serving, and only ever at one
 # that became healthy. Steps, each gating the next:
-#   1. pull the new images; start postgres if it is not running (never recreated here)
+#   1. pull the new images; start postgres, recreating it only if its pinned image changed
 #   2. SMTP readiness check from the new portal image      } on failure: exit 1; the
 #   3. migrations from the new iris image                  } serving release is untouched
-#   4. point `current` here; recreate iris, worker, portal; wait for their healthchecks
+#   4. recreate iris, worker, portal; wait for their healthchecks; healthy: point
+#      `current` here (only now, so an interrupted deploy keeps its rollback target)
 #   5. unhealthy: recreate them from the previous release's directory (its compose
-#      file, settings, secrets and images), point `current` back, exit 1
+#      file, settings, secrets and images), `current` unchanged, exit 1
 #
 # Compose always runs from a release's real path, so each container's bind mounts name
 # its own release's files: a restart never picks up an ungated file from a newer one.
@@ -63,7 +64,9 @@ log "serving: ${previous:-nothing}"
 log "deploying: $release"
 
 docker compose pull --quiet
-docker compose up -d --wait --wait-timeout "$wait_timeout" --no-recreate postgres
+# Recreated only when its definition changed, i.e. a deliberately bumped digest (a
+# security release): compose leaves an unchanged postgres alone. Not rolled back.
+docker compose up -d --wait --wait-timeout "$wait_timeout" postgres
 
 if ! docker compose run --rm --no-deps portal node verify/apps/portal/scripts/verify-smtp.js; then
   log 'SMTP check failed: nothing changed, the serving release keeps serving'
