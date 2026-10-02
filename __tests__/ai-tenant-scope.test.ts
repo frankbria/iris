@@ -245,6 +245,56 @@ describe('SmartAIVisionClient scoped to an org', () => {
     }
   });
 
+  it('reports each billed vision call for the usage ledger, but not a cache hit (#263)', async () => {
+    const calls: Array<{ operation: string; costUsd: number; estimated: boolean }> = [];
+    const smart = createSmartClient(config, {
+      orgId: 'org-a',
+      cacheConfig: { dbPath: path.join(dir(), 'cache.db') },
+      costConfig: { dbPath: ledger(), dailyLimit: 100, monthlyLimit: 100 },
+      onUsage: (call) => void calls.push(call),
+    });
+    try {
+      await smart.analyzeVisualDiff(request);
+      await smart.analyzeVisualDiff(request); // served from the cache
+    } finally {
+      smart.close();
+    }
+    expect(calls).toEqual([
+      expect.objectContaining({
+        operation: 'vision-analysis',
+        provider: 'openai',
+        estimated: false,
+      }),
+    ]);
+    expect(calls[0].costUsd).toBeGreaterThan(0);
+  });
+
+  it('reports a vision reply IRIS rejected too: the provider billed it (#263)', async () => {
+    const { AIResponseRejectedError } = jest.requireActual('../src/ai-client/base');
+    jest.spyOn(AIClientFactory, 'create').mockImplementation(
+      () =>
+        ({
+          isAvailable: async () => true,
+          analyzeVisualDiff: async () => {
+            throw new AIResponseRejectedError('not JSON', { inputTokens: 1000, outputTokens: 100 });
+          },
+        }) as never,
+    );
+    const calls: Array<{ costUsd: number }> = [];
+    const smart = createSmartClient(config, {
+      enableCache: false,
+      costConfig: { dbPath: ledger(), dailyLimit: 100, monthlyLimit: 100 },
+      onUsage: (call) => void calls.push(call),
+    });
+    try {
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow();
+    } finally {
+      smart.close();
+    }
+    expect(calls).toHaveLength(1);
+    expect(calls[0].costUsd).toBeGreaterThan(0);
+  });
+
   it("charges the org that asked, and reports only this client's run in its stats", async () => {
     const a1 = client('org-a');
     const a2 = client('org-a');

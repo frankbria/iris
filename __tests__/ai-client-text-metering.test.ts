@@ -405,3 +405,52 @@ describe('text LLM metering per org (#255)', () => {
     expect(orgRows()).toEqual([{ org_id: 'org-b', operation: 'text' }]);
   });
 });
+
+describe('settled calls reported for billing (#263)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    fs.rmSync(ledgerPath(), { force: true });
+  });
+
+  it('reports each settled call with its cost and whether that cost is estimated', async () => {
+    mockOpenAICreate.mockResolvedValue(openaiReply);
+    const calls: unknown[] = [];
+    const client = await createResolvedAIClient(config({ apiKey: 'sk-test' }), {
+      onUsage: (call) => {
+        calls.push(call);
+      },
+    });
+    await client.translateInstruction({ instruction: 'click go' });
+    expect(calls).toEqual([
+      {
+        callId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        operation: 'text',
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        costUsd: expect.closeTo(1000 * 1.5e-7 + 200 * 6e-7, 12),
+        estimated: false,
+      },
+    ]);
+  });
+
+  it('reports an unpriced model as estimated, and a failing report does not fail the call', async () => {
+    mockOpenAICreate.mockResolvedValue(openaiReply);
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let seen: { estimated: boolean } | undefined;
+    const client = await createResolvedAIClient(
+      config({ apiKey: 'sk-test', model: 'gpt-imaginary-9' }),
+      {
+        onUsage: (call) => {
+          seen = call;
+          throw new Error('usage store down');
+        },
+      },
+    );
+    await expect(client.translateInstruction({ instruction: 'click go' })).resolves.toBeDefined();
+    expect(seen?.estimated).toBe(true);
+    expect(errors.mock.calls.flat().join(' ')).toMatch(/usage store down/);
+    errors.mockRestore();
+    warn.mockRestore();
+  });
+});

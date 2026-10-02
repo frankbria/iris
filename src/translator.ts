@@ -1,5 +1,6 @@
 import { loadConfig, validateConfig } from './config';
 import { configFromCredentials, type AICredentials } from './ai-client/credentials';
+import type { SettledAICall } from './ai-client/factory';
 import { isHostedMode } from './hosted';
 
 /**
@@ -47,7 +48,12 @@ export async function translate(
    * entirely; `null` means this tenant has no AI, and never falls back to the
    * process-wide keys. Omitted (local mode): the process configuration.
    */
-  scope: { orgId?: string; credentials?: CredentialsSource } = {},
+  scope: {
+    orgId?: string;
+    credentials?: CredentialsSource;
+    /** Hosted: told about each billed AI call, for the usage ledger (#263). */
+    onUsage?: (call: SettledAICall) => void | Promise<void>;
+  } = {},
 ): Promise<TranslationResult> {
   assertInstructionLength(instruction);
 
@@ -196,7 +202,11 @@ async function askCredentials(
 async function translateWithAI(
   instruction: string,
   context: { url?: string } | undefined,
-  scope: { orgId?: string; credentials?: CredentialsSource },
+  scope: {
+    orgId?: string;
+    credentials?: CredentialsSource;
+    onUsage?: (call: SettledAICall) => void | Promise<void>;
+  },
 ): Promise<TranslationResult> {
   // Asked for only now, after patterns failed: a lookup can cost a database read.
   // In hosted mode, omitting credentials is no AI too, never the operator's keys: a
@@ -232,7 +242,10 @@ async function translateWithAI(
 
     // Resolved, not just constructed: a retired pin or a typo'd model is
     // caught here and reported by name instead of returning an opaque 404 (#184).
-    const aiClient = await createResolvedAIClient(config, { orgId: scope.orgId });
+    const aiClient = await createResolvedAIClient(config, {
+      orgId: scope.orgId,
+      onUsage: scope.onUsage,
+    });
     const isAvailable = await aiClient.isAvailable();
 
     if (!isAvailable) {

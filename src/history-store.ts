@@ -13,6 +13,7 @@ import {
   insertVisualTestResult,
 } from './db';
 import type { ExecutionResult } from './executor';
+import { insertUsage, type UsageEvent } from './billing/usage';
 import type { VisualTestResult as VisualRunResult } from './visual/visual-runner';
 
 /**
@@ -48,8 +49,13 @@ export interface StoredRunResult {
 }
 
 export interface HistoryStore {
-  /** @returns the new run's id */
-  record(run: RunInput): Promise<string>;
+  /**
+   * @param options.usage - billable usage of the run (#263), written in the same
+   *   transaction as the run, so a run is never recorded without its usage or the
+   *   other way round. Hosted only; the local store ignores it.
+   * @returns the new run's id
+   */
+  record(run: RunInput, options?: { usage?: UsageEvent[] }): Promise<string>;
   /** Newest first. */
   list(options?: { limit?: number }): Promise<StoredRun[]>;
   /** `null` for an id this store does not hold. */
@@ -218,7 +224,7 @@ const toStoredRun = (row: RunRow): StoredRun => ({
 export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
   return {
     forOrg: ({ orgId, apiKeyId }) => ({
-      async record(run) {
+      async record(run, { usage = [] } = {}) {
         const { summary, passed } = summarize(run);
         const results = resultsOf(run);
         // One transaction: a run is never visible without its results. `position`
@@ -240,6 +246,11 @@ export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
                 insert into run_results (org_id, run_id, position, url, passed, result)
                 values ${sql.join(values)}`.execute(tx);
             }
+            await insertUsage(
+              tx,
+              orgId,
+              usage.map((u) => ({ ...u, runId })),
+            );
             return runId;
           });
         try {

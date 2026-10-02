@@ -80,7 +80,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
@@ -647,6 +647,40 @@ They apply only to connections with a principal; local mode is untouched.
   `IRIS_HOSTED=1` with a token or no auth. `iris connect` is the enforcing caller.
 - Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`
   (real Postgres, spawned hosted `iris connect`, keys made through BetterAuth).
+
+### Billable Usage Ledger (issue #263)
+
+- **`usage_events`** (migration 0003): kinds `browser_minutes`, `text_call`,
+  `vision_call`, `agent_turn`, `a11y_job`, `visual_job`; `unit_cost_usd` (the provider
+  cost of one unit, AI only) and `estimated` (#243). `billing_mode` (`byok`/`managed`)
+  is **required on AI kinds and must be null on platform kinds**, a check constraint,
+  because the plan prices platform usage (#260). `(org_id, idempotency_key)` is unique,
+  and `insertUsage` does `on conflict do nothing`, so a retried write is not a second
+  charge.
+- **`usageLedger(db)`** (src/billing/usage.ts): `record(orgId, events)` and
+  `summary(orgId, from, to)`, giving quantity and cost per kind and billing mode, with the
+  estimated part of the cost separate.
+- **Transactional with the work**: `postgresHistory().forOrg().record(run, { usage })`
+  writes a job's usage in the run's transaction (#267/#268 use it). An AI call is
+  reported after it is settled: `createResolvedAIClient({ onUsage })`,
+  `translate(…, { onUsage })` and `SmartClientConfig.onUsage` (not for cache hits)
+  report `SettledAICall { operation, provider, model, costUsd, estimated }`. A failed
+  report is logged, never thrown: the call is already paid for.
+- **Hosted RPC** (`startServer({ usage, usageCheckpointMs })`, wired by
+  `hostedServices()`): a tenant session's browser minutes are billed in segments
+  (`session:<id>:<n>`), one per checkpoint (default 5 min) and a last one when it ends,
+  so a crash or forced restart loses at most one interval and a session that spans a
+  month is billed to both months. Minutes run from the first page, idle time included
+  (Chromium is held either way), and are clamped at 0 against a backward clock.
+  `BrowserSession.onEnd` runs on the first cleanup only, which matters when
+  `closeBrowser` and the socket's `close` race. A settled AI call maps to its kind
+  explicitly (`usageKindOf`), keyed `<operation>:<callId>`. A translation is `byok`
+  until managed credits (#346).
+- **Constraints**: `billing_mode` null iff platform kind; an AI row must carry
+  `unit_cost_usd` (`usage_events_ai_cost_check`). A key already recorded is skipped and
+  logged (`returning`), so a reused key cannot hide an event silently.
+- **Writers not yet wired**: vision calls and jobs come with #268/#267 (the hooks
+  exist); agent turns come with #428 (the agent loop is CLI-only).
 
 ### BYOK Provider Keys (issue #344)
 

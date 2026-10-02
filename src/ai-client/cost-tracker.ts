@@ -637,6 +637,14 @@ export class CostTracker {
    * providers cost nothing; a model with no registered or family price is
    * charged `estimatedRates()` and flagged `estimated` (issue #243).
    */
+  /**
+   * Whether a call to this model is priced from an estimate (#243): no exact or family
+   * price row, so the dearest registered rate was charged. Billing records it (#263).
+   */
+  priceIsEstimated(provider: string, model: string): boolean {
+    return this.computeCost(provider, model, false, { inputTokens: 1, outputTokens: 1 }).estimated;
+  }
+
   private computeCost(
     provider: string,
     model: string,

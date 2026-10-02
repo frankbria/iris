@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import * as path from 'path';
 import { IrisConfig, resolveBudget } from '../config';
 import { resolveDataDir } from '../data-dir';
@@ -99,6 +100,8 @@ class MeteredTextClient implements AIClient {
     private readonly operation: CostOperation,
     /** The tenant charged for the call, whose budget gates it (#255). */
     private readonly orgId?: string,
+    /** Told about every call the provider billed, for the usage ledger (#263). */
+    private readonly onUsage?: (call: SettledAICall) => void | Promise<void>,
   ) {}
 
   async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
@@ -129,7 +132,15 @@ class MeteredTextClient implements AIClient {
       // No usage means the request failed before the provider answered, so
       // there is nothing billed to record.
       if (response.usage) {
-        tracker.settle(reservation, response.usage);
+        const costUsd = tracker.settle(reservation, response.usage);
+        await this.report({
+          callId: randomUUID(),
+          operation: this.operation,
+          provider: this.provider,
+          model: this.model,
+          costUsd,
+          estimated: tracker.priceIsEstimated(this.provider, this.model),
+        });
       } else {
         tracker.release(reservation);
       }
@@ -142,6 +153,36 @@ class MeteredTextClient implements AIClient {
   isAvailable(): Promise<boolean> {
     return this.inner.isAvailable();
   }
+
+  /**
+   * A failed report is logged, never thrown: the call was made and paid for, and its
+   * cost is already on the budget ledger.
+   *
+   * ponytail: the usage row is lost in that case; a retry queue is #264's if invoices
+   * must be exact.
+   */
+  private async report(call: SettledAICall): Promise<void> {
+    try {
+      await this.onUsage?.(call);
+    } catch (error) {
+      console.error(
+        '[iris] failed to record AI usage:',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+}
+
+/** A provider call that was billed, as the usage ledger needs it (#263). */
+export interface SettledAICall {
+  /** One per provider call: the usage row's idempotency key is built from it. */
+  callId: string;
+  operation: CostOperation;
+  provider: string;
+  model: string;
+  costUsd: number;
+  /** Priced from an estimate: no price row for the model (#243). */
+  estimated: boolean;
 }
 
 /**
@@ -165,10 +206,13 @@ export async function createResolvedAIClient(
   {
     operation = 'text',
     orgId,
+    onUsage,
   }: {
     operation?: Extract<CostOperation, 'text' | 'agent_turn'>;
     /** Hosted: the org the call is charged to and budgeted against (#255). */
     orgId?: string;
+    /** Hosted: told about each billed call, for the usage ledger (#263). */
+    onUsage?: (call: SettledAICall) => void | Promise<void>;
   } = {},
 ): Promise<AIClient> {
   const model = await resolveModel({
@@ -179,5 +223,5 @@ export async function createResolvedAIClient(
   });
 
   const client = AIClientFactory.create({ ...config, ai: { ...config.ai, model } }, 'text');
-  return new MeteredTextClient(client, config.ai.provider, model, operation, orgId);
+  return new MeteredTextClient(client, config.ai.provider, model, operation, orgId, onUsage);
 }

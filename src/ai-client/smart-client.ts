@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { SettledAICall } from './factory';
 import * as path from 'path';
 import { DEFAULT_BUDGET_LIMITS, IrisConfig, ProviderCredentials, resolveBudget } from '../config';
 import { resolveDataDir } from '../data-dir';
@@ -48,6 +49,12 @@ export interface SmartClientConfig {
   orgId?: string;
 
   /**
+   * Told about each vision call the provider billed, for the usage ledger (#263).
+   * Not called for cache hits. A failing report is logged, not thrown.
+   */
+  onUsage?: (call: SettledAICall) => void | Promise<void>;
+
+  /**
    * Cache configuration
    */
   cacheConfig?: {
@@ -67,10 +74,11 @@ export interface SmartClientConfig {
 }
 
 type ResolvedConfig = Required<
-  Omit<SmartClientConfig, 'cacheConfig' | 'costConfig' | 'enableFallback' | 'orgId'>
+  Omit<SmartClientConfig, 'cacheConfig' | 'costConfig' | 'enableFallback' | 'orgId' | 'onUsage'>
 > & {
   enableFallback?: boolean;
   orgId?: string;
+  onUsage?: SmartClientConfig['onUsage'];
   cacheConfig: { maxMemoryEntries: number; ttlMs: number; dbPath: string };
   costConfig: { dbPath: string; dailyLimit: number; monthlyLimit: number };
 };
@@ -163,6 +171,28 @@ export class SmartAIVisionClient {
           monthlyLimit: this.config.costConfig.monthlyLimit,
         },
         { orgId: this.config.orgId, runId: randomUUID() },
+      );
+    }
+  }
+
+  /**
+   * Report a billed vision call to the usage ledger (#263). Never throws: the call was
+   * made and paid for, and its cost is on the budget ledger already.
+   */
+  private async reportUsage(provider: string, model: string, costUsd: number): Promise<void> {
+    try {
+      await this.config.onUsage?.({
+        callId: randomUUID(),
+        operation: 'vision-analysis',
+        provider,
+        model,
+        costUsd,
+        estimated: this.costTracker!.priceIsEstimated(provider, model),
+      });
+    } catch (error) {
+      console.error(
+        '[iris] failed to record AI usage:',
+        error instanceof Error ? error.message : String(error),
       );
     }
   }
@@ -276,7 +306,9 @@ export class SmartAIVisionClient {
         // A reply IRIS rejected was still billed; anything else never got one.
         if (reservation !== undefined) {
           if (error instanceof AIResponseRejectedError) {
-            this.costTracker!.settle(reservation, error.usage);
+            // Billed by the provider, so it is usage too (#263).
+            const costUsd = this.costTracker!.settle(reservation, error.usage);
+            await this.reportUsage(providerName, model, costUsd);
           } else {
             this.costTracker!.release(reservation);
           }
@@ -293,7 +325,8 @@ export class SmartAIVisionClient {
       // From here on the call is paid for and answered. Nothing below may send
       // it to the next vendor, which would pay for the same answer twice.
       if (reservation !== undefined) {
-        this.costTracker!.settle(reservation, result.usage);
+        const costUsd = this.costTracker!.settle(reservation, result.usage);
+        await this.reportUsage(providerName, model, costUsd);
       }
 
       if (this.cache && cacheKey) {
