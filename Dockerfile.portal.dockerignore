@@ -1,0 +1,26 @@
+# Build context of Dockerfile.portal (#273): the repo root, minus everything the
+# portal build does not read. Docker uses <Dockerfile>.dockerignore over .dockerignore.
+
+**/node_modules
+**/.next
+**/*.tsbuildinfo
+dist
+coverage
+.git
+.github
+
+# Never let a developer's credentials into an image layer (#185).
+**/.env
+**/.env.*
+
+.iris
+secrets
+__tests__
+plans
+docs
+deploy
+docker
+# Not apps/portal/e2e or __tests__: `next build` type-checks them (tsconfig **/*.ts).
+apps/portal/test-results
+apps/portal/playwright-report
+*.log

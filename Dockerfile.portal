@@ -1,0 +1,67 @@
+# IRIS portal image (apps/portal, issue #273).
+#
+# Built from the repo root (`docker build -f Dockerfile.portal .`): the portal
+# imports ../../../src directly, so the context must hold both. Its ignore file is
+# Dockerfile.portal.dockerignore; the IRIS image's .dockerignore excludes apps/.
+#
+# Next's `output: 'standalone'` (next.config.ts) gives a server.js plus only the
+# node_modules it traces, so the runtime stage carries no dev dependencies. No
+# secret is read at build time: getAuth() is lazy, so `next build` needs none.
+#
+# Node 24, the line .nvmrc and CI use; satisfies engines "^22.13.0 || >=24".
+
+# --- build ------------------------------------------------------------------
+FROM node:24-alpine AS build
+
+WORKDIR /repo
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY package.json package-lock.json ./
+COPY apps/portal/package.json ./apps/portal/
+# --ignore-scripts: the root's native modules (better-sqlite3) are not part of the
+# portal, and sharp / Next's SWC come as prebuilt optional packages.
+RUN npm ci --ignore-scripts
+
+COPY tsconfig.json ./
+COPY src ./src
+COPY apps/portal ./apps/portal
+RUN npm run build -w @iris/portal
+
+# The deploy's SMTP readiness check, compiled to CommonJS beside the server. Same
+# transport code as the portal (lib/mail.ts); its own package.json because
+# apps/portal is "type": "module".
+RUN npx tsc --outDir /verify --rootDir . --module commonjs --moduleResolution node10 \
+      --target es2022 --esModuleInterop --skipLibCheck apps/portal/scripts/verify-smtp.ts \
+    && echo '{"type":"commonjs"}' > /verify/package.json
+
+# --- runtime ----------------------------------------------------------------
+FROM node:24-alpine AS runtime
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    # 0.0.0.0 inside the container: Docker forwards a published port to the
+    # container's interface. The boundary is compose's 127.0.0.1 host mapping.
+    HOSTNAME=0.0.0.0
+
+WORKDIR /app
+# Owned by root and read-only to the server: compose also mounts / read_only.
+COPY --from=build /repo/apps/portal/.next/standalone ./
+COPY --from=build /repo/apps/portal/.next/static ./apps/portal/.next/static
+COPY --from=build /repo/apps/portal/public ./apps/portal/public
+COPY --from=build /verify ./verify
+# Bundled into the server's chunks, so not traced; the verify script needs it
+# as a module. No dependencies of its own.
+COPY --from=build /repo/node_modules/nodemailer ./node_modules/nodemailer
+
+# uid 1001, like the IRIS image's pwuser: the deploy writes every app secret file
+# for that one uid (#273), so the portal and iris-api read the same files.
+RUN adduser -D -H -u 1001 portal
+USER portal
+EXPOSE 3000
+
+# /login renders without the database or SMTP, so this says the server answers.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+
+CMD ["node", "apps/portal/server.js"]
