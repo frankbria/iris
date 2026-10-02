@@ -342,3 +342,11 @@ Write/Edit, not as a pre-push afterthought.
 - Every path where the provider bills must report usage, including the "rejected reply" catch branch: the cost ledger had it, the usage ledger did not.
 - A doc script that derives a value (the CI test count) must stop before it edits anything when the derivation comes back empty.
 
+
+## #267 / PR #434 (2026-10-02)
+- A refusal test passes vacuously when the refused request would have failed anyway (the metadata dial had nowhere to go, `localhost` failed at DNS). Route the test dialer so a bypass would actually reach the server, assert the refusal's own message, then disable the guard and watch the test fail.
+- An egress-proxy refusal comes back as an HTTP 403 *page*, which a scanner happily scans and bills as a success. A hosted job must fail when the final response is >= 400.
+- A per-tenant cap that counts `running` turns any stuck job into a permanent lockout; a cap needs its reaper (#435).
+- Refuse credentials at the API boundary rather than sanitising each place they get stored: params, results and error text all held the URL.
+- Demonstrating a shared rate budget with a background burst raced the 2/s refill; drain first, then send the other surface's burst, in sequence.
+- `showboat verify` replays every step, background servers included: stop them again afterwards.
