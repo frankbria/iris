@@ -141,7 +141,7 @@ function resultsOf(run: RunInput): StoredRunResult[] {
           url: action.type === 'navigate' ? action.url : null,
           passed: r.success,
           result: {
-            action: describeAction(action),
+            action: stripUserinfo(describeAction(action)),
             // Bounded: an error message is page-influenced text of any length. It
             // also quotes URLs (guardedGoto, Playwright's goto), credentials and all.
             // Cut by code point: a cut inside a surrogate pair leaves a lone half,
@@ -152,6 +152,19 @@ function resultsOf(run: RunInput): StoredRunResult[] {
       });
   }
 }
+
+/**
+ * A result as jsonb input, with every string well-formed. A lone UTF-16 surrogate
+ * (a client can send one as a JSON escape in a selector, and errors quote selectors)
+ * survives JSON.stringify as an escape Postgres's jsonb input rejects, and the whole
+ * run would be lost. It becomes U+FFFD instead.
+ */
+const toJsonb = (value: unknown) =>
+  JSON.stringify(value, (_key, v: unknown) => (typeof v === 'string' ? wellFormed(v) : v));
+
+/** `String.prototype.toWellFormed()`, which the ES2020 lib does not declare. */
+const wellFormed = (text: string) => text.replace(LONE_SURROGATE, '\uFFFD');
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 /** Every `scheme://user:password@` in free text, without the userinfo. */
 const stripUserinfo = (text: string) => text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
@@ -218,7 +231,7 @@ export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
             if (results.length) {
               const values = results.map(
                 (r, position) =>
-                  sql`(${orgId}, ${runId}, ${position}, ${r.url}, ${r.passed}, ${JSON.stringify(r.result)}::jsonb)`,
+                  sql`(${orgId}, ${runId}, ${position}, ${r.url === null ? null : wellFormed(r.url)}, ${r.passed}, ${toJsonb(r.result)}::jsonb)`,
               );
               await sql`
                 insert into run_results (org_id, run_id, position, url, passed, result)

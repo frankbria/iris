@@ -261,6 +261,56 @@ const a11yRun = {
     expect(stored.endsWith('😀')).toBe(true);
   });
 
+  it('records a run whose strings hold a lone surrogate instead of losing it', async () => {
+    // A client can send "\ud800" as a JSON escape in a selector, and errors quote
+    // selectors. JSON.stringify keeps it as an escape Postgres's jsonb rejects.
+    const lone = String.fromCharCode(0xd800);
+    const id = await history()
+      .forOrg(A)
+      .record({
+        kind: 'rpc',
+        success: false,
+        startedAt: started,
+        finishedAt: finished,
+        results: [
+          {
+            success: false,
+            action: { type: 'click', selector: `#a${lone}` },
+            error: `no element #a${lone}`,
+          },
+        ],
+      });
+    const run = await history().forOrg(A).get(id);
+    expect(run!.results[0].result).toEqual({
+      action: 'click #a\ufffd',
+      error: 'no element #a\ufffd',
+    });
+  });
+
+  it('strips credentials from an action description too', async () => {
+    const id = await history()
+      .forOrg(A)
+      .record({
+        kind: 'rpc',
+        success: true,
+        startedAt: started,
+        finishedAt: finished,
+        results: [
+          {
+            success: true,
+            action: {
+              type: 'assert',
+              kind: 'url_matches',
+              target: `https://${USERINFO}@shop.example/`,
+            },
+          },
+        ],
+      });
+    const stored = JSON.stringify(await history().forOrg(A).get(id));
+    expect(stored).not.toContain(USERINFO);
+    expect(stored).toContain('assert url_matches https://shop.example/');
+  });
+
   it('strips credentials from URLs quoted in an error message too', async () => {
     const id = await history()
       .forOrg(A)
