@@ -121,6 +121,8 @@ __tests__/
 ├── api-key-auth.test.ts           # Real Postgres + spawned hosted `iris connect`: real keys, revoked/disabled 401, startup refusals (#341)
 ├── db/postgres.test.ts            # Real Postgres: migrate, idempotency, org_id catalog check, BetterAuth round trip (#248)
 ├── db/history-store.test.ts       # Real Postgres: runs per org, cross-org list/get empty, same-org key FK, no typed values (#254)
+├── ingress.test.ts                # Real nginx (Docker) over deploy/nginx/iris.conf: routing, header overwrite, WSS, 429, headers, TLS (#347)
+├── auth-client-ip.test.ts         # Real Postgres: BetterAuth rate limits key on X-Real-IP, not a rotated X-Forwarded-For (#347)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
@@ -146,6 +148,9 @@ docs/                               # Detailed project documentation
 ├── integration-surfaces.md        # Which integration surfaces exist and why (decision record)
 ├── adr/0001-hosted-architecture.md # Hosted SaaS architecture — anchors every Cycle 4 platform issue
 └── archive/                       # Superseded planning docs (historical)
+
+deploy/
+└── nginx/iris.conf                # TLS ingress site template for the host's nginx (#347)
 
 plans/
 └── README.md                      # Single source of truth: current status / what's next
@@ -300,8 +305,9 @@ Sign-up, verification, login and password reset run through BetterAuth in
   - Rate limits are on in every environment (BetterAuth's defaults turn them on only in
     production).
   - `sendEmail` is required. Secure/httpOnly/SameSite=Lax cookies are BetterAuth's defaults *given* an
-  https `baseURL`. Do not add `advanced` to the policy spread: it would replace a
-  caller's `advanced` (e.g. `trustedProxies`).
+  https `baseURL`. The policy pins `advanced.ipAddress.ipAddressHeaders` only (#347),
+  merged two levels deep: spreading a whole `advanced` would replace a caller's
+  (e.g. `trustedProxies`, cookie options).
 - **The portal imports `../../../src/...` directly.** Turbopack finds the workspace
   root from the root lockfile, and `pg` is on Next's default server-external list. No
   `transpilePackages` or workspace package is needed.
@@ -311,15 +317,14 @@ Sign-up, verification, login and password reset run through BetterAuth in
 - **Submit buttons stay disabled until hydration** (`useSyncExternalStore`). Before
   hydration, a native submit is a GET with the password in the query string. The E2E
   test pins this with JavaScript disabled.
-- **Rate limits are per client IP from `X-Forwarded-For`**, stored in memory (one
-  portal process). BetterAuth trusts a single-value header, and `next start` passes a
-  client's header through. Until the ingress (#347) overwrites it, a client can pick its
-  own counter.
+- **Rate limits are per client IP from `X-Real-IP`** (#347), stored in memory (one
+  portal process). The ingress overwrites it with the peer address. Served without
+  the ingress (no header), production falls back to one shared bucket per path.
 - **E2E** (`apps/portal/e2e`, `npm run e2e -w @iris/portal` after a build): real
   Postgres plus Mailpit, from docker-compose.dev.yml or the CI services. Things that bit:
   - The global setup runs `src/db/migrate.ts` as a child process, because Playwright's
     loader cannot link the ESM `kysely/migration`.
-  - Each test sends a random `X-Forwarded-For`, not a counter: Playwright restarts
+  - Each test sends a random `X-Real-IP`, not a counter: Playwright restarts
     the worker after a failure, which resets module state.
   - After a client-side link click, wait for the URL before `getByLabel(...)`. The old
     page may have a field with the same label.
@@ -385,6 +390,38 @@ The portal page is `/api-keys`.
 - **Do not let `npm install -w @iris/portal` pick the package's latest version.** It
   nested a second `better-auth` under `apps/portal`. Pin the range the root uses and
   check the lockfile diff.
+
+### TLS Ingress (issue #347)
+
+`deploy/nginx/iris.conf` is a site file for the host's existing nginx (it already owns
+443), not a proxy container. The operator fills in `server_name`, the certificate
+paths and the two upstream ports (iris-api `127.0.0.1:4000`, portal `127.0.0.1:3000`),
+then `nginx -t` and reloads. `/v1/` (REST and WSS) goes to iris-api, the rest to the
+portal. No host details in the repo (`repo-hygiene.test.ts`).
+
+- **Overwrite, never append.** `X-Real-IP` and `X-Forwarded-For` are set to
+  `$remote_addr`. `$proxy_add_x_forwarded_for` appends to the client's value, and
+  BetterAuth (no `trustedProxies`) then trusts nothing and puts everyone in one
+  bucket. `createAuth()` pins `ipAddressHeaders: ['x-real-ip']`, so a client-sent
+  `X-Forwarded-For` never picks a counter. Portal E2E therefore picks its counter
+  with `X-Real-IP`.
+- **`X-Iris-Probe` is cleared.** Behind the proxy every peer is loopback, so a
+  forwarded header would claim the healthcheck's extra slot (#342).
+- **`add_header` and `proxy_set_header` inherit only into a location with none of
+  its own.** The security headers live at server level only; `/v1/` needs
+  `Upgrade`/`Connection`, so it repeats every `proxy_set_header`. A test checks each
+  location, and nginx's own 429 (`always`).
+- **`limit_req_zone` and `map` must be in `http {}`.** A site file is included there,
+  so they sit at its top. Their names are global to the host's nginx: everything is
+  prefixed `iris_` (a second `$connection_upgrade` fails `nginx -t`).
+- **Throttles**: `/v1/` 5 r/s per IP, burst 20 (an org's 300/min; counts upgrades,
+  not messages); `/api/auth/` 10 r/s, burst 20 (BetterAuth's general 100/10s; its
+  per-route rules still apply behind it). Reads 75s, above the 30s heartbeat.
+- **Test** (`ingress.test.ts`): the template with only ports, upstreams and a
+  self-signed cert substituted, in `nginx:1.29-alpine` on `--network host`. Required
+  under `CI`, skipped locally without Docker. "Per IP" is shown with `127.0.0.1` vs
+  `::1`. The image's OpenSSL refuses TLS 1.1 on its own too, so the TLS check pins the
+  outcome, not the `ssl_protocols` line.
 
 ### Container Deployment (issue #192)
 
@@ -647,8 +684,8 @@ They apply only to connections with a principal; local mode is untouched.
 - **Buckets run on `performance.now()`**, not `Date.now()`: the WSL2 clock steps
   backward (#190), and a negative elapsed time would drain a budget. A malformed frame
   from a tenant spends a token too (the check runs before the shape check).
-- Per-IP pre-auth throttling is #347's: without a trusted client-IP source, everyone
-  behind the ingress shares one address.
+- Per-IP pre-auth throttling is the ingress's `limit_req` (#347), not the server's:
+  behind the proxy every peer is loopback.
 - `startServer` itself does not enforce hosted mode: `protocol.test.ts` runs under
   `IRIS_HOSTED=1` with a token or no auth. `iris connect` is the enforcing caller.
 - Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`

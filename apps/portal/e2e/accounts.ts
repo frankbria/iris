@@ -10,14 +10,15 @@ import {
 import { linkFromMail } from "./mailpit"
 
 /**
- * BetterAuth rate-limits sign-in to 3 per 10s per client IP. Giving each browser
- * context its own X-Forwarded-For gives it a counter of its own. Random, not a
+ * BetterAuth rate-limits sign-in to 3 per 10s per client IP, which it reads from
+ * X-Real-IP (the header the ingress overwrites, #347). Giving each browser context its
+ * own X-Real-IP gives it a counter of its own. Random, not a
  * counter: Playwright restarts the worker after a failure, which would reset a counter
  * and put the next test in an already-spent bucket.
  */
 export async function ownRateLimitBucket(context: BrowserContext) {
   const [a, b, c] = randomBytes(3)
-  await context.setExtraHTTPHeaders({ "x-forwarded-for": `10.${a}.${b}.${c}` })
+  await context.setExtraHTTPHeaders({ "x-real-ip": `10.${a}.${b}.${c}` })
 }
 
 export const unique = () => `e2e-${randomBytes(4).toString("hex")}@iris.test`

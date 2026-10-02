@@ -460,6 +460,21 @@ Container specifics worth knowing:
 > the CLI contract below. Rationale:
 > [docs/integration-surfaces.md](docs/integration-surfaces.md).
 
+
+### TLS ingress (hosted)
+
+The hosted services sit behind the host's nginx, the only public listener.
+[`deploy/nginx/iris.conf`](deploy/nginx/iris.conf) is the site file: copy it into
+nginx's site directory (e.g. `/etc/nginx/conf.d/`), replace the placeholders
+(`server_name iris.example.com`, the certificate paths under `/etc/ssl/iris/`, and the
+upstream ports `127.0.0.1:4000` for `iris connect` and `127.0.0.1:3000` for the
+portal), then run `nginx -t` and `systemctl reload nginx`. It terminates TLS 1.2+,
+redirects http to https, routes `/v1/` (REST and WebSocket) to iris-api and the rest to
+the portal, overwrites `X-Real-IP`/`X-Forwarded-For` with the client's address,
+throttles per client IP (429), and sets HSTS and the other security headers. Keep both
+upstreams on loopback: the portal's rate limits trust `X-Real-IP`, which only the proxy
+may set.
+
 ---
 
 ## Using IRIS from an AI assistant

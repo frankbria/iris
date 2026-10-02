@@ -27,6 +27,11 @@ const { createAuth } = require('./src/auth/config.ts');
     emailAndPassword: { enabled: true, requireEmailVerification: false },
     emailVerification: { autoSignInAfterVerification: true, expiresIn: 600 },
     rateLimit: { enabled: false, storage: 'database' },
+    // #347: the client-IP header is pinned; the caller's other advanced keys are not.
+    advanced: {
+      cookiePrefix: 'probe',
+      ipAddress: { ipAddressHeaders: ['x-forwarded-for'], trustedProxies: ['10.0.0.0/8'] },
+    },
   });
   const ctx = await auth.$context;
   process.stdout.write(JSON.stringify({
@@ -43,6 +48,7 @@ const { createAuth } = require('./src/auth/config.ts');
     sendOnSignIn: ctx.options.emailVerification.sendOnSignIn,
     autoSignInAfterVerification: ctx.options.emailVerification.autoSignInAfterVerification,
     revokeSessionsOnPasswordReset: ctx.options.emailAndPassword.revokeSessionsOnPasswordReset,
+    advanced: ctx.options.advanced,
   }));
 })().catch((e) => { console.error(e); process.exit(1); });
 `;
@@ -99,6 +105,17 @@ describe('shared auth config (require(esm))', () => {
   it("keeps the caller's keys the policy does not pin", async () => {
     const out = await probe('http://localhost:3000');
     expect(out).toMatchObject({ verificationExpiresIn: 600, rateLimitStorage: 'database' });
+  }, 30_000);
+
+  // #347: rate limits key on X-Real-IP, which the ingress overwrites with the peer
+  // address. X-Forwarded-For is client-controlled, so a caller cannot switch back to it,
+  // but its other `advanced` keys (cookies, trusted proxies) must survive the merge.
+  it("pins the client-IP header to X-Real-IP and keeps the caller's other advanced keys", async () => {
+    const out = await probe('http://localhost:3000');
+    expect(out.advanced).toMatchObject({
+      cookiePrefix: 'probe',
+      ipAddress: { ipAddressHeaders: ['x-real-ip'], trustedProxies: ['10.0.0.0/8'] },
+    });
   }, 30_000);
 
   it('issues an httpOnly, SameSite=Lax session cookie, Secure whenever the portal is served over https', async () => {
