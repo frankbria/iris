@@ -366,3 +366,9 @@ Write/Edit, not as a pre-push afterthought.
 - A rollback to an older release meets a schema it doesn't know: the Kysely Migrator refuses ("corrupted migrations") unless the runner treats "schema ahead, nothing pending" as a no-op.
 - Killing a Jest run mid-suite skips its `afterAll`: clean up the test's Docker containers, networks and volumes by hand.
 - This repo's Jest config prints no per-test lines even with `--verbose`; for demo evidence, use `--json --outputFile` and print the titles.
+
+## #435 / PR #443 (2026-10-02)
+- `git stash` on a clean tree saves nothing, and the `git stash pop` that follows applies an older, unrelated entry. Check `git status` before stashing to compare against HEAD; or use `git worktree add` or `git show HEAD:path`.
+- A runtime import added only to share a constant pulled a whole store module into the worker, and a timing test that had always passed began failing 2 runs in 3. Prove a suspected cause by removing it and rerunning several times (4/4 clean), not by reasoning.
+- A heartbeat that runs during the final write waits on that write's row lock and then reports "lost". Gate heartbeat answers on a "writing" flag, and say "claim lost" once.
+- A reaper of dead workers does not catch a hung browser whose worker still heartbeats. That needs a job deadline (#442).
