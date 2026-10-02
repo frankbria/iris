@@ -585,10 +585,16 @@ Under `IRIS_HOSTED`, `iris connect` authenticates **org API keys**
 `hostedAuthenticator()` (src/api-key-auth.ts) builds the shared `createAuth()` over
 Kysely and calls `verifyApiKey`; the key's `referenceId` is the org.
 
-- **`verifyApiKey` cannot tell a dead database from a bad key.** The plugin catches
-  every error and returns `valid: false, code: INVALID_API_KEY` either way. So a
-  refusal is trusted only after `select 1` succeeds; otherwise the authenticator
-  throws, which is `503` at the upgrade and "keep the connection" at a re-check.
+- **`verifyApiKey` cannot tell a backend failure from a bad key.** The plugin catches
+  every error (timeout, locked table, its write on a read-only database) and returns
+  `valid: false, code: INVALID_API_KEY` either way. So a refusal is believed only when
+  `keyIsUsable()`, a read-only lookup of the key's row by the plugin's own
+  `defaultKeyHasher`, agrees it is gone, disabled, expired or used up. Otherwise the
+  authenticator throws: `503` at the upgrade, "keep the connection" at a re-check. A
+  `select 1` is not enough: it succeeds while the `apikey` table is locked.
+- **The auth pool has a query timeout** (`createPostgresDb(url, { queryTimeoutMs })`):
+  a stalled query would otherwise hold an upgrade slot and stall every later re-check.
+  Migrations keep the unbounded default. Hosted startup probes the database (exit 3).
 - **The check is async inside `verifyClient`.** Upgrades still being verified count
   against `maxConnections` (`verifying`), or a burst of slow checks would all be
   admitted. Decrement right before `done()`: ws adds the client synchronously.

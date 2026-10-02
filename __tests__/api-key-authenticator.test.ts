@@ -29,15 +29,18 @@ function scripted(...results: Result[]) {
   return { verifier, keys };
 }
 
-const up = async () => undefined;
-const down = async () => {
+/** The key store's own row says the key is gone, disabled, expired or used up. */
+const unusable = async () => false;
+/** The row says the key is fine, so a refusal can only have been a backend failure. */
+const usable = async () => true;
+const down = async (): Promise<boolean> => {
   throw new Error('connection refused');
 };
 
 describe('apiKeyAuthenticator', () => {
   test('a valid key resolves to its org and key id', async () => {
     const { verifier, keys } = scripted(VALID);
-    expect(await apiKeyAuthenticator(verifier, up)('Bearer iris_abc')).toEqual({
+    expect(await apiKeyAuthenticator(verifier, unusable)('Bearer iris_abc')).toEqual({
       orgId: 'org-1',
       keyId: 'key-1',
     });
@@ -48,25 +51,26 @@ describe('apiKeyAuthenticator', () => {
     'header %p is refused without asking the key store',
     async (header) => {
       const { verifier, keys } = scripted();
-      expect(await apiKeyAuthenticator(verifier, up)(header)).toBeNull();
+      expect(await apiKeyAuthenticator(verifier, unusable)(header)).toBeNull();
       expect(keys).toEqual([]);
     },
   );
 
-  test('a refusal stands only when it repeats while the key store answers', async () => {
-    const { verifier, keys } = scripted(INVALID, INVALID);
-    expect(await apiKeyAuthenticator(verifier, up)('Bearer iris_gone')).toBeNull();
-    expect(keys).toEqual(['iris_gone', 'iris_gone']);
+  test('a refusal stands when the key row confirms the key is unusable', async () => {
+    const { verifier } = scripted(INVALID);
+    const checked: string[] = [];
+    const isUsable = async (key: string) => (checked.push(key), false);
+    expect(await apiKeyAuthenticator(verifier, isUsable)('Bearer iris_gone')).toBeNull();
+    expect(checked).toEqual(['iris_gone']);
   });
 
-  test('a refusal caused by a database blip is retried, not believed', async () => {
-    // The plugin reports a timed-out lookup as `valid: false`. By the time the
-    // reachability probe runs the database is back, so the key is asked again.
-    const { verifier } = scripted(INVALID, VALID);
-    expect(await apiKeyAuthenticator(verifier, up)('Bearer iris_abc')).toEqual({
-      orgId: 'org-1',
-      keyId: 'key-1',
-    });
+  test('a refusal of a usable key is a backend failure, never a verdict', async () => {
+    // The plugin reports a locked table, a read-only database or a timed-out
+    // lookup as `valid: false`, exactly like an unknown key.
+    const { verifier } = scripted(INVALID);
+    await expect(apiKeyAuthenticator(verifier, usable)('Bearer iris_abc')).rejects.toThrow(
+      /usable key/,
+    );
   });
 
   test('an unreachable key store is an error, never a refusal', async () => {

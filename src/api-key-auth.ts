@@ -1,3 +1,4 @@
+import { sql, type Kysely } from 'kysely';
 import type { Authenticator } from './protocol';
 
 /** The slice of a BetterAuth instance (`createAuth()`) this module uses. */
@@ -17,33 +18,52 @@ export interface KeyVerifier {
  * Keys are org-owned, so the verified key's `referenceId` is the org the
  * connection acts for.
  *
- * `verifyApiKey` reports a database failure the same way as an unknown key
- * (`valid: false`, `INVALID_API_KEY`): the plugin catches every error. So a refusal
- * is only trusted when it repeats after `reachable()` shows the key store answering:
- * the first lookup may have timed out on a database that has since come back.
- * Otherwise this throws, and the server answers 503 rather than telling a valid key
- * it is invalid, or dropping every live connection during a database restart.
- *
- * ponytail: the store can still fail again between the probe and the second lookup;
- * a read-only check by key id would close that window (see #342).
+ * `verifyApiKey` reports a backend failure the same way as an unknown key
+ * (`valid: false`, `INVALID_API_KEY`): the plugin catches every error, including a
+ * timed-out lookup, a locked table and the write it makes on a read-only database.
+ * So a refusal is only believed when `isUsable(key)`, a read of the key's own row,
+ * agrees the key is gone, disabled, expired or used up. For a key whose row is fine
+ * this throws, and the server answers 503 (or keeps a live connection) rather than
+ * telling a valid key it is invalid.
  */
 export function apiKeyAuthenticator(
   auth: KeyVerifier,
-  reachable: () => Promise<unknown>,
+  isUsable: (key: string) => Promise<boolean>,
 ): Authenticator {
   return async (authorization) => {
     const key = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
     if (!key) return null;
-    const verify = async () => {
-      const result = await auth.api.verifyApiKey({ body: { key } });
-      return result.valid && result.key
-        ? { orgId: result.key.referenceId, keyId: result.key.id }
-        : null;
-    };
-    const first = await verify();
-    if (first) return first;
-    await reachable();
-    return verify();
+    const result = await auth.api.verifyApiKey({ body: { key } });
+    if (result.valid && result.key) {
+      return { orgId: result.key.referenceId, keyId: result.key.id };
+    }
+    if (await isUsable(key)) throw new Error('API key verification failed for a usable key');
+    return null;
+  };
+}
+
+/**
+ * Whether the key's own row would let it verify: present, enabled, not expired and
+ * not used up. Read-only, by the plugin's own hash of the key.
+ */
+export function keyIsUsable(db: Kysely<unknown>): (key: string) => Promise<boolean> {
+  return async (key) => {
+    // ESM-only, like BetterAuth: loaded on use (require(esm)).
+    const { defaultKeyHasher } = await import('@better-auth/api-key');
+    const { rows } = await sql<{
+      enabled: boolean | null;
+      expiresAt: Date | null;
+      remaining: number | null;
+    }>`select enabled, "expiresAt", remaining from apikey where key = ${await defaultKeyHasher(key)}`.execute(
+      db,
+    );
+    const row = rows[0];
+    return (
+      !!row &&
+      row.enabled !== false &&
+      (!row.expiresAt || row.expiresAt.getTime() > Date.now()) &&
+      row.remaining !== 0
+    );
   };
 }
 
@@ -60,11 +80,10 @@ export async function hostedAuthenticator(
 ): Promise<Authenticator> {
   const missing = ['BETTER_AUTH_SECRET', 'BETTER_AUTH_URL'].filter((name) => !env[name]);
   if (missing.length) throw new Error(`Hosted mode needs ${missing.join(' and ')}`);
-  // Loaded here, not at the top: BetterAuth and Kysely are ESM-only (require(esm)),
-  // and local mode never needs them.
+  // Loaded here, not at the top: BetterAuth is ESM-only (require(esm)), and this
+  // module is itself only loaded in hosted mode.
   const { createPostgresDb, resolveDatabaseUrl } = await import('./db/postgres');
   const { createAuth } = await import('./auth/config');
-  const { sql } = await import('kysely');
   // Bounded: a stalled query would hold an upgrade's connection slot, and stall
   // every later revocation re-check behind it.
   const db = createPostgresDb(resolveDatabaseUrl(env), { queryTimeoutMs: 5_000 });
@@ -77,12 +96,11 @@ export async function hostedAuthenticator(
       throw new Error('iris connect sends no account mail');
     },
   });
-  const reachable = () => sql`select 1`.execute(db);
   try {
-    await reachable();
+    await sql`select 1`.execute(db);
   } catch (err) {
     await db.destroy();
     throw new Error(`Cannot reach the database: ${(err as Error).message}`);
   }
-  return apiKeyAuthenticator(auth, reachable);
+  return apiKeyAuthenticator(auth, keyIsUsable(db));
 }

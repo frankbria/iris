@@ -138,7 +138,8 @@ test('a database that never answers exits 3 instead of serving 503s', async () =
 const PROBE = `
 const { Pool } = require('pg');
 const { createAuth } = require('./src/auth/config.ts');
-const { apiKeyAuthenticator } = require('./src/api-key-auth.ts');
+const { apiKeyAuthenticator, keyIsUsable } = require('./src/api-key-auth.ts');
+const { createPostgresDb } = require('./src/db/postgres.ts');
 const PASSWORD = 'correct-horse-battery-staple';
 (async () => {
   const pool = new Pool({ connectionString: process.env.PROBE_URL });
@@ -169,13 +170,26 @@ const PASSWORD = 'correct-horse-battery-staple';
   await auth.api.deleteApiKey({ headers: alice.headers, body: { keyId: r.revoked.id } });
   await auth.api.updateApiKey({ headers: bob.headers, body: { keyId: r.disabled.id, enabled: false } });
 
-  // The authenticator itself: a verdict while the database answers, an error when it cannot.
-  const authn = apiKeyAuthenticator(auth, () => pool.query('select 1'));
+  // The authenticator itself: a verdict only when the key's own row agrees.
+  const kdb = createPostgresDb(process.env.PROBE_URL);
+  const usable = keyIsUsable(kdb);
+  r.usable = {};
+  for (const k of ['a', 'revoked', 'disabled']) r.usable[k] = await usable(r[k].key);
+  r.usable.unknown = await usable('iris_nope');
+  const authn = apiKeyAuthenticator(auth, usable);
   r.live = await authn('Bearer ' + r.a.key);
   r.unknown = await authn('Bearer iris_nope');
+  r.revokedNow = await authn('Bearer ' + r.revoked.key);
   r.notBearer = await authn('Basic ' + r.a.key);
+  const outcome = (p) => p.then((v) => ({ value: v }), (e) => ({ threw: String(e.message) }));
+  // BetterAuth's database path fails (its pool is gone) while the key row reads fine:
+  // a locked table or a read-only database looks like this to the plugin.
   await pool.end();
-  r.down = await authn('Bearer iris_nope').then((v) => ({ value: v }), (e) => ({ threw: String(e.message) }));
+  r.brokenVerify = await outcome(authn('Bearer ' + r.a.key));
+  r.brokenUnknown = await outcome(authn('Bearer iris_nope'));
+  // Nothing answers at all.
+  await kdb.destroy();
+  r.down = await outcome(authn('Bearer iris_nope'));
   process.stdout.write(JSON.stringify(r));
 })().catch((e) => { console.error(e); process.exit(1); });
 `;
@@ -270,11 +284,17 @@ const PASSWORD = 'correct-horse-battery-staple';
     });
   }
 
-  test('the authenticator maps a key to its org, and refuses only when the database answered', () => {
+  test('the authenticator maps a key to its org, and refuses only when the key row agrees', () => {
+    expect(r.usable).toEqual({ a: true, revoked: false, disabled: false, unknown: false });
     expect(r.live).toEqual({ orgId: r.A, keyId: r.a.id });
     expect(r.unknown).toBeNull();
+    expect(r.revokedNow).toBeNull();
     expect(r.notBearer).toBeNull();
-    // A closed pool is "cannot tell", never "invalid key".
+    // The plugin failed on a key whose row is fine: an error, never "invalid key".
+    expect(r.brokenVerify).toEqual({ threw: 'API key verification failed for a usable key' });
+    // An unknown key stays refused even then: its row confirms it.
+    expect(r.brokenUnknown).toEqual({ value: null });
+    // A key store that cannot be read is "cannot tell".
     expect(r.down).toHaveProperty('threw');
   });
 
