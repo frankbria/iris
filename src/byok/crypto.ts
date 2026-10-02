@@ -63,7 +63,13 @@ export function resolveKeyring(env: NodeJS.ProcessEnv = process.env): Keyring {
     if (sep < 1 || !KEY_ID.test(id)) {
       throw new Error('Each IRIS_KEY_ENCRYPTION_KEY entry must be id:base64');
     }
-    const key = Buffer.from(entry.slice(sep + 1), 'base64');
+    const encoded = entry.slice(sep + 1);
+    // Strict: Node's decoder skips invalid characters, so a typo could still decode to
+    // 32 bytes of a different key and seal rows nothing can open later.
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+      throw new Error(`Master key ${id} is not valid base64`);
+    }
+    const key = Buffer.from(encoded, 'base64');
     if (key.length !== 32) throw new Error(`Master key ${id} must be 32 bytes (base64)`);
     if (keys.has(id)) throw new Error(`Master key id ${id} is listed twice`);
     keys.set(id, { id, key });
@@ -88,7 +94,10 @@ function seal(key: Buffer, plaintext: Buffer, additional: Buffer) {
 }
 
 function open(key: Buffer, sealed: Buffer, additional: Buffer) {
-  const decipher = createDecipheriv('aes-256-gcm', key, sealed.subarray(0, 12));
+  // A full 16-byte tag: GCM otherwise accepts tags down to 4 bytes.
+  const decipher = createDecipheriv('aes-256-gcm', key, sealed.subarray(0, 12), {
+    authTagLength: 16,
+  });
   decipher.setAAD(additional);
   decipher.setAuthTag(sealed.subarray(12, 28));
   return Buffer.concat([decipher.update(sealed.subarray(28)), decipher.final()]);
@@ -114,8 +123,14 @@ export function sealProviderKey(apiKey: string, owner: KeyOwner, keyring: Keyrin
  * @throws on any other org or provider, any changed byte, or an unknown master key
  */
 export function openProviderKey(sealed: Buffer, owner: KeyOwner, keyring: Keyring): string {
+  if (sealed.length < 2) throw new Error('Provider key blob is truncated');
   if (sealed[0] !== VERSION) throw new Error(`Unsupported provider key format ${sealed[0]}`);
   const idLength = sealed[1];
+  // Header, wrapped data key (iv, tag, key), then the body's iv and tag: anything
+  // shorter is truncated, and must not reach the cipher with a short tag.
+  if (!idLength || sealed.length < 2 + idLength + 60 + 28) {
+    throw new Error('Provider key blob is truncated');
+  }
   const id = sealed.subarray(2, 2 + idLength).toString('ascii');
   const master = keyring.keys.get(id);
   if (!master)

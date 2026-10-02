@@ -1,3 +1,6 @@
+// Holds the master keyring: a client import must fail the build, not ship it.
+import "server-only"
+
 import { resolveKeyring } from "../../../src/byok/crypto"
 import { providerKeyStore } from "../../../src/byok/store"
 import { createPostgresDb, resolveDatabaseUrl } from "../../../src/db/postgres"
@@ -12,7 +15,8 @@ let store: ReturnType<typeof providerKeyStore> | undefined
  */
 export function getProviderKeys() {
   store ??= providerKeyStore(
-    createPostgresDb(resolveDatabaseUrl()),
+    // Bounded, as for iris connect (#341): a stalled query must not hang a page.
+    createPostgresDb(resolveDatabaseUrl(), { queryTimeoutMs: 5_000 }),
     resolveKeyring()
   )
   return store

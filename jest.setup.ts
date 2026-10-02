@@ -97,6 +97,10 @@ for (const key of [
   'OPENAI_BASE_URL',
   'OPENAI_ORG_ID',
   'OPENAI_PROJECT_ID',
+  // #344: the BYOK master key. A developer who exports it would otherwise defeat the
+  // "refuses to start without it" test, whose child inherits process.env.
+  'IRIS_KEY_ENCRYPTION_KEY',
+  'IRIS_KEY_ENCRYPTION_KEY_FILE',
   // Added with #192, which taught `iris connect` to read these. Without them
   // here an exported IRIS_CONNECT_HOST=0.0.0.0 fails the connect-default test on
   // a developer's machine while CI stays green — #185 exactly, recurring the

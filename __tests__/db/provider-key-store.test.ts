@@ -113,6 +113,30 @@ const ANTHROPIC_KEY = ['sk', 'ant', 'api03', randomBytes(24).toString('hex')].jo
     await expect(store().credentialsFor('org-b')).rejects.toThrow();
   });
 
+  it('re-seals every row under the current master key after a rotation', async () => {
+    const old = `old:${randomBytes(32).toString('base64')}`;
+    const fresh = `new:${randomBytes(32).toString('base64')}`;
+    const oldRing = resolveKeyring({ IRIS_KEY_ENCRYPTION_KEY: old });
+    await sql`delete from provider_keys`.execute(db);
+    await providerKeyStore(db, oldRing).set('org-a', 'openai', OPENAI_KEY);
+    await providerKeyStore(db, oldRing).set('org-b', 'anthropic', ANTHROPIC_KEY);
+
+    const rotated = resolveKeyring({ IRIS_KEY_ENCRYPTION_KEY: `${fresh},${old}` });
+    expect(await providerKeyStore(db, rotated).rewrapAll()).toBe(2);
+
+    // The old key can now be dropped: the new one alone opens every row.
+    const onlyNew = providerKeyStore(db, resolveKeyring({ IRIS_KEY_ENCRYPTION_KEY: fresh }));
+    expect(await onlyNew.credentialsFor('org-a')).toEqual({
+      provider: 'openai',
+      apiKey: OPENAI_KEY,
+    });
+    expect(await onlyNew.credentialsFor('org-b')).toEqual({
+      provider: 'anthropic',
+      apiKey: ANTHROPIC_KEY,
+    });
+    await sql`delete from provider_keys`.execute(db);
+  });
+
   it.each([
     ['openai', ''],
     ['openai', 'not-a-key'],

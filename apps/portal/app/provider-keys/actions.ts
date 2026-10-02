@@ -19,12 +19,23 @@ type Provider = (typeof PROVIDERS)[number]
  * does; BetterAuth refuses an org the caller is not in.
  */
 async function allowed(organizationId: string, action: "create" | "delete") {
+  // BetterAuth reads an empty id as "the active org": the org checked and the org
+  // written would differ.
+  if (!organizationId) return false
   const result = await getAuth()
     .api.hasPermission({
       headers: await headers(),
       body: { organizationId, permissions: { providerKey: [action] } },
     })
-    .catch(() => null)
+    .catch((error: unknown) => {
+      // Refused, whatever the reason; the reason stays in the server log.
+      const e = error as { body?: { code?: string }; message?: string }
+      console.error(
+        "[portal] provider key permission check refused:",
+        e?.body?.code ?? e?.message ?? String(error)
+      )
+      return null
+    })
   return Boolean(result?.success)
 }
 

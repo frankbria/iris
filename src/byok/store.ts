@@ -75,6 +75,36 @@ export function providerKeyStore(db: Kysely<unknown>, keyring: Keyring) {
      * @throws when the stored key does not open (another org's row, a changed row, a
      *   missing master key): the caller treats that as no AI
      */
+    /**
+     * Re-seal every org's key under the keyring's current master key, for a rotation:
+     * list the new key first, run this (`node dist/byok/rewrap.js`), then drop the
+     * old key. Operator use only: it opens every org's key in this process.
+     *
+     * @returns how many rows were re-sealed
+     */
+    async rewrapAll(): Promise<number> {
+      const { rows } = await sql<{
+        id: string;
+        org_id: string;
+        provider: StoredProvider;
+        ciphertext: Buffer;
+      }>`
+        select id, org_id, provider, ciphertext from provider_keys`.execute(db);
+      for (const row of rows) {
+        const owner = { orgId: row.org_id, provider: row.provider };
+        const resealed = sealProviderKey(
+          openProviderKey(row.ciphertext, owner, keyring),
+          owner,
+          keyring,
+        );
+        // updated_at is untouched: the key did not change, and it orders which vendor is used.
+        await sql`update provider_keys set ciphertext = ${resealed} where id = ${row.id}`.execute(
+          db,
+        );
+      }
+      return rows.length;
+    },
+
     async credentialsFor(orgId: string): Promise<AICredentials | null> {
       const { rows } = await sql<{ provider: StoredProvider; ciphertext: Buffer }>`
         select provider, ciphertext from provider_keys where org_id = ${orgId}

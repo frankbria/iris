@@ -41,6 +41,9 @@ describe('resolveKeyring', () => {
     [{ IRIS_KEY_ENCRYPTION_KEY: 'nokeyid' }, /id:base64/],
     [{ IRIS_KEY_ENCRYPTION_KEY: `k1:${randomBytes(16).toString('base64')}` }, /32 bytes/],
     [{ IRIS_KEY_ENCRYPTION_KEY: `k1:${b64()},k1:${b64()}` }, /twice/],
+    // Node's decoder skips invalid characters: one typo would still give 32 bytes, of
+    // a different key, and seal rows nothing can open once the typo is fixed.
+    [{ IRIS_KEY_ENCRYPTION_KEY: `k1:${b64().replace(/^(.{10})/, '$1!')}` }, /not valid base64/],
   ])('refuses %p', (env, message) => {
     expect(() => resolveKeyring(env as NodeJS.ProcessEnv)).toThrow(message);
   });
@@ -76,6 +79,18 @@ describe('sealProviderKey / openProviderKey', () => {
       const bad = Buffer.from(sealed);
       bad[i] ^= 0x01;
       expect(() => openProviderKey(bad, A_OPENAI, ring)).toThrow();
+    }
+  });
+
+  it('refuses a truncated blob by its length, before any decryption', () => {
+    const sealed = sealProviderKey(SECRET, A_OPENAI, ring);
+    // GCM accepts tags as short as 4 bytes unless told otherwise: a blob cut down to
+    // a short tag must be refused for its length, not left to the cipher.
+    const header = 2 + 2;
+    for (const length of [0, 1, 2, header + 60, header + 60 + 12 + 4, header + 60 + 27]) {
+      expect(() => openProviderKey(sealed.subarray(0, length), A_OPENAI, ring)).toThrow(
+        /truncated/,
+      );
     }
   });
 
