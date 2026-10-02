@@ -318,3 +318,12 @@ Write/Edit, not as a pre-push afterthought.
 - A user-visible promise in the README (`runId` "in the JSON result") is a criterion: the cross-family review checked every persisted surface and found it missing from the report the CLI actually writes.
 - `bash $'\x00'` is an empty string, so `grep -c $'\x00' file` counts every line. Check NUL bytes with Python (`.count(b'\x00')`).
 
+## #257 (2026-10-02, paused)
+- MinIO's community distribution is gone: `minio/minio` and `quay.io/minio/minio` refuse pulls, and `dl.min.io` answers 410 Gone. An ADR that names a vendor's free distribution can be overtaken by the vendor. Probe availability before planning around a named server; #257 is paused for an owner decision on its replacement.
+
+## #258 / PR #427 (2026-10-02)
+- An SDK constructor reads env for every option left `undefined` (`ANTHROPIC_AUTH_TOKEN`, `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`). For a request made with someone else's key, pass `null` explicitly, and pin the SDK's resolution in a test against the real classes: reviewers disagreed on whether `null` pins, and only the installed source settles it.
+- A review bot can be confidently wrong about third-party semantics (four "major" findings claimed `null` falls through `??`). Read `node_modules`, answer with file:line, and add a test that proves it, so the next reviewer can see the proof.
+- A fail-closed rule has to live in the exported seam (`translate()`), not in one caller's wrapper: the next caller (BYOK, job APIs) will not copy the wrapper.
+- A "null means none" contract needs `undefined` handled too: untyped lookups resolve `undefined`.
+

@@ -99,13 +99,13 @@ code is the ordering key.
 | `P0.26` | [#254](https://github.com/frankbria/iris/issues/254) | Tenant-scoped history store (storage seam: SQLite local, Postgres hosted) | P0.13 (#241), P0.20 (#248) | DONE ([#419](https://github.com/frankbria/iris/pull/419)) |
 | `P0.27` | [#255](https://github.com/frankbria/iris/issues/255) | Tenant-scoped cost ledger and vision cache | P0.16 (#244), P0.26 (#254) | DONE ([#422](https://github.com/frankbria/iris/pull/422)) |
 | `P0.28` | [#343](https://github.com/frankbria/iris/issues/343) | Visual artifacts: naming and per-run layout | — | DONE ([#424](https://github.com/frankbria/iris/pull/424)) |
-| `P0.29` | [#257](https://github.com/frankbria/iris/issues/257) | Object storage for artifacts with tenant/run prefixes and signed URLs | P0.26 (#254), P0.28 (#343) | TODO |
+| `P0.29` | [#257](https://github.com/frankbria/iris/issues/257) | Object storage for artifacts with tenant/run prefixes and signed URLs | P0.26 (#254), P0.28 (#343) | BLOCKED (needs-owner: MinIO distribution gone, see #257) |
 
 **G. BYOK**
 
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
-| `P0.30` | [#258](https://github.com/frankbria/iris/issues/258) | Per-request AI credentials seam (translator + vision client) | P0.14 (#242) | TODO |
+| `P0.30` | [#258](https://github.com/frankbria/iris/issues/258) | Per-request AI credentials seam (translator + vision client) | P0.14 (#242) | DONE ([#427](https://github.com/frankbria/iris/pull/427)) |
 | `P0.31` | [#344](https://github.com/frankbria/iris/issues/344) | BYOK: per-org provider key storage | P0.23 (#340), P0.30 (#258) | TODO |
 
 **H. Managed-key credits & billing**
