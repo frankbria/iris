@@ -211,3 +211,111 @@ describe('docker/healthcheck.js reads IRIS_CONNECT_TOKEN_FILE (issue #332)', () 
     }
   });
 });
+
+describe('docker-compose.production.yml (issue #273)', () => {
+  const file = read('docker-compose.production.yml')
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  /** One service's block: from `  name:` to the next two-space key or top-level key. */
+  const service = (name: string) => {
+    const m = file.match(new RegExp(`^  ${name}:\\n((?:(?:    .*)?\\n)*)`, 'm'));
+    expect(m).not.toBeNull();
+    return m![1];
+  };
+
+  it('runs postgres, hosted iris-api, the worker and the portal', () => {
+    expect(service('iris')).toMatch(/^\s+command: \['connect', '4000'\]$/m);
+    expect(service('iris')).toMatch(/^\s+IRIS_HOSTED: '1'$/m);
+    expect(service('worker')).toMatch(/^\s+command: \['worker'\]$/m);
+    expect(service('worker')).toMatch(/^\s+IRIS_HOSTED: '1'$/m);
+    expect(service('portal')).toBeTruthy();
+    expect(service('postgres')).toMatch(/^\s+image: postgres:17-alpine$/m);
+  });
+
+  it('takes every app image from a required env var, never a tag in the file', () => {
+    expect(service('iris')).toMatch(/^\s+image: \$\{IRIS_IMAGE:\?[^}]*\}$/m);
+    expect(service('worker')).toMatch(/^\s+image: \$\{IRIS_IMAGE:\?[^}]*\}$/m);
+    expect(service('portal')).toMatch(/^\s+image: \$\{PORTAL_IMAGE:\?[^}]*\}$/m);
+    expect(file).not.toMatch(/ghcr\.io/);
+  });
+
+  it.each(['iris', 'worker'])('hardens %s like staging (#332)', (name) => {
+    const s = service(name);
+    expect(s).toMatch(/^\s+init: true$/m);
+    expect(s).toMatch(/^\s+cap_drop:\n\s+- ALL$/m);
+    expect(s).toMatch(/^\s+- no-new-privileges:true$/m);
+    expect(s).toMatch(/^\s+- seccomp=\.\/docker\/seccomp-chromium\.json$/m);
+    expect(s).toMatch(/^\s+read_only: true$/m);
+    expect(s).toMatch(/^\s+- \/tmp:/m);
+    expect(s).toMatch(/^\s+- \/home\/pwuser:/m);
+    expect(s).toMatch(/^\s+shm_size: 1gb$/m);
+    expect(s).toMatch(/^\s+mem_limit: \d+[mg]$/m);
+    expect(s).toMatch(/^\s+cpus: '?[\d.]+'?$/m);
+    expect(s).toMatch(/^\s+pids_limit: [1-9]\d*$/m);
+    expect(Number(s.match(/^\s+stop_grace_period: (\d+)s$/m)?.[1])).toBeGreaterThan(5);
+    expect(s).not.toMatch(/IRIS_CHROMIUM_SANDBOX/);
+  });
+
+  it('hardens the portal: read-only, no capabilities, no privilege gain, limits', () => {
+    const s = service('portal');
+    expect(s).toMatch(/^\s+read_only: true$/m);
+    expect(s).toMatch(/^\s+cap_drop:\n\s+- ALL$/m);
+    expect(s).toMatch(/^\s+- no-new-privileges:true$/m);
+    expect(s).toMatch(/^\s+mem_limit: \d+[mg]$/m);
+    expect(s).toMatch(/^\s+pids_limit: [1-9]\d*$/m);
+  });
+
+  it('publishes iris-api and the portal on loopback only, at the ingress ports (#347)', () => {
+    const ports = [...file.matchAll(/^\s+- '([^']*:\d+)'$/gm)].map((m) => m[1]);
+    expect(ports).toEqual([
+      '127.0.0.1:${IRIS_API_PORT:-4000}:4000',
+      '127.0.0.1:${PORTAL_PORT:-3000}:3000',
+    ]);
+    expect(service('postgres')).not.toMatch(/ports:/);
+    expect(service('worker')).not.toMatch(/ports:/);
+    const nginx = read('deploy/nginx/iris.conf');
+    expect(nginx).toMatch(/127\.0\.0\.1:4000/);
+    expect(nginx).toMatch(/127\.0\.0\.1:3000/);
+  });
+
+  it('passes every secret as a file, never as an environment value', () => {
+    for (const name of [
+      'BETTER_AUTH_SECRET',
+      'SMTP_URL',
+      'DATABASE_URL',
+      'IRIS_KEY_ENCRYPTION_KEY',
+    ]) {
+      expect(file).not.toMatch(new RegExp(`^\\s+${name}:`, 'm'));
+    }
+    expect(file).not.toMatch(/IRIS_CONNECT_TOKEN/);
+    for (const secret of [
+      'pg_password',
+      'database_url',
+      'better_auth_secret',
+      'master_key',
+      'smtp_url',
+    ]) {
+      expect(file).toMatch(new RegExp(`^  ${secret}:\\n\\s+file: \\./secrets/${secret}$`, 'm'));
+    }
+  });
+});
+
+describe('Dockerfile.portal (issue #273)', () => {
+  const dockerfile = read('Dockerfile.portal');
+
+  it('runs the standalone server as uid 1001 on the engines-floor Node line', () => {
+    expect(dockerfile).toMatch(/^FROM node:24-alpine AS runtime$/m);
+    expect(dockerfile).toMatch(/^USER portal$/m);
+    expect(dockerfile).toMatch(/adduser -D -H -u 1001 portal/);
+    expect(dockerfile).toMatch(/^CMD \["node", "apps\/portal\/server\.js"\]$/m);
+    expect(read('apps/portal/next.config.ts')).toMatch(/output: "standalone"/);
+  });
+
+  it('has its own ignore file that keeps credentials out of the context', () => {
+    const ignore = read('Dockerfile.portal.dockerignore');
+    expect(ignore).toMatch(/^\*\*\/\.env$/m);
+    expect(ignore).toMatch(/^secrets$/m);
+    expect(ignore).toMatch(/^\*\*\/node_modules$/m);
+  });
+});

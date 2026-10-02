@@ -1,0 +1,202 @@
+# Production runtime for IRIS (issue #273, ADR 0001 §1): iris-api (hosted
+# `iris connect`), iris-worker (same image, `iris worker`), the portal and Postgres.
+# The host's nginx (deploy/nginx/iris.conf, #347) is the only public listener.
+#
+# Images are pinned by digest through IRIS_IMAGE / PORTAL_IMAGE, which
+# deploy/deploy.sh writes into .env: the deploy promotes the exact digests staging
+# ran, never a tag that could have moved. Hardening matches
+# docker-compose.staging.yml (#332); its comments explain each setting.
+#
+# Secrets are files under ./secrets (written by the deploy job), mounted at
+# /run/secrets. Readable by uid 1001 (pwuser in the IRIS image, `portal` in the
+# portal image) except pg_password (uid 70, postgres).
+
+name: iris-production
+
+services:
+  iris:
+    image: ${IRIS_IMAGE:?set IRIS_IMAGE to the iris image by digest}
+    command: ['connect', '4000']
+    # Loopback only (#347): nginx forwards to it and sets X-Real-IP / clears
+    # X-Iris-Probe. Must match the upstream port in deploy/nginx/iris.conf.
+    ports:
+      - '127.0.0.1:${IRIS_API_PORT:-4000}:4000'
+    environment:
+      # API keys authenticate (#341); no shared token in hosted mode.
+      IRIS_HOSTED: '1'
+      IRIS_DB_PATH: /data/iris.db
+      IRIS_DATA_DIR: /data
+      DATABASE_URL_FILE: /run/secrets/database_url
+      BETTER_AUTH_SECRET_FILE: /run/secrets/better_auth_secret
+      BETTER_AUTH_URL: ${PORTAL_URL:?set PORTAL_URL to the portal's public https origin}
+      IRIS_KEY_ENCRYPTION_KEY_FILE: /run/secrets/master_key
+    secrets:
+      - database_url
+      - better_auth_secret
+      - master_key
+    volumes:
+      - iris-data:/data
+    restart: unless-stopped
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./docker/seccomp-chromium.json
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+      - /home/pwuser:size=256m,uid=1001,gid=1001,mode=0700
+    shm_size: 1gb
+    mem_limit: 3g
+    cpus: '2'
+    pids_limit: 1024
+    stop_grace_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+    # Hosted mode cannot run docker/healthcheck.js: it authenticates with the shared
+    # token, which hosted mode refuses (#309). A 404 for GET / comes from the job API
+    # (src/jobs-api.ts) before any auth: the listener is up and hosted services
+    # started, which includes the database probe. 426 would mean token mode.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4000/').then(r=>process.exit(r.status===404?0:1),()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  worker:
+    image: ${IRIS_IMAGE:?set IRIS_IMAGE to the iris image by digest}
+    command: ['worker']
+    environment:
+      IRIS_HOSTED: '1'
+      IRIS_DB_PATH: /data/iris.db
+      IRIS_DATA_DIR: /data
+      DATABASE_URL_FILE: /run/secrets/database_url
+    secrets:
+      - database_url
+    volumes:
+      - worker-data:/data
+    restart: unless-stopped
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./docker/seccomp-chromium.json
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+      - /home/pwuser:size=256m,uid=1001,gid=1001,mode=0700
+    shm_size: 1gb
+    mem_limit: 3g
+    cpus: '2'
+    pids_limit: 1024
+    stop_grace_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+    # No listener, so no healthcheck: `up --wait` waits for it to be running.
+
+  portal:
+    image: ${PORTAL_IMAGE:?set PORTAL_IMAGE to the portal image by digest}
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:${PORTAL_PORT:-3000}:3000'
+    environment:
+      BETTER_AUTH_URL: ${PORTAL_URL:?set PORTAL_URL to the portal's public https origin}
+      BETTER_AUTH_SECRET_FILE: /run/secrets/better_auth_secret
+      DATABASE_URL_FILE: /run/secrets/database_url
+      IRIS_KEY_ENCRYPTION_KEY_FILE: /run/secrets/master_key
+      SMTP_URL_FILE: /run/secrets/smtp_url
+      SMTP_FROM: ${SMTP_FROM:?set SMTP_FROM to the sender address}
+    secrets:
+      - database_url
+      - better_auth_secret
+      - master_key
+      - smtp_url
+    depends_on:
+      postgres:
+        condition: service_healthy
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      # Next's runtime cache (fetch / image optimisation) under the read-only root.
+      - /app/apps/portal/.next/cache:size=128m,uid=1001,gid=1001,mode=0700
+    mem_limit: 512m
+    cpus: '1'
+    pids_limit: 256
+    stop_grace_period: 20s
+    # The image's HEALTHCHECK (GET /login) applies.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  # No `ports:`: only this compose network reaches it.
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: iris
+      POSTGRES_DB: iris
+      # Read at first init only, so the deploy generates it once and never rotates it.
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets:
+      - pg_password
+    volumes:
+      - iris-pg:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U iris -d iris']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  iris-data:
+  worker-data:
+  iris-pg:
+
+# Written by the deploy-production job (ci.yml). Never commit them.
+secrets:
+  pg_password:
+    file: ./secrets/pg_password
+  database_url:
+    file: ./secrets/database_url
+  better_auth_secret:
+    file: ./secrets/better_auth_secret
+  master_key:
+    file: ./secrets/master_key
+  smtp_url:
+    file: ./secrets/smtp_url
