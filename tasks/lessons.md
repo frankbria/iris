@@ -333,3 +333,12 @@ Write/Edit, not as a pre-push afterthought.
 - A red-first test can be red for the wrong reason: the strict-base64 test first passed on the old code because the bad character made the key 31 bytes. Write the failing input so it reaches exactly the check being added, and give each refusal a distinct message.
 - agent-browser refs reset on every page load: take a fresh `snapshot -i` before filling, or the fill goes nowhere and the step looks like a successful no-op.
 
+## #260 (2026-10-02, paused)
+- Plan names, prices and limits are business decisions: posted a proposed table on the issue for the owner to approve, labelled `needs-owner`, and moved on. Do not invent pricing to unblock the queue.
+
+## #263 / PR #432 (2026-10-02)
+- Usage written only when a session ends is lost on any hard exit. Meter long-running resources in checkpoint segments (`session:<id>:<n>`), which also splits a usage window cleanly at a month boundary.
+- A "runs once" guard needs a test with two cleanups in flight at the same moment: a sequential second cleanup finds the session already gone and never exercises the guard, so the mutation survived until the test fired `closeBrowser` and terminated the socket in the same tick.
+- Every path where the provider bills must report usage, including the "rejected reply" catch branch: the cost ledger had it, the usage ledger did not.
+- A doc script that derives a value (the CI test count) must stop before it edits anything when the derivation comes back empty.
+

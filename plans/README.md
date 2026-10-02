@@ -112,10 +112,10 @@ code is the ordering key.
 
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
-| `P0.32` | [#260](https://github.com/frankbria/iris/issues/260) | Plan catalog and org entitlements | P0.20 (#248) | TODO |
+| `P0.32` | [#260](https://github.com/frankbria/iris/issues/260) | Plan catalog and org entitlements | P0.20 (#248) | BLOCKED (needs-owner: plan names and limits, see #260) |
 | `P0.33` | [#261](https://github.com/frankbria/iris/issues/261) | Stripe customer and subscription lifecycle | P0.22 (#250), P0.32 (#260) | TODO |
 | `P0.34` | [#345](https://github.com/frankbria/iris/issues/345) | Stripe webhook endpoint | P0.33 (#261) | TODO |
-| `P0.35` | [#263](https://github.com/frankbria/iris/issues/263) | Billable usage ledger: browser-minutes, text calls, vision calls, agent turns | P0.27 (#255) | TODO |
+| `P0.35` | [#263](https://github.com/frankbria/iris/issues/263) | Billable usage ledger: browser-minutes, text calls, vision calls, agent turns | P0.27 (#255) | DONE ([#432](https://github.com/frankbria/iris/pull/432)) |
 | `P0.36` | [#264](https://github.com/frankbria/iris/issues/264) | Report managed-credit usage to Stripe meters | P0.34 (#345), P0.35 (#263) | TODO |
 | `P0.37` | [#346](https://github.com/frankbria/iris/issues/346) | Entitlement enforcement at the API boundary | P0.25 (#342), P0.32 (#260), P0.35 (#263) | TODO |
 | `P0.38` | [#266](https://github.com/frankbria/iris/issues/266) | Payment failure: grace period, suspension and restore | P0.34 (#345), P0.37 (#346) | TODO |
