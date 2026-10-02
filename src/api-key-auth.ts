@@ -19,9 +19,13 @@ export interface KeyVerifier {
  *
  * `verifyApiKey` reports a database failure the same way as an unknown key
  * (`valid: false`, `INVALID_API_KEY`): the plugin catches every error. So a refusal
- * is only trusted once `reachable()` shows the key store answering. Otherwise this
- * throws, and the server answers 503 rather than telling a valid key it is invalid,
- * or dropping every live connection during a database restart.
+ * is only trusted when it repeats after `reachable()` shows the key store answering:
+ * the first lookup may have timed out on a database that has since come back.
+ * Otherwise this throws, and the server answers 503 rather than telling a valid key
+ * it is invalid, or dropping every live connection during a database restart.
+ *
+ * ponytail: the store can still fail again between the probe and the second lookup;
+ * a read-only check by key id would close that window (see #342).
  */
 export function apiKeyAuthenticator(
   auth: KeyVerifier,
@@ -30,12 +34,16 @@ export function apiKeyAuthenticator(
   return async (authorization) => {
     const key = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
     if (!key) return null;
-    const result = await auth.api.verifyApiKey({ body: { key } });
-    if (result.valid && result.key) {
-      return { orgId: result.key.referenceId, keyId: result.key.id };
-    }
+    const verify = async () => {
+      const result = await auth.api.verifyApiKey({ body: { key } });
+      return result.valid && result.key
+        ? { orgId: result.key.referenceId, keyId: result.key.id }
+        : null;
+    };
+    const first = await verify();
+    if (first) return first;
     await reachable();
-    return null;
+    return verify();
   };
 }
 
@@ -44,7 +52,8 @@ export function apiKeyAuthenticator(
  * ambient config files). Needs the portal's `BETTER_AUTH_SECRET` and
  * `BETTER_AUTH_URL`, and `DATABASE_URL` or `DATABASE_URL_FILE`.
  *
- * @throws naming what is missing, so `iris connect` refuses to start
+ * @throws naming what is missing, or when the database does not answer, so
+ *   `iris connect` refuses to start rather than serve nothing but 503s
  */
 export async function hostedAuthenticator(
   env: NodeJS.ProcessEnv = process.env,
@@ -66,5 +75,12 @@ export async function hostedAuthenticator(
       throw new Error('iris connect sends no account mail');
     },
   });
-  return apiKeyAuthenticator(auth, () => sql`select 1`.execute(db));
+  const reachable = () => sql`select 1`.execute(db);
+  try {
+    await reachable();
+  } catch (err) {
+    await db.destroy();
+    throw new Error(`Cannot reach the database: ${(err as Error).message}`);
+  }
+  return apiKeyAuthenticator(auth, reachable);
 }

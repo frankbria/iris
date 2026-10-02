@@ -115,6 +115,24 @@ describe('hosted iris connect refuses to start without key authentication', () =
   );
 });
 
+test('a database that never answers exits 3 instead of serving 503s', async () => {
+  // Accepts and stays silent: the shape that hangs `pg` without its connect timeout.
+  const silent = net.createServer(() => undefined).listen(0, '127.0.0.1');
+  await once(silent, 'listening');
+  const { port: dbPort } = silent.address() as net.AddressInfo;
+  try {
+    const c = spawnConnect(await freePort(), {
+      ...HOSTED_ENV,
+      DATABASE_URL: `postgres://iris:iris@127.0.0.1:${dbPort}/iris`,
+    });
+    expect(await exitCode(c)).toBe(3);
+    expect(c.out).toMatch(/Cannot reach the database/);
+    expect(c.out).not.toMatch(/listening/);
+  } finally {
+    silent.close();
+  }
+}, 40_000);
+
 // Signs up alice and bob (each gets an org at sign-in), creates keys through the
 // plugin, and checks the authenticator against a live and a closed pool.
 const PROBE = `
@@ -209,7 +227,8 @@ const PASSWORD = 'correct-horse-battery-staple';
   afterAll(async () => {
     for (const ws of sockets) ws.terminate();
     if (server) {
-      server.proc.kill('SIGTERM');
+      // Graceful shutdown is not under test here, and it waits out a 5 s timer.
+      server.proc.kill('SIGKILL');
       await server.exit;
     }
     await admin(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);

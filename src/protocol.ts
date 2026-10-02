@@ -275,23 +275,26 @@ export function startServer(
   const recheck = setInterval(async () => {
     if (rechecking) return;
     rechecking = true;
-    await Promise.all(
-      [...tenants].map(async ([ws, { principal, authorization }]) => {
-        let now: Principal | null;
-        try {
-          now = await authenticate!(authorization);
-        } catch {
-          // ponytail: an unreachable key store keeps connections up; the next round decides.
-          return;
-        }
-        if (now?.orgId === principal.orgId && now.keyId === principal.keyId) return;
-        tenants.delete(ws);
-        ws.close(1008, 'API key no longer valid');
-        // Not waiting for the close handshake: the browser goes now.
-        cleanupSession(ws, sessions);
-      }),
-    );
-    rechecking = false;
+    try {
+      await Promise.all(
+        [...tenants].map(async ([ws, { principal, authorization }]) => {
+          let now: Principal | null;
+          try {
+            now = await authenticate!(authorization);
+          } catch {
+            // ponytail: an unreachable key store keeps connections up; the next round decides.
+            return;
+          }
+          if (now?.orgId === principal.orgId && now.keyId === principal.keyId) return;
+          tenants.delete(ws);
+          ws.close(1008, 'API key no longer valid');
+          // Not waiting for the close handshake: the browser goes now.
+          cleanupSession(ws, sessions);
+        }),
+      );
+    } finally {
+      rechecking = false;
+    }
   }, options?.authRecheckMs ?? 60_000);
   recheck.unref();
   if (!authenticate) clearInterval(recheck);
