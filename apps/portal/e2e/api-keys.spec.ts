@@ -66,7 +66,7 @@ test("an owner creates a key, sees it once, and revokes it", async ({
   const key = await shown.inputValue()
   const keys = page.getByRole("list", { name: "Keys" })
   await expect(keys).toContainText("ci")
-  await expect(keys).toContainText(key.slice(0, 6))
+  await expect(keys).toContainText(key.slice(0, 11))
 
   // Stored as a hash, owned by the org.
   const [row] = await sql<{ key: string; referenceId: string; id: string }>(
@@ -79,7 +79,7 @@ test("an owner creates a key, sees it once, and revokes it", async ({
   // Shown once: after a reload the key is nowhere on the page.
   await page.reload()
   await expect(page.getByLabel("Your new key")).toHaveCount(0)
-  expect(await page.content()).not.toContain(key.slice(6))
+  expect(await page.content()).not.toContain(key.slice(11))
 
   page.once("dialog", (dialog) => dialog.accept())
   await page.getByRole("button", { name: "Revoke ci" }).click()

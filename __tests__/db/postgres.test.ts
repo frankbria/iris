@@ -242,7 +242,7 @@ describe('migrate process against a server that never answers', () => {
         const org = await auth.api.createOrganization({
           body: { name: 'Probe Org', slug: 'probe-org', userId: user.id },
         });
-        const key = await auth.api.createApiKey({ body: { organizationId: org.id, userId: user.id } });
+        const key = await auth.api.createApiKey({ body: { name: 'probe', organizationId: org.id, userId: user.id } });
         const verified = await auth.api.verifyApiKey({ body: { key: key.key } });
         await pool.end();
         process.stdout.write(JSON.stringify({

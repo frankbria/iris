@@ -151,6 +151,9 @@ export function createAuth(
         // Hashed at rest and returned once, by create (the plugin's defaults). The
         // prefix lets secret scanners and people recognise a leaked key.
         defaultPrefix: 'iris_',
+        // The list shows each key's first characters. The default 6 would be the prefix
+        // plus one random character, which cannot tell keys apart.
+        startingCharactersConfig: { charactersLength: 11 },
         requireName: true,
         // The plugin's limiter defaults to 10 verifications a day and copies that onto
         // each key as it is created. Per-key limits are #342's; until then, none.

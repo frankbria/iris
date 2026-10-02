@@ -87,6 +87,9 @@ const PASSWORD = 'correct-horse-battery-staple';
   r.memberList = await attempt(() => list(carol, A));
   r.memberCreate = await attempt(() => create(carol, A, 'nope'));
   r.memberRevoke = await attempt(() => revoke(carol, ka.id));
+  // Disabling a key takes its clients down as surely as revoking it.
+  r.memberDisable = await attempt(() =>
+    auth.api.updateApiKey({ headers: carol, body: { keyId: ka.id, enabled: false } }));
   const kd = await create(dave, A, 'dave-ci');
   r.adminCreate = kd.referenceId;
   r.adminRevoke = await attempt(() => revoke(dave, kd.id));
@@ -96,6 +99,9 @@ const PASSWORD = 'correct-horse-battery-staple';
   r.listB = await attempt(() => list(alice, B));
   r.createInB = await attempt(() => create(alice, B, 'mallory'));
   r.revokeB = await attempt(() => revoke(alice, kb.id));
+  r.getB = await attempt(() => auth.api.getApiKey({ headers: alice, query: { id: kb.id } }));
+  r.disableB = await attempt(() =>
+    auth.api.updateApiKey({ headers: alice, body: { keyId: kb.id, enabled: false } }));
   r.bInA = (await list(alice, A)).some((k) => k.id === kb.id);
   r.bStillValid = (await verify(kb.key)).valid;
 
@@ -173,7 +179,8 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect(r.created.referenceId).toBe(r.A);
     expect(r.created.name).toBe('ci');
     expect(r.created.key).toMatch(/^iris_[A-Za-z0-9]{32,}$/);
-    expect(r.created.start).toBe(r.created.key.slice(0, 6));
+    // The prefix plus six random characters: enough to tell keys apart in the list.
+    expect(r.created.start).toBe(r.created.key.slice(0, 11));
     expect(r.noName).toBe('NAME_REQUIRED');
     expect(r.noOrg).toBe('ORGANIZATION_ID_REQUIRED');
   });
@@ -188,6 +195,7 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect(r.memberList).toBe('ok');
     expect(r.memberCreate).toBe('INSUFFICIENT_API_KEY_PERMISSIONS');
     expect(r.memberRevoke).toBe('INSUFFICIENT_API_KEY_PERMISSIONS');
+    expect(r.memberDisable).toBe('INSUFFICIENT_API_KEY_PERMISSIONS');
     expect(r.adminCreate).toBe(r.A);
     expect(r.adminRevoke).toBe('ok');
   });
@@ -196,6 +204,8 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect(r.listB).toBe('USER_NOT_MEMBER_OF_ORGANIZATION');
     expect(r.createInB).toBe('USER_NOT_MEMBER_OF_ORGANIZATION');
     expect(r.revokeB).toBe('USER_NOT_MEMBER_OF_ORGANIZATION');
+    expect(r.getB).toBe('USER_NOT_MEMBER_OF_ORGANIZATION');
+    expect(r.disableB).toBe('USER_NOT_MEMBER_OF_ORGANIZATION');
     expect(r.bInA).toBe(false);
     expect(r.bStillValid).toBe(true);
   });

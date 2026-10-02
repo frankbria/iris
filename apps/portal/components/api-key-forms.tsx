@@ -23,6 +23,7 @@ export function CreateApiKeyForm({
   const router = useRouter()
   const { busy, error, run } = useAuthAction(explain)
   const [created, setCreated] = useState<string | null>(null)
+  const [copyFailed, setCopyFailed] = useState(false)
   return (
     <AuthCard
       title="Create a key"
@@ -60,11 +61,24 @@ export function CreateApiKeyForm({
             <Button
               type="button"
               variant="outline"
-              onClick={() => navigator.clipboard.writeText(created)}
+              onClick={async () => {
+                // No clipboard on plain http, or permission refused.
+                try {
+                  await navigator.clipboard.writeText(created)
+                  setCopyFailed(false)
+                } catch {
+                  setCopyFailed(true)
+                }
+              }}
             >
               Copy
             </Button>
           </div>
+          {copyFailed && (
+            <p role="alert" className="text-sm text-destructive">
+              Could not copy. Select the key and copy it yourself.
+            </p>
+          )}
         </div>
       )}
       <Field label="Name" name="name" autoComplete="off" maxLength={32} />

@@ -24,7 +24,8 @@ export default async function ApiKeysPage() {
     headers: await headers(),
     query: { organizationId: org.id },
   })
-  const manager = role === "owner" || role === "admin"
+  // A member may hold several roles, stored comma-separated.
+  const manager = role.split(",").some((r) => r === "owner" || r === "admin")
   return (
     <main className="flex min-h-svh flex-col gap-6 p-6">
       <div className="flex flex-col gap-1">
