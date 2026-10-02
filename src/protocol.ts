@@ -11,6 +11,7 @@ import {
 } from './executor';
 import { chromiumIsInstalled } from './browser';
 import { Page } from 'playwright';
+import type { HistoryStore, TenantScope } from './history-store';
 
 export interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -255,6 +256,11 @@ export function startServer(
     authenticate?: Authenticator;
     /** How often a connected key is verified again, so revoking it ends the connection. */
     authRecheckMs?: number;
+    /**
+     * Hosted run history (#254): each `executeBrowserAction` of a tenant connection
+     * is recorded under its org and API key. Local connections record nothing.
+     */
+    history?: { forOrg(scope: TenantScope): Pick<HistoryStore, 'record'> };
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
     limits?: Partial<ServerLimits>;
   },
@@ -587,6 +593,7 @@ export function startServer(
               break;
             }
             const { instruction, actions, url } = parsed.data;
+            const startedAt = new Date();
 
             // Shared: actions still run concurrently with each other, but never
             // alongside a session mutation. Resolving the session inside the
@@ -608,6 +615,22 @@ export function startServer(
                 limits.maxActionsPerRequest,
               );
             });
+            if (principal && options?.history) {
+              // A side effect of the request, like local history (#77): a failed
+              // write is logged, and the caller still gets the actions' result.
+              await options.history
+                .forOrg({ orgId: principal.orgId, apiKeyId: principal.keyId })
+                .record({
+                  kind: 'rpc',
+                  success: res.result.success,
+                  results: res.result.results,
+                  startedAt,
+                  finishedAt: new Date(),
+                })
+                .catch((err: unknown) =>
+                  console.error('[iris] failed to record run history:', (err as Error).message),
+                );
+            }
             break;
           }
 

@@ -1,9 +1,4 @@
-import {
-  apiKeyAuthenticator,
-  hostedAuthenticator,
-  KeyStore,
-  KeyVerifier,
-} from '../src/api-key-auth';
+import { apiKeyAuthenticator, hostedServices, KeyStore, KeyVerifier } from '../src/api-key-auth';
 
 /**
  * The refusal rule of `apiKeyAuthenticator` (#341), in-process.
@@ -113,12 +108,12 @@ describe('apiKeyAuthenticator.recheck', () => {
   });
 });
 
-describe('hostedAuthenticator', () => {
+describe('hostedServices', () => {
   test('names every missing auth setting before touching the database', async () => {
-    await expect(hostedAuthenticator({})).rejects.toThrow(
+    await expect(hostedServices({})).rejects.toThrow(
       'Hosted mode needs BETTER_AUTH_SECRET and BETTER_AUTH_URL',
     );
-    await expect(hostedAuthenticator({ BETTER_AUTH_SECRET: 's' })).rejects.toThrow(
+    await expect(hostedServices({ BETTER_AUTH_SECRET: 's' })).rejects.toThrow(
       'Hosted mode needs BETTER_AUTH_URL',
     );
   });

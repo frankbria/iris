@@ -1,5 +1,7 @@
 import WebSocket from 'ws';
+import http from 'http';
 import { AddressInfo } from 'net';
+import type { RunInput, TenantScope } from '../src/history-store';
 import { startServer, JsonRpcResponse, Principal, Authenticator } from '../src/protocol';
 
 /**
@@ -344,4 +346,90 @@ describe('per-org caps (#342)', () => {
     await eventually(() => servers[0].clients.size === 1);
     expect((await call(await open(url, as('key-a2')), 'getStatus')).result.status).toBe('ready');
   });
+});
+
+describe('hosted RPC history (#254)', () => {
+  // Real Chromium: an action needs a page. The fixture is a local http page, since
+  // the default URL policy refuses data: URLs.
+  let site: http.Server;
+  let siteUrl: string;
+  beforeAll(async () => {
+    site = http.createServer((_req, res) => {
+      res.setHeader('content-type', 'text/html');
+      res.end('<input id="pw" type="password"><button id="go">Go</button>');
+    });
+    await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
+    siteUrl = `http://127.0.0.1:${(site.address() as AddressInfo).port}/`;
+  });
+  afterAll(() => new Promise((r) => site.close(r)));
+
+  test("records each executeBrowserAction under the key's org and key, never the typed value", async () => {
+    const recorded: Array<{ scope: TenantScope; run: RunInput }> = [];
+    const history = {
+      forOrg: (scope: TenantScope) => ({
+        record: async (run: RunInput) => {
+          recorded.push({ scope, run });
+          return 'run-1';
+        },
+      }),
+    };
+    const url = await serve({ history });
+    const a = await open(url, as('key-a'));
+    await call(a, 'launchBrowser');
+    const res = await call(a, 'executeBrowserAction', {
+      actions: [
+        { type: 'navigate', url: siteUrl },
+        { type: 'fill', selector: '#pw', text: 'hunter2-secret' },
+        { type: 'click', selector: '#missing', timeout: 500 },
+      ],
+    });
+    expect(res.result.success).toBe(false);
+    await call(a, 'closeBrowser');
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].scope).toEqual({ orgId: 'org-a', apiKeyId: 'id-a' });
+    const run = recorded[0].run as Extract<RunInput, { kind: 'rpc' }>;
+    expect(run.kind).toBe('rpc');
+    expect(run.success).toBe(false);
+    expect(run.results.map((r) => r.success)).toEqual([true, true, false]);
+    expect(run.finishedAt.getTime()).toBeGreaterThanOrEqual(run.startedAt.getTime());
+  }, 60_000);
+
+  test('a failing history write is logged and the request still succeeds', async () => {
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const history = {
+      forOrg: () => ({
+        record: async (): Promise<string> => {
+          throw new Error('database unreachable');
+        },
+      }),
+    };
+    const url = await serve({ history });
+    const a = await open(url, as('key-a'));
+    await call(a, 'launchBrowser');
+    const res = await call(a, 'executeBrowserAction', {
+      actions: [{ type: 'navigate', url: siteUrl }],
+    });
+    await call(a, 'closeBrowser');
+    expect(res.result.success).toBe(true);
+    expect(errors.mock.calls.flat().join(' ')).toMatch(/history.*database unreachable/s);
+    errors.mockRestore();
+  }, 60_000);
+
+  test('local mode, with no principal, records nothing', async () => {
+    const recorded: unknown[] = [];
+    const history = {
+      forOrg: () => ({ record: async (run: RunInput) => (recorded.push(run), 'x') }),
+    };
+    const wss = startServer(0, { authToken: 'local', history });
+    servers.push(wss);
+    await new Promise<void>((resolve) => wss.once('listening', resolve));
+    const ws = await open(`ws://127.0.0.1:${(wss.address() as AddressInfo).port}`, {
+      headers: { authorization: 'Bearer local' },
+    });
+    await call(ws, 'launchBrowser');
+    await call(ws, 'executeBrowserAction', { actions: [{ type: 'navigate', url: siteUrl }] });
+    await call(ws, 'closeBrowser');
+    expect(recorded).toEqual([]);
+  }, 60_000);
 });

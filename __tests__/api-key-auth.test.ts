@@ -295,7 +295,7 @@ const PASSWORD = 'correct-horse-battery-staple';
     );
 
   let nextId = 1;
-  function call(ws: WebSocket, method: string): Promise<JsonRpcResponse> {
+  function call(ws: WebSocket, method: string, params?: unknown): Promise<JsonRpcResponse> {
     const id = nextId++;
     return new Promise((resolve) => {
       const onMessage = (data: WebSocket.Data) => {
@@ -305,7 +305,7 @@ const PASSWORD = 'correct-horse-battery-staple';
         resolve(res);
       };
       ws.on('message', onMessage);
-      ws.send(JSON.stringify({ jsonrpc: '2.0', id, method }));
+      ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
     });
   }
 
@@ -346,6 +346,38 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect((await call(a, 'getStatus')).result.activeSessions).toBe(1);
     expect((await call(b, 'getStatus')).result.activeSessions).toBe(0);
   });
+
+  test("records each executeBrowserAction as a run of the key's org (#254)", async () => {
+    const a = await open(`Bearer ${r.a.key}`);
+    await call(a, 'launchBrowser');
+    // Hosted mode refuses loopback, so this action fails without any network, and a
+    // failed run is still a run.
+    const res = await call(a, 'executeBrowserAction', {
+      actions: [{ type: 'navigate', url: 'http://127.0.0.1/' }],
+    });
+    await call(a, 'closeBrowser');
+    expect(res.result.success).toBe(false);
+    const client = new Client({ connectionString: dbUrl });
+    await client.connect();
+    try {
+      const { rows } = await client.query(
+        `select r.org_id, r.api_key_id, r.kind, r.status, rr.url, rr.passed
+         from runs r join run_results rr on rr.run_id = r.id`,
+      );
+      expect(rows).toEqual([
+        {
+          org_id: r.A,
+          api_key_id: r.a.id,
+          kind: 'rpc',
+          status: 'failed',
+          url: 'http://127.0.0.1/',
+          passed: false,
+        },
+      ]);
+    } finally {
+      await client.end();
+    }
+  }, 60_000);
 
   test('no shared token is printed in hosted mode', () => {
     expect(server.out).not.toMatch(/Auth token/);
