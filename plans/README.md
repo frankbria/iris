@@ -135,7 +135,7 @@ code is the ordering key.
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
 | `P0.44` | [#347](https://github.com/frankbria/iris/issues/347) | TLS ingress and reverse proxy | P0.24 (#341) | DONE (PR #437) |
-| `P0.45` | [#273](https://github.com/frankbria/iris/issues/273) | Production environment and deploy pipeline | P0.20 (#248), P0.44 (#347) | TODO |
+| `P0.45` | [#273](https://github.com/frankbria/iris/issues/273) | Production environment and deploy pipeline | P0.20 (#248), P0.44 (#347) | DONE (PR #439) |
 | `P0.46` | [#274](https://github.com/frankbria/iris/issues/274) | Backups and restore drill for Postgres and object storage | P0.45 (#273) | TODO |
 | `P0.47` | [#275](https://github.com/frankbria/iris/issues/275) | Observability: structured logs, metrics, alerting | P0.45 (#273) | TODO |
 
@@ -189,6 +189,7 @@ code is the ordering key.
 | `P1.34` | [#376](https://github.com/frankbria/iris/issues/376) | Container egress firewall for the hosted deployment | P0.9 (#336), P1.33 (#375) | TODO |
 | `P1.35` | [#379](https://github.com/frankbria/iris/issues/379) | Egress proxy timeouts, configurable popup cap, per-session page cap | P0.11 (#338) | TODO |
 | `P1.36` | [#408](https://github.com/frankbria/iris/issues/408) | Portal: remove members, change roles, leave an org | P0.22 (#250) | TODO |
+| `P1.38` | [#440](https://github.com/frankbria/iris/issues/440) | Move staging onto the hosted stack so staged-<sha> proves what production runs | P0.45 (#273) | TODO |
 
 ### P2 — Post-launch fast-follow
 
