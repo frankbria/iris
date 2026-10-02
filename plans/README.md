@@ -106,7 +106,7 @@ code is the ordering key.
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
 | `P0.30` | [#258](https://github.com/frankbria/iris/issues/258) | Per-request AI credentials seam (translator + vision client) | P0.14 (#242) | DONE ([#427](https://github.com/frankbria/iris/pull/427)) |
-| `P0.31` | [#344](https://github.com/frankbria/iris/issues/344) | BYOK: per-org provider key storage | P0.23 (#340), P0.30 (#258) | TODO |
+| `P0.31` | [#344](https://github.com/frankbria/iris/issues/344) | BYOK: per-org provider key storage | P0.23 (#340), P0.30 (#258) | DONE ([#430](https://github.com/frankbria/iris/pull/430)) |
 
 **H. Managed-key credits & billing**
 
