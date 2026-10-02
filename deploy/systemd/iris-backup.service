@@ -1,0 +1,16 @@
+# Encrypted Postgres + master key backup (issue #274, deploy/backup.sh).
+# Installed by the operator: docs/runbook-production.md, "Backups and restore".
+# Runs as root: the master key is readable by uid 1001 only, and the script needs docker.
+[Unit]
+Description=IRIS production backup
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+Environment=DEPLOY_DIR=/opt/iris-production
+# Optional settings (BACKUP_RCLONE_REMOTE, BACKUP_KEEP_DAYS) go here, not in this file.
+EnvironmentFile=-/opt/iris-production/shared/backup.env
+ExecStart=/opt/iris-production/current/backup.sh
+Nice=10
+IOSchedulingClass=idle

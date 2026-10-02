@@ -126,6 +126,7 @@ __tests__/
 ├── auth-client-ip.test.ts         # Real Postgres: BetterAuth rate limits key on X-Real-IP, not a rotated X-Forwarded-For (#347)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── deploy-script.test.ts          # deploy/deploy.sh on local Docker + a throwaway registry: gates, rollback, rerun (#273)
+├── backup-script.test.ts          # backup.sh/restore.sh on real Postgres + age: encrypted, restore matches, retention, failure (#274)
 ├── portal-image.test.ts           # Built portal image (IRIS_TEST_PORTAL_IMAGE): SMTP check, /login, sign-up via _FILE secrets (#273)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
@@ -150,11 +151,14 @@ docs/                               # Detailed project documentation
 ├── phase2c_roadmap.md             # Phase 2C roadmap (ROADMAP — not started)
 ├── integration-surfaces.md        # Which integration surfaces exist and why (decision record)
 ├── adr/0001-hosted-architecture.md # Hosted SaaS architecture — anchors every Cycle 4 platform issue
-├── runbook-production.md          # Production setup, promote, rollback (#273)
+├── runbook-production.md          # Production setup, promote, rollback (#273); backups, restore, drill log (#274)
 └── archive/                       # Superseded planning docs (historical)
 
 deploy/
 ├── deploy.sh                      # On-box deploy by digest: SMTP + migration gates, rollback (#273)
+├── backup.sh                      # Daily age-encrypted pg_dump + master key, retention, rclone copy (#274)
+├── restore.sh                     # Decrypt + pg_restore in a disposable pinned postgres container (#274)
+├── systemd/iris-backup.{service,timer} # The daily schedule, installed by the operator (#274)
 └── nginx/iris.conf                # TLS ingress site template for the host's nginx (#347)
 
 plans/
@@ -504,6 +508,32 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   `deploy.sh` during a run.
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
+
+### Backups (issue #274)
+
+`deploy/backup.sh` (daily, `deploy/systemd/iris-backup.timer`, as root) and
+`deploy/restore.sh`; setup, restore and the drill log are in `docs/runbook-production.md`.
+The deploy job ships both scripts and the units into each release directory; nothing
+runs them at deploy time. Object storage is #445.
+
+- **`age` to public keys only** (`shared/backup-recipients.txt`); the identity stays off
+  the box. No recipients: the script refuses, it never writes plaintext. The master key
+  is backed up as its own file: a dump without it cannot open stored provider keys.
+- **Atomic and fail-closed**: `pg_dump | age` into `<name>.tmp` under pipefail, renamed on
+  success, the temp file removed by an EXIT trap. Retention runs only after a success and
+  never touches the files just written. An rclone failure exits 1 after the local backup.
+- **Restore runs `pg_restore` in the production-pinned postgres image** (read from the
+  compose file next to the script), one transaction, `--no-owner --no-acl --clean
+  --if-exists`. The URL travels by env; inside the container the password moves to
+  `PGPASSWORD`, so it is on no command line. It refuses the serving database (same
+  host:port/db as `shared/secrets/database_url`) without `--force`. `--network` picks
+  the docker network that reaches the target (`iris-production_default` on the box).
+- **`pg_dump -Fc` compresses**, so a plaintext marker is absent from an unencrypted dump
+  too. The test checks the `PGDMP` magic instead, and the restore checks content.
+- **`backup-script.test.ts`**: the Postgres healthcheck uses `-h 127.0.0.1`: the image's
+  init-time server listens on the socket only and then restarts, so a socket check goes
+  healthy early and the first connection is cut. `age` comes from PATH (CI installs the
+  apt package) or the pinned, checksummed release tarball cached in the temp dir.
 
 ### Container Deployment (issue #192)
 
