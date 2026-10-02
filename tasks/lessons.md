@@ -313,3 +313,8 @@ Write/Edit, not as a pre-push afterthought.
 - In a demo script, a "query or fallback" (`cmd || other`) that runs a broken query prints nothing and looks like an empty result. Write one query that is right.
 - `gh run list --workflow CI` returned nothing for a branch whose run is named CI. Look up the run id with `--json databaseId,name` and read that run, and make a doc script fail before it edits anything.
 
+## #343 / PR #424 (2026-10-02)
+- A "fallback" added after a function that already walks a fallback chain inverts the precedence: `loadBaseline` tried branch then main for the new name, so the legacy-name retry came after main had already won. Push alternative names into the walk itself (names inside the branch loop).
+- A user-visible promise in the README (`runId` "in the JSON result") is a criterion: the cross-family review checked every persisted surface and found it missing from the report the CLI actually writes.
+- `bash $'\x00'` is an empty string, so `grep -c $'\x00' file` counts every line. Check NUL bytes with Python (`.count(b'\x00')`).
+
