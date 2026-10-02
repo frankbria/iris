@@ -93,7 +93,7 @@ code is the ordering key.
 | `P0.20` | [#248](https://github.com/frankbria/iris/issues/248) | PostgreSQL service + migration runner for hosted data | P0.3 (#231), P0.19 (#247) | DONE ([#402](https://github.com/frankbria/iris/pull/402)) |
 | `P0.21` | [#249](https://github.com/frankbria/iris/issues/249) | Portal: signup, login and email verification (BetterAuth) | P0.19 (#247), P0.20 (#248) | DONE ([#403](https://github.com/frankbria/iris/pull/403)) |
 | `P0.22` | [#250](https://github.com/frankbria/iris/issues/250) | Portal: organizations, membership and roles | P0.21 (#249) | DONE ([#407](https://github.com/frankbria/iris/pull/407)) |
-| `P0.23` | [#340](https://github.com/frankbria/iris/issues/340) | Portal: API key management | P0.22 (#250) | TODO |
+| `P0.23` | [#340](https://github.com/frankbria/iris/issues/340) | Portal: API key management | P0.22 (#250) | DONE ([#411](https://github.com/frankbria/iris/pull/411)) |
 | `P0.24` | [#341](https://github.com/frankbria/iris/issues/341) | Server: per-tenant API key authentication | P0.11 (#338), P0.23 (#340) | TODO |
 | `P0.25` | [#342](https://github.com/frankbria/iris/issues/342) | Server: per-key rate limits and session caps | P0.24 (#341) | TODO |
 | `P0.26` | [#254](https://github.com/frankbria/iris/issues/254) | Tenant-scoped history store (storage seam: SQLite local, Postgres hosted) | P0.13 (#241), P0.20 (#248) | TODO |
@@ -206,6 +206,8 @@ code is the ordering key.
 | `P2.11` | [#322](https://github.com/frankbria/iris/issues/322) | Accessibility of IRIS own reports | P0.18 (#339) | TODO |
 | `P2.12` | [#323](https://github.com/frankbria/iris/issues/323) | Capture engine: do not force `transform: none` on every element | — | TODO |
 | `P2.13` | [#363](https://github.com/frankbria/iris/issues/363) | Dependency audit gate | — | TODO |
+| `P2.14` | [#378](https://github.com/frankbria/iris/issues/378) | Agent mode: per-origin asset allowlist under a pinned origin | — | TODO |
+| `P2.15` | [#412](https://github.com/frankbria/iris/issues/412) | Portal: rename and disable API keys | P0.23 (#340) | TODO |
 
 ### P3 — Polish / test trust / hygiene
 

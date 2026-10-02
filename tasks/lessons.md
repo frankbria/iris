@@ -275,3 +275,12 @@ Write/Edit, not as a pre-push afterthought.
 - BetterAuth's client follows `signIn`'s `callbackURL` itself, so a `router.push(next)` after it never mattered. Read what the client does before layering navigation on top.
 - A session restart wiped the scratchpad, including the saved PR body. GitHub is the durable copy: `gh pr view --json body` before editing.
 - opencode stalled for the 4th run in a row; codex plus the CI GLM workflow covered review.
+
+## #340 / PR #411 (2026-10-02)
+- Again a private-backlog issue. Asking first worked: the maintainer chose "derive from the ADR", and the PR body listed the derived criteria for checking against the backlog.
+- Read a plugin's permission model before writing a role test. BetterAuth's org roles have no `apiKey` statement, so org-owned keys were owner-only, and admins were refused, until the roles were extended.
+- A plugin option that is copied onto each row at creation (the api-key limiter) cannot be fixed later by changing the config. Decide it before the first key exists, and tell the issue that owns it (#342) about the backfill.
+- `npm install <pkg> -w <workspace>` resolved the newest release and nested a second `better-auth` under the workspace (231 lockfile lines). Pin the root's range by hand, then `npm install --prefer-dedupe`; the lockfile diff should be one line.
+- A native `window.confirm` hangs the whole agent-browser session (even `get url` times out). In a demo, replace `window.confirm` with an eval before the click.
+- Two full local E2E runs failed 4 and 6 specs, mostly in files the diff never touched; `vmstat` showed 24-29% iowait while otherwise idle. The changed spec run on its own, plus CI, settled it in minutes.
+- opencode worked this time on both passes (about 15 minutes each). Each pass read the plugin source and ran the suites itself.
