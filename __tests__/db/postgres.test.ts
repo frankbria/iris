@@ -179,6 +179,7 @@ describe('migrate process against a server that never answers', () => {
       ['0001_initial', 'Success'],
       ['0002_history', 'Success'],
       ['0003_usage', 'Success'],
+      ['0004_jobs', 'Success'],
     ]);
 
     const tables = await sql<{ table_name: string }>`
@@ -201,7 +202,7 @@ describe('migrate process against a server that never answers', () => {
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('3');
+    expect(applied.rows[0].n).toBe('4');
   });
 
   it('gives every IRIS table org_id NOT NULL and an index that leads with it', async () => {

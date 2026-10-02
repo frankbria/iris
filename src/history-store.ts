@@ -270,7 +270,8 @@ export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
       async list({ limit = 50 } = {}) {
         const { rows } = await sql<RunRow>`
           select id, kind, status, summary, started_at, finished_at, created_at from runs
-          where org_id = ${orgId} order by created_at desc, id limit ${limit}`.execute(db);
+          where org_id = ${orgId} and finished_at is not null
+          order by created_at desc, id limit ${limit}`.execute(db);
         return rows.map(toStoredRun);
       },
 
@@ -279,7 +280,7 @@ export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
         if (!UUID.test(id)) return null;
         const { rows } = await sql<RunRow>`
           select id, kind, status, summary, started_at, finished_at, created_at from runs
-          where org_id = ${orgId} and id = ${id}`.execute(db);
+          where org_id = ${orgId} and id = ${id} and finished_at is not null`.execute(db);
         if (!rows[0]) return null;
         const results = await sql<StoredRunResult>`
           select url, passed, result from run_results
@@ -287,6 +288,178 @@ export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
         return { ...toStoredRun(rows[0]), results: results.rows };
       },
     }),
+  };
+}
+
+// --- Jobs (#267): queued `runs` rows, claimed by a worker --------------------------
+
+/** What a job runs, as the request stated it. */
+export interface A11yJobParams {
+  urls: string[];
+  wcagLevel: 'A' | 'AA' | 'AAA';
+  failOn: Array<'critical' | 'serious' | 'moderate' | 'minor'>;
+}
+
+export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
+
+/** A job as its org reads it: any status, results once finished. */
+export interface StoredJob {
+  id: string;
+  kind: RunKind;
+  status: JobStatus;
+  createdAt: Date;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  summary: string | null;
+  error: string | null;
+  results: StoredRunResult[];
+}
+
+/** A claimed job: what the worker needs to run it and to write its outcome. */
+export interface ClaimedJob {
+  id: string;
+  orgId: string;
+  apiKeyId: string | null;
+  kind: 'a11y';
+  params: A11yJobParams;
+  startedAt: Date;
+}
+
+/** The org-scoped half: what the API does for a tenant. */
+export interface OrgJobs {
+  /** @returns the new job's id, status `queued` */
+  enqueue(job: { kind: 'a11y'; params: A11yJobParams }): Promise<string>;
+  /** `null` for an id that is not this org's, or not a uuid. */
+  get(id: string): Promise<StoredJob | null>;
+}
+
+/** The hosted job queue: `forOrg` for the API, the rest for workers (cross-tenant). */
+export interface PostgresJobs {
+  forOrg(scope: TenantScope): OrgJobs;
+  /** The oldest queued job of a kind, now `running`; `null` when none. Safe to call concurrently. */
+  claim(kind: 'a11y'): Promise<ClaimedJob | null>;
+  /**
+   * Writes the outcome of a claimed job: its results, its status (the run's verdict) and
+   * its `a11y_job` usage, in one transaction. `status` stays `running` until this commits.
+   */
+  finish(job: ClaimedJob, result: AccessibilityTestResult): Promise<void>;
+  /** The job could not run. No usage: nothing was delivered. */
+  fail(job: ClaimedJob, message: string): Promise<void>;
+}
+
+const JOB_ERROR_MAX = 500;
+
+export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
+  return {
+    forOrg: ({ orgId, apiKeyId }) => ({
+      async enqueue({ kind, params }) {
+        const insert = (keyId: string | null) =>
+          sql<{ id: string }>`
+            insert into runs (org_id, api_key_id, kind, status, params)
+            values (${orgId}, ${keyId}, ${kind}, 'queued', ${toJsonb(params)}::jsonb)
+            returning id`.execute(db);
+        try {
+          return (await insert(apiKeyId ?? null)).rows[0].id;
+        } catch (err) {
+          // The key was revoked after authentication: keep the job, as `record` does.
+          const e = err as { code?: string; constraint?: string };
+          if (apiKeyId && e.code === '23503' && e.constraint === 'runs_org_id_api_key_id_fkey') {
+            return (await insert(null)).rows[0].id;
+          }
+          throw err;
+        }
+      },
+
+      async get(id) {
+        if (!UUID.test(id)) return null;
+        const { rows } = await sql<
+          Omit<RunRow, 'status' | 'started_at' | 'finished_at'> & {
+            status: JobStatus;
+            started_at: Date | null;
+            finished_at: Date | null;
+            error: string | null;
+            summary: string | null;
+          }
+        >`select id, kind, status, summary, error, started_at, finished_at, created_at from runs
+          where org_id = ${orgId} and id = ${id}`.execute(db);
+        const row = rows[0];
+        if (!row) return null;
+        const results = await sql<StoredRunResult>`
+          select url, passed, result from run_results
+          where org_id = ${orgId} and run_id = ${id} order by position`.execute(db);
+        return {
+          id: row.id,
+          kind: row.kind,
+          status: row.status,
+          createdAt: row.created_at,
+          startedAt: row.started_at,
+          finishedAt: row.finished_at,
+          summary: row.summary,
+          error: row.error,
+          results: results.rows,
+        };
+      },
+    }),
+
+    async claim(kind) {
+      // SKIP LOCKED: concurrent workers take different rows instead of queueing on one.
+      const { rows } = await sql<{
+        id: string;
+        org_id: string;
+        api_key_id: string | null;
+        params: A11yJobParams;
+        started_at: Date;
+      }>`
+        update runs set status = 'running', started_at = now()
+        where id = (select id from runs where status = 'queued' and kind = ${kind}
+                    order by created_at, id for update skip locked limit 1)
+        returning id, org_id, api_key_id, params, started_at`.execute(db);
+      const row = rows[0];
+      return row
+        ? {
+            id: row.id,
+            orgId: row.org_id,
+            apiKeyId: row.api_key_id,
+            kind,
+            params: row.params,
+            startedAt: row.started_at,
+          }
+        : null;
+    },
+
+    async finish(job, result) {
+      const finishedAt = new Date();
+      const run: RunInput = { kind: 'a11y', result, startedAt: job.startedAt, finishedAt };
+      const { summary, passed } = summarize(run);
+      const results = resultsOf(run);
+      await db.transaction().execute(async (tx) => {
+        const updated = await sql`
+          update runs set status = ${passed ? 'succeeded' : 'failed'}, summary = ${summary},
+                 finished_at = ${finishedAt}
+          where id = ${job.id} and org_id = ${job.orgId} and status = 'running'`.execute(tx);
+        if (!updated.numAffectedRows) throw new Error(`Job ${job.id} is not running`);
+        if (results.length) {
+          const values = results.map(
+            (r, position) =>
+              sql`(${job.orgId}, ${job.id}, ${position}, ${r.url === null ? null : wellFormed(r.url)}, ${r.passed}, ${toJsonb(r.result)}::jsonb)`,
+          );
+          await sql`
+            insert into run_results (org_id, run_id, position, url, passed, result)
+            values ${sql.join(values)}`.execute(tx);
+        }
+        await insertUsage(tx, job.orgId, [
+          { kind: 'a11y_job', quantity: 1, idempotencyKey: `job:${job.id}`, runId: job.id },
+        ]);
+      });
+    },
+
+    async fail(job, message) {
+      // Cut by code point, like an action error: the text may quote the page.
+      const error = [...stripUserinfo(wellFormed(message))].slice(0, JOB_ERROR_MAX).join('');
+      await sql`
+        update runs set status = 'failed', error = ${error}, finished_at = now()
+        where id = ${job.id} and org_id = ${job.orgId} and status = 'running'`.execute(db);
+    },
   };
 }
 
