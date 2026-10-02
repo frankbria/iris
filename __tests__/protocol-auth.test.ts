@@ -264,6 +264,32 @@ describe('request rate limits (#342)', () => {
     expect((await call(a2, 'getStatus')).result.activeSessions).toBe(0);
   });
 
+  test('malformed frames spend the budget too', async () => {
+    const url = await serve({ limits: { keyRequestsPerMinute: 2 } });
+    const a = await open(url, as('key-a'));
+    const replies: JsonRpcResponse[] = [];
+    a.on('message', (d) => replies.push(JSON.parse(d.toString())));
+    for (let i = 0; i < 3; i++) a.send('null');
+    await eventually(() => replies.length === 3);
+    expect(replies.map((r) => r.error?.code)).toEqual([-32600, -32600, -32029]);
+  });
+
+  test('a wall clock stepping backward does not drain a budget', async () => {
+    // WSL2's clock steps backward (#190). Measured on wall time, the negative
+    // elapsed time would subtract tokens and refuse a client that sent nothing.
+    const url = await serve({ limits: { keyRequestsPerMinute: 3 } });
+    const a = await open(url, as('key-a'));
+    expect(await limited(a)).toBeUndefined();
+    const realNow = Date.now();
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(realNow - 3_600_000);
+    try {
+      expect(await limited(a)).toBeUndefined();
+      expect(await limited(a)).toBeUndefined();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test('reconnecting does not reset a key budget', async () => {
     const url = await serve({ limits: { keyRequestsPerMinute: 2 } });
     const a = await open(url, as('key-a'));

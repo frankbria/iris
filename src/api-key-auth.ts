@@ -59,14 +59,30 @@ interface KeyRow {
   enabled: boolean | null;
   expiresAt: Date | null;
   remaining: number | null;
+  refillAmount: number | null;
+  refillInterval: number | null;
+  lastRefillAt: Date | null;
+  createdAt: Date;
 }
 
-/** The plugin's own conditions for a key row to verify (validateApiKey). */
-const usableRow = (row: KeyRow | undefined) =>
-  !!row &&
-  row.enabled !== false &&
-  (!row.expiresAt || row.expiresAt.getTime() > Date.now()) &&
-  row.remaining !== 0;
+const KEY_COLUMNS = sql.raw(
+  'enabled, "expiresAt", remaining, "refillAmount", "refillInterval", "lastRefillAt", "createdAt"',
+);
+
+/**
+ * The plugin's own conditions for a key row to verify (`validateApiKey`,
+ * `consumeRemaining`), read without spending anything: enabled, unexpired, and quota
+ * left, where a used-up key with a refill counts once its next refill is due (the
+ * plugin refills it on that verification).
+ */
+function usableRow(row: KeyRow | undefined): boolean {
+  if (!row || row.enabled === false) return false;
+  if (row.expiresAt && row.expiresAt.getTime() <= Date.now()) return false;
+  if (row.remaining !== 0) return true;
+  if (!row.refillAmount || !row.refillInterval) return false;
+  const lastRefill = (row.lastRefillAt ?? row.createdAt).getTime();
+  return Date.now() - lastRefill > row.refillInterval;
+}
 
 /** `KeyStore` over the `apikey` table. Plaintext keys are looked up by the plugin's own hash. */
 export function postgresKeyStore(db: Kysely<unknown>): KeyStore {
@@ -76,12 +92,12 @@ export function postgresKeyStore(db: Kysely<unknown>): KeyStore {
       const { defaultKeyHasher } = await import('@better-auth/api-key');
       const hash = await defaultKeyHasher(key);
       const { rows } = await sql<KeyRow>`
-        select enabled, "expiresAt", remaining from apikey where key = ${hash}`.execute(db);
+        select ${KEY_COLUMNS} from apikey where key = ${hash}`.execute(db);
       return usableRow(rows[0]);
     },
     async isLive({ keyId, orgId }) {
       const { rows } = await sql<KeyRow>`
-        select enabled, "expiresAt", remaining from apikey
+        select ${KEY_COLUMNS} from apikey
         where id = ${keyId} and "referenceId" = ${orgId}`.execute(db);
       return usableRow(rows[0]);
     },

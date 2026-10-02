@@ -187,6 +187,19 @@ const PASSWORD = 'correct-horse-battery-staple';
   await store.isLive({ orgId: r.A, keyId: r.a.id });
   const lastAfter = (await pool.query('select "lastRequest" from apikey where id = $1', [r.a.id])).rows[0].lastRequest;
   r.recheckWrites = String(lastBefore) !== String(lastAfter);
+  // A used-up key with a refill (the plugin refills it on its next verification once
+  // the interval has passed) is live only when that refill is due.
+  const quota = (lastRefill) => pool.query(
+    'update apikey set remaining = 0, "refillAmount" = $2, "refillInterval" = 60000, "lastRefillAt" = $3 where id = $1',
+    [r.b.id, lastRefill === undefined ? null : 5, lastRefill ?? null]);
+  const liveB = () => store.isLive({ orgId: r.B, keyId: r.b.id });
+  await quota(new Date(Date.now() - 3600000));
+  r.refill = { due: await liveB() };
+  await quota(new Date());
+  r.refill.notYet = await liveB();
+  await quota(undefined);
+  r.refill.none = await liveB();
+  await pool.query('update apikey set remaining = null, "refillAmount" = null, "refillInterval" = null where id = $1', [r.b.id]);
   const authn = apiKeyAuthenticator(auth, store);
   r.live = await authn.verify('Bearer ' + r.a.key);
   r.unknown = await authn.verify('Bearer iris_nope');
@@ -301,6 +314,7 @@ const PASSWORD = 'correct-horse-battery-staple';
     // Re-check by id: no plaintext, no write to the key row, and bound to the org.
     expect(r.live2).toEqual({ a: true, revoked: false, disabled: false, otherOrg: false });
     expect(r.recheckWrites).toBe(false);
+    expect(r.refill).toEqual({ due: true, notYet: false, none: false });
     expect(r.downRecheck).toHaveProperty('threw');
     expect(r.live).toEqual({ orgId: r.A, keyId: r.a.id });
     expect(r.unknown).toBeNull();

@@ -186,7 +186,9 @@ export const RATE_LIMITED = -32029;
  * Request budgets, one token bucket per id (#342). A bucket holds up to a minute's
  * worth and refills continuously, so a burst is allowed and the sustained rate is
  * `perMinute`. Checking is synchronous: an await ahead of the SessionGate would
- * reorder pipelined messages (#128).
+ * reorder pipelined messages (#128). Times are `performance.now()`, a monotonic
+ * clock: on wall time, a clock stepping backward (WSL2 does, #190) would subtract
+ * tokens, and one stepping forward would hand them out.
  *
  * ponytail: in memory, so the budget is per server process; several processes need
  * a shared store (#316).
@@ -351,8 +353,8 @@ export function startServer(
   // the ordinary session cleanup.
   const alive = new WeakSet<WebSocket>();
   const heartbeat = setInterval(() => {
-    keyRate.prune(Date.now());
-    orgRate.prune(Date.now());
+    keyRate.prune(performance.now());
+    orgRate.prune(performance.now());
     for (const ws of wss.clients) {
       if (!alive.has(ws)) {
         ws.terminate();
@@ -419,6 +421,32 @@ export function startServer(
         return;
       }
 
+      // Tenant request budgets (#342), before anything else, so a malformed frame
+      // spends one too. Both must have a token before either is spent, so a refusal
+      // by the org costs the key nothing.
+      if (principal) {
+        const now = performance.now();
+        const wait = Math.max(
+          keyRate.wait(principal.keyId, now),
+          orgRate.wait(principal.orgId, now),
+        );
+        if (wait > 0) {
+          const id = (parsed as { id?: unknown } | null)?.id;
+          reply({
+            jsonrpc: '2.0',
+            id: typeof id === 'string' || typeof id === 'number' ? id : null,
+            error: {
+              code: RATE_LIMITED,
+              message: 'Rate limit exceeded',
+              data: { retryAfterMs: wait },
+            },
+          });
+          return;
+        }
+        keyRate.take(principal.keyId);
+        orgRate.take(principal.orgId);
+      }
+
       // Valid JSON is not necessarily a request: `null`, `1`, `[]` and `"x"`
       // all parse. Reading `.id` off `null` used to throw here, outside every
       // try, and the rejected listener took the whole process — and every
@@ -431,27 +459,6 @@ export function startServer(
       const req = parsed as JsonRpcRequest;
 
       const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id };
-
-      // Tenant request budgets (#342), before anything runs. Both must have a token
-      // before either is spent, so a refusal by the org costs the key nothing.
-      if (principal) {
-        const now = Date.now();
-        const wait = Math.max(
-          keyRate.wait(principal.keyId, now),
-          orgRate.wait(principal.orgId, now),
-        );
-        if (wait > 0) {
-          res.error = {
-            code: RATE_LIMITED,
-            message: 'Rate limit exceeded',
-            data: { retryAfterMs: wait },
-          };
-          reply(res);
-          return;
-        }
-        keyRate.take(principal.keyId);
-        orgRate.take(principal.orgId);
-      }
 
       try {
         switch (req.method) {

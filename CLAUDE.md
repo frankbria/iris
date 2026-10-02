@@ -632,7 +632,11 @@ They apply only to connections with a principal; local mode is untouched.
 - **The healthcheck probe slot**: a loopback peer sending `X-Iris-Probe: 1` gets one
   connection beyond `maxConnections`. Loopback only: a published port arrives on the
   container's interface. The test reaches the server through the host's own interface
-  address to prove a remote header gets no slot.
+  address to prove a remote header gets no slot. It serves the token-mode deployment
+  (staging); the healthcheck cannot authenticate in hosted mode at all yet (#309).
+- **Buckets run on `performance.now()`**, not `Date.now()`: the WSL2 clock steps
+  backward (#190), and a negative elapsed time would drain a budget. A malformed frame
+  from a tenant spends a token too (the check runs before the shape check).
 - Per-IP pre-auth throttling is #347's: without a trusted client-IP source, everyone
   behind the ingress shares one address.
 - `startServer` itself does not enforce hosted mode: `protocol.test.ts` runs under
