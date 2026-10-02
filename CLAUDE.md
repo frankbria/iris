@@ -79,7 +79,7 @@ src/
 ├── api-key-auth.ts        # Hosted `iris connect`: Bearer org API key -> { orgId, keyId } (#341)
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
-│   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step
+│   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
 │   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
@@ -260,7 +260,9 @@ stays the local-mode store. `docker-compose.dev.yml` runs a dev Postgres on
   resolution is the same under ts-node, `dist/` and the image. The Kysely Migrator
   applies migrations in name order, records them in `kysely_migration`, and on
   Postgres runs the whole pending batch in **one** transaction. Never edit an
-  applied migration; add a new one.
+  applied migration; add a new one. Every migration must keep the previous release
+  working on the new schema (expand/contract): a production rollback runs it there,
+  and `migrateToLatest()` then applies nothing (#273).
 - **Every IRIS table gets `org_id NOT NULL` and an index that leads with it.**
   `__tests__/db/postgres.test.ts` checks this against the catalog, so a new table
   without them fails there. A table that references a run uses the composite key
@@ -447,13 +449,34 @@ portal. No host details in the repo (`repo-hygiene.test.ts`).
 
 `deploy-production` (ci.yml) promotes digests; it never builds. Runbook:
 `docs/runbook-production.md`. Compose: `docker-compose.production.yml` (iris-api, worker,
-portal, postgres; images only from `${IRIS_IMAGE:?}` / `${PORTAL_IMAGE:?}`).
+portal, postgres; every image pinned by digest, app images only from `${IRIS_IMAGE:?}` /
+`${PORTAL_IMAGE:?}`).
 
-- **`staged-<sha>` is the record that staging ran a digest.** deploy-staging tags both
-  images (`imagetools create`, no rebuild) as its *last* step, so a failed staging
-  deploy records nothing. Production resolves the tag's commit and refuses a sha
-  without both tags. Staging does not run the portal yet: it only boots the pushed
-  portal digest on the runner (`/login` 200) before tagging.
+- **The security boundary is the protected `v*` tag + the `production` environment's
+  tag-only rule and required reviewer**, not the workflow. Without them a collaborator's
+  branch workflow could run in `production` and read its secrets. The job runs only on
+  a `v*` ref, for a dispatch too (no tag input: an input would let a branch run deploy).
+- **`staged-<sha>` is a record, not a boundary**: deploy-staging tags both images
+  (`imagetools create`, no rebuild) as its *last* step; anything with `packages: write`
+  could move it. Staging runs token mode without worker/portal, so it proves the iris
+  image boots (plus the portal digest serving `/login` on the runner), not the hosted stack.
+- **One directory per release** (`releases/<tag>-<run>-<attempt>/`: compose, settings.env,
+  per-release secrets); `shared/secrets/` holds pg_password, master_key, database_url
+  (rewritten only if it differs: serving containers mount it). `current` is switched only
+  after the SMTP and migration gates, and only ever names a release that became healthy;
+  rollback runs compose from the previous release's directory (its files, settings,
+  images). Compose always runs from a release's **real path**, so bind mounts name that
+  release's files; via the `current` link a restart would follow the link.
+- **Migrations are forward-only; rollback relies on expand/contract.** `migrateToLatest()`
+  succeeds as a no-op when the database has migrations the release does not know and all
+  of its own are applied (an older release on a newer schema), and refuses when it also
+  has pending ones (branched off before the newer release). Kysely alone throws
+  "corrupted migrations" for both.
+- **Health**: iris-api `GET /` -> 404 (the job API, before auth; the token check cannot
+  authenticate in hosted mode, #309). Portal `/api/health` (dynamic, `no-store`): 200 only
+  when getAuth() builds, the master key loads and `select 1` answers; 503 with no detail.
+  Worker: `probeDatabase()` at startup (exit 3), heartbeat file written per poll and every
+  30s during a job (`IRIS_WORKER_HEARTBEAT_FILE`), compose fails it at 180s.
 - **Portal image** (`Dockerfile.portal`, context = repo root): Next `output:
   'standalone'` traced from the repo root (`outputFileTracingRoot`), server at
   `apps/portal/server.js`. Its ignore file is `Dockerfile.portal.dockerignore`, which
@@ -470,17 +493,13 @@ portal, postgres; images only from `${IRIS_IMAGE:?}` / `${PORTAL_IMAGE:?}`).
 - **`_FILE` secrets go through `readSecretEnv()`** (src/secret-env.ts): `resolveDatabaseUrl`,
   `resolveKeyring`, `hostedServices`' `BETTER_AUTH_SECRET`, and the portal's
   `BETTER_AUTH_SECRET` / `SMTP_URL`. Do not add another reader.
-- **Hosted iris-api health = `GET /` returns 404** (the job API, before auth). The token
-  healthcheck cannot authenticate in hosted mode (#309); 426 means token mode.
-- **`deploy.sh` keeps `.env` = what runs** (settings.env + image refs), restored by an
-  EXIT trap on failure, so manual `docker compose` works in the deploy dir. The rollback
-  target is read from the running containers (`.Config.Image`), not from a file.
-  Migrations are forward-only: expand/contract, never down-migrations.
 - **`deploy-script.test.ts`** pushes busybox images to a `registry:2` on a loopback port
-  so refs are real digests. COPY-only Dockerfiles (each RUN is a container: tens of
-  seconds on a loaded WSL daemon) and `BUILDX_BUILDER=default` (CI's
-  setup-buildx-action makes a docker-container builder current, which would not load
-  the image). 4-10 min on a loaded WSL host (load ~3.5); not yet timed on CI.
+  so refs are real digests, and stages release directories as the job does. COPY-only
+  Dockerfiles (each RUN is a container: tens of seconds on a loaded WSL daemon) and
+  `BUILDX_BUILDER=default` (CI's setup-buildx-action makes a docker-container builder
+  current, which would not load the image). The worker uses the production compose
+  file's own heartbeat check. Bash reads a script while running it: do not edit
+  `deploy.sh` during a run.
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
 
