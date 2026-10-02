@@ -319,7 +319,9 @@ key gets HTTP `401`, and a key store that cannot be reached gets `503`.
 The key's org is bound to the connection and its browser session, so `getStatus`
 counts only that org's sessions. Keys are verified again every minute, and a
 connection whose key was revoked or disabled is closed with `1008` (the re-check reads
-the key by id; it does not re-verify or keep the key). Hosted mode
+the key by id; it does not re-verify or keep the key). A tenant's natural-language
+instructions use the org's own AI credentials, never the server's `*_API_KEY`. Until
+BYOK and managed credits exist (#344, #346), tenants get pattern translation only. Hosted mode
 needs `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` (the portal's values) and
 `DATABASE_URL` or `DATABASE_URL_FILE`; it exits 3 naming whichever is missing.
 

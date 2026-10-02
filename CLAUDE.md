@@ -99,6 +99,7 @@ __tests__/
 ├── ai-client-preprocessor.test.ts # Preprocessor tests (24 tests)
 ├── ai-client-batch4.test.ts       # Cache + cost tracker tests (19 tests)
 ├── ai-client-models.test.ts       # Model pins, provider probe, resolution (26 tests)
+├── ai-credentials.test.ts         # Injected AI credentials: own key per request, no process keys, no other vendor (#258)
 ├── ai-tenant-scope.test.ts        # Ledger and vision cache per org: breakers, reservations, run-scoped stats, cache isolation (#255)
 ├── browser-hardening.test.ts      # One launch factory: spawned argv has no --no-sandbox; context hardening; src/ guard (#331)
 ├── egress-proxy.test.ts           # Proxy over real sockets: resolved-address refusals, rebinding pin, positive controls (#336)
@@ -646,6 +647,35 @@ They apply only to connections with a principal; local mode is untouched.
   `IRIS_HOSTED=1` with a token or no auth. `iris connect` is the enforcing caller.
 - Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`
   (real Postgres, spawned hosted `iris connect`, keys made through BetterAuth).
+
+### Per-Request AI Credentials (issue #258)
+
+- **`AICredentials { provider, apiKey?, endpoint?, model? }`** (src/ai-client/credentials.ts)
+  is one tenant's credential for one request. `configFromCredentials(creds, { kind,
+  fallback })` builds the client config from it alone: no env, no `.env`, no
+  `~/.iris/config.json`, no other vendor's key, and `fallback` only from the caller (the
+  org's opt-in), never the process config's `ai.fallback`.
+- **`translate(…, { orgId, credentials })`**: `credentials` is an `AICredentials`, `null`
+  (the tenant has no AI: pattern translation only), or a function asked only after
+  patterns miss. Omitted is local mode, the process configuration, **except under
+  `IRIS_HOSTED`, where omitted means `null`**: a caller that forgets them must not spend
+  the operator's keys (ADR 0001 §5).
+- **Injected credentials refuse `endpoint` and `ollama`**: AI clients fetch from the
+  server process, outside the browser egress controls (#336), so a tenant-chosen URL
+  would be an SSRF.
+- **The SDK clients pin `authToken: null` (Anthropic) and `organization`/`project: null`
+  (OpenAI)**: left undefined, the SDKs read `ANTHROPIC_AUTH_TOKEN` (sent as a second
+  credential next to the tenant's key) and `OPENAI_ORG_ID`/`OPENAI_PROJECT_ID` from the
+  process. Those variables, and the SDKs' `*_BASE_URL`, are on the `jest.setup.ts`
+  scrub list. Base URLs from env are kept: that is the operator's own routing.
+- **Vision**: construct `SmartAIVisionClient` / the classifier with
+  `configFromCredentials(creds, { kind: 'vision' })`. Its existing vendor scoping
+  (`credentialsFor`, #74/#245) then has only the tenant's vendor, so even with the org's
+  fallback on, no other vendor is contacted.
+- **Hosted RPC**: `startServer({ aiCredentials: (principal) => … })` resolves a tenant's
+  credentials per request, lazily; a lookup that throws is logged and becomes no AI, so
+  its message never reaches the client. Hosted `iris connect` passes none yet, so tenants get pattern
+  translation only until BYOK (#344) and managed credits (#346) supply the resolver.
 
 ### Tenant-Scoped Ledger and Vision Cache (issue #255)
 

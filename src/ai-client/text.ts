@@ -27,6 +27,10 @@ export class OpenAITextClient extends BaseAIClient {
     const { OpenAI } = await import('openai');
     const openai = new OpenAI({
       apiKey: this.config.apiKey,
+      // Explicit, so the SDK cannot add the process's OPENAI_ORG_ID / OPENAI_PROJECT_ID
+      // to a request made with someone else's key (#258).
+      organization: null,
+      project: null,
       timeout: this.config.timeout ?? DEFAULT_TIMEOUT_MS,
       maxRetries: 0, // retries are driven by our withRetry below
     });
@@ -163,6 +167,9 @@ export class AnthropicTextClient extends BaseAIClient {
     const { Anthropic } = await import('@anthropic-ai/sdk');
     const anthropic = new Anthropic({
       apiKey: this.config.apiKey,
+      // Explicit, so the SDK cannot send the process's ANTHROPIC_AUTH_TOKEN as a
+      // second credential next to this key (#258).
+      authToken: null,
       timeout: this.config.timeout ?? DEFAULT_TIMEOUT_MS,
       maxRetries: 0, // retries are driven by our withRetry below
     });

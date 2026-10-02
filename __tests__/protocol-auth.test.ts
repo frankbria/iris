@@ -445,9 +445,67 @@ describe('AI spend is charged to the org (#255)', () => {
       const a = await open(url, as('key-a'));
       await call(a, 'launchBrowser');
       await call(a, 'executeBrowserAction', { instruction: 'check the order total' });
+      // No credentials resolver: the tenant has no AI, and the operator's process-wide
+      // keys are never used for it (#258).
       expect(translate).toHaveBeenCalledWith('check the order total', undefined, {
         orgId: 'org-a',
+        credentials: expect.any(Function),
       });
+      expect(await (translate.mock.calls[0][2] as any).credentials()).toBeNull();
+    } finally {
+      translate.mockRestore();
+    }
+  });
+
+  test('a failing credentials lookup is no AI for that request, not a leaked error', async () => {
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const translate = jest
+      .spyOn(translatorModule, 'translate')
+      .mockResolvedValue({ actions: [], method: 'ai', confidence: 0, reasoning: 'stub' });
+    try {
+      const url = await serve({
+        aiCredentials: async () => {
+          throw new Error('decrypt failed: master key mismatch at kms://internal');
+        },
+      });
+      const a = await open(url, as('key-a'));
+      await call(a, 'launchBrowser');
+      await call(a, 'executeBrowserAction', { instruction: 'check the order total' });
+      const scope = translate.mock.calls[0][2] as any;
+      expect(await scope.credentials()).toBeNull();
+      expect(errors.mock.calls.flat().join(' ')).toMatch(/credentials/);
+    } finally {
+      translate.mockRestore();
+      errors.mockRestore();
+    }
+  });
+
+  test("an instruction runs with the principal's own AI credentials (#258)", async () => {
+    const translate = jest
+      .spyOn(translatorModule, 'translate')
+      .mockResolvedValue({ actions: [], method: 'ai', confidence: 0, reasoning: 'stub' });
+    const asked: Principal[] = [];
+    try {
+      const url = await serve({
+        aiCredentials: async (principal) => {
+          asked.push(principal);
+          return principal.orgId === 'org-a' ? { provider: 'openai', apiKey: 'sk-org-a' } : null;
+        },
+      });
+      const a = await open(url, as('key-a'));
+      const b = await open(url, as('key-b'));
+      await call(a, 'launchBrowser');
+      await call(b, 'launchBrowser');
+      await call(a, 'executeBrowserAction', { instruction: 'check the order total' });
+      await call(b, 'executeBrowserAction', { instruction: 'check the order total' });
+      // Handed over lazily: translate() asks only if patterns did not match.
+      expect(asked).toEqual([]);
+      const [first, second] = translate.mock.calls.map((c) => c[2] as any);
+      expect(first.orgId).toBe('org-a');
+      expect(await first.credentials()).toEqual({ provider: 'openai', apiKey: 'sk-org-a' });
+      expect(second.orgId).toBe('org-b');
+      expect(await second.credentials()).toBeNull();
+      expect(asked.map((p) => p.orgId)).toEqual(['org-a', 'org-b']);
     } finally {
       translate.mockRestore();
     }
