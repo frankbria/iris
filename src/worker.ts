@@ -8,7 +8,17 @@ import type { A11yJobParams, ClaimedJob, PostgresJobs } from './history-store';
  * hosted URL policy.
  */
 
-export type WorkerJobs = Pick<PostgresJobs, 'claim' | 'finish' | 'fail'>;
+/**
+ * A running job with no heartbeat for this long is reaped (#435): six missed 30 s beats.
+ * Kept here, not imported from the store: a runtime import of it would load the store's
+ * dependencies into every worker test (measured: it made a timing test flaky).
+ */
+export const DEFAULT_STALE_MS = 180_000;
+
+export type WorkerJobs = Pick<
+  PostgresJobs,
+  'claim' | 'finish' | 'fail' | 'heartbeat' | 'reapStuck'
+>;
 
 /** The axe tags of a WCAG level: each level includes the ones below, like `--tags`. */
 export function axeTagsFor(level: A11yJobParams['wcagLevel']): string[] {
@@ -49,29 +59,60 @@ async function runA11y(params: A11yJobParams) {
 }
 
 /**
- * Claims and runs one job.
+ * Claims and runs one job. While it runs, a timer (every `heartbeatMs`) tells the
+ * database the claim is alive; a job whose heartbeat stops is reaped (#435). A failed
+ * heartbeat write is logged and never stops the job.
  * @returns the job, or `null` when the queue was empty
  * @throws only when the database cannot be written; a job that cannot run is recorded as failed
  */
-export async function processNextA11yJob(jobs: WorkerJobs): Promise<ClaimedJob | null> {
+export async function processNextA11yJob(
+  jobs: WorkerJobs,
+  { heartbeatMs = 30_000 }: { heartbeatMs?: number } = {},
+): Promise<ClaimedJob | null> {
   const job = await jobs.claim('a11y');
   if (!job) return null;
-  let result;
+  let reported = false;
+  const lost = (what: string) => {
+    if (reported) return;
+    reported = true;
+    console.error(`[iris] worker: claim on job ${job.id} was lost; not recording its ${what}`);
+  };
+  // Once the outcome is being written, a heartbeat answer means nothing: one in flight
+  // waits on finish's row lock and then sees a finished row.
+  let writing = false;
+  const timer = setInterval(() => {
+    jobs.heartbeat(job).then(
+      (held) => {
+        if (held || writing) return;
+        // Reaped: say so once and stop asking. The scan runs on; its write will be refused.
+        clearInterval(timer);
+        lost('outcome');
+      },
+      (err) => console.error(`[iris] worker job heartbeat ${job.id}:`, (err as Error).message),
+    );
+  }, heartbeatMs);
   try {
-    result = await runA11y(job.params);
-  } catch (err) {
-    await jobs.fail(job, (err as Error).message || 'Job failed');
+    let result;
+    try {
+      result = await runA11y(job.params);
+    } catch (err) {
+      writing = true;
+      if (!(await jobs.fail(job, (err as Error).message || 'Job failed'))) lost('failure');
+      return job;
+    }
+    writing = true;
+    try {
+      if (!(await jobs.finish(job, result))) lost('result');
+    } catch (err) {
+      // The outcome did not commit (nothing of it did): the job must not stay `running`.
+      // The detail (a database error) is for the operator's log, not the tenant's job.
+      console.error(`[iris] worker could not store job ${job.id}:`, (err as Error).message);
+      if (!(await jobs.fail(job, 'Could not store the result'))) lost('failure');
+    }
     return job;
+  } finally {
+    clearInterval(timer);
   }
-  try {
-    await jobs.finish(job, result);
-  } catch (err) {
-    // The outcome did not commit (nothing of it did): the job must not stay `running`.
-    // The detail (a database error) is for the operator's log, not the tenant's job.
-    console.error(`[iris] worker could not store job ${job.id}:`, (err as Error).message);
-    await jobs.fail(job, 'Could not store the result');
-  }
-  return job;
 }
 
 /**
@@ -90,8 +131,24 @@ export async function runWorker(options: {
   pollMs?: number;
   heartbeatFile?: string;
   heartbeatMs?: number;
+  /** A running job with no heartbeat for this long is taken back (#435). */
+  staleMs?: number;
+  /** Claims a job gets before a reap fails it instead of requeueing it. */
+  maxAttempts?: number;
 }): Promise<void> {
-  const { jobs, signal, pollMs = 2_000, heartbeatFile, heartbeatMs = 30_000 } = options;
+  const {
+    jobs,
+    signal,
+    pollMs = 2_000,
+    heartbeatFile,
+    heartbeatMs = 30_000,
+    staleMs = DEFAULT_STALE_MS,
+    maxAttempts,
+  } = options;
+  // A live job beats every heartbeatMs; the reaper must not mistake one late beat for death.
+  if (heartbeatMs * 2 >= staleMs) {
+    throw new Error(`heartbeatMs (${heartbeatMs}) must be under half of staleMs (${staleMs})`);
+  }
   const beat = () => {
     if (!heartbeatFile) return;
     try {
@@ -105,7 +162,16 @@ export async function runWorker(options: {
     const timer = heartbeatFile ? setInterval(beat, heartbeatMs) : undefined;
     let ran = false;
     try {
-      ran = (await processNextA11yJob(jobs)) !== null;
+      // One indexed statement per tick; a reaper failure must not stop claims.
+      try {
+        const { requeued, failed } = await jobs.reapStuck({ staleMs, maxAttempts });
+        if (requeued || failed) {
+          console.error(`[iris] worker reaped stuck jobs: ${requeued} requeued, ${failed} failed`);
+        }
+      } catch (err) {
+        console.error('[iris] worker reaper error:', (err as Error).message);
+      }
+      ran = (await processNextA11yJob(jobs, { heartbeatMs })) !== null;
     } catch (err) {
       console.error('[iris] worker error:', (err as Error).message);
     } finally {

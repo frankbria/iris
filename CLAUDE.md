@@ -811,7 +811,7 @@ They apply only to connections with a principal; local mode is untouched.
 
 `iris connect` (hosted) serves REST beside the WebSocket; `iris worker` runs what it
 queues. Queue = the `runs` table (migration 0004: `params jsonb`, `error text`, claim
-index), no broker (ADR 0001 §1).
+index; 0005: `attempts`, `claim_token`, `heartbeat_at`, #435), no broker (ADR 0001 §1).
 
 - **One `http.Server`**, handed to `WebSocketServer({ server })`. ws does not close a
   listener it was given, so `startServer` wraps `wss.close`: it stops listening the
@@ -845,8 +845,26 @@ index), no broker (ADR 0001 §1).
   `failOnHttpError`: the egress proxy answers a plain-HTTP request to an internal address
   with a 403 *document*, which would otherwise be scanned and billed as a success.
   A result that cannot be stored is recorded as a generic error; the detail is logged.
-- **A job left `running` by a crashed worker stays `running`** until a reaper exists
-  (follow-up). Polling, not LISTEN/NOTIFY.
+- **Claims, heartbeats and the reaper (#435).** `claim` bumps `attempts`, sets a fresh
+  `claim_token` and `heartbeat_at`. `finish`/`fail` write only for `status = 'running'`
+  and their own token and return `false` (nothing written, no usage) when the claim was
+  lost; the worker logs that, never throws. `processNextA11yJob` heartbeats every 30 s
+  while a job runs (a failed write is logged, the job continues). `reapStuck({ staleMs =
+  180 s, maxAttempts = 3 })` runs before every claim in `runWorker`, as one statement over
+  `FOR UPDATE SKIP LOCKED` rows: requeue (`queued`, claim/heartbeat/`started_at` cleared)
+  while `attempts < maxAttempts`, else `failed` with "The job was interrupted too many
+  times" and no usage. A requeued job reads `queued`, `startedAt: null`. A running row
+  with no heartbeat (pre-0005) is judged by `started_at`. A reaper error is logged and
+  the loop continues. A scan that is legitimately slower than `staleMs` without beating
+  (a hung event loop) is reaped too; the old claim's late write is then refused.
+  A reaped worker's heartbeat stops after its first "claim lost" (said once), and a
+  heartbeat answered while the outcome is being written is ignored (it waited on
+  finish's row lock). `runWorker` refuses `heartbeatMs * 2 >= staleMs`. Migration 0005
+  sets `lock_timeout = 5s`: its exclusive lock on `runs` must not queue behind a long
+  transaction while the old release serves. A browser that hangs while the worker's event
+  loop still beats is never reaped (#442). During a rollout, a pre-0005 worker finishes
+  without a token check until it is recreated (seconds; usage stays idempotent).
+  Polling, not LISTEN/NOTIFY.
 - **Tests**: set `process.env.IRIS_HOSTED = '1'` at the top of the file and start
   `hostedEgressProxy({ lookup, connect })` before the first launch; no isolateModules is
   needed, because the worker loads the runner lazily.

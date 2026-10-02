@@ -64,6 +64,8 @@ describe('runWorker heartbeat (#273)', () => {
       }),
       finish: jest.fn(),
       fail: jest.fn(),
+      heartbeat: jest.fn(),
+      reapStuck: jest.fn().mockResolvedValue({ requeued: 0, failed: 0 }),
     };
     const done = runWorker({
       jobs: jobs as never,
@@ -119,11 +121,179 @@ describe('processNextA11yJob', () => {
         throw new Error('relation "usage_events" does not exist');
       },
       fail,
+      heartbeat: async () => true,
+      reapStuck: async () => ({ requeued: 0, failed: 0 }),
     });
     expect(fail).toHaveBeenCalledWith(job, 'Could not store the result');
     expect(log.mock.calls.flat().join(' ')).toContain('usage_events');
     log.mockRestore();
     jest.dontMock('../src/a11y/a11y-runner');
+  });
+});
+
+describe('job claims (#435)', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const job = {
+    id: 'j',
+    orgId: 'o',
+    apiKeyId: null,
+    kind: 'a11y',
+    startedAt: new Date(),
+    claimToken: 't',
+    attempts: 1,
+    params: { urls: ['https://a.example/'], wcagLevel: 'AA', failOn: [] },
+  };
+  // resetModules: the registry would otherwise serve an earlier test's cached runner mock.
+  const slowRunner = (ms: number) => {
+    jest.resetModules();
+    jest.doMock('../src/a11y/a11y-runner', () => ({
+      AccessibilityRunner: class {
+        async run() {
+          await sleep(ms);
+          return { summary: {}, results: [] };
+        }
+      },
+    }));
+  };
+  afterEach(() => jest.dontMock('../src/a11y/a11y-runner'));
+
+  it('heartbeats while the job runs; a failing heartbeat is logged and the job still finishes', async () => {
+    slowRunner(150);
+    const { processNextA11yJob } = await import('../src/worker');
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const heartbeat = jest.fn().mockRejectedValue(new Error('db blip'));
+    const finish = jest.fn().mockResolvedValue(true);
+    await processNextA11yJob(
+      { claim: async () => job as never, finish, fail: jest.fn(), heartbeat, reapStuck: jest.fn() },
+      { heartbeatMs: 20 },
+    );
+    expect(heartbeat.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(heartbeat).toHaveBeenCalledWith(job);
+    expect(finish).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls.flat().join(' ')).toContain('db blip');
+    log.mockRestore();
+    const calls = heartbeat.mock.calls.length;
+    await sleep(60);
+    expect(heartbeat.mock.calls.length).toBe(calls); // the timer stopped with the job
+  });
+
+  it('logs a lost claim instead of throwing', async () => {
+    slowRunner(0);
+    const { processNextA11yJob } = await import('../src/worker');
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    await processNextA11yJob({
+      claim: async () => job as never,
+      finish: async () => false,
+      fail: jest.fn(),
+      heartbeat: jest.fn(),
+      reapStuck: jest.fn(),
+    });
+    expect(log.mock.calls.flat().join(' ')).toContain('claim on job j was lost');
+    log.mockRestore();
+  });
+
+  it('stops heartbeating after the first lost claim, and says so once', async () => {
+    slowRunner(200);
+    const { processNextA11yJob } = await import('../src/worker');
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const heartbeat = jest.fn().mockResolvedValue(false); // reaped: the claim is gone
+    await processNextA11yJob(
+      {
+        claim: async () => job as never,
+        finish: async () => false,
+        fail: jest.fn(),
+        heartbeat,
+        reapStuck: jest.fn(),
+      },
+      { heartbeatMs: 20 },
+    );
+    expect(heartbeat).toHaveBeenCalledTimes(1);
+    const lostLines = log.mock.calls.filter((c) => String(c[0]).includes('was lost'));
+    expect(lostLines).toHaveLength(1);
+    log.mockRestore();
+  });
+
+  it('a heartbeat answered after a successful finish is not a lost claim', async () => {
+    slowRunner(0);
+    const { processNextA11yJob } = await import('../src/worker');
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    // The heartbeat blocks on finish's row lock and then sees a finished row: false.
+    let release!: () => void;
+    const heartbeat = jest.fn(
+      () => new Promise<boolean>((resolve) => (release = () => resolve(false))),
+    );
+    await processNextA11yJob(
+      {
+        claim: async () => job as never,
+        finish: async () => {
+          await sleep(60); // a heartbeat tick fires meanwhile
+          return true;
+        },
+        fail: jest.fn(),
+        heartbeat,
+        reapStuck: jest.fn(),
+      },
+      { heartbeatMs: 20 },
+    );
+    expect(heartbeat).toHaveBeenCalled();
+    release();
+    await sleep(10);
+    expect(log.mock.calls.flat().join(' ')).not.toContain('was lost');
+    log.mockRestore();
+  });
+
+  it('refuses a heartbeat interval too close to the reap threshold', async () => {
+    const { runWorker } = await import('../src/worker');
+    await expect(
+      runWorker({
+        jobs: {
+          claim: jest.fn(),
+          finish: jest.fn(),
+          fail: jest.fn(),
+          heartbeat: jest.fn(),
+          reapStuck: jest.fn(),
+        },
+        heartbeatMs: 60_000,
+        staleMs: 90_000,
+      }),
+    ).rejects.toThrow(/heartbeat/i);
+  });
+
+  it('runs the reaper before each claim, logs counts, and survives a reaper error', async () => {
+    const { runWorker } = await import('../src/worker');
+    const controller = new AbortController();
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const order: string[] = [];
+    let ticks = 0;
+    const reapStuck = jest.fn(async (_o?: unknown) => {
+      order.push('reap');
+      if (++ticks === 1) return { requeued: 2, failed: 1 };
+      throw new Error('reaper down');
+    });
+    await runWorker({
+      signal: controller.signal,
+      pollMs: 1,
+      staleMs: 1234,
+      heartbeatMs: 100,
+      maxAttempts: 5,
+      jobs: {
+        claim: async () => {
+          order.push('claim');
+          if (ticks === 2) controller.abort();
+          return null;
+        },
+        finish: async () => true,
+        fail: async () => true,
+        heartbeat: async () => true,
+        reapStuck,
+      },
+    });
+    expect(order.slice(0, 4)).toEqual(['reap', 'claim', 'reap', 'claim']);
+    expect(reapStuck).toHaveBeenCalledWith({ staleMs: 1234, maxAttempts: 5 });
+    const out = log.mock.calls.flat().join(' ');
+    expect(out).toContain('2 requeued, 1 failed');
+    expect(out).toContain('reaper down');
+    log.mockRestore();
   });
 });
 
@@ -144,8 +314,10 @@ describe('runWorker', () => {
           if (claims === 4) controller.abort();
           return null;
         },
-        finish: async () => undefined,
-        fail: async () => undefined,
+        finish: async () => true,
+        fail: async () => true,
+        heartbeat: async () => true,
+        reapStuck: async () => ({ requeued: 0, failed: 0 }),
       },
     });
     await done;
@@ -160,7 +332,13 @@ describe('runWorker', () => {
     const done = runWorker({
       signal: controller.signal,
       pollMs: 60_000,
-      jobs: { claim: async () => null, finish: async () => undefined, fail: async () => undefined },
+      jobs: {
+        claim: async () => null,
+        finish: async () => true,
+        fail: async () => true,
+        heartbeat: async () => true,
+        reapStuck: async () => ({ requeued: 0, failed: 0 }),
+      },
     });
     setImmediate(() => controller.abort());
     // A worker stuck in its 60 s wait would time this test out.

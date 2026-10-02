@@ -4,6 +4,7 @@ import * as initial from './migrations/0001_initial';
 import * as history from './migrations/0002_history';
 import * as usage from './migrations/0003_usage';
 import * as jobs from './migrations/0004_jobs';
+import * as jobClaims from './migrations/0005_job_claims';
 import { createPostgresDb, resolveDatabaseUrl } from './postgres';
 
 /**
@@ -16,6 +17,7 @@ export const MIGRATIONS = {
   '0002_history': history,
   '0003_usage': usage,
   '0004_jobs': jobs,
+  '0005_job_claims': jobClaims,
 };
 
 /**

@@ -323,6 +323,10 @@ export interface ClaimedJob {
   kind: 'a11y';
   params: A11yJobParams;
   startedAt: Date;
+  /** Which claim this is: only its holder may write the outcome (#435). */
+  claimToken: string;
+  /** How many times the job has been claimed, this claim included. */
+  attempts: number;
 }
 
 /** The org-scoped half: what the API does for a tenant. */
@@ -348,10 +352,25 @@ export interface PostgresJobs {
   /**
    * Writes the outcome of a claimed job: its results, its status (the run's verdict) and
    * its `a11y_job` usage, in one transaction. `status` stays `running` until this commits.
+   * @returns `false`, having written nothing, when the claim was lost (the job was reaped, #435)
    */
-  finish(job: ClaimedJob, result: AccessibilityTestResult): Promise<void>;
-  /** The job could not run. No usage: nothing was delivered. */
-  fail(job: ClaimedJob, message: string): Promise<void>;
+  finish(job: ClaimedJob, result: AccessibilityTestResult): Promise<boolean>;
+  /** The job could not run. No usage: nothing was delivered. `false` when the claim was lost. */
+  fail(job: ClaimedJob, message: string): Promise<boolean>;
+  /** Says the claim is alive. `false` when it was lost. */
+  heartbeat(job: ClaimedJob): Promise<boolean>;
+  /**
+   * Takes back running jobs whose heartbeat is older than `staleMs`: requeued while they
+   * have attempts left, otherwise failed. One statement, rows taken `SKIP LOCKED`, so
+   * concurrent reapers and workers never process a job twice. A running row with no
+   * heartbeat (claimed before migration 0005) is judged by its start time.
+   */
+  reapStuck(options?: { staleMs?: number; maxAttempts?: number }): Promise<ReapResult>;
+}
+
+export interface ReapResult {
+  requeued: number;
+  failed: number;
 }
 
 const JOB_ERROR_MAX = 500;
@@ -428,11 +447,14 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
         api_key_id: string | null;
         params: A11yJobParams;
         started_at: Date;
+        claim_token: string;
+        attempts: number;
       }>`
-        update runs set status = 'running', started_at = now()
+        update runs set status = 'running', started_at = now(), attempts = attempts + 1,
+               claim_token = gen_random_uuid(), heartbeat_at = now()
         where id = (select id from runs where status = 'queued' and kind = ${kind}
                     order by created_at, id for update skip locked limit 1)
-        returning id, org_id, api_key_id, params, started_at`.execute(db);
+        returning id, org_id, api_key_id, params, started_at, claim_token, attempts`.execute(db);
       const row = rows[0];
       return row
         ? {
@@ -442,6 +464,8 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
             kind,
             params: row.params,
             startedAt: row.started_at,
+            claimToken: row.claim_token,
+            attempts: row.attempts,
           }
         : null;
     },
@@ -451,12 +475,13 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
       const run: RunInput = { kind: 'a11y', result, startedAt: job.startedAt, finishedAt };
       const { summary, passed } = summarize(run);
       const results = resultsOf(run);
-      await db.transaction().execute(async (tx) => {
+      return db.transaction().execute(async (tx) => {
         const updated = await sql`
           update runs set status = ${passed ? 'succeeded' : 'failed'}, summary = ${summary},
                  finished_at = ${finishedAt}
-          where id = ${job.id} and org_id = ${job.orgId} and status = 'running'`.execute(tx);
-        if (!updated.numAffectedRows) throw new Error(`Job ${job.id} is not running`);
+          where id = ${job.id} and org_id = ${job.orgId} and status = 'running'
+                and claim_token = ${job.claimToken}`.execute(tx);
+        if (!updated.numAffectedRows) return false; // reaped: the new claim owns the outcome
         if (results.length) {
           const values = results.map(
             (r, position) =>
@@ -469,15 +494,51 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
         await insertUsage(tx, job.orgId, [
           { kind: 'a11y_job', quantity: 1, idempotencyKey: `job:${job.id}`, runId: job.id },
         ]);
+        return true;
       });
     },
 
     async fail(job, message) {
       // Cut by code point, like an action error: the text may quote the page.
       const error = [...stripUserinfo(wellFormed(message))].slice(0, JOB_ERROR_MAX).join('');
-      await sql`
+      const updated = await sql`
         update runs set status = 'failed', error = ${error}, finished_at = now()
-        where id = ${job.id} and org_id = ${job.orgId} and status = 'running'`.execute(db);
+        where id = ${job.id} and org_id = ${job.orgId} and status = 'running'
+              and claim_token = ${job.claimToken}`.execute(db);
+      return Boolean(updated.numAffectedRows);
+    },
+
+    async heartbeat(job) {
+      const updated = await sql`
+        update runs set heartbeat_at = now()
+        where id = ${job.id} and org_id = ${job.orgId} and status = 'running'
+              and claim_token = ${job.claimToken}`.execute(db);
+      return Boolean(updated.numAffectedRows);
+    },
+
+    // staleMs: the worker passes its DEFAULT_STALE_MS (src/worker.ts); this default matches it.
+    async reapStuck({ staleMs = 180_000, maxAttempts = 3 } = {}) {
+      const { rows } = await sql<{ status: string; n: string }>`
+        with stale as (
+          select id, attempts < ${maxAttempts} as retry from runs
+          where status = 'running'
+            and (heartbeat_at < now() - make_interval(secs => ${staleMs / 1000})
+              or (heartbeat_at is null
+                  and started_at < now() - make_interval(secs => ${staleMs / 1000})))
+          for update skip locked
+        ), reaped as (
+          update runs r set
+            status = case when s.retry then 'queued' else 'failed' end,
+            started_at = case when s.retry then null else r.started_at end,
+            finished_at = case when s.retry then null else now() end,
+            error = case when s.retry then r.error else 'The job was interrupted too many times' end,
+            claim_token = null, heartbeat_at = null
+          from stale s where r.id = s.id
+          returning r.status
+        )
+        select status, count(*) as n from reaped group by status`.execute(db);
+      const count = (status: string) => Number(rows.find((r) => r.status === status)?.n ?? 0);
+      return { requeued: count('queued'), failed: count('failed') };
     },
   };
 }
