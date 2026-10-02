@@ -311,6 +311,17 @@ and it survives a restart, which a per-session token does not. Prefer the file
 form wherever the environment is visible to others (`docker inspect` shows it);
 setting both variables is refused, as is an empty or unreadable file.
 
+**Hosted mode authenticates org API keys instead.** With `IRIS_HOSTED=1`, the
+shared token is off (setting either token variable refuses to start, exit 2).
+Clients send a key created in the portal as `Authorization: Bearer iris_…`. It is
+verified before the WebSocket upgrade: a missing, unknown, revoked or disabled
+key gets HTTP `401`, and a key store that cannot be reached gets `503`.
+The key's org is bound to the connection and its browser session, so `getStatus`
+counts only that org's sessions. Keys are verified again every minute, and a
+connection whose key was revoked or disabled is closed with `1008`. Hosted mode
+needs `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` (the portal's values) and
+`DATABASE_URL` or `DATABASE_URL_FILE`; it exits 3 naming whichever is missing.
+
 **Resource limits.** Every one bounds something a client could otherwise grow
 without limit:
 
