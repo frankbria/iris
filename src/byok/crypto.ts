@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
-import * as fs from 'fs';
+import { readSecretEnv } from '../secret-env';
 
 /**
  * Envelope encryption for organisations' AI provider keys (#344, ADR 0001 §6).
@@ -44,13 +44,7 @@ const KEY_ID = /^[A-Za-z0-9_-]{1,32}$/;
  * @throws when unset, set twice, or malformed: hosted mode must not start without it
  */
 export function resolveKeyring(env: NodeJS.ProcessEnv = process.env): Keyring {
-  const { IRIS_KEY_ENCRYPTION_KEY: inline, IRIS_KEY_ENCRYPTION_KEY_FILE: file } = env;
-  if (inline && file) {
-    throw new Error(
-      'Set IRIS_KEY_ENCRYPTION_KEY and IRIS_KEY_ENCRYPTION_KEY_FILE one at a time, not both',
-    );
-  }
-  const raw = (file ? fs.readFileSync(file, 'utf8') : (inline ?? '')).trim();
+  const raw = (readSecretEnv('IRIS_KEY_ENCRYPTION_KEY', env) ?? '').trim();
   if (!raw) {
     throw new Error(
       'Set IRIS_KEY_ENCRYPTION_KEY (or IRIS_KEY_ENCRYPTION_KEY_FILE) to encrypt provider keys',

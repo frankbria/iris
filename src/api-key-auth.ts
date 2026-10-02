@@ -2,6 +2,7 @@ import { sql, type Kysely } from 'kysely';
 import type { AICredentials } from './ai-client/credentials';
 import type { PostgresHistory, PostgresJobs } from './history-store';
 import type { Authenticator, Principal } from './protocol';
+import { readSecretEnv } from './secret-env';
 
 /** The slice of a BetterAuth instance (`createAuth()`) this module uses. */
 export interface KeyVerifier {
@@ -108,7 +109,7 @@ export function postgresKeyStore(db: Kysely<unknown>): KeyStore {
 
 /**
  * The hosted server's authenticator and run history, from the process environment (ADR 0001 §5: no
- * ambient config files). Needs the portal's `BETTER_AUTH_SECRET` and
+ * ambient config files). Needs the portal's `BETTER_AUTH_SECRET` (or `_FILE`) and
  * `BETTER_AUTH_URL`, and `DATABASE_URL` or `DATABASE_URL_FILE`.
  *
  * @throws naming what is missing, or when the database does not answer, so
@@ -121,7 +122,11 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   usage: ReturnType<typeof import('./billing/usage').usageLedger>;
   jobs: PostgresJobs;
 }> {
-  const missing = ['BETTER_AUTH_SECRET', 'BETTER_AUTH_URL'].filter((name) => !env[name]);
+  const secret = readSecretEnv('BETTER_AUTH_SECRET', env);
+  const missing = [
+    !secret && 'BETTER_AUTH_SECRET',
+    !env.BETTER_AUTH_URL && 'BETTER_AUTH_URL',
+  ].filter(Boolean);
   if (missing.length) throw new Error(`Hosted mode needs ${missing.join(' and ')}`);
   // Before the database: without the master key no org's AI key can be opened, and
   // ADR 0001 §5 has hosted mode refuse to start without it.
@@ -135,7 +140,7 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   // every later revocation re-check behind it.
   const db = createPostgresDb(resolveDatabaseUrl(env), { queryTimeoutMs: 5_000 });
   const auth = createAuth({
-    secret: env.BETTER_AUTH_SECRET!,
+    secret: secret!,
     baseURL: env.BETTER_AUTH_URL!,
     database: { db, type: 'postgres' },
     // Verification and reset mail is the portal's job; this process only verifies keys.
