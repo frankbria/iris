@@ -1,5 +1,6 @@
 import WebSocket, { WebSocketServer } from 'ws';
-import { IncomingMessage } from 'http';
+import { createServer, IncomingMessage, STATUS_CODES } from 'http';
+import { handleJobsRequest } from './jobs-api';
 import { randomUUID, timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { translateSync, translate, Action, ActionSchema } from './translator';
@@ -11,7 +12,7 @@ import {
 } from './executor';
 import { chromiumIsInstalled } from './browser';
 import { Page } from 'playwright';
-import type { HistoryStore, TenantScope } from './history-store';
+import type { HistoryStore, OrgJobs, TenantScope } from './history-store';
 import type { AICredentials } from './ai-client/credentials';
 import type { UsageEvent } from './billing/usage';
 import type { SettledAICall } from './ai-client/factory';
@@ -293,6 +294,12 @@ export function startServer(
      * month boundary is billed to both months.
      */
     usageCheckpointMs?: number;
+    /**
+     * The hosted job API (#267), served over HTTP on the same port: `POST
+     * /v1/a11y/jobs`, `GET /v1/jobs/:id`. Needs `authenticate`; it shares the key and
+     * org request budgets with the RPC messages. Unset, plain HTTP gets 426 as before.
+     */
+    jobs?: { forOrg(scope: TenantScope): OrgJobs };
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
     limits?: Partial<ServerLimits>;
   },
@@ -301,6 +308,7 @@ export function startServer(
   if (authenticate && options?.authToken) {
     throw new Error('Pass authToken or authenticate, one at a time');
   }
+  if (options?.jobs && !authenticate) throw new Error('The job API needs authenticate');
   const host = options?.host ?? '127.0.0.1';
   const limits: ServerLimits = { ...DEFAULT_SERVER_LIMITS, ...options?.limits };
   const allowedOrigins = options?.allowedOrigins ?? [];
@@ -312,9 +320,37 @@ export function startServer(
   /** Upgrades whose key is still being verified; they count against the connection cap. */
   let verifying = 0;
 
+  // One listener for both: the WebSocket upgrade, and the job REST API (#267).
+  const server = createServer((req, res) => {
+    if (options?.jobs) {
+      void handleJobsRequest(req, res, {
+        authenticate: authenticate!,
+        jobs: options.jobs,
+        charge: (principal) => {
+          // Both buckets need a token before either is spent (see the RPC path).
+          const now = performance.now();
+          const wait = Math.max(
+            keyRate.wait(principal.keyId, now),
+            orgRate.wait(principal.orgId, now),
+          );
+          if (wait === 0) {
+            keyRate.take(principal.keyId);
+            orgRate.take(principal.orgId);
+          }
+          return wait;
+        },
+      });
+      return;
+    }
+    // What ws answers a plain HTTP request with when it owns the listener.
+    res.writeHead(426, {
+      'content-type': 'text/plain',
+      'content-length': STATUS_CODES[426]!.length,
+    });
+    res.end(STATUS_CODES[426]);
+  });
   const wss: WebSocketServer = new WebSocketServer({
-    port,
-    host,
+    server,
     maxPayload: limits.maxPayloadBytes,
     // Every check runs before the upgrade completes, so a refused client never
     // holds a socket, a message listener or a connection slot (#338). This used
@@ -771,6 +807,16 @@ export function startServer(
       cleanupSession(ws, sessions);
     });
   });
+
+  server.listen(port, host);
+  // ws does not close a listener it was handed: free the port when the server closes,
+  // and report 'close' to a `wss.close(cb)` caller only once it is free.
+  const closeWss = wss.close.bind(wss) as (cb?: (err?: Error) => void) => WebSocketServer;
+  wss.close = ((cb?: (err?: Error) => void) =>
+    closeWss((err) => {
+      server.close(() => cb?.(err));
+      server.closeAllConnections();
+    })) as typeof wss.close;
 
   wss.on('close', () => {
     clearInterval(cleanupInterval);
