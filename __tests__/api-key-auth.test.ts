@@ -12,6 +12,7 @@
  */
 
 import { execFile, spawn, ChildProcess } from 'child_process';
+import * as http from 'http';
 import { randomBytes } from 'crypto';
 import { once } from 'events';
 import * as net from 'net';
@@ -22,6 +23,8 @@ import WebSocket from 'ws';
 import { JsonRpcResponse } from '../src/protocol';
 import { createPostgresDb } from '../src/db/postgres';
 import { migrateToLatest } from '../src/db/migrate';
+import { resolveKeyring } from '../src/byok/crypto';
+import { providerKeyStore } from '../src/byok/store';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -32,6 +35,8 @@ const HOSTED_ENV = {
   IRIS_HOSTED: '1',
   BETTER_AUTH_SECRET: SECRET,
   BETTER_AUTH_URL: 'https://portal.example.com',
+  // The BYOK master key (#344): hosted mode refuses to start without one.
+  IRIS_KEY_ENCRYPTION_KEY: `k1:${randomBytes(32).toString('base64')}`,
 };
 
 if (!ADMIN_URL) {
@@ -101,6 +106,7 @@ describe('hosted iris connect refuses to start without key authentication', () =
     ['BETTER_AUTH_SECRET', /BETTER_AUTH_SECRET/],
     ['BETTER_AUTH_URL', /BETTER_AUTH_URL/],
     ['DATABASE_URL', /DATABASE_URL/],
+    ['IRIS_KEY_ENCRYPTION_KEY', /IRIS_KEY_ENCRYPTION_KEY/],
   ])(
     'missing %s exits 3 and names it',
     async (name, message) => {
@@ -225,6 +231,9 @@ const PASSWORD = 'correct-horse-battery-staple';
   let r: any;
   let server: Connect;
   let port: number;
+  let vendor: http.Server;
+  const vendorKeys: string[] = [];
+  const OPERATOR_KEY = ['sk', 'operator', randomBytes(12).toString('hex')].join('-');
   const sockets: WebSocket[] = [];
 
   async function admin(query: string): Promise<void> {
@@ -254,8 +263,45 @@ const PASSWORD = 'correct-horse-battery-staple';
       { cwd: REPO_ROOT, env: { ...process.env, ...HOSTED_ENV, PROBE_URL: dbUrl } },
     );
     r = JSON.parse(stdout);
+    // A stand-in OpenAI that records the key each request carried (#344).
+    vendor = http.createServer((req, res) => {
+      req.resume();
+      vendorKeys.push((req.headers.authorization ?? '').replace('Bearer ', ''));
+      res.setHeader('content-type', 'application/json');
+      res.end(
+        JSON.stringify({
+          id: 'x',
+          object: 'chat.completion',
+          created: 0,
+          model: 'gpt-4o-mini',
+          choices: [
+            {
+              index: 0,
+              finish_reason: 'stop',
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({
+                  actions: [{ type: 'click', selector: '#total' }],
+                  confidence: 0.9,
+                  reasoning: 'ok',
+                }),
+              },
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        }),
+      );
+    });
+    await new Promise<void>((res) => vendor.listen(0, '127.0.0.1', res));
     port = await freePort();
-    server = spawnConnect(port, { ...HOSTED_ENV, DATABASE_URL: dbUrl });
+    server = spawnConnect(port, {
+      ...HOSTED_ENV,
+      DATABASE_URL: dbUrl,
+      IRIS_MODEL_PROBE: '0',
+      // The operator's own key, which no tenant may use (#258), and the route to the fake.
+      OPENAI_API_KEY: OPERATOR_KEY,
+      OPENAI_BASE_URL: `http://127.0.0.1:${(vendor.address() as net.AddressInfo).port}/v1`,
+    });
     const deadline = Date.now() + 30_000;
     while (!server.out.includes('listening')) {
       if (Date.now() > deadline) throw new Error(`connect never listened:\n${server.out}`);
@@ -264,6 +310,7 @@ const PASSWORD = 'correct-horse-battery-staple';
   }, 90_000);
 
   afterAll(async () => {
+    vendor?.close();
     for (const ws of sockets) ws.terminate();
     if (server) {
       // Graceful shutdown is not under test here, and it waits out a 5 s timer.
@@ -347,6 +394,32 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect((await call(b, 'getStatus')).result.activeSessions).toBe(0);
   });
 
+  test("translates a tenant's instruction with its org's stored key, never the operator's (#344)", async () => {
+    const tenantKey = ['sk', 'proj', randomBytes(24).toString('hex')].join('-');
+    const db = createPostgresDb(dbUrl);
+    try {
+      await providerKeyStore(db, resolveKeyring(HOSTED_ENV)).set(r.A, 'openai', tenantKey);
+    } finally {
+      await db.destroy();
+    }
+    const ask = async (key: string) => {
+      const ws = await open(`Bearer ${key}`);
+      await call(ws, 'launchBrowser');
+      const res = await call(ws, 'executeBrowserAction', {
+        instruction: 'make sure the order total is shown',
+      });
+      await call(ws, 'closeBrowser');
+      return res.result.translationResult;
+    };
+    vendorKeys.length = 0;
+    // Org A stored a key: its instruction reaches the vendor with that key.
+    expect((await ask(r.a.key)).method).toBe('ai');
+    expect(vendorKeys).toEqual([tenantKey]);
+    // Org B stored none: no AI, and nothing reaches the vendor, operator key or not.
+    expect((await ask(r.b.key)).reasoning).toMatch(/no AI credentials/i);
+    expect(vendorKeys).toEqual([tenantKey]);
+  }, 60_000);
+
   test("records each executeBrowserAction as a run of the key's org (#254)", async () => {
     const a = await open(`Bearer ${r.a.key}`);
     await call(a, 'launchBrowser');
@@ -362,7 +435,8 @@ const PASSWORD = 'correct-horse-battery-staple';
     try {
       const { rows } = await client.query(
         `select r.org_id, r.api_key_id, r.kind, r.status, rr.url, rr.passed
-         from runs r join run_results rr on rr.run_id = r.id`,
+         from runs r join run_results rr on rr.run_id = r.id
+         where rr.url = 'http://127.0.0.1/'`,
       );
       expect(rows).toEqual([
         {

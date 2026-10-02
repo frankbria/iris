@@ -70,7 +70,7 @@ function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
 }
 
 /**
- * Org roles with an `apiKey` resource (#340). The api-key plugin checks it for every
+ * Org roles with an `apiKey` resource (#340), and a `providerKey` one for BYOK keys (#344). The api-key plugin checks it for every
  * org-owned key operation, and BetterAuth's default roles do not have it, so without
  * it only the org's creator could manage keys. Owners and admins manage keys; members
  * can see the list (names and first characters, never a key) but not change it.
@@ -78,12 +78,17 @@ function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
 const ac = createAccessControl({
   ...defaultStatements,
   apiKey: ['create', 'read', 'update', 'delete'],
+  // The org's own AI provider keys (BYOK, #344). Members see which are configured.
+  providerKey: ['create', 'read', 'delete'],
 } as const);
-const keyManager = { apiKey: ['create', 'read', 'update', 'delete'] as const };
+const keyManager = {
+  apiKey: ['create', 'read', 'update', 'delete'] as const,
+  providerKey: ['create', 'read', 'delete'] as const,
+};
 const roles = {
   owner: ac.newRole({ ...ownerAc.statements, ...keyManager }),
   admin: ac.newRole({ ...adminAc.statements, ...keyManager }),
-  member: ac.newRole({ ...memberAc.statements, apiKey: ['read'] }),
+  member: ac.newRole({ ...memberAc.statements, apiKey: ['read'], providerKey: ['read'] }),
 };
 
 /**

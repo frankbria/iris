@@ -321,7 +321,15 @@ counts only that org's sessions. Keys are verified again every minute, and a
 connection whose key was revoked or disabled is closed with `1008` (the re-check reads
 the key by id; it does not re-verify or keep the key). A tenant's natural-language
 instructions use the org's own AI credentials, never the server's `*_API_KEY`. Until
-BYOK and managed credits exist (#344, #346), tenants get pattern translation only. Hosted mode
+BYOK and managed credits exist (#344, #346), tenants get pattern translation only.
+
+**Bring your own AI key.** Owners and admins store their org's OpenAI or Anthropic key
+in the portal (**AI provider keys**). It is encrypted at rest (a per-key data key
+wrapped by the server's master key) and never shown again. A tenant's natural-language
+instructions then run on that key. Hosted mode needs the master key,
+`IRIS_KEY_ENCRYPTION_KEY` (or `_FILE`), as `id:base64` of 32 random bytes, in both
+`iris connect` and the portal: `echo "k1:$(openssl rand -base64 32)"`. It exits 3
+without one. Hosted mode
 needs `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` (the portal's values) and
 `DATABASE_URL` or `DATABASE_URL_FILE`; it exits 3 naming whichever is missing.
 

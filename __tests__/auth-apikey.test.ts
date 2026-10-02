@@ -122,6 +122,17 @@ const PASSWORD = 'correct-horse-battery-staple';
   r.afterRevoke = (await verify(ka.key)).valid;
   r.listAfter = (await list(alice, A)).map((k) => k.id);
 
+  // #344: provider keys use the same roles: owners and admins manage, members read.
+  const can = async (headers, organizationId, action) =>
+    (await auth.api.hasPermission({ headers, body: { organizationId, permissions: { providerKey: [action] } } })).success;
+  r.providerKey = {
+    ownerCreate: await can(alice, A, 'create'),
+    adminDelete: await can(dave, A, 'delete'),
+    memberRead: await can(carol, A, 'read'),
+    memberCreate: await can(carol, A, 'create'),
+    otherOrgRead: await attempt(() => can(alice, B, 'read')),
+  };
+
   r.A = A;
   r.B = B;
   r.ka = ka.id;
@@ -189,6 +200,17 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect(r.stored).not.toContain(r.created.key);
     expect(r.stored).not.toContain(r.created.key.slice(5));
     expect(r.listed).toEqual([{ id: r.ka, hasKey: false, start: r.created.start, name: 'ci' }]);
+  });
+
+  it('gives provider keys (#344) the same roles: owners and admins manage, members read', () => {
+    expect(r.providerKey).toMatchObject({
+      ownerCreate: true,
+      adminDelete: true,
+      memberRead: true,
+      memberCreate: false,
+    });
+    // Not a member of org B at all.
+    expect(r.providerKey.otherOrgRead).not.toBe('ok');
   });
 
   it('lets owners and admins create and revoke keys, and members only list them', () => {

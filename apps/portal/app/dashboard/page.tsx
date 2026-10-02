@@ -21,6 +21,9 @@ export default async function DashboardPage() {
       <Link href="/api-keys" className="text-sm underline">
         API keys
       </Link>
+      <Link href="/provider-keys" className="text-sm underline">
+        AI provider keys
+      </Link>
       <div>
         <LogOutButton />
       </div>

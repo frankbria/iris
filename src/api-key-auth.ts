@@ -1,4 +1,5 @@
 import { sql, type Kysely } from 'kysely';
+import type { AICredentials } from './ai-client/credentials';
 import type { PostgresHistory } from './history-store';
 import type { Authenticator, Principal } from './protocol';
 
@@ -113,11 +114,17 @@ export function postgresKeyStore(db: Kysely<unknown>): KeyStore {
  * @throws naming what is missing, or when the database does not answer, so
  *   `iris connect` refuses to start rather than serve nothing but 503s
  */
-export async function hostedServices(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<{ authenticate: Authenticator; history: PostgresHistory }> {
+export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Promise<{
+  authenticate: Authenticator;
+  history: PostgresHistory;
+  aiCredentials: (principal: Principal) => Promise<AICredentials | null>;
+}> {
   const missing = ['BETTER_AUTH_SECRET', 'BETTER_AUTH_URL'].filter((name) => !env[name]);
   if (missing.length) throw new Error(`Hosted mode needs ${missing.join(' and ')}`);
+  // Before the database: without the master key no org's AI key can be opened, and
+  // ADR 0001 §5 has hosted mode refuse to start without it.
+  const { resolveKeyring } = await import('./byok/crypto');
+  const keyring = resolveKeyring(env);
   // Loaded here, not at the top: BetterAuth is ESM-only (require(esm)), and this
   // module is itself only loaded in hosted mode.
   const { createPostgresDb, resolveDatabaseUrl } = await import('./db/postgres');
@@ -140,10 +147,14 @@ export async function hostedServices(
     await db.destroy();
     throw new Error(`Cannot reach the database: ${(err as Error).message}`);
   }
-  // Run history shares the pool, and its query timeout (#254).
+  // Run history and the orgs' own AI keys share the pool, and its query timeout.
   const { postgresHistory } = await import('./history-store');
+  const { providerKeyStore } = await import('./byok/store');
+  const providerKeys = providerKeyStore(db, keyring);
   return {
     authenticate: apiKeyAuthenticator(auth, postgresKeyStore(db)),
     history: postgresHistory(db),
+    // BYOK (#344): a tenant's AI runs on the key its org stored, or not at all (#258).
+    aiCredentials: (principal) => providerKeys.credentialsFor(principal.orgId),
   };
 }

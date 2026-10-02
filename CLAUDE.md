@@ -648,6 +648,39 @@ They apply only to connections with a principal; local mode is untouched.
 - Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`
   (real Postgres, spawned hosted `iris connect`, keys made through BetterAuth).
 
+### BYOK Provider Keys (issue #344)
+
+- **Envelope encryption** (src/byok/crypto.ts): each stored key gets a fresh AES-256-GCM
+  data key, wrapped by a master key from `IRIS_KEY_ENCRYPTION_KEY(_FILE)`
+  (`id:base64` entries, the first seals; generate with
+  `echo "k1:$(openssl rand -base64 32)"`). Both layers take `(key id, org, provider)` as
+  AAD, so a row copied to another org or relabelled does not open. Each blob names its
+  master key: rotate by listing the new key first, running `node dist/byok/rewrap.js`
+  (`rewrapAll()`), then dropping the old key. Opening requires the full 16-byte tag and a
+  minimum blob length (GCM otherwise accepts 4-byte tags), and the master key's base64
+  is parsed strictly (Node skips invalid characters, so a typo could decode to 32 bytes
+  of a different key).
+- **`providerKeyStore(db, keyring)`** (src/byok/store.ts): `set`/`remove`/`list` per org
+  (format-checked, OpenAI and Anthropic only, per #258), and `credentialsFor(orgId)`,
+  the only way the plaintext leaves. With both vendors stored, the one saved most
+  recently is used, until #346 adds an org AI setting.
+- **Hosted `iris connect`** resolves `aiCredentials` from the store, and refuses to start
+  without the master key (exit 3, ADR 0001 §5).
+- **Roles**: `createAuth()` has a `providerKey` resource; owners and admins create and
+  delete, members read.
+- **Portal `/provider-keys`**: server actions (`app/provider-keys/actions.ts`) ask
+  BetterAuth `hasPermission` for the org the form names (it checks the caller's own
+  membership in that org, not the active org), then call the store. An empty org id
+  is refused first: BetterAuth would read it as the active org. `lib/provider-keys.ts`
+  imports `server-only`, since it holds the master keyring. The forms
+  POST even before hydration, so a key never lands in a URL. The portal needs the same
+  master key as `iris connect` (`IRIS_KEY_ENCRYPTION_KEY`, set by `playwright.config.ts`
+  for E2E).
+- **E2E forgery needs the server-rendered form.** A hydrated client form's DOM drops the
+  server-action fields, so re-submitting its `outerHTML` never reaches the action. Take
+  the hidden `$ACTION_*` fields from the SSR HTML and POST them as multipart, with a
+  positive control from an authorised session.
+
 ### Per-Request AI Credentials (issue #258)
 
 - **`AICredentials { provider, apiKey?, endpoint?, model? }`** (src/ai-client/credentials.ts)

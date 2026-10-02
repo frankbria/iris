@@ -27,6 +27,8 @@ export default defineConfig({
       DATABASE_URL: env.databaseUrl,
       SMTP_URL: env.smtpUrl,
       SMTP_FROM: "IRIS <no-reply@iris.test>",
+      // BYOK master key (#344): seals provider keys; a fresh one per run.
+      IRIS_KEY_ENCRYPTION_KEY: `e2e:${randomBytes(32).toString("base64")}`,
     },
   },
 })
