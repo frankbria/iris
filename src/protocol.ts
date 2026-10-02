@@ -864,7 +864,7 @@ async function executeBrowserActions(
                 } catch (err) {
                   console.error(
                     '[iris] AI credentials lookup failed; translating without AI:',
-                    (err as Error).message,
+                    err instanceof Error ? err.message : String(err),
                   );
                   return null;
                 }
