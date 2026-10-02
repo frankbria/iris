@@ -49,7 +49,7 @@ const PASSWORD = 'correct-horse-battery-staple';
   };
   const user = async (name) => {
     const email = name + '@iris.test';
-    await auth.api.signUpEmail({ body: { email, password: PASSWORD, name } });
+    await auth.api.signUpEmail({ body: { email, password: PASSWORD, name, acceptedTerms: require('./src/legal/versions.ts').ACCEPTED_TERMS } });
     await pool.query('update "user" set "emailVerified" = true where email = $1', [email]);
     return signIn(email);
   };

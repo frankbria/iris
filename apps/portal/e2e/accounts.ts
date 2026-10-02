@@ -7,6 +7,7 @@ import {
   type Page,
 } from "@playwright/test"
 
+import { ACCEPTED_TERMS } from "../../../src/legal/versions"
 import { linkFromMail } from "./mailpit"
 
 /**
@@ -37,7 +38,13 @@ export async function signUpVerified(
   name = "E2E"
 ) {
   const res = await request.post("/api/auth/sign-up/email", {
-    data: { email, password: PASSWORD, name, callbackURL: "/dashboard" },
+    data: {
+      email,
+      password: PASSWORD,
+      name,
+      callbackURL: "/dashboard",
+      acceptedTerms: ACCEPTED_TERMS,
+    },
   })
   expect(res.ok()).toBe(true)
   const verify = await request.get(await linkFromMail(email, "Verify"), {

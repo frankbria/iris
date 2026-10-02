@@ -1,5 +1,8 @@
 import { apiKey } from '@better-auth/api-key';
 import { betterAuth, type BetterAuthOptions } from 'better-auth';
+import { APIError, createAuthMiddleware, getIP } from 'better-auth/api';
+import { Kysely, PostgresDialect } from 'kysely';
+import type { Pool } from 'pg';
 import { organization } from 'better-auth/plugins';
 import { createAccessControl } from 'better-auth/plugins/access';
 import {
@@ -8,6 +11,8 @@ import {
   memberAc,
   ownerAc,
 } from 'better-auth/plugins/organization/access';
+import { recordCurrentAcceptance } from '../legal/acceptance';
+import { ACCEPTED_TERMS } from '../legal/versions';
 import { log, type LogLevel } from '../log';
 
 /** One outgoing account email: verification or password reset. */
@@ -152,7 +157,13 @@ const roles = {
  * `require` does not implement that, so the test spawns a real Node process.
  */
 export function createAuth(
-  options: Omit<BetterAuthOptions, 'plugins' | 'databaseHooks' | 'logger'> & {
+  options: Omit<
+    BetterAuthOptions,
+    // `socialProviders` would create users through OAuth callbacks, which skip the
+    // `/sign-up/email` hook that enforces the terms (#276). Adding one means enforcing
+    // acceptance on that path first (e.g. in `databaseHooks.user.create.before`).
+    'plugins' | 'databaseHooks' | 'hooks' | 'logger' | 'socialProviders'
+  > & {
     secret: string;
     baseURL: string;
     /** Delivers verification and password-reset mail. Required: no mail means no accounts. */
@@ -174,6 +185,30 @@ export function createAuth(
     advanced: {
       ...rest.advanced,
       ipAddress: { ...rest.advanced?.ipAddress, ...policy.ipAddress },
+    },
+    hooks: {
+      // Sign-up must carry the current versions of the terms (#276). A client that skips
+      // the checkbox, or names an old version, is refused here, not in the form.
+      before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path !== '/sign-up/email') return;
+        if ((ctx.body as { acceptedTerms?: unknown } | undefined)?.acceptedTerms !== ACCEPTED_TERMS)
+          throw new APIError('BAD_REQUEST', {
+            code: 'TERMS_NOT_ACCEPTED',
+            message: 'Accept the Terms of Service and Acceptable Use Policy to create an account.',
+          });
+      }),
+      after: createAuthMiddleware(async (ctx) => {
+        if (ctx.path !== '/sign-up/email') return;
+        const userId = (ctx.context.returned as { user?: { id?: string } } | undefined)?.user?.id;
+        if (!userId) return;
+        const source = ctx.request ?? (ctx.headers ? { headers: ctx.headers } : undefined);
+        const ip = source ? getIP(source as Request, ctx.context.options) : null;
+        // The user exists already: a failed write is logged, and the portal asks for
+        // the acceptance again at the next page (/accept-terms) rather than losing it.
+        await recordCurrentAcceptance(termsDb(rest.database), userId, ip).catch((err) =>
+          log('error', 'recording terms acceptance failed', { err: String(err?.message ?? err) }),
+        );
+      }),
     },
     databaseHooks: {
       session: {
@@ -247,4 +282,12 @@ export function createAuth(
     return org.id;
   };
   return auth;
+}
+
+/** Kysely over whichever database the caller gave BetterAuth: its own `{ db }` or a `pg` pool. */
+function termsDb(database: BetterAuthOptions['database']): Kysely<unknown> {
+  if (database && 'db' in database && database.db) return database.db as Kysely<unknown>;
+  if (database && 'query' in database)
+    return new Kysely({ dialect: new PostgresDialect({ pool: database as unknown as Pool }) });
+  throw new Error('createAuth needs a pg Pool or a Kysely database to record terms acceptance');
 }

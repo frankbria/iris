@@ -34,6 +34,12 @@ if (!ADMIN_URL) {
   console.warn('Skipping Postgres tests: set IRIS_TEST_DATABASE_URL (see docker-compose.dev.yml)');
 }
 
+/**
+ * IRIS tables that are keyed by user, not org (#276): acceptance of the terms belongs to
+ * the person, who may belong to several orgs. Add one here only with that reason.
+ */
+const USER_SCOPED_TABLES = ['terms_acceptances'];
+
 /** BetterAuth's tables (generated, its own column names); every other table is IRIS's. */
 const BETTER_AUTH_TABLES = [
   'account',
@@ -181,6 +187,7 @@ describe('migrate process against a server that never answers', () => {
       ['0003_usage', 'Success'],
       ['0004_jobs', 'Success'],
       ['0005_job_claims', 'Success'],
+      ['0006_terms_acceptances', 'Success'],
     ]);
 
     const tables = await sql<{ table_name: string }>`
@@ -203,17 +210,19 @@ describe('migrate process against a server that never answers', () => {
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('5');
+    expect(applied.rows[0].n).toBe('6');
   });
 
   // A rollback deploys an older image (#273): its catalog lacks what a newer release applied.
   it('an older release on a newer schema applies nothing and succeeds', async () => {
     const older: Record<string, unknown> = { ...MIGRATIONS };
-    delete older['0005_job_claims'];
+    delete older['0006_terms_acceptances'];
     const log = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
       expect(await migrateToLatest(db, older as typeof MIGRATIONS)).toEqual([]);
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/schema is ahead.*0005_job_claims/));
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(/schema is ahead.*0006_terms_acceptances/),
+      );
     } finally {
       log.mockRestore();
     }
@@ -221,17 +230,17 @@ describe('migrate process against a server that never answers', () => {
 
   it('refuses a release with pending migrations on a schema with newer ones', async () => {
     const branched: Record<string, unknown> = { ...MIGRATIONS };
-    delete branched['0005_job_claims'];
+    delete branched['0006_terms_acceptances'];
     const up = jest.fn();
     branched['0003b_branch'] = { up };
     await expect(migrateToLatest(db, branched as typeof MIGRATIONS)).rejects.toThrow(
-      /does not know \(0005_job_claims\).*unapplied ones \(0003b_branch\).*branched off/,
+      /does not know \(0006_terms_acceptances\).*unapplied ones \(0003b_branch\).*branched off/,
     );
     expect(up).not.toHaveBeenCalled();
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('5');
+    expect(applied.rows[0].n).toBe('6');
   });
 
   it('gives every IRIS table org_id NOT NULL and an index that leads with it', async () => {
@@ -252,7 +261,10 @@ describe('migrate process against a server that never answers', () => {
       where t.table_schema = 'public' and t.table_type = 'BASE TABLE'
         and t.table_name not like 'kysely\\_%'`.execute(db);
 
-    const tenant = rows.rows.filter((r) => !BETTER_AUTH_TABLES.includes(r.table_name));
+    const tenant = rows.rows.filter(
+      (r) =>
+        !BETTER_AUTH_TABLES.includes(r.table_name) && !USER_SCOPED_TABLES.includes(r.table_name),
+    );
     // Guards against a filter that matches nothing and passes vacuously.
     expect(tenant.length).toBeGreaterThanOrEqual(5);
     for (const r of tenant) {
@@ -262,6 +274,32 @@ describe('migrate process against a server that never answers', () => {
         leads: true,
       });
     }
+  });
+
+  it('keeps the user-scoped exemption honest: user_id first in an index, cascade, one row per version', async () => {
+    const lead = await sql<{ n: string }>`
+      select count(*) as n from pg_index i
+      join pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
+      where i.indrelid = 'public.terms_acceptances'::regclass and a.attname = 'user_id'`.execute(
+      db,
+    );
+    expect(Number(lead.rows[0].n)).toBeGreaterThan(0);
+    await sql`insert into "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+              values ('u_terms', 'T', 'terms@iris.test', true, now(), now())`.execute(db);
+    const accept = () =>
+      sql`insert into terms_acceptances (user_id, document, version) values ('u_terms', 'terms', 'v1')`.execute(
+        db,
+      );
+    await accept();
+    await expect(accept()).rejects.toThrow(/duplicate key/);
+    await expect(
+      sql`insert into terms_acceptances (user_id, document, version) values ('u_terms', 'other', 'v1')`.execute(
+        db,
+      ),
+    ).rejects.toThrow(/check constraint/);
+    await sql`delete from "user" where id = 'u_terms'`.execute(db);
+    const left = await sql<{ n: string }>`select count(*) as n from terms_acceptances`.execute(db);
+    expect(left.rows[0].n).toBe('0');
   });
 
   it("refuses a run result that points at another org's run", async () => {
@@ -316,7 +354,7 @@ describe('migrate process against a server that never answers', () => {
           sendEmail: async () => {},
         });
         const { user } = await auth.api.signUpEmail({
-          body: { email: 'probe@example.com', password: 'correct-horse-battery', name: 'Probe' },
+          body: { email: 'probe@example.com', password: 'correct-horse-battery', name: 'Probe', acceptedTerms: require('./src/legal/versions.ts').ACCEPTED_TERMS },
         });
         const org = await auth.api.createOrganization({
           body: { name: 'Probe Org', slug: 'probe-org', userId: user.id },

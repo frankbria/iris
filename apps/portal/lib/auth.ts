@@ -59,3 +59,9 @@ export async function checkAuthReady(): Promise<void> {
   getAuth()
   await probeDatabase(db!)
 }
+
+/** The portal's database, for IRIS tables BetterAuth does not own (terms acceptance, #276). */
+export function getDb() {
+  getAuth()
+  return db!
+}

@@ -21,6 +21,7 @@ import * as path from 'path';
 import { Client } from 'pg';
 import { migrateToLatest } from '../src/db/migrate';
 import { createPostgresDb } from '../src/db/postgres';
+import { ACCEPTED_TERMS } from '../src/legal/versions';
 
 const IMAGE = process.env.IRIS_TEST_PORTAL_IMAGE;
 if (!IMAGE) {
@@ -184,7 +185,12 @@ async function freePort(host: string): Promise<number> {
     const signUp = await fetch(`${base}/api/auth/sign-up/email`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: base, 'x-real-ip': '192.0.2.7' },
-      body: JSON.stringify({ email, password: randomBytes(12).toString('hex'), name: 'Image' }),
+      body: JSON.stringify({
+        email,
+        password: randomBytes(12).toString('hex'),
+        name: 'Image',
+        acceptedTerms: ACCEPTED_TERMS,
+      }),
     });
     expect(signUp.status).toBe(200);
     let mails = 0;
