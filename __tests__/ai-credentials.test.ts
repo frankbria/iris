@@ -117,6 +117,16 @@ describe('translate with injected credentials', () => {
     expect(calls).toEqual([{ vendor: 'openai', apiKey: 'sk-lazy' }]);
   });
 
+  it('a source that resolves nothing (undefined) is no AI, never the process keys', async () => {
+    // A resolver over an untyped lookup (`map.get(...)`, an early `return;`) can resolve
+    // undefined instead of null; that must not open the process configuration.
+    const result = await translate(NEEDS_AI, undefined, {
+      credentials: async () => undefined as never,
+    });
+    expect(calls).toEqual([]);
+    expect(result.reasoning).toMatch(/no AI credentials/i);
+  });
+
   it('in hosted mode, omitting credentials is no AI too, never the process keys', async () => {
     // isHostedMode() is read once per module registry, so load a fresh one with it on.
     process.env.IRIS_HOSTED = '1';

@@ -185,7 +185,7 @@ async function translateWithAI(
   // caller that forgets them must not spend the process-wide ones (ADR 0001 §5).
   const credentials =
     typeof scope.credentials === 'function'
-      ? await scope.credentials()
+      ? ((await scope.credentials()) ?? null)
       : scope.credentials === undefined && isHostedMode()
         ? null
         : scope.credentials;
