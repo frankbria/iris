@@ -24,7 +24,7 @@ import { promisify } from 'util';
 import { Kysely, sql } from 'kysely';
 import { Client } from 'pg';
 import { createPostgresDb, resolveDatabaseUrl } from '../../src/db/postgres';
-import { migrateToLatest } from '../../src/db/migrate';
+import { MIGRATIONS, migrateToLatest } from '../../src/db/migrate';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -199,6 +199,34 @@ describe('migrate process against a server that never answers', () => {
 
   it('is idempotent: a second run applies nothing', async () => {
     expect(await migrateToLatest(db)).toEqual([]);
+    const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
+      db,
+    );
+    expect(applied.rows[0].n).toBe('4');
+  });
+
+  // A rollback deploys an older image (#273): its catalog lacks what a newer release applied.
+  it('an older release on a newer schema applies nothing and succeeds', async () => {
+    const older: Record<string, unknown> = { ...MIGRATIONS };
+    delete older['0004_jobs'];
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(await migrateToLatest(db, older as typeof MIGRATIONS)).toEqual([]);
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/schema is ahead.*0004_jobs/));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('refuses a release with pending migrations on a schema with newer ones', async () => {
+    const branched: Record<string, unknown> = { ...MIGRATIONS };
+    delete branched['0004_jobs'];
+    const up = jest.fn();
+    branched['0003b_branch'] = { up };
+    await expect(migrateToLatest(db, branched as typeof MIGRATIONS)).rejects.toThrow(
+      /does not know \(0004_jobs\).*unapplied ones \(0003b_branch\).*branched off/,
+    );
+    expect(up).not.toHaveBeenCalled();
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );

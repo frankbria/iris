@@ -1,4 +1,4 @@
-import type { Kysely } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 import { type MigrationResult, Migrator } from 'kysely/migration';
 import * as initial from './migrations/0001_initial';
 import * as history from './migrations/0002_history';
@@ -11,7 +11,7 @@ import { createPostgresDb, resolveDatabaseUrl } from './postgres';
  * name a new one `NNNN_<what>` and add it here. A static map rather than a
  * directory scan: it resolves the same under ts-node, `dist/` and the image.
  */
-const MIGRATIONS = {
+export const MIGRATIONS = {
   '0001_initial': initial,
   '0002_history': history,
   '0003_usage': usage,
@@ -24,14 +24,54 @@ const MIGRATIONS = {
  * concurrent runs cannot both apply one. On Postgres the pending batch runs in
  * one transaction, so a failure applies none of it.
  *
- * @returns the migrations this call applied (empty when already current)
- * @throws the first migration's error, after its transaction rolled back
+ * A database ahead of this release (#273): a rollback deploys an older image whose
+ * catalog lacks migrations a newer release applied, and Kysely refuses that as
+ * "corrupted migrations". When every migration this release knows is applied, that
+ * is the expected state of a rollback (expand/contract keeps the old code working on
+ * the new schema): nothing to apply. When this release also has unapplied ones, it
+ * branched off before the newer release, and interleaving them is not safe: refuse.
+ *
+ * @param migrations the catalog; the default is this release's
+ * @returns the migrations this call applied (empty when already current, or ahead)
+ * @throws the first migration's error, after its transaction rolled back; or when
+ *   the database is ahead of this release and this release still has pending ones
  */
-export async function migrateToLatest(db: Kysely<unknown>): Promise<MigrationResult[]> {
-  const migrator = new Migrator({ db, provider: { getMigrations: async () => MIGRATIONS } });
+export async function migrateToLatest(
+  db: Kysely<unknown>,
+  migrations: Record<string, (typeof MIGRATIONS)[keyof typeof MIGRATIONS]> = MIGRATIONS,
+): Promise<MigrationResult[]> {
+  const executed = await executedMigrations(db);
+  const newer = executed.filter((name) => !(name in migrations));
+  if (newer.length) {
+    const pending = Object.keys(migrations).filter((name) => !executed.includes(name));
+    if (pending.length) {
+      throw new Error(
+        `The database has migrations this release does not know (${newer.join(', ')}) ` +
+          `and this release has unapplied ones (${pending.join(', ')}): it branched off ` +
+          'before a newer release. Deploy a release that contains both.',
+      );
+    }
+    console.log(
+      `schema is ahead of this release (newer migrations: ${newer.join(', ')}); nothing to apply`,
+    );
+    return [];
+  }
+  const migrator = new Migrator({ db, provider: { getMigrations: async () => migrations } });
   const { error, results = [] } = await migrator.migrateToLatest();
   if (error) throw error;
   return results;
+}
+
+/** Names recorded in `kysely_migration`; none before the first migration. */
+async function executedMigrations(db: Kysely<unknown>): Promise<string[]> {
+  const { rows } = await sql<{ name: string }>`select name from kysely_migration`
+    .execute(db)
+    .catch((err: { code?: string }) => {
+      // 42P01: the table does not exist yet (a fresh database).
+      if (err.code === '42P01') return { rows: [] as { name: string }[] };
+      throw err;
+    });
+  return rows.map((r) => r.name);
 }
 
 // The process entry below runs only as a spawned `node`, which Jest cannot
