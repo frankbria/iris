@@ -16,6 +16,8 @@ import type { HistoryStore, OrgJobs, TenantScope } from './history-store';
 import type { AICredentials } from './ai-client/credentials';
 import type { UsageEvent } from './billing/usage';
 import type { SettledAICall } from './ai-client/factory';
+import { errMessage, log } from './log';
+import { metrics, REQUEST_BUCKETS } from './metrics';
 
 export interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -201,6 +203,85 @@ export const DEFAULT_SERVER_LIMITS: Readonly<ServerLimits> = Object.freeze({
 /** JSON-RPC error code for a request refused by a rate limit (#342). */
 export const RATE_LIMITED = -32029;
 
+// Observability (#275). Labels are bounded: a method the server knows, or `unknown`.
+const RPC_METHODS = new Set([
+  'executeCommand',
+  'launchBrowser',
+  'closeBrowser',
+  'getBrowserStatus',
+  'executeBrowserAction',
+  'getStatus',
+]);
+const requestsTotal = metrics.counter(
+  'iris_requests_total',
+  'Requests answered, by RPC method or REST route, and outcome (ok, client_error, rate_limited, error)',
+);
+const requestSeconds = metrics.histogram(
+  'iris_request_duration_seconds',
+  'Request latency, by RPC method or REST route',
+  REQUEST_BUCKETS,
+);
+const aiSpend = metrics.counter(
+  'iris_ai_spend_usd_total',
+  'Provider cost of settled AI calls, USD, by provider, usage kind and billing mode',
+);
+
+/** How a request ended, for logs and metrics. */
+type Outcome = 'ok' | 'client_error' | 'rate_limited' | 'error';
+
+/** A JSON-RPC answer's outcome: the client's own mistakes are not server errors. */
+function rpcOutcome(code: number | undefined): Outcome {
+  if (code === undefined) return 'ok';
+  if (code === RATE_LIMITED) return 'rate_limited';
+  if (code === -32600 || code === -32601 || code === -32602) return 'client_error';
+  return 'error';
+}
+
+/** A known method name from a parsed frame, else `unknown`: the label set stays bounded. */
+function rpcMethod(parsed: unknown): string {
+  const method = (parsed as { method?: unknown } | null)?.method;
+  return typeof method === 'string' && RPC_METHODS.has(method) ? method : 'unknown';
+}
+
+/** The tenant fields of a log line: org and key id, never the key. */
+const who = (principal?: Principal) =>
+  principal ? { orgId: principal.orgId, keyId: principal.keyId } : {};
+
+/** One line and one sample per answered request. Synchronous: no await ahead of the gate. */
+function observeRequest(
+  kind: 'rpc' | 'rest',
+  method: string,
+  outcome: Outcome,
+  startedAt: number,
+  fields: Record<string, unknown>,
+): void {
+  const seconds = Math.max(0, (performance.now() - startedAt) / 1000);
+  requestsTotal.inc({ method, outcome });
+  requestSeconds.observe({ method }, seconds);
+  log(outcome === 'error' ? 'warn' : 'info', `${kind} request`, {
+    method,
+    outcome,
+    latencyMs: Math.round(seconds * 1000),
+    ...fields,
+  });
+}
+
+/** A client-sent `X-Request-Id` is echoed only if it is short and plain; else one is made. */
+const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
+
+/** The REST route a request names, with ids folded so the label set stays bounded. */
+function restRoute(req: IncomingMessage): string {
+  const path = (req.url ?? '').split('?')[0];
+  const route =
+    path === '/v1/a11y/jobs' ? path : /^\/v1\/jobs\/[^/]+$/.test(path) ? '/v1/jobs/:id' : 'other';
+  const method = ['GET', 'POST', 'HEAD', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(
+    req.method ?? '',
+  )
+    ? req.method
+    : 'OTHER';
+  return `${method} ${route}`;
+}
+
 /**
  * Request budgets, one token bucket per id (#342). A bucket holds up to a minute's
  * worth and refills continuously, so a burst is allowed and the sustained rate is
@@ -325,6 +406,29 @@ export function startServer(
 
   // One listener for both: the WebSocket upgrade, and the job REST API (#267).
   const server = createServer((req, res) => {
+    // One line per REST request, with the id echoed back so a client can quote it (#275).
+    const t0 = performance.now();
+    const sent = req.headers['x-request-id'];
+    const requestId = typeof sent === 'string' && SAFE_REQUEST_ID.test(sent) ? sent : randomUUID();
+    res.setHeader('x-request-id', requestId);
+    let tenant: Principal | undefined;
+    let rateLimited = false;
+    res.on('close', () => {
+      const status = res.writableFinished ? res.statusCode : undefined;
+      const outcome: Outcome =
+        status === undefined || status >= 500
+          ? 'error'
+          : rateLimited
+            ? 'rate_limited'
+            : status >= 400
+              ? 'client_error'
+              : 'ok';
+      observeRequest('rest', restRoute(req), outcome, t0, {
+        requestId,
+        status: status ?? 'aborted',
+        ...who(tenant),
+      });
+    });
     if (options?.jobs) {
       void handleJobsRequest(req, res, {
         authenticate: authenticate!,
@@ -341,6 +445,7 @@ export function startServer(
           };
         },
         charge: (principal) => {
+          tenant = principal;
           // Both buckets need a token before either is spent (see the RPC path).
           const now = performance.now();
           const wait = Math.max(
@@ -350,7 +455,7 @@ export function startServer(
           if (wait === 0) {
             keyRate.take(principal.keyId);
             orgRate.take(principal.orgId);
-          }
+          } else rateLimited = true;
           return wait;
         },
       });
@@ -375,16 +480,23 @@ export function startServer(
       // Reject cross-site WebSocket hijacking: a browser page connecting to
       // localhost sends an Origin header; trusted local tooling sends none.
       const origin = req.headers.origin;
-      if (origin && !allowedOrigins.includes(origin)) return done(false, 403, 'Origin not allowed');
+      // Refusals are logged with their reason only; never the header that was refused.
+      const refuse = (status: number, message: string, reason: string) => {
+        log('info', 'connection refused', { reason, status });
+        done(false, status, message);
+      };
+      if (origin && !allowedOrigins.includes(origin)) {
+        return refuse(403, 'Origin not allowed', 'origin');
+      }
       // The token travels in the Authorization header, which a browser page
       // cannot set on a WebSocket. Absent Origin is NOT treated as trusted: no
       // token means rejected.
       if (options?.authToken && !hasValidToken(req.headers.authorization, options.authToken)) {
-        return done(false, 401, 'Unauthorized');
+        return refuse(401, 'Unauthorized', 'token');
       }
       const cap = limits.maxConnections + (isProbe(req) ? 1 : 0);
       if (wss.clients.size + verifying >= cap) {
-        return done(false, 503, 'Connection limit reached');
+        return refuse(503, 'Connection limit reached', 'connection_limit');
       }
       if (!authenticate) return done(true);
       verifying++;
@@ -394,18 +506,28 @@ export function startServer(
           // and its 'connection' handler registers it in `tenants` before returning,
           // so the org count below cannot miss a client admitted a moment earlier.
           verifying--;
-          if (!principal) return done(false, 401, 'Unauthorized');
+          if (!principal) return refuse(401, 'Unauthorized', 'invalid_key');
           const orgConnections = [...tenants.values()].filter(
             (t) => t.orgId === principal.orgId,
           ).length;
           if (orgConnections >= limits.maxConnectionsPerOrg) {
+            log('info', 'connection refused', {
+              reason: 'org_connection_limit',
+              status: 429,
+              ...who(principal),
+            });
             return done(false, 429, 'Organization connection limit reached');
           }
           verified.set(req, principal);
           done(true);
         },
-        () => {
+        (err: unknown) => {
           verifying--;
+          log('warn', 'connection refused', {
+            reason: 'auth_unavailable',
+            status: 503,
+            err: errMessage(err),
+          });
           done(false, 503, 'Authentication unavailable');
         },
       );
@@ -441,7 +563,11 @@ export function startServer(
         },
       ])
       .catch((err: unknown) =>
-        console.error('[iris] failed to record browser minutes:', (err as Error).message),
+        log('error', 'failed to record browser minutes', {
+          sessionId: session.id,
+          ...who(principal),
+          err: errMessage(err),
+        }),
       );
   };
   const meterMinutes = (_principal: Principal) => (session: BrowserSession) =>
@@ -458,6 +584,13 @@ export function startServer(
   checkpoint.unref();
   if (!options?.usage) clearInterval(checkpoint);
   const sessions = new Map<WebSocket, BrowserSession>();
+  // Read at scrape time. With several servers in one process (tests), the last one wins.
+  metrics.gauge('iris_sessions_active', 'Browser sessions open', () => sessions.size);
+  metrics.gauge(
+    'iris_browsers_active',
+    'Sessions whose browser has started (a page is open)',
+    () => [...sessions.values()].filter((s) => s.page !== null && !s.page.isClosed()).length,
+  );
   const sessionTimeout = options?.sessionTimeout || 30 * 60 * 1000; // 30 minutes default
   /** Server start, so `getStatus` can report real uptime rather than a constant (issue #80). */
   const startedAt = Date.now();
@@ -468,7 +601,7 @@ export function startServer(
       const now = Date.now();
       for (const [ws, session] of sessions.entries()) {
         if (session.busy === 0 && now - session.lastActivity > sessionTimeout) {
-          cleanupSession(ws, sessions);
+          cleanupSession(ws, sessions, 'timeout');
         }
       }
     },
@@ -487,6 +620,7 @@ export function startServer(
     orgRate.prune(performance.now());
     for (const ws of wss.clients) {
       if (!alive.has(ws)) {
+        log('info', 'connection terminated: no heartbeat answer', { ...who(tenants.get(ws)) });
         ws.terminate();
         continue;
       }
@@ -513,9 +647,10 @@ export function startServer(
             return;
           }
           tenants.delete(ws);
+          log('info', 'connection closed: API key no longer valid', { ...who(principal) });
           ws.close(1008, 'API key no longer valid');
           // Not waiting for the close handshake: the browser goes now.
-          cleanupSession(ws, sessions);
+          cleanupSession(ws, sessions, 'revoked');
         }),
       );
     } finally {
@@ -528,6 +663,7 @@ export function startServer(
   wss.on('connection', (ws, req) => {
     const principal = verified.get(req);
     if (principal) tenants.set(ws, principal);
+    log('info', 'connection opened', { ...who(principal) });
     alive.add(ws);
     ws.on('pong', () => alive.add(ws));
 
@@ -544,6 +680,10 @@ export function startServer(
     };
 
     ws.on('message', async (data) => {
+      // Per request (#275): an id for its log line, and the start of its latency.
+      const t0 = performance.now();
+      const requestId = randomUUID();
+      const requestFields = { requestId, ...who(principal) };
       let parsed: unknown;
       let unparseable = false;
       try {
@@ -572,13 +712,20 @@ export function startServer(
               data: { retryAfterMs: wait },
             },
           });
+          observeRequest('rpc', rpcMethod(parsed), 'rate_limited', t0, {
+            ...requestFields,
+            code: RATE_LIMITED,
+          });
           return;
         }
         keyRate.take(principal.keyId);
         orgRate.take(principal.orgId);
       }
       // Charged above, then dropped without a reply, as before.
-      if (unparseable) return;
+      if (unparseable) {
+        observeRequest('rpc', 'unknown', 'client_error', t0, { ...requestFields, code: -32700 });
+        return;
+      }
 
       // Valid JSON is not necessarily a request: `null`, `1`, `[]` and `"x"`
       // all parse. Reading `.id` off `null` used to throw here, outside every
@@ -587,6 +734,7 @@ export function startServer(
       // rejected the same way.
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
         reply({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+        observeRequest('rpc', 'unknown', 'client_error', t0, { ...requestFields, code: -32600 });
         return;
       }
       const req = parsed as JsonRpcRequest;
@@ -638,7 +786,7 @@ export function startServer(
             res.result = await gate.write(async () => {
               // Tear down any existing session first so its Chromium process
               // isn't orphaned when the map entry is overwritten (issue #69).
-              await cleanupSession(ws, sessions);
+              await cleanupSession(ws, sessions, 'replaced');
               // This callback can resume after the socket closed: it waits on
               // in-flight actions and on the old session's teardown. Its 'close'
               // cleanup has then already run, so a session set now would hold a
@@ -666,14 +814,13 @@ export function startServer(
                   message: `Session limit reached (${limits.maxSessions}); try again later`,
                 };
               }
-              sessions.set(
-                ws,
-                createBrowserSession(
-                  launchOptions,
-                  principal,
-                  principal && meterMinutes(principal),
-                ),
+              const session = createBrowserSession(
+                launchOptions,
+                principal,
+                principal && meterMinutes(principal),
               );
+              sessions.set(ws, session);
+              log('info', 'session started', { sessionId: session.id, ...who(principal) });
               return {
                 success: true,
                 // Says what happened. This used to claim "Browser launched
@@ -706,7 +853,7 @@ export function startServer(
               if (!session) {
                 throw { code: -32000, message: 'No active browser session' };
               }
-              await cleanupSession(ws, sessions);
+              await cleanupSession(ws, sessions, 'closed');
               return { success: true, message: 'Browser closed successfully' };
             });
             break;
@@ -760,7 +907,10 @@ export function startServer(
                   finishedAt: new Date(),
                 })
                 .catch((err: unknown) =>
-                  console.error('[iris] failed to record run history:', (err as Error).message),
+                  log('error', 'failed to record run history', {
+                    ...requestFields,
+                    err: errMessage(err),
+                  }),
                 );
             }
             break;
@@ -810,15 +960,25 @@ export function startServer(
       }
 
       reply(res);
+      // executeBrowserAction: the action types that ran, never their selectors or values.
+      const ran = (res.result as { results?: ExecutionResult[] } | undefined)?.results;
+      observeRequest('rpc', rpcMethod(req), rpcOutcome(res.error?.code), t0, {
+        ...requestFields,
+        ...(res.error && { code: res.error.code }),
+        ...(Array.isArray(ran) && {
+          actions: ran.map((r) => r.action?.type),
+          success: res.result.success,
+        }),
+      });
     });
 
     ws.on('close', () => {
       tenants.delete(ws);
-      cleanupSession(ws, sessions);
+      cleanupSession(ws, sessions, 'disconnect');
     });
 
     ws.on('error', () => {
-      cleanupSession(ws, sessions);
+      cleanupSession(ws, sessions, 'socket_error');
     });
   });
 
@@ -846,7 +1006,7 @@ export function startServer(
     clearInterval(checkpoint);
     // Cleanup all sessions
     for (const [ws] of sessions.entries()) {
-      cleanupSession(ws, sessions);
+      cleanupSession(ws, sessions, 'shutdown');
     }
   });
 
@@ -1006,28 +1166,30 @@ async function executeBrowserActions(
               // Lazy: asked only if patterns do not match. A failed lookup is no AI
               // for this request; its message stays in the server log, not the reply.
               // Each billed call goes to the usage ledger, on the org's own key (#263).
-              ...(tenant.usage && {
-                onUsage: (call: SettledAICall) =>
-                  tenant.usage!.record(principal.orgId, [
-                    {
-                      kind: usageKindOf(call.operation),
-                      quantity: 1,
-                      unitCostUsd: call.costUsd,
-                      estimated: call.estimated,
-                      billingMode: 'byok',
-                      idempotencyKey: `${call.operation}:${call.callId}`,
-                    },
-                  ]),
-              }),
+              onUsage: (call: SettledAICall) => {
+                const kind = usageKindOf(call.operation);
+                // Spend as a metric (#275): no org label; the ledger has the per-org split.
+                aiSpend.inc({ provider: call.provider, kind, billing_mode: 'byok' }, call.costUsd);
+                return tenant.usage?.record(principal.orgId, [
+                  {
+                    kind,
+                    quantity: 1,
+                    unitCostUsd: call.costUsd,
+                    estimated: call.estimated,
+                    billingMode: 'byok',
+                    idempotencyKey: `${call.operation}:${call.callId}`,
+                  },
+                ]);
+              },
               credentials: async () => {
                 if (!tenant.aiCredentials) return null;
                 try {
                   return await tenant.aiCredentials(principal);
                 } catch (err) {
-                  console.error(
-                    '[iris] AI credentials lookup failed; translating without AI:',
-                    err instanceof Error ? err.message : String(err),
-                  );
+                  log('error', 'AI credentials lookup failed; translating without AI', {
+                    ...who(principal),
+                    err: errMessage(err),
+                  });
                   return null;
                 }
               },
@@ -1174,11 +1336,21 @@ export function usageKindOf(operation: SettledAICall['operation']): UsageEvent['
 async function cleanupSession(
   ws: WebSocket,
   sessions: Map<WebSocket, BrowserSession>,
+  reason:
+    'replaced' | 'closed' | 'timeout' | 'revoked' | 'disconnect' | 'socket_error' | 'shutdown',
 ): Promise<void> {
   const session = sessions.get(ws);
   if (session) {
     // The first cleanup ends the session; a second (close after error) does not.
-    if (session.isActive) session.onEnd?.(session);
+    if (session.isActive) {
+      log('info', 'session ended', {
+        sessionId: session.id,
+        reason,
+        browserStarted: session.billedUntil !== undefined || session.page !== null,
+        ...who(session.principal),
+      });
+      session.onEnd?.(session);
+    }
     // Before the await: an action already holding this session checks the flag
     // before it creates a page, and must see it at once.
     session.isActive = false;
@@ -1231,13 +1403,17 @@ function getSessionId(_ws: WebSocket): string {
  */
 export function installProcessErrorPolicy(
   proc: NodeJS.Process = process,
-  log: (message: string, err: unknown) => void = console.error,
+  report: (message: string, err: unknown) => void = (message, err) =>
+    log('error', message, {
+      err: errMessage(err),
+      ...(err instanceof Error && { stack: err.stack }),
+    }),
 ): void {
   proc.on('unhandledRejection', (reason) => {
-    log('[iris] unhandled rejection (contained; server keeps running):', reason);
+    report('unhandled rejection (contained; server keeps running)', reason);
   });
   proc.on('uncaughtException', (err) => {
-    log('[iris] uncaught exception; exiting because server state is unknown:', err);
+    report('uncaught exception; exiting because server state is unknown', err);
     proc.exit(1);
   });
 }

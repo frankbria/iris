@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { z } from 'zod';
 import type { A11yJobParams, OrgJobs, TenantScope } from './history-store';
 import type { Authenticator, Principal } from './protocol';
+import { errMessage, log } from './log';
 
 /**
  * The hosted job REST API (#267, ADR 0001 §1): `POST /v1/a11y/jobs` queues a scan,
@@ -171,7 +172,10 @@ export async function handleJobsRequest(
     if (id === null) return send(res, 429, { error: 'Too many queued jobs' });
     return send(res, 202, { id, status: 'queued' });
   } catch (err) {
-    console.error('[iris] job API request failed:', (err as Error).message);
+    log('error', 'job API request failed', {
+      requestId: res.getHeader('x-request-id'),
+      err: errMessage(err),
+    });
     if (!res.headersSent) send(res, 500, { error: 'Internal error' });
     else res.end();
   }
