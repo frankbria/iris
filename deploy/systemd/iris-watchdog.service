@@ -1,0 +1,24 @@
+# IRIS production watchdog (issue #275, deploy/watchdog.sh): restarts unhealthy
+# containers within an hourly cap, scrapes the metrics listeners and alerts.
+# Installed by the operator: docs/runbook-production.md, "Monitoring and alerts".
+#
+# Runs as root (it drives docker), so everything it runs or reads as configuration is
+# root-owned and outside the deploy user's tree: the script is a reviewed copy in
+# /usr/local/sbin, settings and the alert hook are in /etc/iris.
+[Unit]
+Description=IRIS production watchdog
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/iris-watchdog
+# Optional settings (WATCHDOG_MAX_RESTARTS, WATCHDOG_ERROR_PERCENT, ...): root:root 0600.
+EnvironmentFile=-/etc/iris/watchdog.env
+Environment=WATCHDOG_STATE_DIR=/var/lib/iris-watchdog
+StateDirectory=iris-watchdog
+StateDirectoryMode=0700
+# A run with restarts can pass a minute; the timer skips a tick while one is running.
+TimeoutStartSec=5min
+# No NoNewPrivileges / ProtectSystem: the operator's alert hook (mail, chat, pager) runs
+# in this unit, and a mailer may need its setgid helper or a spool directory.
+PrivateTmp=yes

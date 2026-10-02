@@ -211,8 +211,15 @@ interface Reply {
     expect((await get('/')).body).toBe('portal');
     expect((await get('/api/auth/get-session')).body).toBe('portal');
     expect((await get('/dashboard')).body).toBe('portal');
+    // Metrics are on their own loopback port (#275); /metrics is no special path here.
+    expect((await get('/metrics')).body).toBe('portal');
     expect(api.seen.map((s) => s.path)).toEqual(['/v1/jobs/abc']);
-    expect(portal.seen.map((s) => s.path)).toEqual(['/', '/api/auth/get-session', '/dashboard']);
+    expect(portal.seen.map((s) => s.path)).toEqual([
+      '/',
+      '/api/auth/get-session',
+      '/dashboard',
+      '/metrics',
+    ]);
   });
 
   // The portal's readiness route runs a database query per request; it is for the
