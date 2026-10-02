@@ -18,9 +18,9 @@ export interface AuthEmail {
 
 /**
  * Account policy (#249, ADR 0001 §4). It is merged key by key into the caller's
- * `emailAndPassword`, `emailVerification` and `rateLimit`, with the policy's keys
- * winning, so a caller cannot relax the settings below but can add others. It does
- * not lock `advanced` or `trustedOrigins`; #347 needs `advanced.ipAddress`.
+ * `emailAndPassword`, `emailVerification`, `rateLimit` and `advanced.ipAddress`, with
+ * the policy's keys winning, so a caller cannot relax the settings below but can add
+ * others. It does not lock `trustedOrigins` or any other `advanced` key.
  * - email + password; no session until the address is verified
  * - a verification mail on sign-up, and a fresh one on each correct-password sign-in
  *   of an unverified account. A lost or expired link, or a send that failed
@@ -36,10 +36,16 @@ export interface AuthEmail {
  * Those are BetterAuth's defaults given a `baseURL`, which is why `baseURL` is required.
  * The test pins them.
  *
- * ponytail: counters are per client IP from a single-value X-Forwarded-For, in memory.
- * A client can pick its own counter until the ingress overwrites that header and
- * `advanced.ipAddress` trusts only it (#347). Memory storage then holds for one portal
- * process; use `storage: 'database'` (a new migration) for several (#316).
+ * - the client IP (rate-limit key) comes from `X-Real-IP` only (#347). The ingress
+ *   (deploy/nginx/iris.conf) overwrites it with the peer address; `X-Forwarded-For`
+ *   is whatever the client sent, and rotating it used to pick a fresh counter. So the
+ *   portal must be reachable only through the ingress (loopback bind, never a published
+ *   or public port): in production a request without the header shares one counter per
+ *   path with every other such request (`no-trusted-ip`), and any process that can
+ *   reach the port can name any `X-Real-IP`.
+ *
+ * ponytail: counters are in memory, which holds for one portal process; use
+ * `storage: 'database'` (a new migration) for several (#316).
  */
 function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
   return {
@@ -66,7 +72,13 @@ function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
         }),
     },
     rateLimit: { enabled: true },
-  } satisfies Partial<BetterAuthOptions>;
+    // BetterAuth applies no rate limit to a request it has no IP for, so tracking stays on.
+    // IPv6 clients are keyed per /64 (BetterAuth's default, pinned), like the ingress's
+    // zones: per address, a /64 holder could rotate past the sign-in limits.
+    ipAddress: { ipAddressHeaders: ['x-real-ip'], disableIpTracking: false, ipv6Subnet: 64 },
+  } satisfies Partial<BetterAuthOptions> & {
+    ipAddress: NonNullable<BetterAuthOptions['advanced']>['ipAddress'];
+  };
 }
 
 /**
@@ -123,6 +135,11 @@ export function createAuth(
     emailAndPassword: { ...rest.emailAndPassword, ...policy.emailAndPassword },
     emailVerification: { ...rest.emailVerification, ...policy.emailVerification },
     rateLimit: { ...rest.rateLimit, ...policy.rateLimit },
+    // One level deeper: replacing `advanced` would drop the caller's cookie and proxy keys.
+    advanced: {
+      ...rest.advanced,
+      ipAddress: { ...rest.advanced?.ipAddress, ...policy.ipAddress },
+    },
     databaseHooks: {
       session: {
         create: {
