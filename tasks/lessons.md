@@ -372,3 +372,11 @@ Write/Edit, not as a pre-push afterthought.
 - A runtime import added only to share a constant pulled a whole store module into the worker, and a timing test that had always passed began failing 2 runs in 3. Prove a suspected cause by removing it and rerunning several times (4/4 clean), not by reasoning.
 - A heartbeat that runs during the final write waits on that write's row lock and then reports "lost". Gate heartbeat answers on a "writing" flag, and say "claim lost" once.
 - A reaper of dead workers does not catch a hung browser whose worker still heartbeats. That needs a job deadline (#442).
+
+## #274 / PR #446 (2026-10-02)
+- A root timer must not run a file the deploy user can rewrite: install a root-owned copy (`/usr/local/sbin`) and keep root's config under `/etc`.
+- Refuse a destructive restore by comparing server identity (`pg_control_system().system_identifier` + `current_database()`), not URL text: percent-encoding, `?dbname=`, a container name and its IP all name the same database.
+- `pg_restore --clean` drops only what the archive contains: restoring an older dump over a newer schema leaves later tables and an old migrations table. Restore into a fresh schema, in one transaction, committing only on success.
+- An off-box copy of "just today's file" never retries a failed day; copy the whole directory idempotently.
+- Bash reads `08` as octal in `$(( ))`: validate numeric settings with `10#` before the first side effect.
+- Before blaming a change for browser-suite failures in a full run, rerun them alone: these 10 failed under Docker-heavy concurrent work and passed 15/15 alone.
