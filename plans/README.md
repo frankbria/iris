@@ -95,7 +95,7 @@ code is the ordering key.
 | `P0.22` | [#250](https://github.com/frankbria/iris/issues/250) | Portal: organizations, membership and roles | P0.21 (#249) | DONE ([#407](https://github.com/frankbria/iris/pull/407)) |
 | `P0.23` | [#340](https://github.com/frankbria/iris/issues/340) | Portal: API key management | P0.22 (#250) | DONE ([#411](https://github.com/frankbria/iris/pull/411)) |
 | `P0.24` | [#341](https://github.com/frankbria/iris/issues/341) | Server: per-tenant API key authentication | P0.11 (#338), P0.23 (#340) | DONE ([#414](https://github.com/frankbria/iris/pull/414)) |
-| `P0.25` | [#342](https://github.com/frankbria/iris/issues/342) | Server: per-key rate limits and session caps | P0.24 (#341) | TODO |
+| `P0.25` | [#342](https://github.com/frankbria/iris/issues/342) | Server: per-key rate limits and session caps | P0.24 (#341) | DONE ([#416](https://github.com/frankbria/iris/pull/416)) |
 | `P0.26` | [#254](https://github.com/frankbria/iris/issues/254) | Tenant-scoped history store (storage seam: SQLite local, Postgres hosted) | P0.13 (#241), P0.20 (#248) | TODO |
 | `P0.27` | [#255](https://github.com/frankbria/iris/issues/255) | Tenant-scoped cost ledger and vision cache | P0.16 (#244), P0.26 (#254) | TODO |
 | `P0.28` | [#343](https://github.com/frankbria/iris/issues/343) | Visual artifacts: naming and per-run layout | — | TODO |
