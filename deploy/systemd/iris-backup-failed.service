@@ -1,0 +1,9 @@
+# Runs when iris-backup.service fails (its OnFailure=, issue #274). Logs a critical
+# journal entry, then runs the operator's alert hook if one is installed (root-owned,
+# executable): /etc/iris/backup-failed-hook, e.g. a mail or webhook call.
+[Unit]
+Description=IRIS production backup failed: alert
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo "IRIS BACKUP FAILED: see journalctl -u iris-backup.service" | systemd-cat -t iris-backup -p crit; if [ -x /etc/iris/backup-failed-hook ]; then exec /etc/iris/backup-failed-hook; fi'

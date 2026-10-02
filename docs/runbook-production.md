@@ -212,68 +212,131 @@ from backup (#274, "Backups and restore" below) instead of a rollback.
 ## Backups and restore (issue #274)
 
 `deploy/backup.sh` runs daily on the box from a systemd timer. It writes two files to
-`/opt/iris-production/backups/`, both encrypted with `age` to public keys only:
+`/var/backups/iris/`, both encrypted with `age` to public keys only:
 
-- `iris-<UTC time>.dump.age`: `pg_dump -Fc` of the `iris` database, taken from the
-  serving release's `postgres` service.
-- `master_key-<UTC time>.age`: `shared/secrets/master_key`. Without it, every org's
-  stored provider keys are lost (#344), even with a good dump. Keep both.
+- `iris-<UTC time>.dump.age`: `pg_dump -Fc` of the `iris` database, taken in the
+  `postgres` container of the `iris-production` compose project.
+- `master_key-<UTC time>.age`: `/opt/iris-production/shared/secrets/master_key`.
+  Without it, every org's stored provider keys are lost (#344), even with a good dump.
+  Keep both.
 
 Each file is written to a temp file and renamed only when it is complete, with mode
-0600. A failed run leaves no partial file, deletes nothing and exits non-zero. Files
-older than `BACKUP_KEEP_DAYS` (default 14) are deleted only after a new backup
-succeeds. Without a recipients file the script refuses to run: it never writes an
-unencrypted dump.
+0600. A failed run leaves no partial file, deletes nothing and exits non-zero, which
+triggers the failure alert. After a successful run, each kind keeps its newest
+`BACKUP_KEEP_MIN` files (default 7) whatever their age, so a clock jump cannot empty the
+directory, and deletes the rest once older than `BACKUP_KEEP_DAYS` (default 14). Both
+must be whole numbers of at least 1, checked before anything runs. Without a
+recipients file the script refuses to run: it never writes an unencrypted dump.
 
 Pending: object-storage versioning and replication, #445 (blocked by #257).
+
+### Why everything the backup runs is root-owned
+
+The backup runs as root, because the master key is readable only by uid 1001. The
+deploy user (the `USER` secret of the `production` environment) does not need to be
+root, and should not be. It owns `/opt/iris-production`, so it can rewrite any file
+there, including every release's `backup.sh`. A root timer running a file from that
+tree would let anyone holding the deploy key run code as root at the next backup. So
+the timer runs only root-owned files outside that tree:
+
+| What               | Where                                               | Owner, mode     |
+| ------------------ | --------------------------------------------------- | --------------- |
+| The script         | `/usr/local/sbin/iris-backup` (a reviewed copy)     | root:root 0755  |
+| Settings           | `/etc/iris/backup.env` (optional)                   | root:root 0600  |
+| Recipients         | `/etc/iris/backup-recipients.txt` (public keys)     | root:root 0644  |
+| rclone config      | `/etc/iris/rclone.conf` (optional)                  | root:root 0600  |
+| Failure hook       | `/etc/iris/backup-failed-hook` (optional)           | root:root 0755  |
+| Backups            | `/var/backups/iris/`                                | root:root 0700  |
+| The units          | `/etc/systemd/system/iris-backup*.{service,timer}`  | root:root 0644  |
+
+The script reaches the database by its container's compose labels (`docker exec`),
+not through a release directory. It still reads the master key from
+`/opt/iris-production/shared/secrets/`, but only to encrypt it to your offline key.
+
+If the deploy user is in the `docker` group, it is root-equivalent on the box anyway
+(docker can mount `/`). That is a separate exposure, still open; these rules keep the
+backup from adding another path.
 
 ### Setup (once)
 
 1. **Make the key pair off the box**, on the operator's machine:
    `age-keygen -o iris-backup-identity.txt`. The file holds the private key, which
    opens every backup. Keep it offline, in two places (a password manager and an
-   offline copy). It must never be on the box: a box compromise would then expose the
-   backups too.
-2. **Put the public key on the box** (the `age1…` line that `age-keygen` printed). One
+   offline copy). It must never stay on the box: a box compromise would then expose
+   the backups too.
+2. **Install the tools and directories**:
+   ```bash
+   sudo apt-get install age rclone        # rclone only for the off-box copy
+   sudo install -d -o root -g root -m 0755 /etc/iris
+   sudo install -d -o root -g root -m 0700 /var/backups/iris
+   ```
+3. **Put the public key on the box** (the `age1…` line that `age-keygen` printed). One
    line per recipient. Add a second key to allow a second operator:
    ```bash
-   echo 'age1...' | sudo tee /opt/iris-production/shared/backup-recipients.txt
+   echo 'age1...' | sudo tee /etc/iris/backup-recipients.txt
    ```
-3. **Install the tools**: `sudo apt-get install age rclone`. `rclone` is needed only
-   for the off-box copy.
-4. **Off-box copy (strongly recommended)**: configure an rclone remote for root
-   (`sudo rclone config`), then set it for the timer:
+4. **Off-box copy (strongly recommended)**: write an rclone remote to
+   `/etc/iris/rclone.conf` (`sudo rclone config --config /etc/iris/rclone.conf`; then
+   `sudo chmod 600 /etc/iris/rclone.conf`), and set it for the timer:
    ```bash
-   echo 'BACKUP_RCLONE_REMOTE=offsite:iris-backups' | sudo tee /opt/iris-production/shared/backup.env
+   echo 'BACKUP_RCLONE_REMOTE=offsite:iris-backups' | sudo install -o root -g root -m 0600 /dev/stdin /etc/iris/backup.env
    ```
-   Pick the destination's retention and versioning rules there. Without a remote,
-   each run logs a warning: the backups share a disk with the database.
-5. **Install the schedule.** The deploy ships the units with every release, so this
-   works once a release with #274 is serving:
+   Each run copies every backup in the directory that the remote lacks, so a run after
+   a failed copy catches up. The remote is never pruned by the script: set the
+   destination's own retention and versioning rules. Without a remote, each run logs a
+   warning: the backups share a disk with the database.
+5. **Install the script and the units from a release you have reviewed.** The deploy
+   ships them with every release (`releases/<id>/backup.sh`, `restore.sh`,
+   `systemd/`) but never installs them. Compare the files with the tagged commit
+   (`git show <tag>:deploy/backup.sh`), then:
    ```bash
-   sudo install -m 644 /opt/iris-production/current/systemd/iris-backup.{service,timer} /etc/systemd/system/
+   r=$(readlink -f /opt/iris-production/current)
+   sudo install -o root -g root -m 0755 "$r/backup.sh" /usr/local/sbin/iris-backup
+   sudo install -o root -g root -m 0644 "$r"/systemd/iris-backup.service "$r"/systemd/iris-backup.timer \
+     "$r"/systemd/iris-backup-failed.service /etc/systemd/system/
    sudo systemctl daemon-reload
    sudo systemctl enable --now iris-backup.timer
    sudo systemctl start iris-backup.service   # one run now
    journalctl -u iris-backup.service -n 20    # "wrote ..." and no error
    ```
-   The service runs as root, because the master key is readable only by uid 1001. It
-   runs daily at 03:15 UTC plus up to 30 minutes of random delay. `Persistent=true`
-   catches up a run missed while the box was down. Monitor a failed unit
-   (`systemctl --failed`, or `OnFailure=` to your alerting).
+   Repeat the install when a release changes `deploy/backup.sh` or `deploy/systemd/`.
+6. **Alerting**: a failed run starts `iris-backup-failed.service`, which logs a `crit`
+   journal entry ("IRIS BACKUP FAILED") and runs `/etc/iris/backup-failed-hook` if it
+   exists and is executable. Put your mail or webhook call there (root:root 0755).
+   Test it with `sudo systemctl start iris-backup-failed.service`.
 
-Optional settings in `shared/backup.env`: `BACKUP_KEEP_DAYS`, `BACKUP_DIR`,
-`BACKUP_RECIPIENTS`, `BACKUP_RCLONE_REMOTE`.
+The timer runs daily at 03:15 UTC plus up to 30 minutes of random delay.
+`Persistent=true` catches up a run missed while the box was down. The service is
+sandboxed (`ProtectSystem=strict`, writable only `/var/backups/iris` and `/etc/iris`;
+`ProtectHome`, `PrivateTmp`, `NoNewPrivileges`), with a 2-hour limit. Optional
+settings in `/etc/iris/backup.env`: `BACKUP_KEEP_DAYS`, `BACKUP_KEEP_MIN`,
+`BACKUP_RCLONE_REMOTE`, `BACKUP_COMPOSE_PROJECT`.
 
 ### Restore
 
-`deploy/restore.sh` decrypts a dump with the identity file and runs `pg_restore
---no-owner --no-acl --clean --if-exists --single-transaction` in a disposable
-container of the pinned postgres image. The host needs `age` and Docker, no Postgres
-client. One transaction: a failed restore leaves the target as it was. The target
-database must exist. The script refuses the serving database (same host, port and
-database as `shared/secrets/database_url`) unless `--force` is given. Pass the target
-URL in `RESTORE_TARGET_URL`, not `--target`: a command line is visible in `ps`.
+`deploy/restore.sh` decrypts a dump with the identity file and restores it in a
+disposable container of the pinned postgres image. The host needs `age` and Docker,
+no Postgres client.
+
+- **It replaces the target's `public` schema** with the dump's, in one transaction:
+  drop, create, then the dump (`pg_restore --no-owner --no-acl`). Tables a newer
+  release added are gone and `kysely_migration` is the dump's, so the next deploy's
+  migrations apply cleanly. The commit is sent only after the whole dump was read, and
+  the file is decrypted once before anything connects, so a corrupt file or a failed
+  restore leaves the target as it was. The target database must exist.
+- **It refuses the serving database** unless `--force`: it asks both servers for
+  their identity (`pg_control_system()`'s system identifier plus
+  `current_database()`), so no spelling of the URL (another host name, an address, a
+  percent-encoded name, `?dbname=`) gets past it. That query needs a superuser on
+  both (the compose `iris` role is one); it refuses when it cannot run. Off the box,
+  where `shared/secrets/database_url` is unreadable, it cannot check and refuses
+  unless `--force`.
+- **Pass the target URL in `RESTORE_TARGET_URL`**, not `--target`: a command line is
+  visible in `ps`. The URLs reach the container as files in a private temp
+  directory, so `docker inspect` does not show them either.
+- `--network` is the docker network the container joins to reach the databases:
+  `iris-production_default` for the production `postgres` service, the default `host`
+  for a server reachable from the host.
 
 **Into a scratch database on the production server** (a drill, or recovering a few
 rows). Bring the identity file to the box for the restore only, and remove it after:
@@ -282,43 +345,56 @@ rows). Bring the identity file to the box for the restore only, and remove it af
 sudo -i   # a root shell: an exported variable is on no command line
 cd "$(readlink -f /opt/iris-production/current)"
 docker compose exec -T postgres createdb -U iris iris_restore
-export RESTORE_TARGET_URL="postgres://iris:$(cat ../../shared/secrets/pg_password)@postgres:5432/iris_restore"
-./restore.sh ../../backups/iris-<time>.dump.age --identity /path/to/iris-backup-identity.txt \
+export RESTORE_TARGET_URL="postgres://iris:$(cat /opt/iris-production/shared/secrets/pg_password)@postgres:5432/iris_restore"
+./restore.sh /var/backups/iris/iris-<time>.dump.age --identity /root/iris-backup-identity.txt \
   --network iris-production_default
 # compare, then: docker compose exec -T postgres dropdb -U iris iris_restore
-shred -u /path/to/iris-backup-identity.txt
+shred -u /root/iris-backup-identity.txt
 ```
 
-`--network` is the docker network the restore container joins to reach the target:
-`iris-production_default` for the production `postgres` service, the default `host`
-for a server reachable from the host.
+**Over the production database** (disaster recovery), from a root shell:
 
-**Over the production database** (disaster recovery):
+1. `cd "$(readlink -f /opt/iris-production/current)"` and stop the writers:
+   `docker compose stop iris worker portal`.
+2. If the master key was lost too, restore it first:
+   ```bash
+   age -d -i /root/iris-backup-identity.txt /var/backups/iris/master_key-<time>.age \
+     > /opt/iris-production/shared/secrets/master_key
+   chown 1001:1001 /opt/iris-production/shared/secrets/master_key
+   chmod 400 /opt/iris-production/shared/secrets/master_key
+   ```
+3. Restore with the serving URL and `--force`:
+   ```bash
+   export RESTORE_TARGET_URL="$(cat /opt/iris-production/shared/secrets/database_url)"
+   ./restore.sh /var/backups/iris/iris-<time>.dump.age --identity /root/iris-backup-identity.txt \
+     --network iris-production_default --force
+   ```
+4. A dump older than the serving release has fewer migrations; apply them, then start
+   the services:
+   ```bash
+   docker compose run --rm --no-deps --entrypoint node iris dist/db/migrate.js
+   docker compose up -d --wait iris worker portal
+   ```
+5. `shred -u /root/iris-backup-identity.txt`.
 
-1. Stop the writers: `docker compose stop iris worker portal` (from the serving release).
-2. Restore with the serving URL and `--force`.
-3. If the master key was lost too, restore it first:
-   `age -d -i iris-backup-identity.txt master_key-<time>.age > shared/secrets/master_key`,
-   then `chown 1001:1001` and `chmod 400` it.
-4. `docker compose up -d --wait iris worker portal`. If the dump is from an older
-   release, the next deploy applies the pending migrations (expand/contract, above).
-
-**Onto a new box**: run the first deploy as usual (it creates the database and
-generates a new `pg_password`). Restore `master_key` before that deploy, because the
-deploy generates a new one only when the file is missing. Then restore the dump with
-`--force` as above.
+**Onto a new box**: restore `/opt/iris-production/shared/secrets/master_key` first
+(step 2; create the directory with `install -d -m 700`), because the first deploy
+generates a new key only when the file is missing. Run the first deploy as usual (it
+creates the database and a new `pg_password`), then steps 1, 3 and 4 above.
 
 ### Drill log
 
 Each drill restores a fresh backup into a scratch database and compares the row counts
 of every table with the source. Record each one here.
 
-| Date       | Where                              | Data                                                                                         | Dump (encrypted) | Backup | Restore | Result                                                     |
-| ---------- | ---------------------------------- | -------------------------------------------------------------------------------------------- | ---------------- | ------ | ------- | ---------------------------------------------------------- |
+| Date       | Where                              | Data                                                                                        | Dump (encrypted) | Backup | Restore | Result                                                          |
+| ---------- | ---------------------------------- | ------------------------------------------------------------------------------------------- | ---------------- | ------ | ------- | --------------------------------------------------------------- |
 | 2026-10-02 | local, pinned `postgres:17-alpine` | 96 MB: 100 orgs, 50,000 runs, 200,000 run results, 100,000 usage rows, migrations 0001-0005 | 13.3 MB          | 1.3 s  | 18.1 s  | Row counts of all 15 tables match, `usage_events` checksum too |
+| 2026-10-02 | same, after the review fixes       | same data, reseeded                                                                         | 13.3 MB          | 1.3 s  | 15.0 s  | Row counts of all 15 tables match, `usage_events` checksum too |
 
-The restore time includes starting the disposable container, about 9 s on that host
-(an empty database took 9.0 s).
+Restore times include the decrypt check, the serving-database check and starting the
+disposable container: about 9 s on the loaded host of the first drill (an empty
+database took 9.0 s), about 4 s at the second.
 
 ## Troubleshooting
 

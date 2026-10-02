@@ -53,6 +53,7 @@ jobs:
       # Tests launch a real browser; install Chromium + its OS deps first.
       - run: npx playwright install --with-deps chromium
       # age encrypts the backups in backup-script.test.ts (#274), as on the box.
+      - run: sudo apt-get update
       - run: sudo apt-get install -y --no-install-recommends age
       # IRIS launches Chromium sandboxed (#331), and ubuntu-24.04's AppArmor
       # blocks the unprivileged user namespaces the sandbox needs ("No usable
@@ -712,10 +713,11 @@ jobs:
           scp "${ssh_opts[@]}" docker-compose.production.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.yml"
           scp "${ssh_opts[@]}" docker/seccomp-chromium.json "$DEPLOY_USER@$DEPLOY_HOST:$release/docker/seccomp-chromium.json"
           scp "${ssh_opts[@]}" deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/deploy.sh"
-          # Backups (#274): not run by the deploy; the operator's systemd timer runs
-          # current/backup.sh (docs/runbook-production.md, "Backups and restore").
+          # Backups (#274): shipped for the operator to review and install as root-owned
+          # copies; the deploy never runs or installs them (docs/runbook-production.md).
           scp "${ssh_opts[@]}" deploy/backup.sh deploy/restore.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/"
-          scp "${ssh_opts[@]}" deploy/systemd/iris-backup.service deploy/systemd/iris-backup.timer "$DEPLOY_USER@$DEPLOY_HOST:$release/systemd/"
+          scp "${ssh_opts[@]}" deploy/systemd/iris-backup.service deploy/systemd/iris-backup.timer \
+            deploy/systemd/iris-backup-failed.service "$DEPLOY_USER@$DEPLOY_HOST:$release/systemd/"
           # Host ports only when set (defaults 4000 / 3000, nginx's upstreams).
           {
             printf "PORTAL_URL='%s'\nSMTP_FROM='%s'\n" "$PORTAL_URL" "$SMTP_FROM"
