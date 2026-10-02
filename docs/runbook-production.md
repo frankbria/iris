@@ -422,7 +422,8 @@ docker compose logs --no-log-prefix iris | jq -c 'select(.requestId == "<id>")'
 
 `outcome` is `ok`, `client_error` (bad request, unknown method, no session, a session
 limit, 4xx), `rate_limited`, `aborted` (the client left before the answer) or `error` (a
-server error, or a 5xx). Rate-limited and malformed frames are logged once per 10 s per
+server error, a 5xx, or a browser that would not start or died mid-request; an action
+that simply failed, such as a missing selector, is `ok`). Rate-limited and malformed frames are logged once per 10 s per
 connection, with a `suppressed` count (and a `rpc refusals suppressed` line on close);
 the metrics count every one. The server always makes its own `requestId`; a client's
 `X-Request-Id` (letters, digits, `._:-`, up to 64) is logged as `clientRequestId`. Logs never hold an API

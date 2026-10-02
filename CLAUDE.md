@@ -587,7 +587,11 @@ alerts".
   the id folded (`GET /v1/jobs/:id`), outcome `ok|client_error|rate_limited|error`. No
   org id on any series; `usage_events` is the per-org record. `-32600/-32601/-32602`
   and tenant-caused `-32000`s (thrown with `refused: true`: no session, session limits,
-  closed during launch) are `client_error`; other codes are `error`. A REST response the
+  closed during launch) are `client_error`; other codes are `error`. `executeBrowserAction`
+  answers every failure as `{ success: false, error }`; its outcome rides beside the reply
+  in a `WeakMap` (`tagged()`): a throw caught there (launch, page, dead browser,
+  translation) is `error`, missing instruction/actions `client_error`, a failed action
+  `ok`. A REST response the
   client abandoned is `aborted`. The watchdog's rate is error / (ok + error), so no tenant
   can raise or dilute it.
 - **One process-wide registry** (`metrics`). `startServer` re-registers its gauges

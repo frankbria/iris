@@ -229,6 +229,18 @@ const aiSpend = metrics.counter(
 /** How a request ended, for logs and metrics. */
 type Outcome = 'ok' | 'client_error' | 'rate_limited' | 'aborted' | 'error';
 
+/**
+ * `executeBrowserActions` answers every failure as `{ success: false, error }`, which a
+ * client already relies on. The outcome of the ones that are not "ok" rides beside the
+ * reply here, never in it: a server fault (Chromium would not start, the browser died,
+ * translation threw) is `error`, so the error rate sees a browser outage (#275).
+ */
+const resultOutcome = new WeakMap<object, Outcome>();
+const tagged = <T extends object>(result: T, outcome: Outcome): T => {
+  resultOutcome.set(result, outcome);
+  return result;
+};
+
 /** A JSON-RPC answer's outcome: the client's own mistakes are not server errors. */
 function rpcOutcome(code: number | undefined): Outcome {
   if (code === undefined) return 'ok';
@@ -1006,7 +1018,9 @@ export function startServer(
       reply(res);
       // executeBrowserAction: the action types that ran, never their selectors or values.
       const ran = (res.result as { results?: ExecutionResult[] } | undefined)?.results;
-      const outcome = refused ? 'client_error' : rpcOutcome(res.error?.code);
+      const outcome = refused
+        ? 'client_error'
+        : ((res.result && resultOutcome.get(res.result)) ?? rpcOutcome(res.error?.code));
       observeRequest(
         'rpc',
         rpcMethod(req),
@@ -1260,7 +1274,10 @@ async function executeBrowserActions(
       // Use provided actions directly
       actionsToExecute = actions;
     } else {
-      throw new Error('Either instruction or actions must be provided');
+      return tagged(
+        { success: false, results: [], error: 'Either instruction or actions must be provided' },
+        'client_error',
+      );
     }
 
     if (actionsToExecute.length === 0) {
@@ -1326,11 +1343,16 @@ async function executeBrowserActions(
       error: success ? undefined : 'Some actions failed',
     };
   } catch (error) {
-    return {
-      success: false,
-      results: [],
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
+    // Tenant-caused failures returned above; what throws is ours: a launch, a page, a
+    // browser that died mid-action, a translation that threw.
+    return tagged(
+      {
+        success: false,
+        results: [],
+        error: error instanceof Error ? error.message : 'Unknown error',
+      },
+      'error',
+    );
   } finally {
     session.busy--;
     session.lastActivity = Date.now();
