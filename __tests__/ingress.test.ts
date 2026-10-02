@@ -141,7 +141,15 @@ interface Reply {
       .replace(/listen (\[::\]:)?80;/g, `listen $1${httpPort};`)
       .replace(/listen (\[::\]:)?443 ssl;/g, `listen $1${httpsPort} ssl;`)
       .replace(/127\.0\.0\.1:4000/g, `127.0.0.1:${api.port}`)
-      .replace(/127\.0\.0\.1:3000/g, `127.0.0.1:${portal.port}`);
+      .replace(/127\.0\.0\.1:3000/g, `127.0.0.1:${portal.port}`)
+      // Test-only: a request from ::1 may name its client address in X-Test-Client
+      // (nginx's realip module), so the shipped zones can be fed IPv6 addresses this
+      // host does not have. Requests without the header keep their real peer.
+      .replace(
+        /^(\s*)ssl_session_cache .*$/m,
+        '$&\n$1set_real_ip_from ::1;\n$1real_ip_header X-Test-Client;',
+      );
+    expect(conf).toContain('real_ip_header X-Test-Client;');
     fs.writeFileSync(path.join(dir, 'iris.conf'), conf);
     fs.chmodSync(path.join(dir, 'iris.conf'), 0o644);
 
@@ -183,6 +191,9 @@ interface Reply {
     'x-real-ip': '198.51.100.9',
     // The RPC server's loopback healthcheck slot (#342): never from outside.
     'x-iris-probe': '1',
+    // Next checks server actions' Origin against X-Forwarded-Host.
+    'x-forwarded-host': 'evil.example',
+    forwarded: 'for=198.51.100.9;host=evil.example',
   };
 
   function expectPeerHeaders(h: http.IncomingHttpHeaders) {
@@ -191,6 +202,8 @@ interface Reply {
     expect(h['x-forwarded-proto']).toBe('https');
     expect(h.host).toBe(HOST);
     expect(h['x-iris-probe']).toBeUndefined();
+    expect(h['x-forwarded-host']).toBe(HOST);
+    expect(h.forwarded).toBeUndefined();
   }
 
   it('routes /v1/ to iris-api and everything else to the portal', async () => {
@@ -200,6 +213,17 @@ interface Reply {
     expect((await get('/dashboard')).body).toBe('portal');
     expect(api.seen.map((s) => s.path)).toEqual(['/v1/jobs/abc']);
     expect(portal.seen.map((s) => s.path)).toEqual(['/', '/api/auth/get-session', '/dashboard']);
+  });
+
+  // nginx answers a prefix location's slashless form with a redirect to it; either
+  // way the request itself never reaches iris-api.
+  it('does not send /v1 without its slash, or /v1x, to iris-api', async () => {
+    api.seen.length = 0;
+    const bare = await get('/v1');
+    expect(bare.status).toBe(301);
+    expect(bare.headers.location).toMatch(/\/v1\/$/);
+    expect((await get('/v1x/jobs')).body).toBe('portal');
+    expect(api.seen).toEqual([]);
   });
 
   it('overwrites client-sent X-Real-IP and X-Forwarded-For with the peer address', async () => {
@@ -290,6 +314,62 @@ interface Reply {
       });
     expect(await handshake('TLSv1.1')).toMatch(/alert protocol version/i);
     expect(await handshake('TLSv1.2')).toBe('TLSv1.2');
+  });
+
+  // Unlike TLS 1.1, nginx's default ciphers (HIGH:!aNULL:!MD5) allow this one, so the
+  // refusal comes from the template's ssl_ciphers.
+  it('refuses a TLS 1.2 cipher without forward secrecy, accepts an ECDHE one', async () => {
+    const cipher = (name: string) =>
+      new Promise<string>((resolve) => {
+        const s = tls.connect({
+          host: '127.0.0.1',
+          port: httpsPort,
+          servername: HOST,
+          ca: cert,
+          maxVersion: 'TLSv1.2',
+          ciphers: name,
+        });
+        s.on('secureConnect', () => {
+          resolve(s.getCipher().standardName);
+          s.end();
+        });
+        s.on('error', (e) => resolve(e.message));
+      });
+    expect(await cipher('AES128-GCM-SHA256')).toMatch(/handshake failure/i);
+    expect(await cipher('ECDHE-RSA-AES128-GCM-SHA256')).toBe(
+      'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
+    );
+  });
+
+  /** `n` concurrent requests as client `addr` (via the test-only realip header); 200 count. */
+  async function burstAs(addr: string, p: string, n: number): Promise<number> {
+    const replies = await Promise.all(
+      Array.from({ length: n }, () => get(p, { 'x-test-client': addr }, '::1')),
+    );
+    expect(replies.every((r) => r.status === 200 || r.status === 429)).toBe(true);
+    return replies.filter((r) => r.status === 200).length;
+  }
+
+  // Burst 20: a fresh budget lets ~21 of 30 through; a spent one only what refilled.
+  it('throttles IPv6 clients per /64, so rotating addresses in one /64 gains nothing', async () => {
+    expect(await burstAs('2001:db8:0:1::1', '/v1/jobs/v6', 30)).toBeGreaterThanOrEqual(20);
+    expect(await burstAs('2001:db8:0:1::2', '/v1/jobs/v6', 30)).toBeLessThan(10);
+    expect(await burstAs('2001:db8:0:2::1', '/v1/jobs/v6', 30)).toBeGreaterThanOrEqual(20);
+  });
+
+  it('throttles IPv4 clients per address', async () => {
+    expect(await burstAs('192.0.2.1', '/v1/jobs/v4', 30)).toBeGreaterThanOrEqual(20);
+    expect(await burstAs('192.0.2.2', '/v1/jobs/v4', 30)).toBeGreaterThanOrEqual(20);
+  });
+
+  // nginx matches locations on the decoded path, so an escaped spelling of /api/auth/
+  // gets the same limit (and the portal the URI as sent).
+  it('throttles an escaped /api/%61uth/ like /api/auth/', async () => {
+    const p = '/api/%61uth/sign-in/email';
+    portal.seen.length = 0;
+    const ok = await burstAs('192.0.2.50', p, 40);
+    expect(ok).toBeLessThan(40);
+    expect(portal.seen.filter((s) => s.path === p)).toHaveLength(ok);
   });
 
   // Last: they spend 127.0.0.1's budget in both zones.

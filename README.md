@@ -473,7 +473,8 @@ redirects http to https, routes `/v1/` (REST and WebSocket) to iris-api and the 
 the portal, overwrites `X-Real-IP`/`X-Forwarded-For` with the client's address,
 throttles per client IP (429), and sets HSTS and the other security headers. Keep both
 upstreams on loopback: the portal's rate limits trust `X-Real-IP`, which only the proxy
-may set.
+may set. If other sites share port 443, also check the `default_server`'s
+`ssl_protocols`/`ssl_ciphers`: it may settle the handshake before SNI selects this site.
 
 ---
 

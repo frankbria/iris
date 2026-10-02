@@ -38,7 +38,11 @@ export interface AuthEmail {
  *
  * - the client IP (rate-limit key) comes from `X-Real-IP` only (#347). The ingress
  *   (deploy/nginx/iris.conf) overwrites it with the peer address; `X-Forwarded-For`
- *   is whatever the client sent, and rotating it used to pick a fresh counter.
+ *   is whatever the client sent, and rotating it used to pick a fresh counter. So the
+ *   portal must be reachable only through the ingress (loopback bind, never a published
+ *   or public port): in production a request without the header shares one counter per
+ *   path with every other such request (`no-trusted-ip`), and any process that can
+ *   reach the port can name any `X-Real-IP`.
  *
  * ponytail: counters are in memory, which holds for one portal process; use
  * `storage: 'database'` (a new migration) for several (#316).
@@ -68,7 +72,8 @@ function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
         }),
     },
     rateLimit: { enabled: true },
-    ipAddress: { ipAddressHeaders: ['x-real-ip'] },
+    // BetterAuth applies no rate limit to a request it has no IP for, so tracking stays on.
+    ipAddress: { ipAddressHeaders: ['x-real-ip'], disableIpTracking: false },
   } satisfies Partial<BetterAuthOptions> & {
     ipAddress: NonNullable<BetterAuthOptions['advanced']>['ipAddress'];
   };

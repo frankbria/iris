@@ -30,7 +30,12 @@ const { createAuth } = require('./src/auth/config.ts');
     // #347: the client-IP header is pinned; the caller's other advanced keys are not.
     advanced: {
       cookiePrefix: 'probe',
-      ipAddress: { ipAddressHeaders: ['x-forwarded-for'], trustedProxies: ['10.0.0.0/8'] },
+      ipAddress: {
+        ipAddressHeaders: ['x-forwarded-for'],
+        trustedProxies: ['10.0.0.0/8'],
+        // No IP means no rate limit in BetterAuth: a caller must not turn tracking off.
+        disableIpTracking: true,
+      },
     },
   });
   const ctx = await auth.$context;
@@ -114,7 +119,11 @@ describe('shared auth config (require(esm))', () => {
     const out = await probe('http://localhost:3000');
     expect(out.advanced).toMatchObject({
       cookiePrefix: 'probe',
-      ipAddress: { ipAddressHeaders: ['x-real-ip'], trustedProxies: ['10.0.0.0/8'] },
+      ipAddress: {
+        ipAddressHeaders: ['x-real-ip'],
+        trustedProxies: ['10.0.0.0/8'],
+        disableIpTracking: false,
+      },
     });
   }, 30_000);
 

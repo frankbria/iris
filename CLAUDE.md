@@ -403,8 +403,14 @@ portal. No host details in the repo (`repo-hygiene.test.ts`).
   `$remote_addr`. `$proxy_add_x_forwarded_for` appends to the client's value, and
   BetterAuth (no `trustedProxies`) then trusts nothing and puts everyone in one
   bucket. `createAuth()` pins `ipAddressHeaders: ['x-real-ip']`, so a client-sent
-  `X-Forwarded-For` never picks a counter. Portal E2E therefore picks its counter
-  with `X-Real-IP`.
+  `X-Forwarded-For` never picks a counter, and pins `disableIpTracking: false` (no IP
+  means no rate limit at all). Portal E2E therefore picks its counter with `X-Real-IP`.
+  `X-Forwarded-Host` is overwritten too (Next checks server actions against it) and
+  `Forwarded` cleared.
+- **The portal must be reachable only through the ingress** (loopback bind, never a
+  published or public port). In production a request without `X-Real-IP` lands in
+  BetterAuth's shared `no-trusted-ip|<path>` bucket (sign-in: 3 per 10s for everyone
+  at once), and any local process that reaches the port can name any `X-Real-IP`.
 - **`X-Iris-Probe` is cleared.** Behind the proxy every peer is loopback, so a
   forwarded header would claim the healthcheck's extra slot (#342).
 - **`add_header` and `proxy_set_header` inherit only into a location with none of
@@ -414,7 +420,16 @@ portal. No host details in the repo (`repo-hygiene.test.ts`).
 - **`limit_req_zone` and `map` must be in `http {}`.** A site file is included there,
   so they sit at its top. Their names are global to the host's nginx: everything is
   prefixed `iris_` (a second `$connection_upgrade` fails `nginx -t`).
-- **Throttles**: `/v1/` 5 r/s per IP, burst 20 (an org's 300/min; counts upgrades,
+- **Throttle key is `$iris_client_key`**: IPv4 whole, IPv6 by its /64 (a map over
+  the first 8 bytes of `$binary_remote_addr`; nginx's PCRE matches bytes). Keyed on the
+  full address, one /64 holder rotates into 2^64 fresh budgets. The test feeds IPv6
+  addresses through a test-only realip header (`X-Test-Client`, trusted from `::1`).
+- **TLS 1.2 is ECDHE + AEAD only** (`ssl_ciphers`). On a shared 443 the handshake may
+  be settled by the host's `default_server` before SNI picks this block, so the
+  operator checks that server's `ssl_protocols`/`ssl_ciphers` too.
+- **`/v1` (no slash) is a 301 to `/v1/`** from nginx, never proxied. Locations match
+  the decoded path, so `/api/%61uth/` gets the auth throttle.
+- **Throttles**: `/v1/` 5 r/s per client, burst 20 (an org's 300/min; counts upgrades,
   not messages); `/api/auth/` 10 r/s, burst 20 (BetterAuth's general 100/10s; its
   per-route rules still apply behind it). Reads 75s, above the 30s heartbeat.
 - **Test** (`ingress.test.ts`): the template with only ports, upstreams and a
