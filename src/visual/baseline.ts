@@ -69,9 +69,15 @@ export class BaselineManager {
   }
 
   /**
-   * Load a baseline image with metadata
+   * Load a baseline image with metadata.
+   *
+   * @param testName - The baseline's name, or several in order of preference (a
+   *   current name, then a legacy one, #343). Every name is tried on the branch
+   *   before the fallback to main, so a branch's own baseline under an old name
+   *   wins over main's under the new one.
    */
-  async loadBaseline(testName: string, branch?: string): Promise<BaselineLoadResult> {
+  async loadBaseline(testName: string | string[], branch?: string): Promise<BaselineLoadResult> {
+    const names = Array.isArray(testName) ? testName : [testName];
     try {
       const targetBranch = branch || (await this.getCurrentBranch());
 
@@ -79,25 +85,27 @@ export class BaselineManager {
       const branches = targetBranch === 'main' ? ['main'] : [targetBranch, 'main'];
 
       for (const branchName of branches) {
-        const imagePath = this.generateBaselinePath(testName, branchName);
-        const metadataPath = this.generateMetadataPath(testName, branchName);
+        for (const name of names) {
+          const imagePath = this.generateBaselinePath(name, branchName);
+          const metadataPath = this.generateMetadataPath(name, branchName);
 
-        if (fs.existsSync(imagePath) && fs.existsSync(metadataPath)) {
-          const imageBuffer = fs.readFileSync(imagePath);
-          const metadataText = fs.readFileSync(metadataPath, 'utf-8');
-          const metadata = JSON.parse(metadataText) as BaselineMetadata;
+          if (fs.existsSync(imagePath) && fs.existsSync(metadataPath)) {
+            const imageBuffer = fs.readFileSync(imagePath);
+            const metadataText = fs.readFileSync(metadataPath, 'utf-8');
+            const metadata = JSON.parse(metadataText) as BaselineMetadata;
 
-          return {
-            success: true,
-            buffer: imageBuffer,
-            metadata,
-          };
+            return {
+              success: true,
+              buffer: imageBuffer,
+              metadata,
+            };
+          }
         }
       }
 
       return {
         success: false,
-        error: `Baseline not found for test '${testName}' in branches: ${branches.join(', ')}`,
+        error: `Baseline not found for test '${names.join("' or '")}' in branches: ${branches.join(', ')}`,
       };
     } catch (error) {
       return {

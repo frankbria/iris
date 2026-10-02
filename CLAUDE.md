@@ -679,9 +679,15 @@ They apply only to connections with a principal; local mode is untouched.
   where `current`/`diff`/`baseline` took the place of a branch name. `runId` (config, or
   `newRunId()`: UTC time plus 8 random hex characters) is returned on the result;
   `runArtifactPath()` refuses a run id or name outside `[A-Za-z0-9_-]`.
-- **Baselines use the new name**, but `loadBaseline` falls back to
-  `legacyArtifactName()` once, so an upgrade does not orphan existing baselines. The
-  next `--update-baseline` writes the new name.
+- **Baselines use the new name**, but `loadBaseline([newName, legacyName], ref)` still
+  finds one saved under `legacyArtifactName()`, so an upgrade does not orphan existing
+  baselines. Both names are tried on the branch before main's, so a feature branch's own
+  old-name baseline wins over main's new one. The next `--update-baseline` writes the
+  new name. Pages that used to collide (`/a/b`, `/a_b`) share the legacy file until
+  then: update their baselines after upgrading.
+- **The run id is on every surface**: the result, the JSON report (`runId`) and the
+  `iris visual` summary line. A caller-supplied `runId` is trusted to be unique; reuse
+  writes into the same run directory.
 - Runner tests set `artifactsDir` to a temp directory: the runner really creates the
   run directories (only `writeFileSync` is mocked there).
 

@@ -36,6 +36,14 @@ describe('artifactName', () => {
     expect(legacyArtifactName('/a/b', 'desktop')).toBe(legacyArtifactName('/a_b', 'desktop'));
   });
 
+  it('keeps a symbol-only device readable and stable under the baseline sanitizer', () => {
+    // BaselineManager collapses runs of dashes; a name it would rewrite gets one
+    // file name for the run artifact and another for the baseline.
+    const name = artifactName('/a', '!!!');
+    expect(name).toMatch(/^a_device-[0-9a-f]{10}$/);
+    expect(name).not.toMatch(/--/);
+  });
+
   it('separates devices', () => {
     expect(artifactName('/', 'desktop')).not.toBe(artifactName('/', 'mobile'));
   });

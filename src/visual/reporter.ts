@@ -404,6 +404,8 @@ export class VisualReporter {
           format: 'json',
           version: '1.0.0',
         },
+        // Names the run's artifact directory, `.iris/runs/<runId>/` (#343).
+        ...(results.runId && { runId: results.runId }),
         summary: results.summary,
         results: filteredResults,
         duration: results.duration,

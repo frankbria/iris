@@ -1034,7 +1034,7 @@ describe('VisualTestRunner', () => {
       await runner.run();
 
       expect(mockBaselineManager.resolveReference).toHaveBeenCalledWith('branch', 'develop');
-      expect(mockBaselineManager.loadBaseline).toHaveBeenCalledWith(expect.any(String), 'develop');
+      expect(mockBaselineManager.loadBaseline).toHaveBeenCalledWith(expect.any(Array), 'develop');
     });
 
     it('forwards the configured reference to saveBaseline when updating baselines', async () => {
@@ -1084,6 +1084,20 @@ describe('VisualTestRunner', () => {
       expect(second.results[0].screenshotPath).not.toBe(r.screenshotPath);
     });
 
+    it('puts the run id in the report it writes', async () => {
+      const { VisualReporter } = require('../../src/visual/reporter');
+      const report = jest
+        .spyOn(VisualReporter.prototype, 'generateReport')
+        .mockResolvedValue({ reportPath: 'r.json', screenshotPaths: [] } as any);
+      const result = await new VisualTestRunner({
+        ...defaultConfig,
+        pages: ['/'],
+        output: { format: 'json', path: 'r.json' },
+      }).run();
+      expect(report).toHaveBeenCalledWith(expect.objectContaining({ runId: result.runId }));
+      report.mockRestore();
+    });
+
     it('takes a caller-given run id', async () => {
       const result = await new VisualTestRunner({
         ...defaultConfig,
@@ -1101,23 +1115,23 @@ describe('VisualTestRunner', () => {
       }).run();
       const [x, y] = result.results;
       expect(x.screenshotPath).not.toBe(y.screenshotPath);
-      const names = mockBaselineManager.loadBaseline.mock.calls.map((c: unknown[]) => c[0]);
+      // The first name tried for each page is its own collision-free one.
+      const names = mockBaselineManager.loadBaseline.mock.calls.map((c: any[]) => c[0][0]);
       expect(new Set(names).size).toBe(2);
     });
 
-    it('still finds a baseline saved under the pre-#343 name, and does not overwrite it', async () => {
-      mockBaselineManager.loadBaseline.mockImplementation(
-        async (name: string) =>
-          (name === '_about_desktop'
-            ? { success: true, buffer: Buffer.from('legacy-baseline'), metadata: {} }
-            : { success: false, error: 'not found' }) as any,
-      );
+    it('asks for the new name, then the pre-#343 one, and does not overwrite a legacy hit', async () => {
+      mockBaselineManager.loadBaseline.mockResolvedValue({
+        success: true,
+        buffer: Buffer.from('legacy-baseline'),
+        metadata: {},
+      } as any);
       const result = await new VisualTestRunner({ ...defaultConfig, pages: ['/about'] }).run();
 
-      expect(mockDiffEngine.compare).toHaveBeenCalledWith(
-        Buffer.from('legacy-baseline'),
-        expect.any(Buffer),
-        expect.any(Object),
+      // BaselineManager tries both names on the branch before main (baseline-names.test.ts).
+      expect(mockBaselineManager.loadBaseline).toHaveBeenCalledWith(
+        [expect.stringMatching(/^about_desktop-[0-9a-f]{10}$/), '_about_desktop'],
+        'main',
       );
       expect(mockBaselineManager.saveBaseline).not.toHaveBeenCalled();
       expect(result.summary.newBaselines).toBe(0);

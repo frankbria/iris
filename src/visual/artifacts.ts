@@ -29,7 +29,12 @@ export function artifactName(page: string, device: string): string {
       .replace(/^-+|-+$/g, '')
       .slice(0, 60)
       .replace(/-+$/, '') || 'page';
-  const deviceSlug = device.replace(/[^A-Za-z0-9]+/g, '-').slice(0, 20) || 'device';
+  const deviceSlug =
+    device
+      .replace(/[^A-Za-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 20)
+      .replace(/-+$/, '') || 'device';
   const hash = createHash('sha256')
     .update(JSON.stringify([page, device]))
     .digest('hex');

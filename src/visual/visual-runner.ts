@@ -12,7 +12,6 @@ import { VisualCaptureEngine } from './capture';
 import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
 import { AIVisualClassifier } from './ai-classifier';
-import { StorageManager } from './storage';
 import { artifactName, legacyArtifactName, newRunId, runArtifactPath } from './artifacts';
 import { VisualReporter } from './reporter';
 import type { ProviderCredentials } from '../config';
@@ -149,7 +148,6 @@ export class VisualTestRunner {
   private captureEngine: VisualCaptureEngine;
   private diffEngine: VisualDiffEngine;
   private baselineManager: BaselineManager;
-  private storageManager: StorageManager;
   private aiClassifier?: AIVisualClassifier;
   private browser?: Browser;
   private runId = '';
@@ -161,7 +159,6 @@ export class VisualTestRunner {
     this.captureEngine = new VisualCaptureEngine();
     this.diffEngine = new VisualDiffEngine();
     this.baselineManager = new BaselineManager('.iris/baselines');
-    this.storageManager = new StorageManager('.iris/screenshots');
 
     // Initialize AI classifier if semantic analysis is enabled
     if (config.diff.semanticAnalysis) {
@@ -414,16 +411,13 @@ export class VisualTestRunner {
           )
         : undefined;
 
-      // Load baseline. One saved before #343 is under the old name: use it, so an
-      // upgrade does not orphan every baseline; the next update saves the new name.
-      let baselineResult = await this.baselineManager.loadBaseline(testName, resolvedRef);
-      if (!baselineResult.success) {
-        const legacy = await this.baselineManager.loadBaseline(
-          legacyArtifactName(pagePattern, device),
-          resolvedRef,
-        );
-        if (legacy.success) baselineResult = legacy;
-      }
+      // Load baseline. One saved before #343 is under the old name: still found, so an
+      // upgrade does not orphan every baseline, and on each branch before falling back
+      // to main's. The next update saves the new name.
+      const baselineResult = await this.baselineManager.loadBaseline(
+        [testName, legacyArtifactName(pagePattern, device)],
+        resolvedRef,
+      );
 
       // If updating baselines or no baseline exists
       if (this.config.updateBaseline || !baselineResult.success) {
@@ -609,6 +603,8 @@ export class VisualTestRunner {
 
     // Create full test result structure for reporter
     const fullResult: VisualTestResult = {
+      // The run id names the run's artifact directory; a report must carry it (#343).
+      runId: this.runId,
       summary,
       results,
       duration: 0, // Will be set by caller
