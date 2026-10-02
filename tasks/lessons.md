@@ -299,3 +299,11 @@ Write/Edit, not as a pre-push afterthought.
 - `verifyApiKey`'s side effects (writes `lastRequest`, spends `remaining`, refills) make it wrong for periodic re-checks. Read the row by id instead, and reproduce the plugin's own refill rule (`consumeRemaining`), or a refillable key reads as dead.
 - opencode/GLM stalled for the 5th run in a row; codex was the effective cross-family reviewer.
 
+## #254 / PRs #418, #419 (2026-10-02)
+- GitGuardian flags fake `user:pass@host` URLs in test fixtures as Basic Auth secrets, and it scans every commit in the PR, so fixing HEAD does not clear the check. Build such URLs at runtime (`['tester', 'not-a-secret'].join(':')`). Without force-pushing, the way out was to squash the final tree onto a fresh branch and PR (#418 → #419).
+- Rows written in one Postgres transaction share `created_at` (`now()` is the transaction start), and a uuid tie-break is random. Store an explicit `position` when order matters. The internal review caught it; the full run then showed the test failing.
+- Anything that reaches jsonb or text must be storable: Postgres rejects lone surrogates and U+0000, and the whole transaction rolls back. A failed history write that is logged and swallowed hides exactly that. Sanitize in the one place every stored string passes through.
+- The CI precision bot proposed a regex fix that would have dropped every visual and rpc run (`failed\(s\)`). Verify a suggested patch against real data before applying it.
+- An edit made after `prettier --write` failed CI's `format:check`. Run `npm run format:check` as the last step before every push.
+- opencode/GLM completed a review for the first time in six runs, and it read the repo at HEAD rather than the stale diff it was given.
+
