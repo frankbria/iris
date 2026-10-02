@@ -30,6 +30,7 @@ test("sign up, verify, log in, log out", async ({ page, context }) => {
   await page.getByLabel("Name").fill("E2E User")
   await page.getByLabel("Email").fill(email)
   await page.getByLabel("Password").fill(PASSWORD)
+  await page.getByLabel(/I agree to the/).check()
   await page.getByRole("button", { name: "Create account" }).click()
   await expect(page.getByText(`We sent a link to ${email}`)).toBeVisible()
 

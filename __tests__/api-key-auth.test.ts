@@ -157,7 +157,7 @@ const PASSWORD = 'correct-horse-battery-staple';
   });
   const user = async (name) => {
     const email = name + '@iris.test';
-    await auth.api.signUpEmail({ body: { email, password: PASSWORD, name } });
+    await auth.api.signUpEmail({ body: { email, password: PASSWORD, name, acceptedTerms: require('./src/legal/versions.ts').ACCEPTED_TERMS } });
     await pool.query('update "user" set "emailVerified" = true where email = $1', [email]);
     const res = await auth.api.signInEmail({ body: { email, password: PASSWORD }, returnHeaders: true });
     const headers = new Headers({ cookie: res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ') });

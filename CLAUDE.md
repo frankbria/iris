@@ -76,11 +76,12 @@ src/
 │   ├── server.ts          # `iris-mcp` bin — McpServer over StdioServerTransport
 │   └── tools.ts           # run_accessibility_test (axe violations only)
 ├── auth/config.ts         # createAuth(): the BetterAuth config portal + API share (ADR 0001 §4, #247)
+├── legal/                 # versions.ts: current ToS/AUP versions + ACCEPTED_TERMS; acceptance.ts: record/check (#276)
 ├── api-key-auth.ts        # Hosted `iris connect`: Bearer org API key -> { orgId, keyId } (#341)
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
@@ -349,6 +350,34 @@ Sign-up, verification, login and password reset run through BetterAuth in
 - **WSL: a connect to a closed 127.0.0.1 port hangs** (no RST, ~2 min) instead of being
   refused. `[::1]` refuses at once. It is the same blackhole as #382, and Playwright's
   already-running check pays it before every local E2E run.
+
+### Terms and AUP (issue #276)
+
+Drafts in `apps/portal/content/legal/{terms,acceptable-use}.md` (front matter `title`,
+`version`, `draft`), public at `/terms` and `/acceptable-use`. `draft: true` shows the
+"Draft — pending review; not yet in effect" banner; the owner removes it by deleting that
+line once counsel approves. Placeholders are `[square brackets]`: no company name,
+jurisdiction or address is invented. `lib/legal.ts` + `components/legal-document.tsx` are a
+tiny renderer (headings, `-` lists, bold, links; React escapes text, links limited to site
+paths and https).
+
+- **The enforced versions live in `src/legal/versions.ts`** (`LEGAL_VERSIONS`,
+  `ACCEPTED_TERMS` = `<terms>:<aup>`). A test fails if a file's front-matter `version`
+  differs. Publishing a new version: see docs/runbook-production.md.
+- **`terms_acceptances`** (migration 0006): one row per user, document and version, with
+  `accepted_at` and `ip`; keyed by user, so it is the one IRIS table without `org_id`
+  (`USER_SCOPED_TABLES` in the catalog test is the documented exemption; add to it only
+  for a person-scoped table). `on delete cascade` from `"user"`.
+- **Sign-up is enforced in `createAuth()`**: a `hooks.before` on `/sign-up/email` refuses
+  with `400 TERMS_NOT_ACCEPTED` unless the body's `acceptedTerms` equals `ACCEPTED_TERMS`
+  (so every caller, tests included, must send it), and `hooks.after` records the rows
+  with the client IP. `createAuth()` takes no `hooks` from its caller, and needs a `pg`
+  Pool or `{ db }` Kysely as `database`. The after-hook cannot undo the user: a failed
+  write is logged and the user meets `/accept-terms` at the next page.
+- **Re-acceptance**: `requireOrg()` redirects a user missing a current version to
+  `/accept-terms` (server page + server action; the form carries the versions it was
+  rendered for). Only portal pages are gated; API keys and the RPC are unaffected.
+- E2E uses a version bump simulated by aging the user's rows (`terms.spec.ts`).
 
 ### Portal Organizations (issue #250)
 

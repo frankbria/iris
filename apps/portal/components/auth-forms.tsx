@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { ACCEPTED_TERMS } from "../../../src/legal/versions"
 import { authClient } from "@/lib/auth-client"
 
 type AuthError = { status: number; code?: string; message?: string } | null
@@ -163,7 +164,9 @@ export function SignUpForm() {
             email,
             password: text(form, "password"),
             callbackURL: "/login?verified=1",
-          })
+            // The server refuses a sign-up without this (#276).
+            acceptedTerms: ACCEPTED_TERMS,
+          } as Parameters<typeof authClient.signUp.email>[0])
         )
         if (ok) setSentTo(email)
       }}
@@ -185,6 +188,19 @@ export function SignUpForm() {
         autoComplete="new-password"
         minLength={8}
       />
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" name="agree" required className="mt-1" />
+        <span>
+          I agree to the{" "}
+          <Link href="/terms" target="_blank" className="underline">
+            Terms of Service
+          </Link>{" "}
+          and{" "}
+          <Link href="/acceptable-use" target="_blank" className="underline">
+            Acceptable Use Policy
+          </Link>
+        </span>
+      </label>
     </AuthCard>
   )
 }

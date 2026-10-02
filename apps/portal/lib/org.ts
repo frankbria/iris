@@ -2,7 +2,8 @@ import { isAPIError } from "better-auth/api"
 import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 
-import { getAuth } from "@/lib/auth"
+import { hasAcceptedCurrent } from "../../../src/legal/acceptance"
+import { getAuth, getDb } from "@/lib/auth"
 
 /**
  * The signed-in user, their active org and their role in it (#250). Every portal page
@@ -24,6 +25,10 @@ export async function requireOrg() {
   const auth = getAuth()
   const session = await auth.api.getSession({ headers: requestHeaders })
   if (!session) redirect("/login")
+  // A new version of the terms (#276) sends the user to accept it before any tenant
+  // page. Only the portal is gated: API keys are the org's, and keep working.
+  if (!(await hasAcceptedCurrent(getDb(), session.user.id)))
+    redirect("/accept-terms")
 
   const readActive = () =>
     auth.api
