@@ -70,3 +70,44 @@ describe('processNextA11yJob', () => {
     jest.dontMock('../src/a11y/a11y-runner');
   });
 });
+
+describe('runWorker', () => {
+  it('survives a failing database, polls an empty queue, and stops on abort', async () => {
+    const { runWorker } = await import('../src/worker');
+    const controller = new AbortController();
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    let claims = 0;
+    const done = runWorker({
+      signal: controller.signal,
+      pollMs: 5,
+      jobs: {
+        // First claim: the database is down. Then an empty queue, polled until aborted.
+        claim: async () => {
+          claims += 1;
+          if (claims === 1) throw new Error('connection terminated');
+          if (claims === 4) controller.abort();
+          return null;
+        },
+        finish: async () => undefined,
+        fail: async () => undefined,
+      },
+    });
+    await done;
+    expect(claims).toBe(4);
+    expect(log.mock.calls.flat().join(' ')).toContain('connection terminated');
+    log.mockRestore();
+  });
+
+  it('wakes from the poll wait as soon as it is aborted', async () => {
+    const { runWorker } = await import('../src/worker');
+    const controller = new AbortController();
+    const done = runWorker({
+      signal: controller.signal,
+      pollMs: 60_000,
+      jobs: { claim: async () => null, finish: async () => undefined, fail: async () => undefined },
+    });
+    setImmediate(() => controller.abort());
+    // A worker stuck in its 60 s wait would time this test out.
+    await done;
+  });
+});
