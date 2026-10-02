@@ -766,14 +766,17 @@ program
       process.exit(2); // Invalid usage
       return;
     }
-    const { createPostgresDb, resolveDatabaseUrl } = await import('./db/postgres');
+    const { createPostgresDb, probeDatabase, resolveDatabaseUrl } = await import('./db/postgres');
     const { postgresJobs } = await import('./history-store');
     const { runWorker } = await import('./worker');
-    let db: ReturnType<typeof createPostgresDb>;
+    let db: ReturnType<typeof createPostgresDb> | undefined;
     try {
       db = createPostgresDb(resolveDatabaseUrl(), { queryTimeoutMs: 5_000 });
+      // Like hosted connect: a worker that cannot reach its queue must not look started.
+      await probeDatabase(db);
     } catch (err) {
       console.error(`Cannot start the worker: ${(err as Error).message}`);
+      await db?.destroy();
       process.exit(3); // Environment/runtime error
       return;
     }
@@ -788,7 +791,13 @@ program
     process.on('SIGTERM', onSignal);
     console.log('iris worker: waiting for jobs');
     try {
-      await runWorker({ jobs: postgresJobs(db), signal: stop.signal, pollMs: options.pollMs });
+      await runWorker({
+        jobs: postgresJobs(db),
+        signal: stop.signal,
+        pollMs: options.pollMs,
+        // Compose's liveness check reads its age (#273).
+        heartbeatFile: process.env.IRIS_WORKER_HEARTBEAT_FILE || undefined,
+      });
     } finally {
       await db.destroy();
     }

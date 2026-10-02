@@ -110,6 +110,7 @@ for (const key of [
   'IRIS_CONNECT_TOKEN_FILE', // #332
   // #247: read by better-auth (src/auth/config.ts) when a caller omits them.
   'BETTER_AUTH_SECRET',
+  'BETTER_AUTH_SECRET_FILE', // #273
   'BETTER_AUTH_URL',
   'BETTER_AUTH_TELEMETRY',
   // #331: '0' turns the Chromium sandbox off, which browser-hardening.test.ts
@@ -125,6 +126,11 @@ for (const key of [
   // admin URL, and pass each throwaway database's URL explicitly.
   'DATABASE_URL',
   'DATABASE_URL_FILE',
+  // #273: the portal's mail transport, read by the deploy's SMTP check.
+  'SMTP_URL',
+  'SMTP_URL_FILE',
+  'SMTP_FROM',
+  'IRIS_WORKER_HEARTBEAT_FILE',
 ]) {
   delete process.env[key];
 }

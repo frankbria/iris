@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { apiKeyAuthenticator, hostedServices, KeyStore, KeyVerifier } from '../src/api-key-auth';
 
 /**
@@ -116,5 +119,22 @@ describe('hostedServices', () => {
     await expect(hostedServices({ BETTER_AUTH_SECRET: 's' })).rejects.toThrow(
       'Hosted mode needs BETTER_AUTH_URL',
     );
+  });
+
+  test('reads the secret from BETTER_AUTH_SECRET_FILE (#273)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-auth-secret-'));
+    const file = path.join(dir, 'secret');
+    fs.writeFileSync(file, 's\n');
+    try {
+      // Past the secret check: the next thing missing is the URL.
+      await expect(hostedServices({ BETTER_AUTH_SECRET_FILE: file })).rejects.toThrow(
+        'Hosted mode needs BETTER_AUTH_URL',
+      );
+      await expect(
+        hostedServices({ BETTER_AUTH_SECRET: 's', BETTER_AUTH_SECRET_FILE: file }),
+      ).rejects.toThrow(/one at a time/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -1,5 +1,13 @@
 name: CI
-on: [push, pull_request]
+# `push` with no filter is every branch and every tag, exactly as `[push, pull_request]`
+# was. A `v*` tag push also runs deploy-production (#273), as does a manual dispatch
+# from a `v*` tag.
+on:
+  push:
+  pull_request:
+  # Production only: run it from a `v*` tag (Use workflow from: Tags). From a branch,
+  # deploy-production does not run; build does, as on a push.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -53,11 +61,23 @@ jobs:
       - run: npm run db:migrate && npm run db:migrate
         env:
           DATABASE_URL: postgres://iris:iris@localhost:5432/iris
+      # The portal image (#273), built on every run so a broken Dockerfile.portal fails
+      # here, not at the first staging deploy. portal-image.test.ts runs it.
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.portal
+          load: true
+          tags: iris-portal:ci
+          cache-from: type=gha,scope=portal
+          cache-to: type=gha,mode=max,scope=portal
       # IRIS_TEST_DATABASE_URL is an admin URL; the suite creates a database per
       # file. Required under CI, so a missing service fails rather than skips.
       - run: npm test
         env:
           IRIS_TEST_DATABASE_URL: postgres://iris:iris@localhost:5432/postgres
+          IRIS_TEST_PORTAL_IMAGE: iris-portal:ci
       # apps/portal (#247). `next build` type-checks, so there is no separate step.
       - run: npm run lint -w @iris/portal
       - run: npm test -w @iris/portal
@@ -250,6 +270,7 @@ jobs:
       # Tagged with the commit SHA as well as `staging`, because that is what
       # makes rollback a one-liner: redeploy a previous SHA.
       - if: steps.preflight.outputs.configured == 'true'
+        id: iris_image
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -259,6 +280,21 @@ jobs:
             ghcr.io/${{ github.repository }}:staging
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The portal image (#273), same tags in its own package. Staging does not run
+      # the portal yet; the step after the deploy boots this exact digest instead.
+      - if: steps.preflight.outputs.configured == 'true'
+        id: portal_image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.portal
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}-portal:${{ github.sha }}
+            ghcr.io/${{ github.repository }}-portal:staging
+          cache-from: type=gha,scope=portal
+          cache-to: type=gha,mode=max,scope=portal
 
       - if: steps.preflight.outputs.configured == 'true'
         name: Deploy and smoke test
@@ -473,3 +509,239 @@ jobs:
           # Independent of both: prove the shipped CLI runs.
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
             'docker exec iris-staging node dist/cli.js --version'
+
+      # The pushed portal digest serves /login (it needs no database or SMTP for that
+      # page), on the runner: staging has no portal service yet.
+      - if: steps.preflight.outputs.configured == 'true'
+        name: Boot the portal image
+        env:
+          PORTAL_REF: ghcr.io/${{ github.repository }}-portal@${{ steps.portal_image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker run -d --name portal-smoke -p 127.0.0.1:3000:3000 --read-only \
+            --cap-drop ALL --security-opt no-new-privileges:true "$PORTAL_REF"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/login || :)
+            [ "$code" = 200 ] && { echo "portal /login 200 after ${i}s"; exit 0; }
+            sleep 1
+          done
+          docker logs portal-smoke 2>&1 | tail -30
+          exit 1
+
+      # The record production promotes from (#273): `staged-<sha>` on both images,
+      # pointing at the digests this job just deployed and smoke-tested. A new tag on
+      # the same manifest, no rebuild. Last, so a failed deploy records nothing.
+      - if: steps.preflight.outputs.configured == 'true'
+        name: Record the staged digests
+        env:
+          REPO: ghcr.io/${{ github.repository }}
+          SHA: ${{ github.sha }}
+          IRIS_DIGEST: ${{ steps.iris_image.outputs.digest }}
+          PORTAL_DIGEST: ${{ steps.portal_image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "$REPO:staged-$SHA" "$REPO@$IRIS_DIGEST"
+          docker buildx imagetools create --tag "$REPO-portal:staged-$SHA" "$REPO-portal@$PORTAL_DIGEST"
+
+  # Promote what staging ran to production (issue #273, docs/runbook-production.md).
+  #
+  # On a `v*` tag push, or a manual run from a `v*` tag. Never builds or retags: it resolves the
+  # tag's commit, requires the `staged-<sha>` tags deploy-staging writes after a
+  # successful deploy, and deploys those exact digests with deploy/deploy.sh, which
+  # gates on the SMTP check and the migrations and rolls back on failed health.
+  #
+  # Secrets come from the `production` environment (same names as staging's plus the
+  # portal's); unlike staging, missing secrets fail the job: a release tag that
+  # did not deploy must not look green. Network path and ssh hardening as in
+  # deploy-staging, whose comments explain them.
+  deploy-production:
+    needs: build
+    # The ref must be a `v*` tag for a dispatch too: a dispatch input would let a run
+    # from any branch reach the production environment. The security boundary is the
+    # protected `v*` tags plus the environment's tag-only rule and required reviewer
+    # (docs/runbook-production.md), not `staged-<sha>`.
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      contents: read
+      packages: read # resolve the staged digests; the box pulls with this token
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      DEPLOY_DIR: /opt/iris-production
+    steps:
+      - name: Check the tag
+        run: |
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9A-Za-z._-]+$'; then
+            echo "::error::Not a release tag: '$RELEASE_TAG'"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      - id: preflight
+        env:
+          DEPLOY_HOST: ${{ secrets.HOST }}
+          DEPLOY_USER: ${{ secrets.USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.SSH_KEY }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          SMTP_URL: ${{ secrets.SMTP_URL }}
+          PORTAL_URL: ${{ vars.PORTAL_URL }}
+          SMTP_FROM: ${{ vars.SMTP_FROM }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          missing=''
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY BETTER_AUTH_SECRET SMTP_URL PORTAL_URL SMTP_FROM; do
+            [ -n "$(printf '%s' "${!name}" | tr -d '[:space:]')" ] || missing="$missing $name"
+          done
+          if [ -z "$TS_AUTHKEY" ] && { [ -z "$TS_OAUTH_CLIENT_ID" ] || [ -z "$TS_OAUTH_SECRET" ]; }; then
+            missing="$missing TS_AUTHKEY(or TS_OAUTH_CLIENT_ID+TS_OAUTH_SECRET)"
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::The production environment is missing:$missing (see docs/runbook-production.md)"
+            exit 1
+          fi
+          case "$PORTAL_URL" in https://*) ;; *) echo "::error::PORTAL_URL must be https"; exit 1 ;; esac
+          # settings.env is compose's .env syntax: one line, single-quoted.
+          case "$PORTAL_URL$SMTP_FROM" in *"'"* | *$'\n'*) echo "::error::PORTAL_URL/SMTP_FROM may not hold ' or a newline"; exit 1 ;; esac
+          if [ -n "$TS_AUTHKEY" ]; then echo "ts_auth=authkey" >> "$GITHUB_OUTPUT"; else echo "ts_auth=oauth" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Refuse a commit staging never deployed: its `staged-<sha>` tags exist only
+      # after deploy-staging succeeded on it. Pinned by digest from here on.
+      - id: digests
+        name: Resolve the staged digests
+        env:
+          REPO: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse 'HEAD^{commit}') # the checkout is the tag's commit
+          resolve() {
+            local digest
+            if ! digest=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$1:staged-$sha" 2>/dev/null); then
+              echo "::error::$1:staged-$sha does not exist: staging has not deployed $RELEASE_TAG ($sha)" >&2
+              return 1
+            fi
+            printf '%s@%s' "$1" "$digest" | grep -E '^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'
+          }
+          iris=$(resolve "$REPO")
+          portal=$(resolve "$REPO-portal")
+          echo "Deploying $RELEASE_TAG ($sha): $iris $portal"
+          { echo "iris=$iris"; echo "portal=$portal"; } >> "$GITHUB_OUTPUT"
+
+      - if: steps.preflight.outputs.ts_auth == 'authkey'
+        name: Join the tailnet (auth key)
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+
+      - if: steps.preflight.outputs.ts_auth == 'oauth'
+        name: Join the tailnet (OAuth)
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          # Must equal the OAuth client's FULL tag set (see deploy-staging).
+          tags: ${{ vars.TS_TAGS || 'tag:ci' }}
+
+      - name: Assert the tailnet is actually up
+        run: |
+          state=$(tailscale status --json 2>/dev/null | jq -r '.BackendState // "unknown"')
+          [ "$state" = Running ] || { echo "::error::tailnet not up: $state (see deploy-staging's notes)"; exit 1; }
+
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.HOST }}
+          DEPLOY_USER: ${{ secrets.USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          SMTP_URL: ${{ secrets.SMTP_URL }}
+          PORTAL_URL: ${{ vars.PORTAL_URL }}
+          SMTP_FROM: ${{ vars.SMTP_FROM }}
+          IRIS_API_PORT: ${{ vars.IRIS_API_PORT }}
+          PORTAL_PORT: ${{ vars.PORTAL_PORT }}
+          IRIS_IMAGE: ${{ steps.digests.outputs.iris }}
+          PORTAL_IMAGE: ${{ steps.digests.outputs.portal }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DEPLOY_HOST=$(printf '%s' "$DEPLOY_HOST" | tr -d '[:space:]')
+          DEPLOY_USER=$(printf '%s' "$DEPLOY_USER" | tr -d '[:space:]')
+          echo "::add-mask::$DEPLOY_HOST"
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Production requires a pinned host key: no trust-on-first-use.
+          if [ -z "${DEPLOY_SSH_KNOWN_HOSTS:-}" ]; then
+            echo "::error::Set SSH_KNOWN_HOSTS in the production environment"
+            exit 1
+          fi
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          # Keepalives: a box that stops answering mid-deploy fails the step in about a
+          # minute instead of holding it until the job timeout.
+          ssh_opts=(-i ~/.ssh/deploy_key -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+          # Paths and digests in the remote commands expand here, on the runner, on purpose.
+          # shellcheck disable=SC2029
+          box() { ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$@"; }
+
+          # Each run stages its own release directory; the serving one is not touched
+          # until deploy.sh's SMTP and migration gates pass (see deploy/deploy.sh).
+          release="$DEPLOY_DIR/releases/$RELEASE_TAG-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          box "set -eu; umask 077; install -d -m 700 $DEPLOY_DIR/releases $DEPLOY_DIR/shared $DEPLOY_DIR/shared/secrets
+            install -d -m 700 $release $release/docker $release/secrets"
+          scp "${ssh_opts[@]}" docker-compose.production.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.yml"
+          scp "${ssh_opts[@]}" docker/seccomp-chromium.json "$DEPLOY_USER@$DEPLOY_HOST:$release/docker/seccomp-chromium.json"
+          scp "${ssh_opts[@]}" deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/deploy.sh"
+          # Host ports only when set (defaults 4000 / 3000, nginx's upstreams).
+          {
+            printf "PORTAL_URL='%s'\nSMTP_FROM='%s'\n" "$PORTAL_URL" "$SMTP_FROM"
+            [ -z "$IRIS_API_PORT" ] || printf 'IRIS_API_PORT=%d\n' "$IRIS_API_PORT"
+            [ -z "$PORTAL_PORT" ] || printf 'PORTAL_PORT=%d\n' "$PORTAL_PORT"
+          } | box "cat > $release/settings.env"
+
+          # This release's secrets, over ssh's STDIN, never a remote command line (the
+          # process list of a shared box is readable by every user). Read by uid 1001
+          # (pwuser, and the portal image's user).
+          put_secret() {
+            printf '%s' "$2" | box "set -eu; umask 077; cd $release/secrets
+              cat > $1 && chown 1001:1001 $1 && chmod 400 $1"
+          }
+          put_secret better_auth_secret "$BETTER_AUTH_SECRET"
+          put_secret smtp_url "$SMTP_URL"
+
+          # Shared, generated ON the box once and never overwritten: the Postgres
+          # password (the volume keeps the one it was initialised with) and the BYOK
+          # master key (it seals every org's stored provider key; losing it loses them).
+          # Back both up apart from the database (#274). The URL is derived, and
+          # replaced only if it differs, since serving containers mount it.
+          box "set -eu; umask 077; cd $DEPLOY_DIR/shared/secrets
+            if [ ! -s pg_password ]; then head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > pg_password; chown 70:70 pg_password; chmod 400 pg_password; fi
+            if [ ! -s master_key ]; then printf 'k1:%s' \"\$(head -c 32 /dev/urandom | base64 | tr -d '\n')\" > master_key; chown 1001:1001 master_key; chmod 400 master_key; fi
+            printf 'postgres://iris:%s@postgres:5432/iris' \"\$(cat pg_password)\" > database_url.new
+            if cmp -s database_url.new database_url; then rm database_url.new; else
+              chown 1001:1001 database_url.new; chmod 400 database_url.new; mv database_url.new database_url; fi"
+
+          printf '%s' "$GHCR_TOKEN" | box "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+          # The refs were checked against ghcr.io/...@sha256:<64 hex> above, so they
+          # are safe on this command line.
+          box "cd $release && chmod 700 deploy.sh \
+            && IRIS_IMAGE='$IRIS_IMAGE' PORTAL_IMAGE='$PORTAL_IMAGE' ./deploy.sh; \
+            rc=\$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit \$rc"

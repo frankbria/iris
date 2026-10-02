@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import type { A11yJobParams, ClaimedJob, PostgresJobs } from './history-store';
 
 /**
@@ -77,19 +78,38 @@ export async function processNextA11yJob(jobs: WorkerJobs): Promise<ClaimedJob |
  * Polls until `signal` aborts; an abort lets the current job finish. A failure of the
  * database is logged and retried on the next tick: one bad moment must not end the worker.
  * ponytail: polling, not LISTEN/NOTIFY; add it when the poll interval shows up as latency.
+ *
+ * Liveness (#273): with `heartbeatFile`, the loop writes it at every tick, and a timer
+ * every `heartbeatMs` while a job runs, so a long scan still reads as alive. The gap
+ * between writes is at most max(pollMs, heartbeatMs) plus one claim; the compose
+ * healthcheck allows 180s.
  */
 export async function runWorker(options: {
   jobs: WorkerJobs;
   signal?: AbortSignal;
   pollMs?: number;
+  heartbeatFile?: string;
+  heartbeatMs?: number;
 }): Promise<void> {
-  const { jobs, signal, pollMs = 2_000 } = options;
+  const { jobs, signal, pollMs = 2_000, heartbeatFile, heartbeatMs = 30_000 } = options;
+  const beat = () => {
+    if (!heartbeatFile) return;
+    try {
+      fs.writeFileSync(heartbeatFile, `${Date.now()}\n`);
+    } catch (err) {
+      console.error('[iris] worker heartbeat:', (err as Error).message);
+    }
+  };
   while (!signal?.aborted) {
+    beat();
+    const timer = heartbeatFile ? setInterval(beat, heartbeatMs) : undefined;
     let ran = false;
     try {
       ran = (await processNextA11yJob(jobs)) !== null;
     } catch (err) {
       console.error('[iris] worker error:', (err as Error).message);
+    } finally {
+      clearInterval(timer);
     }
     if (!ran && !signal?.aborted) {
       await new Promise<void>((resolve) => {

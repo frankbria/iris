@@ -476,6 +476,13 @@ upstreams on loopback: the portal's rate limits trust `X-Real-IP`, which only th
 may set. If other sites share port 443, also check the `default_server`'s
 `ssl_protocols`/`ssl_ciphers`: it may settle the handshake before SNI selects this site.
 
+### Production deploy
+
+A `v*` tag on a commit that staging deployed promotes the exact image digests staging
+ran (iris and portal) to production, through `deploy/deploy.sh`: SMTP check and
+migrations first, rollback to the previous digests if health fails. Setup, promotion
+and rollback: [docs/runbook-production.md](docs/runbook-production.md).
+
 ---
 
 ## Using IRIS from an AI assistant

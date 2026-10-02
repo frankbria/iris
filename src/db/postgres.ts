@@ -1,6 +1,6 @@
-import * as fs from 'fs';
-import { Kysely, PostgresDialect } from 'kysely';
+import { Kysely, PostgresDialect, sql } from 'kysely';
 import { Pool } from 'pg';
+import { readSecretEnv } from '../secret-env';
 
 /**
  * The hosted database URL (#248, ADR 0001 §2): `DATABASE_URL`, or
@@ -11,14 +11,9 @@ import { Pool } from 'pg';
  * @throws when neither or both are set, or the file is empty
  */
 export function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const { DATABASE_URL: url, DATABASE_URL_FILE: file } = env;
-  if (url && file)
-    throw new Error('Set DATABASE_URL and DATABASE_URL_FILE one at a time, not both');
-  if (url) return url;
-  if (!file) throw new Error('Set DATABASE_URL (or DATABASE_URL_FILE) to a Postgres URL');
-  const fromFile = fs.readFileSync(file, 'utf8').trim();
-  if (!fromFile) throw new Error(`DATABASE_URL_FILE ${file} is empty`);
-  return fromFile;
+  const url = readSecretEnv('DATABASE_URL', env);
+  if (!url) throw new Error('Set DATABASE_URL (or DATABASE_URL_FILE) to a Postgres URL');
+  return url;
 }
 
 /**
@@ -54,4 +49,21 @@ export function createPostgresDb<DB = unknown>(
     console.error(`[iris] idle Postgres connection lost; the pool replaces it: ${err.message}`);
   });
   return new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
+}
+
+/**
+ * A trivial query, for startup and readiness checks: hosted `iris connect`, `iris
+ * worker` and the portal's /api/health (#273).
+ *
+ * @throws `Cannot reach the database: <message or code>`. Never the URL: an
+ *   inspected `pg` error can carry it, password included. A refused connection is
+ *   an AggregateError with an empty message, hence the code.
+ */
+export async function probeDatabase(db: Kysely<unknown>): Promise<void> {
+  try {
+    await sql`select 1`.execute(db);
+  } catch (err) {
+    const e = err as { message?: string; code?: string };
+    throw new Error(`Cannot reach the database: ${e?.message || e?.code || 'unknown error'}`);
+  }
 }

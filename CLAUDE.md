@@ -79,11 +79,12 @@ src/
 ├── api-key-auth.ts        # Hosted `iris connect`: Bearer org API key -> { orgId, keyId } (#341)
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
-│   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step
+│   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
 │   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
+├── secret-env.ts          # readSecretEnv(NAME): NAME or NAME_FILE, the one `_FILE` reader (#273)
 ├── url-policy-guard.ts    # Makes that stick per-request (CDP Fetch): redirect hops, sub-resources, popups (#337)
 ├── egress-proxy.ts        # Hosted: resolve-and-pin HTTP/CONNECT proxy under all Chromium traffic (#336)
 ├── report-encoding.ts     # One encoder per report format: HTML, XML (JUnit), Markdown, safe hrefs (#339)
@@ -124,6 +125,8 @@ __tests__/
 ├── ingress.test.ts                # Real nginx (Docker) over deploy/nginx/iris.conf: routing, header overwrite, WSS, 429, headers, TLS (#347)
 ├── auth-client-ip.test.ts         # Real Postgres: BetterAuth rate limits key on X-Real-IP, not a rotated X-Forwarded-For (#347)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
+├── deploy-script.test.ts          # deploy/deploy.sh on local Docker + a throwaway registry: gates, rollback, rerun (#273)
+├── portal-image.test.ts           # Built portal image (IRIS_TEST_PORTAL_IMAGE): SMTP check, /login, sign-up via _FILE secrets (#273)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
 │   ├── diff.test.ts
@@ -147,9 +150,11 @@ docs/                               # Detailed project documentation
 ├── phase2c_roadmap.md             # Phase 2C roadmap (ROADMAP — not started)
 ├── integration-surfaces.md        # Which integration surfaces exist and why (decision record)
 ├── adr/0001-hosted-architecture.md # Hosted SaaS architecture — anchors every Cycle 4 platform issue
+├── runbook-production.md          # Production setup, promote, rollback (#273)
 └── archive/                       # Superseded planning docs (historical)
 
 deploy/
+├── deploy.sh                      # On-box deploy by digest: SMTP + migration gates, rollback (#273)
 └── nginx/iris.conf                # TLS ingress site template for the host's nginx (#347)
 
 plans/
@@ -255,7 +260,9 @@ stays the local-mode store. `docker-compose.dev.yml` runs a dev Postgres on
   resolution is the same under ts-node, `dist/` and the image. The Kysely Migrator
   applies migrations in name order, records them in `kysely_migration`, and on
   Postgres runs the whole pending batch in **one** transaction. Never edit an
-  applied migration; add a new one.
+  applied migration; add a new one. Every migration must keep the previous release
+  working on the new schema (expand/contract): a production rollback runs it there,
+  and `migrateToLatest()` then applies nothing (#273).
 - **Every IRIS table gets `org_id NOT NULL` and an index that leads with it.**
   `__tests__/db/postgres.test.ts` checks this against the catalog, so a new table
   without them fails there. A table that references a run uses the composite key
@@ -437,6 +444,66 @@ portal. No host details in the repo (`repo-hygiene.test.ts`).
   under `CI`, skipped locally without Docker. "Per IP" is shown with `127.0.0.1` vs
   `::1`. The image's OpenSSL refuses TLS 1.1 on its own too, so the TLS check pins the
   outcome, not the `ssl_protocols` line.
+
+### Production Deploy (issue #273)
+
+`deploy-production` (ci.yml) promotes digests; it never builds. Runbook:
+`docs/runbook-production.md`. Compose: `docker-compose.production.yml` (iris-api, worker,
+portal, postgres; every image pinned by digest, app images only from `${IRIS_IMAGE:?}` /
+`${PORTAL_IMAGE:?}`).
+
+- **The security boundary is the protected `v*` tag + the `production` environment's
+  tag-only rule and required reviewer**, not the workflow. Without them a collaborator's
+  branch workflow could run in `production` and read its secrets. The job runs only on
+  a `v*` ref, for a dispatch too (no tag input: an input would let a branch run deploy).
+- **`staged-<sha>` is a record, not a boundary**: deploy-staging tags both images
+  (`imagetools create`, no rebuild) as its *last* step; anything with `packages: write`
+  could move it. Staging runs token mode without worker/portal, so it proves the iris
+  image boots (plus the portal digest serving `/login` on the runner), not the hosted stack.
+- **One directory per release** (`releases/<tag>-<run>-<attempt>/`: compose, settings.env,
+  per-release secrets); `shared/secrets/` holds pg_password, master_key, database_url
+  (rewritten only if it differs: serving containers mount it). `current` is switched only
+  once the new release is healthy (after the gates and the health wait), so a deploy cut
+  off mid-way keeps its rollback target. Postgres is recreated only when its pinned digest
+  changed (a deliberate upgrade, before the gates, not rolled back);
+  rollback runs compose from the previous release's directory (its files, settings,
+  images). Compose always runs from a release's **real path**, so bind mounts name that
+  release's files; via the `current` link a restart would follow the link.
+- **Migrations are forward-only; rollback relies on expand/contract.** `migrateToLatest()`
+  succeeds as a no-op when the database has migrations the release does not know and all
+  of its own are applied (an older release on a newer schema), and refuses when it also
+  has pending ones (branched off before the newer release). Kysely alone throws
+  "corrupted migrations" for both.
+- **Health**: iris-api `GET /` -> 404 (the job API, before auth; the token check cannot
+  authenticate in hosted mode, #309). Portal `/api/health` (dynamic, `no-store`): 200 only
+  when getAuth() builds, the master key loads and `select 1` answers; 503 with no detail.
+  Worker: `probeDatabase()` at startup (exit 3), heartbeat file written per poll and every
+  30s during a job (`IRIS_WORKER_HEARTBEAT_FILE`), compose fails it at 180s.
+- **Portal image** (`Dockerfile.portal`, context = repo root): Next `output:
+  'standalone'` traced from the repo root (`outputFileTracingRoot`), server at
+  `apps/portal/server.js`. Its ignore file is `Dockerfile.portal.dockerignore`, which
+  only BuildKit reads (the legacy builder ignores it and fails on `apps/`). Keep
+  `apps/portal/e2e` and `__tests__` in the context: `next build` type-checks them.
+  `next start` (portal E2E) still works with standalone output.
+- **The SMTP check is compiled separately**: `scripts/verify-smtp.ts` → tsc CommonJS
+  into `/app/verify` (own `{"type":"commonjs"}`), plus `node_modules/nodemailer`
+  copied in, since Next bundles nodemailer into chunks and does not trace it. It
+  shares `lib/mail.ts` with the portal and has its own 15s timer (nodemailer waits 2
+  min on a blackhole).
+- **uid 1001 everywhere.** The portal image runs as `portal` (1001) like pwuser, so the
+  deploy writes every app secret file once, owned by 1001. `pg_password` is 70.
+- **`_FILE` secrets go through `readSecretEnv()`** (src/secret-env.ts): `resolveDatabaseUrl`,
+  `resolveKeyring`, `hostedServices`' `BETTER_AUTH_SECRET`, and the portal's
+  `BETTER_AUTH_SECRET` / `SMTP_URL`. Do not add another reader.
+- **`deploy-script.test.ts`** pushes busybox images to a `registry:2` on a loopback port
+  so refs are real digests, and stages release directories as the job does. COPY-only
+  Dockerfiles (each RUN is a container: tens of seconds on a loaded WSL daemon) and
+  `BUILDX_BUILDER=default` (CI's setup-buildx-action makes a docker-container builder
+  current, which would not load the image). The worker uses the production compose
+  file's own heartbeat check. Bash reads a script while running it: do not edit
+  `deploy.sh` during a run.
+- **Tag pushes already ran `build`** (`on: push` has no filter); adding
+  `workflow_dispatch` leaves push/PR behaviour unchanged.
 
 ### Container Deployment (issue #192)
 
