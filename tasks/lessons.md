@@ -292,3 +292,10 @@ Write/Edit, not as a pre-push afterthought.
 - A mutation that makes a spawned server keep listening hangs Jest until the hook timeout, not just the one test. Tests that expect a child to exit should race the exit against a timer and SIGKILL the child (`exitCode()` in `api-key-auth.test.ts`).
 - `codex review` writes nothing until it finishes, so an empty output file is not a stall. opencode/GLM stalled for the 4th run in a row; codex plus the CI GLM workflow covered the cross-family passes.
 
+## #342 / PR #416 (2026-10-02)
+- A demo step that starts a server with `&` and then calls a bare `wait` (to collect its clients) deadlocks: `wait` waits for the server too. Kill the server before `wait`, or `wait` on the client PIDs only.
+- Codex caught a hole in my own documented invariant ("malformed frames are charged"): the JSON parse returned before the rate check. When writing an invariant into CLAUDE.md, grep for every early `return` on the path it claims to cover.
+- Token buckets on `Date.now()` drain on a backward clock step, which WSL2 does (#190). Rate code uses `performance.now()`.
+- `verifyApiKey`'s side effects (writes `lastRequest`, spends `remaining`, refills) make it wrong for periodic re-checks. Read the row by id instead, and reproduce the plugin's own refill rule (`consumeRemaining`), or a refillable key reads as dead.
+- opencode/GLM stalled for the 5th run in a row; codex was the effective cross-family reviewer.
+
