@@ -163,6 +163,11 @@ health checks are the first run of that combination.
    (its compose file, settings, secrets and images), leaves `current` where it was,
    and exits non-zero.
 
+A job the recreated worker was running is not lost (#435): its claim stops heartbeating,
+and about 3 minutes later any worker's reaper requeues it (up to 3 attempts, then it is
+failed with "The job was interrupted too many times"). A scan restarts from the
+beginning, so a tenant sees a longer run, not an error.
+
 If step 1, 2 or 3 fails, the script exits non-zero and nothing has changed: the serving
 release's files and containers are untouched. The first deploy has no previous
 release, so it says so and exits non-zero without a rollback. `current` only ever

@@ -145,7 +145,7 @@ const result = {
     const id = await enqueue();
     const job = (await jobs().claim('a11y'))!;
     await jobs().fail(job, 'boom');
-    await expect(jobs().finish(job, result)).rejects.toThrow('not running');
+    expect(await jobs().finish(job, result)).toBe(false);
     expect((await sql`select 1 from run_results where run_id = ${id}`.execute(db)).rows).toEqual(
       [],
     );
@@ -193,5 +193,196 @@ const result = {
     expect(await jobs().forOrg(A).enqueue({ kind: 'a11y', params }, cap)).toEqual(
       expect.any(String),
     );
+  });
+
+  describe('reaping stuck jobs (#435)', () => {
+    // Staleness is simulated by moving the heartbeat back, not by sleeping.
+    const age = (id: string, seconds: number) =>
+      sql`update runs set heartbeat_at = now() - make_interval(secs => ${seconds}) where id = ${id}`.execute(
+        db,
+      );
+    const row = async (id: string) =>
+      (
+        await sql<{
+          status: string;
+          attempts: number;
+          claim_token: string | null;
+          heartbeat_at: Date | null;
+          started_at: Date | null;
+          error: string | null;
+        }>`select status, attempts, claim_token, heartbeat_at, started_at, error from runs where id = ${id}`.execute(
+          db,
+        )
+      ).rows[0];
+    const usageCount = async () => (await sql`select 1 from usage_events`.execute(db)).rows.length;
+    const STALE = { staleMs: 180_000 };
+
+    it('claim counts the attempt and sets a token and heartbeat', async () => {
+      const id = await enqueue();
+      const job = (await jobs().claim('a11y'))!;
+      expect(job.attempts).toBe(1);
+      expect(job.claimToken).toEqual(expect.any(String));
+      expect(await row(id)).toMatchObject({ attempts: 1, claim_token: job.claimToken });
+      expect((await row(id)).heartbeat_at).toBeInstanceOf(Date);
+    });
+
+    it('requeues a stuck job, and leaves a fresh one alone', async () => {
+      const stuck = await enqueue();
+      const fresh = await enqueue();
+      await jobs().claim('a11y');
+      await jobs().claim('a11y');
+      await age(stuck, 200);
+      expect(await jobs().reapStuck(STALE)).toEqual({ requeued: 1, failed: 0 });
+      expect(await row(stuck)).toMatchObject({
+        status: 'queued',
+        claim_token: null,
+        heartbeat_at: null,
+        started_at: null,
+        attempts: 1,
+      });
+      expect((await row(fresh)).status).toBe('running');
+      expect(await jobs().forOrg(A).get(stuck)).toMatchObject({
+        status: 'queued',
+        startedAt: null,
+      });
+      expect((await jobs().claim('a11y'))!.attempts).toBe(2);
+    });
+
+    it('a late finish by the reaped claim writes nothing; the new claim finishes once', async () => {
+      const id = await enqueue();
+      const old = (await jobs().claim('a11y'))!;
+      await age(id, 200);
+      await jobs().reapStuck(STALE);
+      const next = (await jobs().claim('a11y'))!;
+      expect(next.claimToken).not.toBe(old.claimToken);
+
+      // Both while the job is queued again and while another worker holds it.
+      expect(await jobs().finish(old, result)).toBe(false);
+      expect(await jobs().fail(old, 'late')).toBe(false);
+      expect((await sql`select 1 from run_results`.execute(db)).rows).toEqual([]);
+      expect(await usageCount()).toBe(0);
+      expect((await row(id)).status).toBe('running');
+
+      expect(await jobs().finish(next, result)).toBe(true);
+      expect(await jobs().finish(next, result)).toBe(false);
+      expect((await sql`select 1 from run_results`.execute(db)).rows).toHaveLength(1);
+      expect(await usageCount()).toBe(1);
+    });
+
+    it('fails a job whose attempts are used up, with no usage', async () => {
+      const id = await enqueue();
+      for (let i = 0; i < 3; i++) {
+        await jobs().claim('a11y');
+        await age(id, 200);
+        expect(await jobs().reapStuck({ ...STALE, maxAttempts: 3 })).toEqual(
+          i < 2 ? { requeued: 1, failed: 0 } : { requeued: 0, failed: 1 },
+        );
+      }
+      expect(await row(id)).toMatchObject({
+        status: 'failed',
+        error: 'The job was interrupted too many times',
+        claim_token: null,
+      });
+      expect(await jobs().forOrg(A).get(id)).toMatchObject({
+        status: 'failed',
+        finishedAt: expect.any(Date),
+      });
+      expect(await jobs().claim('a11y')).toBeNull();
+      expect(await usageCount()).toBe(0);
+    });
+
+    it('frees the org cap after a reap to failed and after a requeue and finish', async () => {
+      const cap = { maxOutstanding: 1 };
+      const enq = () => jobs().forOrg(A).enqueue({ kind: 'a11y', params }, cap);
+      const id = (await enq())!;
+      await jobs().claim('a11y');
+      expect(await enq()).toBeNull();
+
+      await age(id, 200);
+      await jobs().reapStuck({ ...STALE, maxAttempts: 2 }); // requeued: still counts
+      expect(await enq()).toBeNull();
+      const job = (await jobs().claim('a11y'))!;
+      await age(id, 200);
+      await jobs().reapStuck({ ...STALE, maxAttempts: 2 }); // attempts used up: failed
+      expect(await enq()).toEqual(expect.any(String));
+      expect(job.attempts).toBe(2);
+
+      await sql`delete from runs`.execute(db);
+      const id2 = (await enq())!;
+      await jobs().claim('a11y');
+      await age(id2, 200);
+      await jobs().reapStuck(STALE);
+      await jobs().finish((await jobs().claim('a11y'))!, result);
+      expect(await enq()).toEqual(expect.any(String));
+    });
+
+    it('a heartbeat keeps a long job from being reaped', async () => {
+      const id = await enqueue();
+      const job = (await jobs().claim('a11y'))!;
+      await age(id, 200);
+      expect(await jobs().heartbeat(job)).toBe(true);
+      expect(await jobs().reapStuck(STALE)).toEqual({ requeued: 0, failed: 0 });
+      expect((await row(id)).status).toBe('running');
+    });
+
+    it('a heartbeat of a lost claim reports false and revives nothing', async () => {
+      const id = await enqueue();
+      const old = (await jobs().claim('a11y'))!;
+      await age(id, 200);
+      await jobs().reapStuck(STALE);
+      expect(await jobs().heartbeat(old)).toBe(false);
+      expect((await row(id)).heartbeat_at).toBeNull();
+    });
+
+    it('two concurrent reapers process a stuck job once', async () => {
+      const ids = [await enqueue(), await enqueue(), await enqueue()];
+      for (const id of ids) {
+        await jobs().claim('a11y');
+        await age(id, 200);
+      }
+      const counts = await Promise.all([jobs().reapStuck(STALE), jobs().reapStuck(STALE)]);
+      expect(counts.reduce((n, c) => n + c.requeued, 0)).toBe(3);
+      expect(counts.reduce((n, c) => n + c.failed, 0)).toBe(0);
+      for (const id of ids) expect((await row(id)).attempts).toBe(1);
+    });
+
+    it('a job claimed by a worker that died is reaped and completed by another worker', async () => {
+      const { processNextA11yJob } = await import('../../src/worker');
+      jest.doMock('../../src/a11y/a11y-runner', () => ({
+        AccessibilityRunner: class {
+          async run() {
+            return result;
+          }
+        },
+      }));
+      try {
+        const id = await enqueue();
+        await jobs().claim('a11y'); // the dead worker: claims, then never reports again
+        await age(id, 200);
+        await jobs().reapStuck(STALE);
+        const done = await processNextA11yJob(jobs());
+        expect(done).toMatchObject({ id, attempts: 2 });
+        expect(await jobs().forOrg(A).get(id)).toMatchObject({
+          status: 'failed', // the scan's verdict (a critical violation), not an interruption
+          results: [{ url: 'https://a.example/', passed: false }],
+        });
+        expect(await usageCount()).toBe(1);
+      } finally {
+        jest.dontMock('../../src/a11y/a11y-runner');
+      }
+    });
+
+    it('reaps a running row from before the migration (no heartbeat) by its start time', async () => {
+      const id = await enqueue();
+      await sql`update runs set status = 'running', started_at = now() - interval '1 hour'
+        where id = ${id}`.execute(db);
+      const recent = await enqueue();
+      await sql`update runs set status = 'running', started_at = now() where id = ${recent}`.execute(
+        db,
+      );
+      expect(await jobs().reapStuck(STALE)).toEqual({ requeued: 1, failed: 0 });
+      expect((await row(id)).status).toBe('queued');
+      expect((await row(recent)).status).toBe('running');
+    });
   });
 });
