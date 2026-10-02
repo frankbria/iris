@@ -12,6 +12,7 @@ import {
 import { chromiumIsInstalled } from './browser';
 import { Page } from 'playwright';
 import type { HistoryStore, TenantScope } from './history-store';
+import type { AICredentials } from './ai-client/credentials';
 
 export interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -261,6 +262,13 @@ export function startServer(
      * is recorded under its org and API key. Local connections record nothing.
      */
     history?: { forOrg(scope: TenantScope): Pick<HistoryStore, 'record'> };
+    /**
+     * A tenant's AI credentials (#258): BYOK (#344) or managed credits (#346). `null`,
+     * or no resolver at all, means the tenant has no AI: its instructions get pattern
+     * translation only, and the process-wide `*_API_KEY` is never used for it
+     * (ADR 0001 §5). Local (token) connections keep the process configuration.
+     */
+    aiCredentials?: (principal: Principal) => Promise<AICredentials | null>;
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
     limits?: Partial<ServerLimits>;
   },
@@ -613,6 +621,7 @@ export function startServer(
                 actions,
                 url,
                 limits.maxActionsPerRequest,
+                options?.aiCredentials,
               );
             });
             if (principal && options?.history) {
@@ -819,6 +828,7 @@ async function executeBrowserActions(
   actions: Action[] | undefined,
   url: string | undefined,
   maxActions: number,
+  aiCredentials?: (principal: Principal) => Promise<AICredentials | null>,
 ): Promise<{
   success: boolean;
   results: ExecutionResult[];
@@ -836,11 +846,18 @@ async function executeBrowserActions(
 
     // If instruction provided, translate it to actions
     if (instruction) {
-      // A tenant's AI translation is charged to, and gated by, its org's budget (#255).
+      // A tenant's AI translation is charged to, and gated by, its org's budget
+      // (#255), and runs on its own credentials, never the operator's (#258).
+      const principal = session.principal;
       const translation = await translate(
         instruction,
         url ? { url } : undefined,
-        session.principal ? { orgId: session.principal.orgId } : {},
+        principal
+          ? {
+              orgId: principal.orgId,
+              credentials: aiCredentials ? await aiCredentials(principal) : null,
+            }
+          : {},
       );
       translationResult = translation;
       actionsToExecute = translation.actions;

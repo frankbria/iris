@@ -445,9 +445,44 @@ describe('AI spend is charged to the org (#255)', () => {
       const a = await open(url, as('key-a'));
       await call(a, 'launchBrowser');
       await call(a, 'executeBrowserAction', { instruction: 'check the order total' });
+      // No credentials resolver: the tenant has no AI, and the operator's process-wide
+      // keys are never used for it (#258).
       expect(translate).toHaveBeenCalledWith('check the order total', undefined, {
         orgId: 'org-a',
+        credentials: null,
       });
+    } finally {
+      translate.mockRestore();
+    }
+  });
+
+  test("an instruction runs with the principal's own AI credentials (#258)", async () => {
+    const translate = jest
+      .spyOn(translatorModule, 'translate')
+      .mockResolvedValue({ actions: [], method: 'ai', confidence: 0, reasoning: 'stub' });
+    const asked: Principal[] = [];
+    try {
+      const url = await serve({
+        aiCredentials: async (principal) => {
+          asked.push(principal);
+          return principal.orgId === 'org-a' ? { provider: 'openai', apiKey: 'sk-org-a' } : null;
+        },
+      });
+      const a = await open(url, as('key-a'));
+      const b = await open(url, as('key-b'));
+      await call(a, 'launchBrowser');
+      await call(b, 'launchBrowser');
+      await call(a, 'executeBrowserAction', { instruction: 'check the order total' });
+      await call(b, 'executeBrowserAction', { instruction: 'check the order total' });
+      expect(translate).toHaveBeenNthCalledWith(1, 'check the order total', undefined, {
+        orgId: 'org-a',
+        credentials: { provider: 'openai', apiKey: 'sk-org-a' },
+      });
+      expect(translate).toHaveBeenNthCalledWith(2, 'check the order total', undefined, {
+        orgId: 'org-b',
+        credentials: null,
+      });
+      expect(asked.map((p) => p.orgId)).toEqual(['org-a', 'org-b']);
     } finally {
       translate.mockRestore();
     }

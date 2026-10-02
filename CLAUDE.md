@@ -99,6 +99,7 @@ __tests__/
 ├── ai-client-preprocessor.test.ts # Preprocessor tests (24 tests)
 ├── ai-client-batch4.test.ts       # Cache + cost tracker tests (19 tests)
 ├── ai-client-models.test.ts       # Model pins, provider probe, resolution (26 tests)
+├── ai-credentials.test.ts         # Injected AI credentials: own key per request, no process keys, no other vendor (#258)
 ├── ai-tenant-scope.test.ts        # Ledger and vision cache per org: breakers, reservations, run-scoped stats, cache isolation (#255)
 ├── browser-hardening.test.ts      # One launch factory: spawned argv has no --no-sandbox; context hardening; src/ guard (#331)
 ├── egress-proxy.test.ts           # Proxy over real sockets: resolved-address refusals, rebinding pin, positive controls (#336)
@@ -646,6 +647,25 @@ They apply only to connections with a principal; local mode is untouched.
   `IRIS_HOSTED=1` with a token or no auth. `iris connect` is the enforcing caller.
 - Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`
   (real Postgres, spawned hosted `iris connect`, keys made through BetterAuth).
+
+### Per-Request AI Credentials (issue #258)
+
+- **`AICredentials { provider, apiKey?, endpoint?, model? }`** (src/ai-client/credentials.ts)
+  is one tenant's credential for one request. `configFromCredentials(creds, { kind,
+  fallback })` builds the client config from it alone: no env, no `.env`, no
+  `~/.iris/config.json`, no other vendor's key, and `fallback` only from the caller (the
+  org's opt-in), never the process config's `ai.fallback`.
+- **`translate(…, { orgId, credentials })`**: injected credentials replace the process
+  configuration; `credentials: null` means the tenant has no AI (pattern translation
+  only), and is never a reason to use the process-wide keys (ADR 0001 §5). Omitted is
+  local mode, unchanged.
+- **Vision**: construct `SmartAIVisionClient` / the classifier with
+  `configFromCredentials(creds, { kind: 'vision' })`. Its existing vendor scoping
+  (`credentialsFor`, #74/#245) then has only the tenant's vendor, so even with the org's
+  fallback on, no other vendor is contacted.
+- **Hosted RPC**: `startServer({ aiCredentials: (principal) => … })` resolves a tenant's
+  credentials per request. Hosted `iris connect` passes none yet, so tenants get pattern
+  translation only until BYOK (#344) and managed credits (#346) supply the resolver.
 
 ### Tenant-Scoped Ledger and Vision Cache (issue #255)
 

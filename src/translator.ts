@@ -1,4 +1,5 @@
 import { loadConfig, validateConfig } from './config';
+import { configFromCredentials, type AICredentials } from './ai-client/credentials';
 import { createResolvedAIClient, AITranslationRequest } from './ai-client';
 
 // The action vocabulary lives in its own leaf module so the AI client can share
@@ -33,8 +34,13 @@ function assertInstructionLength(instruction: string): void {
 export async function translate(
   instruction: string,
   context?: { url?: string },
-  /** Hosted: the org an AI translation is charged to (#255). */
-  scope: { orgId?: string } = {},
+  /**
+   * Hosted: the org an AI translation is charged to (#255), and the credentials it
+   * runs with (#258). Injected credentials replace the process configuration
+   * entirely; `null` means this tenant has no AI, and never falls back to the
+   * process-wide keys. Omitted (local mode): the process configuration.
+   */
+  scope: { orgId?: string; credentials?: AICredentials | null } = {},
 ): Promise<TranslationResult> {
   assertInstructionLength(instruction);
 
@@ -165,10 +171,20 @@ function translateWithPatterns(instruction: string): TranslationResult {
 async function translateWithAI(
   instruction: string,
   context: { url?: string } | undefined,
-  scope: { orgId?: string },
+  scope: { orgId?: string; credentials?: AICredentials | null },
 ): Promise<TranslationResult> {
+  if (scope.credentials === null) {
+    return {
+      actions: [],
+      method: 'ai',
+      confidence: 0,
+      reasoning: 'AI translation unavailable: no AI credentials for this organization',
+    };
+  }
   try {
-    const config = loadConfig();
+    const config = scope.credentials
+      ? configFromCredentials(scope.credentials, { kind: 'text' })
+      : loadConfig();
     const configErrors = validateConfig(config);
 
     if (configErrors.length > 0) {
