@@ -73,7 +73,9 @@ function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
     },
     rateLimit: { enabled: true },
     // BetterAuth applies no rate limit to a request it has no IP for, so tracking stays on.
-    ipAddress: { ipAddressHeaders: ['x-real-ip'], disableIpTracking: false },
+    // IPv6 clients are keyed per /64 (BetterAuth's default, pinned), like the ingress's
+    // zones: per address, a /64 holder could rotate past the sign-in limits.
+    ipAddress: { ipAddressHeaders: ['x-real-ip'], disableIpTracking: false, ipv6Subnet: 64 },
   } satisfies Partial<BetterAuthOptions> & {
     ipAddress: NonNullable<BetterAuthOptions['advanced']>['ipAddress'];
   };

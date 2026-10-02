@@ -35,6 +35,8 @@ const { createAuth } = require('./src/auth/config.ts');
         trustedProxies: ['10.0.0.0/8'],
         // No IP means no rate limit in BetterAuth: a caller must not turn tracking off.
         disableIpTracking: true,
+        // A per-address IPv6 key would let a /64 holder rotate past the sign-in limits.
+        ipv6Subnet: 128,
       },
     },
   });
@@ -123,6 +125,7 @@ describe('shared auth config (require(esm))', () => {
         ipAddressHeaders: ['x-real-ip'],
         trustedProxies: ['10.0.0.0/8'],
         disableIpTracking: false,
+        ipv6Subnet: 64,
       },
     });
   }, 30_000);
