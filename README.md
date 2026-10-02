@@ -900,6 +900,14 @@ Create `.irisrc` in your project root:
 - Timestamp-based baselines
 - Automatic cleanup of old baselines
 
+**Run artifacts:** each run writes into its own directory,
+`.iris/runs/<run-id>/{current,diff,baseline}/<name>.png`, so a later or concurrent run
+never overwrites what an earlier report points at. The run id (UTC time plus a random
+suffix) is in the JSON result as `runId`. File names are a readable slug of the page and
+device plus a hash of the exact pair, so `/a/b` and `/a_b` no longer share a screenshot
+or a baseline. Baselines saved under the old names are still found. Prune old runs with
+`rm -rf .iris/runs/<run-id>`.
+
 **Reporting:**
 - Interactive HTML reports with diff viewer
 - JSON structured data export

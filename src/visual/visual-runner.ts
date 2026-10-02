@@ -5,7 +5,6 @@
  * coordinating between capture, diff, baseline, and AI classification engines.
  */
 
-import * as path from 'path';
 import type { Browser } from 'playwright';
 import { launchBrowser, newHardenedContext } from '../browser';
 import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
@@ -13,7 +12,7 @@ import { VisualCaptureEngine } from './capture';
 import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
 import { AIVisualClassifier } from './ai-classifier';
-import { StorageManager } from './storage';
+import { artifactName, legacyArtifactName, newRunId, runArtifactPath } from './artifacts';
 import { VisualReporter } from './reporter';
 import type { ProviderCredentials } from '../config';
 import type { AIProvider } from './ai-classifier';
@@ -68,9 +67,18 @@ export interface VisualTestRunnerConfig {
     format: 'html' | 'json' | 'junit';
     path?: string;
   };
+  /**
+   * Where run artifacts go: `<artifactsDir>/runs/<runId>/{current,diff,baseline}/`
+   * (#343). Default `.iris`. Baselines stay in `.iris/baselines`.
+   */
+  artifactsDir?: string;
+  /** This run's id; a new one (time-sortable, unique) when unset. */
+  runId?: string;
 }
 
 export interface VisualTestResult {
+  /** The run's id: its artifacts are under `<artifactsDir>/runs/<runId>/` (#343). */
+  runId?: string;
   summary: {
     totalComparisons: number;
     passed: number;
@@ -140,9 +148,9 @@ export class VisualTestRunner {
   private captureEngine: VisualCaptureEngine;
   private diffEngine: VisualDiffEngine;
   private baselineManager: BaselineManager;
-  private storageManager: StorageManager;
   private aiClassifier?: AIVisualClassifier;
   private browser?: Browser;
+  private runId = '';
 
   constructor(config: VisualTestRunnerConfig) {
     this.config = config;
@@ -151,7 +159,6 @@ export class VisualTestRunner {
     this.captureEngine = new VisualCaptureEngine();
     this.diffEngine = new VisualDiffEngine();
     this.baselineManager = new BaselineManager('.iris/baselines');
-    this.storageManager = new StorageManager('.iris/screenshots');
 
     // Initialize AI classifier if semantic analysis is enabled
     if (config.diff.semanticAnalysis) {
@@ -190,6 +197,10 @@ export class VisualTestRunner {
         minor: 0,
       },
     };
+
+    // One id per run: every artifact of this run goes under it, so no later or
+    // concurrent run overwrites what this run's report points at (#343).
+    this.runId = this.config.runId ?? newRunId();
 
     try {
       // Launch browser
@@ -247,6 +258,7 @@ export class VisualTestRunner {
       // Read AI cost stats before the finally block closes the cost tracker.
       // undefined when semantic analysis is off or no cost tracker is configured.
       return {
+        runId: this.runId,
         summary,
         results,
         reportPath,
@@ -323,9 +335,7 @@ export class VisualTestRunner {
     const context = await newHardenedContext(this.browser, { viewport });
     const page = await context.newPage();
 
-    // Set default baseline directory
-    const baselineDir = '.iris/baselines';
-    const storage = new StorageManager(baselineDir);
+    const artifactsDir = this.config.artifactsDir ?? '.iris';
 
     try {
       // Before the first navigation, so no redirect hop or sub-resource escapes it.
@@ -369,7 +379,9 @@ export class VisualTestRunner {
       }
 
       // Capture screenshot
-      const testName = `${pagePattern.replace(/\//g, '_')}_${device}`;
+      // Collision-free and file-system safe (#343): `/a/b` and `/a_b` used to share
+      // one file and one baseline.
+      const testName = artifactName(pagePattern, device);
       const screenshotBuffer = await this.captureEngine.capture(page, {
         selector: undefined,
         fullPage: this.config.capture.fullPage,
@@ -385,8 +397,7 @@ export class VisualTestRunner {
       }
 
       // Save current screenshot
-      const currentDir = await storage.ensureTestDirectory('current', testName);
-      const screenshotPath = path.join(currentDir, `${testName}.png`);
+      const screenshotPath = runArtifactPath(artifactsDir, this.runId, 'current', testName);
       const fs = await import('fs');
       fs.writeFileSync(screenshotPath, screenshotBuffer.buffer);
 
@@ -400,8 +411,13 @@ export class VisualTestRunner {
           )
         : undefined;
 
-      // Load baseline
-      const baselineResult = await this.baselineManager.loadBaseline(testName, resolvedRef);
+      // Load baseline. One saved before #343 is under the old name: still found, so an
+      // upgrade does not orphan every baseline, and on each branch before falling back
+      // to main's. The next update saves the new name.
+      const baselineResult = await this.baselineManager.loadBaseline(
+        [testName, legacyArtifactName(pagePattern, device)],
+        resolvedRef,
+      );
 
       // If updating baselines or no baseline exists
       if (this.config.updateBaseline || !baselineResult.success) {
@@ -457,14 +473,14 @@ export class VisualTestRunner {
       // Save diff image if there are differences
       let diffPath: string | undefined;
       if (!diffResult.passed && diffResult.diffBuffer) {
-        const diffDir = await storage.ensureTestDirectory('diff', testName);
-        diffPath = path.join(diffDir, `${testName}.png`);
+        diffPath = runArtifactPath(artifactsDir, this.runId, 'diff', testName);
         fs.writeFileSync(diffPath, diffResult.diffBuffer);
       }
 
       // Get baseline path for reporting
-      const baselineDir = await storage.ensureTestDirectory('baseline', testName);
-      const baselinePath = path.join(baselineDir, `${testName}.png`);
+      // The run's own copy of what it compared against: the baseline itself may be
+      // updated after this report is written.
+      const baselinePath = runArtifactPath(artifactsDir, this.runId, 'baseline', testName);
       fs.writeFileSync(baselinePath, baselineResult.buffer!);
 
       // AI classification if enabled and test failed
@@ -587,6 +603,8 @@ export class VisualTestRunner {
 
     // Create full test result structure for reporter
     const fullResult: VisualTestResult = {
+      // The run id names the run's artifact directory; a report must carry it (#343).
+      runId: this.runId,
       summary,
       results,
       duration: 0, // Will be set by caller

@@ -942,6 +942,8 @@ program
       console.log(`   Total comparisons: ${result.summary.totalComparisons}`);
       console.log(`   Passed: ${result.summary.passed}`);
       console.log(`   Failed: ${result.summary.failed}`);
+      if (result.runId)
+        console.log(`   Run: ${result.runId} (artifacts in .iris/runs/${result.runId}/)`);
 
       // Read-only AI cost summary (spike 008). Only printed when opted in and a
       // classifier ran; cost is $0 on all-cache-hit or local/stub-provider runs.

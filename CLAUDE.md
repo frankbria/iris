@@ -667,6 +667,30 @@ They apply only to connections with a principal; local mode is untouched.
   session's principal. Every org gets the operator's limits; per-plan limits are
   #260/#346, and Postgres `usage_events` stays the billing record (#263).
 
+### Visual Artifact Layout (issue #343)
+
+- **Names come from `artifactName(page, device)`** (src/visual/artifacts.ts): a slug of
+  the page and device plus 10 hex characters of a hash of the exact pair. Only
+  `[A-Za-z0-9_-]`, at most 100 characters. The hash is what makes names collision-free;
+  the old `page.replace('/', '_')` mapped `/a/b` and `/a_b` to one screenshot and one
+  baseline.
+- **Each run has its own directory**: `<artifactsDir>/runs/<runId>/{current,diff,baseline}/`
+  (`artifactsDir` defaults to `.iris`). Run output no longer sits in `.iris/baselines`,
+  where `current`/`diff`/`baseline` took the place of a branch name. `runId` (config, or
+  `newRunId()`: UTC time plus 8 random hex characters) is returned on the result;
+  `runArtifactPath()` refuses a run id or name outside `[A-Za-z0-9_-]`.
+- **Baselines use the new name**, but `loadBaseline([newName, legacyName], ref)` still
+  finds one saved under `legacyArtifactName()`, so an upgrade does not orphan existing
+  baselines. Both names are tried on the branch before main's, so a feature branch's own
+  old-name baseline wins over main's new one. The next `--update-baseline` writes the
+  new name. Pages that used to collide (`/a/b`, `/a_b`) share the legacy file until
+  then: update their baselines after upgrading.
+- **The run id is on every surface**: the result, the JSON report (`runId`) and the
+  `iris visual` summary line. A caller-supplied `runId` is trusted to be unique; reuse
+  writes into the same run directory.
+- Runner tests set `artifactsDir` to a temp directory: the runner really creates the
+  run directories (only `writeFileSync` is mocked there).
+
 ### Run History Store (issue #254)
 
 `src/history-store.ts` puts run history behind one seam. `RunInput` is what the

@@ -110,6 +110,19 @@ describe('VisualReporter', () => {
       expect(json.duration).toBe(5000);
     });
 
+    it('records the run id, which names the run artifact directory (#343)', async () => {
+      const reporter = new VisualReporter({
+        format: 'json',
+        outputPath: path.join(tempDir, 'report.json'),
+      });
+      const artifacts = await reporter.generateReport({
+        ...mockResults,
+        runId: '20261002T090000Z-ab12cd34',
+      });
+      const json = JSON.parse(fs.readFileSync(artifacts.reportPath, 'utf-8'));
+      expect(json.runId).toBe('20261002T090000Z-ab12cd34');
+    });
+
     it('should use default path when not specified', async () => {
       const reporter = new VisualReporter({
         format: 'json',

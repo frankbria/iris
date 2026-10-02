@@ -33,7 +33,14 @@ describe('VisualTestRunner', () => {
   let mockAIClassifier: jest.Mocked<AIVisualClassifier>;
   let visualRunner: VisualTestRunner;
 
+  // Run artifacts go to a temp root (#343), never into the repository's .iris/.
+  const ARTIFACTS = require('fs').mkdtempSync(
+    require('path').join(require('os').tmpdir(), 'iris-runner-'),
+  );
+  afterAll(() => require('fs').rmSync(ARTIFACTS, { recursive: true, force: true }));
+
   const defaultConfig = {
+    artifactsDir: ARTIFACTS,
     pages: ['/', '/about'],
     baseline: {
       strategy: 'branch' as const,
@@ -1027,7 +1034,7 @@ describe('VisualTestRunner', () => {
       await runner.run();
 
       expect(mockBaselineManager.resolveReference).toHaveBeenCalledWith('branch', 'develop');
-      expect(mockBaselineManager.loadBaseline).toHaveBeenCalledWith(expect.any(String), 'develop');
+      expect(mockBaselineManager.loadBaseline).toHaveBeenCalledWith(expect.any(Array), 'develop');
     });
 
     it('forwards the configured reference to saveBaseline when updating baselines', async () => {
@@ -1045,6 +1052,89 @@ describe('VisualTestRunner', () => {
         expect.anything(),
         'develop',
       );
+    });
+  });
+
+  describe('artifact naming and per-run layout (#343)', () => {
+    const path = require('path');
+
+    it("writes each run's artifacts under its own run directory, and reports the run id", async () => {
+      mockDiffEngine.compare.mockResolvedValue({
+        passed: false,
+        similarity: 0.5,
+        pixelDifference: 100,
+        diffBuffer: Buffer.from('diff'),
+      } as any);
+      const first = await new VisualTestRunner({ ...defaultConfig, pages: ['/'] }).run();
+      const second = await new VisualTestRunner({ ...defaultConfig, pages: ['/'] }).run();
+
+      expect(first.runId).toMatch(/^\d{8}T\d{6}Z-[0-9a-f]{8}$/);
+      expect(second.runId).not.toBe(first.runId);
+      const [r] = first.results;
+      for (const [kind, file] of [
+        ['current', r.screenshotPath],
+        ['diff', r.diffPath],
+        ['baseline', r.baselinePath],
+      ]) {
+        expect(path.relative(ARTIFACTS, file)).toBe(
+          path.join('runs', first.runId, kind, path.basename(file)),
+        );
+      }
+      // The second run's screenshot is a different file: the first report still holds.
+      expect(second.results[0].screenshotPath).not.toBe(r.screenshotPath);
+    });
+
+    it('puts the run id in the report it writes', async () => {
+      const { VisualReporter } = require('../../src/visual/reporter');
+      const report = jest
+        .spyOn(VisualReporter.prototype, 'generateReport')
+        .mockResolvedValue({ reportPath: 'r.json', screenshotPaths: [] } as any);
+      const result = await new VisualTestRunner({
+        ...defaultConfig,
+        pages: ['/'],
+        output: { format: 'json', path: 'r.json' },
+      }).run();
+      expect(report).toHaveBeenCalledWith(expect.objectContaining({ runId: result.runId }));
+      report.mockRestore();
+    });
+
+    it('takes a caller-given run id', async () => {
+      const result = await new VisualTestRunner({
+        ...defaultConfig,
+        pages: ['/'],
+        runId: 'job-42',
+      }).run();
+      expect(result.runId).toBe('job-42');
+      expect(result.results[0].screenshotPath).toContain(path.join('runs', 'job-42', 'current'));
+    });
+
+    it('gives pages the old scheme confused their own files and baselines', async () => {
+      const result = await new VisualTestRunner({
+        ...defaultConfig,
+        pages: ['/a/b', '/a_b'],
+      }).run();
+      const [x, y] = result.results;
+      expect(x.screenshotPath).not.toBe(y.screenshotPath);
+      // The first name tried for each page is its own collision-free one.
+      const names = mockBaselineManager.loadBaseline.mock.calls.map((c: any[]) => c[0][0]);
+      expect(new Set(names).size).toBe(2);
+    });
+
+    it('asks for the new name, then the pre-#343 one, and does not overwrite a legacy hit', async () => {
+      mockBaselineManager.loadBaseline.mockResolvedValue({
+        success: true,
+        buffer: Buffer.from('legacy-baseline'),
+        metadata: {},
+      } as any);
+      const result = await new VisualTestRunner({ ...defaultConfig, pages: ['/about'] }).run();
+
+      // BaselineManager tries both names on the branch before main (baseline-names.test.ts).
+      expect(mockBaselineManager.loadBaseline).toHaveBeenCalledWith(
+        [expect.stringMatching(/^about_desktop-[0-9a-f]{10}$/), '_about_desktop'],
+        'main',
+      );
+      expect(mockBaselineManager.saveBaseline).not.toHaveBeenCalled();
+      expect(result.summary.newBaselines).toBe(0);
     });
   });
 });
