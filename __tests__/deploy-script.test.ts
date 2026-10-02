@@ -18,7 +18,7 @@
  * Docker is required under CI and skipped (with a warning) locally without it.
  */
 
-import { execFileSync, spawnSync } from 'child_process';
+import { execFileSync, spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -312,6 +312,53 @@ secrets:
   it('a failed migration changes nothing', () => {
     expectUntouched('r5', refs.badMigration, refs.badMigration, {}, /migration failed/);
   }, 90_000);
+
+  // A deploy cut off mid-way (job cancelled, host rebooted) must leave `current` on the
+  // last release that became healthy: the next deploy rolls back to it.
+  it('an interrupted deploy leaves current on the last healthy release', async () => {
+    const serving = current()!;
+    const release = stage('r5i', { mark: 'b' });
+    const child = spawn('bash', [SCRIPT], {
+      cwd: release,
+      env: {
+        ...process.env,
+        IRIS_IMAGE: refs.unhealthy,
+        PORTAL_IMAGE: refs.unhealthy,
+        DEPLOY_WAIT_TIMEOUT: '30',
+        DEPLOY_KEEP_RELEASES: '2',
+      },
+      stdio: 'ignore',
+      detached: true,
+    });
+    const exited = new Promise((resolve) => child.on('exit', resolve));
+    // Wait until the new containers exist (running or already exited): the script is
+    // then in its health wait.
+    const created = () =>
+      docker(
+        'ps',
+        '-aq',
+        '--filter',
+        'label=com.docker.compose.project=iris-deploy-test',
+        '--filter',
+        'label=com.docker.compose.service=iris',
+        // Not the migration's `compose run` container: the service's own.
+        '--filter',
+        'label=com.docker.compose.oneoff=False',
+        '--filter',
+        `ancestor=${refs.unhealthy}`,
+      );
+    for (let i = 0; i < 120 && !created(); i++) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(created()).not.toBe('');
+    process.kill(-child.pid!, 'SIGKILL');
+    await exited;
+    expect(current()).toBe(serving);
+    // The next deploy of a good release puts things right (and needs the serving one back).
+    const r = deploy(stage('r5j'), refs.v2, refs.v1);
+    expect(r.status).toBe(0);
+    fs.rmSync(path.join(root, 'releases', 'r5i'), { recursive: true, force: true });
+  }, 150_000);
 
   it('an unhealthy release rolls back to the previous release: its images, settings and files', () => {
     const serving = current()!;

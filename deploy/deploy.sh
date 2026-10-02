@@ -74,9 +74,11 @@ if ! docker compose run --rm --no-deps --entrypoint node iris dist/db/migrate.js
   exit 1
 fi
 
-point_current "$release"
+# `current` moves only once the release is healthy: a deploy cut off before then (job
+# cancelled, host rebooted) leaves it on the last good release, the next rollback target.
 if docker compose up -d --force-recreate --no-deps --remove-orphans \
   --wait --wait-timeout "$wait_timeout" "${app_services[@]}"; then
+  point_current "$release"
   log 'healthy'
   # Old releases hold secrets: keep the newest few, never the serving one.
   find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn \
@@ -90,12 +92,10 @@ log 'new containers did not become healthy'
 docker compose ps -a || :
 for service in "${app_services[@]}"; do docker compose logs --tail 30 "$service" || :; done
 if [ -z "$previous" ]; then
-  rm -f "$root/current"
   log 'first deploy: no previous release to roll back to'
   exit 1
 fi
 log "rolling back to $previous"
-point_current "$previous"
 if (cd "$previous" && docker compose up -d --force-recreate --no-deps --remove-orphans \
   --wait --wait-timeout "$wait_timeout" "${app_services[@]}"); then
   log 'rolled back; the previous release is serving'
