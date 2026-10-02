@@ -98,7 +98,9 @@ export async function processNextA11yJob(
     log('warn', `claim on job ${job.id} was lost; not recording its ${what}`, fields);
   };
   /** One line and one sample per job, once its outcome is written (or refused). */
+  let recorded = false;
   const done = (outcome: 'finished' | 'error', written: boolean, err?: string) => {
+    recorded = true;
     const result = written ? outcome : 'lost';
     if (!written) lost(outcome === 'finished' ? 'result' : 'failure');
     const seconds = (performance.now() - t0) / 1000;
@@ -151,6 +153,17 @@ export async function processNextA11yJob(
     }
     done('finished', stored);
     return job;
+  } catch (err) {
+    // Recording the outcome itself failed (the database is gone): still a job that ran
+    // and errored, for the log and the metrics, before the caller hears of it.
+    if (!recorded) {
+      log('error', `could not record the outcome of job ${job.id}`, {
+        ...fields,
+        err: errMessage(err),
+      });
+      done('error', true, errMessage(err));
+    }
+    throw err;
   } finally {
     clearInterval(timer);
   }

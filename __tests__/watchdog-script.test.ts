@@ -6,7 +6,9 @@
  * one serves the file /tmp/metrics on 127.0.0.1:9464 inside the container, like the real
  * metrics listener, and its healthcheck fails while /tmp/sick exists, so a test turns it
  * unhealthy with `docker exec touch`. The file survives a restart, so it stays sick and
- * the restart cap is reached. The alert hook and `logger` are stubs that append to files.
+ * the restart cap is reached. The alert hook and `logger` are stubs that append to files;
+ * a `docker` wrapper fails the subcommands named in WATCHDOG_TEST_FAIL (a container
+ * removed mid-run, a failed restart).
  *
  * Cases run in order and share the containers and the state directory. Docker is
  * required under CI and skipped locally without it.
@@ -69,6 +71,7 @@ describe('deploy/watchdog.sh: settings', () => {
   const hook = path.join(dir, 'alert-hook');
   const iris = `${PROJECT}-iris`;
   const crashy = `${PROJECT}-crashy`;
+  const evil = `${PROJECT}-evil`;
 
   function run(env: Record<string, string> = {}) {
     const r = spawnSync('bash', [SCRIPT], {
@@ -96,7 +99,19 @@ describe('deploy/watchdog.sh: settings', () => {
     return lines;
   }
 
-  const metrics = (total: number, errors: number) =>
+  /**
+   * The iris container's metrics: `total` ok + error requests, `errors` of them errors,
+   * plus client errors and rate-limited ones, and the process start time.
+   */
+  const metrics = (
+    total: number,
+    errors: number,
+    {
+      client = 0,
+      limited = 0,
+      start = 1,
+    }: { client?: number; limited?: number; start?: number } = {},
+  ) =>
     docker(
       'exec',
       iris,
@@ -105,8 +120,11 @@ describe('deploy/watchdog.sh: settings', () => {
       `printf '%s\\n' '# TYPE iris_requests_total counter' ` +
         `'iris_requests_total{method="getStatus",outcome="ok"} ${total - errors}' ` +
         `'iris_requests_total{method="executeBrowserAction",outcome="error"} ${errors}' ` +
-        `'iris_up 1' > /tmp/metrics`,
+        `'iris_requests_total{method="closeBrowser",outcome="client_error"} ${client}' ` +
+        `'iris_requests_total{method="getStatus",outcome="rate_limited"} ${limited}' ` +
+        `'iris_start_time_seconds ${start}' 'iris_up 1' > /tmp/metrics`,
     );
+  const freshWindow = () => fs.rmSync(path.join(state, 'rate.iris'), { force: true });
 
   async function waitFor(what: string, check: () => boolean, ms = 60_000) {
     for (const start = Date.now(); !check(); await sleep(250)) {
@@ -129,6 +147,13 @@ describe('deploy/watchdog.sh: settings', () => {
       mode: 0o755,
     });
     fs.writeFileSync(hook, `#!/bin/sh\necho "$1|$2" >> ${hookLog}\n`, { mode: 0o755 });
+    // docker, with failures injected on demand: WATCHDOG_TEST_FAIL names subcommands.
+    const real = execFileSync('sh', ['-c', 'command -v docker'], { encoding: 'utf8' }).trim();
+    fs.writeFileSync(
+      path.join(bin, 'docker'),
+      `#!/bin/sh\ncase " $WATCHDOG_TEST_FAIL " in *" $1 "*) echo "injected: $1" >&2; exit 1;; esac\nexec ${real} "$@"\n`,
+      { mode: 0o755 },
+    );
     // prettier-ignore
     docker('run', '-d', '--name', iris, ...labels('iris'),
       '--health-cmd', 'test ! -e /tmp/sick', '--health-interval', '1s',
@@ -139,7 +164,7 @@ describe('deploy/watchdog.sh: settings', () => {
 
   afterAll(() => {
     if (DOCKER) {
-      spawnSync('docker', ['rm', '-f', iris, crashy], { stdio: 'ignore' });
+      spawnSync('docker', ['rm', '-f', iris, crashy, evil], { stdio: 'ignore' });
     }
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -168,7 +193,7 @@ describe('deploy/watchdog.sh: settings', () => {
   });
 
   it('does not alert below the threshold or the minimum volume, and restarts the window on a counter reset', () => {
-    fs.rmSync(path.join(state, 'rate.iris'));
+    freshWindow();
     metrics(1000, 0);
     run();
     metrics(1100, 4); // 4% of 100
@@ -180,8 +205,89 @@ describe('deploy/watchdog.sh: settings', () => {
     expect(alerts()).toEqual([]);
   });
 
+  it('counts only ok and error: client errors and rate-limited requests are in neither part', () => {
+    freshWindow();
+    metrics(100, 0, { client: 1000, limited: 1000 });
+    run();
+    // 10 errors of 20 server-side answers, under 12000 tenant-caused refusals.
+    metrics(120, 10, { client: 5000, limited: 9000 });
+    run();
+    expect(alerts()).toEqual([expect.stringMatching(/^error-rate-iris\|iris: 10 of 20 /)]);
+    // A flood of refusals alone is no error rate (and no volume).
+    freshWindow();
+    metrics(200, 0, { client: 0, limited: 0 });
+    run();
+    metrics(205, 0, { client: 50_000, limited: 50_000 });
+    run();
+    expect(alerts()).toEqual([]);
+  });
+
+  it('starts the window again when the process restarted mid-window', () => {
+    // New counters above the oldest sample but below the latest one.
+    freshWindow();
+    metrics(100, 0);
+    run();
+    metrics(1000, 0);
+    run();
+    metrics(500, 300, { start: 2 });
+    run();
+    // Counters below the latest sample with the same start time (an exporter without a
+    // usable start time): the drop alone resets the window.
+    freshWindow();
+    metrics(100, 0);
+    run();
+    metrics(1000, 0);
+    run();
+    metrics(500, 300);
+    run();
+    // New counters above the latest sample too: only the start time tells.
+    freshWindow();
+    metrics(100, 0);
+    run();
+    metrics(1000, 0);
+    run();
+    metrics(1100, 300, { start: 2 });
+    run();
+    expect(alerts()).toEqual([]);
+  });
+
+  it('clears the Docker alert once the daemon answers again', () => {
+    const down = { DOCKER_HOST: 'unix:///nonexistent/docker.sock', WATCHDOG_ALERT_REPEAT: '3600' };
+    expect(run(down).status).toBe(1);
+    expect(alerts()).toEqual([expect.stringMatching(/^docker\|the Docker daemon does not answer/)]);
+    expect(run().status).toBe(0);
+    expect(run(down).status).toBe(1);
+    expect(alerts()).toEqual([expect.stringMatching(/^docker\|/)]); // not held back
+  });
+
+  it('puts container text into an alert as one printable line, cut short', () => {
+    // A container whose `node` (what the scrape runs) prints control characters.
+    // prettier-ignore
+    docker('run', '-d', '--name', evil, ...labels('evil'),
+      '-e', 'PATH=/fake:/usr/local/bin:/usr/bin:/bin', IMAGE, 'sleep', '3600');
+    docker('exec', evil, 'mkdir', '/fake');
+    const fake = path.join(dir, 'fake-node');
+    fs.writeFileSync(
+      fake,
+      `#!/bin/sh\nprintf 'first\\nsecond\\033[31m\\r%s' "$(head -c 2000 /dev/zero | tr '\\0' x)"\nexit 1\n`,
+      { mode: 0o755 },
+    );
+    docker('cp', fake, `${evil}:/fake/node`);
+    run({ WATCHDOG_METRICS: 'evil:9464' });
+    const got = alerts();
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatch(/^scrape-evil\|metrics scrape of evil failed: first second/);
+    expect(got[0]).not.toMatch(/[\x00-\x1f\x7f]/);
+    expect(got[0].length).toBeLessThan(400);
+    expect(fs.readFileSync(journal, 'utf8')).not.toMatch(/\x1b/);
+  }, 60_000);
+
   it('alerts when a scrape fails: no container for a target, or nothing on its port', () => {
-    const r = run({ WATCHDOG_METRICS: 'iris:9999 worker:9465' });
+    // A stamp from a clock that has since stepped back does not hold the alert back.
+    fs.writeFileSync(path.join(state, 'alert.scrape-worker'), '');
+    const future = new Date(Date.now() + 3_600_000);
+    fs.utimesSync(path.join(state, 'alert.scrape-worker'), future, future);
+    const r = run({ WATCHDOG_METRICS: 'iris:9999 worker:9465', WATCHDOG_ALERT_REPEAT: '3600' });
     expect(r.status).toBe(0);
     const got = alerts();
     expect(got).toContainEqual(
@@ -194,6 +300,23 @@ describe('deploy/watchdog.sh: settings', () => {
 
   it('restarts an unhealthy container, at most WATCHDOG_MAX_RESTARTS an hour, then alerts', async () => {
     docker('exec', iris, 'touch', '/tmp/sick');
+    await waitFor('unhealthy', () => health(iris) === 'unhealthy');
+    // A container gone between `ps` and `inspect` is skipped, not the end of the run.
+    const unchanged = startedAt(iris);
+    const skipped = run({ WATCHDOG_TEST_FAIL: 'inspect' });
+    expect(skipped.status).toBe(0);
+    expect(skipped.out).toContain(`checked project ${PROJECT}`);
+    // A restart that fails alerts, and that alert clears once the service is healthy.
+    run({ WATCHDOG_TEST_FAIL: 'restart', WATCHDOG_ALERT_REPEAT: '3600' });
+    expect(startedAt(iris)).toBe(unchanged);
+    expect(alerts()).toEqual([
+      expect.stringMatching(
+        /^restart-failed-iris\|iris \(\w+\) is unhealthy and could not be restarted/,
+      ),
+    ]);
+    // Restart times from a clock that has since stepped back do not count toward the cap.
+    const later = Math.floor(Date.now() / 1000) + 3000;
+    fs.writeFileSync(path.join(state, 'restarts.iris'), `${later}\n${later}\n`);
     for (const n of [1, 2]) {
       await waitFor('unhealthy', () => health(iris) === 'unhealthy');
       const before = startedAt(iris);
@@ -215,7 +338,11 @@ describe('deploy/watchdog.sh: settings', () => {
       expect.stringMatching(/^restart-cap-iris\|iris \(\w+\) is unhealthy; restarted 2 times/),
     ]);
     docker('exec', iris, 'rm', '/tmp/sick');
-  }, 120_000);
+    await waitFor('healthy', () => health(iris) === 'healthy');
+    run();
+    expect(fs.existsSync(path.join(state, 'alert.restart-failed-iris'))).toBe(false);
+    expect(fs.existsSync(path.join(state, 'alert.restart-cap-iris'))).toBe(false);
+  }, 180_000);
 
   it('alerts when Docker restarted a container that exited', async () => {
     // prettier-ignore

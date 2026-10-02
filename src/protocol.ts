@@ -227,7 +227,7 @@ const aiSpend = metrics.counter(
 );
 
 /** How a request ended, for logs and metrics. */
-type Outcome = 'ok' | 'client_error' | 'rate_limited' | 'error';
+type Outcome = 'ok' | 'client_error' | 'rate_limited' | 'aborted' | 'error';
 
 /** A JSON-RPC answer's outcome: the client's own mistakes are not server errors. */
 function rpcOutcome(code: number | undefined): Outcome {
@@ -254,10 +254,13 @@ function observeRequest(
   outcome: Outcome,
   startedAt: number,
   fields: Record<string, unknown>,
+  /** False: counted, but no line (a throttled refusal, or a server already closed). */
+  print = true,
 ): void {
   const seconds = Math.max(0, (performance.now() - startedAt) / 1000);
   requestsTotal.inc({ method, outcome });
   requestSeconds.observe({ method }, seconds);
+  if (!print) return;
   log(outcome === 'error' ? 'warn' : 'info', `${kind} request`, {
     method,
     outcome,
@@ -266,7 +269,14 @@ function observeRequest(
   });
 }
 
-/** A client-sent `X-Request-Id` is echoed only if it is short and plain; else one is made. */
+/**
+ * Refusals answered before dispatch (rate-limited, unparseable, not a request) cost a
+ * client nothing to send, so per connection only one line per interval is printed,
+ * carrying how many were suppressed since the last; every one is still counted.
+ */
+const REFUSAL_LOG_MS = 10_000;
+
+/** A client-sent `X-Request-Id` is logged (as `clientRequestId`) only if short and plain. */
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 
 /** The REST route a request names, with ids folded so the label set stays bounded. */
@@ -399,6 +409,8 @@ export function startServer(
   const ActionParams = ExecuteBrowserActionParams.extend({
     actions: z.array(ActionSchema).max(limits.maxActionsPerRequest).optional(),
   });
+  /** Set once the server has closed; request lines are no longer printed. */
+  let closed = false;
   /** Verified upgrades, read back by the 'connection' handler. */
   const verified = new WeakMap<IncomingMessage, Principal>();
   /** Upgrades whose key is still being verified; they count against the connection cap. */
@@ -408,26 +420,35 @@ export function startServer(
   const server = createServer((req, res) => {
     // One line per REST request, with the id echoed back so a client can quote it (#275).
     const t0 = performance.now();
+    // Ours is always generated (a client's could collide with another's); a safe
+    // client id is logged beside it.
     const sent = req.headers['x-request-id'];
-    const requestId = typeof sent === 'string' && SAFE_REQUEST_ID.test(sent) ? sent : randomUUID();
+    const clientRequestId =
+      typeof sent === 'string' && SAFE_REQUEST_ID.test(sent) ? sent : undefined;
+    const requestId = randomUUID();
     res.setHeader('x-request-id', requestId);
     let tenant: Principal | undefined;
     let rateLimited = false;
     res.on('close', () => {
       const status = res.writableFinished ? res.statusCode : undefined;
       const outcome: Outcome =
-        status === undefined || status >= 500
-          ? 'error'
-          : rateLimited
-            ? 'rate_limited'
-            : status >= 400
-              ? 'client_error'
-              : 'ok';
-      observeRequest('rest', restRoute(req), outcome, t0, {
-        requestId,
-        status: status ?? 'aborted',
-        ...who(tenant),
-      });
+        status === undefined
+          ? 'aborted' // the client went away before the answer: not ours to count as an error
+          : status >= 500
+            ? 'error'
+            : rateLimited
+              ? 'rate_limited'
+              : status >= 400
+                ? 'client_error'
+                : 'ok';
+      observeRequest(
+        'rest',
+        restRoute(req),
+        outcome,
+        t0,
+        { requestId, clientRequestId, status: status ?? 'aborted', ...who(tenant) },
+        !closed,
+      );
     });
     if (options?.jobs) {
       void handleJobsRequest(req, res, {
@@ -672,6 +693,26 @@ export function startServer(
     // the socket rather than needing its own cleanup path.
     const gate = new SessionGate();
 
+    // Pre-dispatch refusals, throttled per connection (REFUSAL_LOG_MS).
+    let refusalLineAt = -Infinity;
+    let suppressed = 0;
+    const refusal = (method: string, outcome: Outcome, t0: number, fields: object) => {
+      const now = performance.now();
+      const print = now - refusalLineAt >= REFUSAL_LOG_MS;
+      observeRequest(
+        'rpc',
+        method,
+        outcome,
+        t0,
+        { ...fields, ...(print && suppressed > 0 && { suppressed }) },
+        print && !closed,
+      );
+      if (print) {
+        refusalLineAt = now;
+        suppressed = 0;
+      } else suppressed++;
+    };
+
     // A request can outlive its socket: the client may close while a handler
     // is awaiting. ws then buffers the reply for a peer that is gone instead of
     // sending it, so check first (#330).
@@ -712,10 +753,7 @@ export function startServer(
               data: { retryAfterMs: wait },
             },
           });
-          observeRequest('rpc', rpcMethod(parsed), 'rate_limited', t0, {
-            ...requestFields,
-            code: RATE_LIMITED,
-          });
+          refusal(rpcMethod(parsed), 'rate_limited', t0, { ...requestFields, code: RATE_LIMITED });
           return;
         }
         keyRate.take(principal.keyId);
@@ -723,7 +761,7 @@ export function startServer(
       }
       // Charged above, then dropped without a reply, as before.
       if (unparseable) {
-        observeRequest('rpc', 'unknown', 'client_error', t0, { ...requestFields, code: -32700 });
+        refusal('unknown', 'client_error', t0, { ...requestFields, code: -32700 });
         return;
       }
 
@@ -734,12 +772,13 @@ export function startServer(
       // rejected the same way.
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
         reply({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
-        observeRequest('rpc', 'unknown', 'client_error', t0, { ...requestFields, code: -32600 });
+        refusal('unknown', 'client_error', t0, { ...requestFields, code: -32600 });
         return;
       }
       const req = parsed as JsonRpcRequest;
 
       const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id };
+      let refused = false;
 
       try {
         switch (req.method) {
@@ -792,7 +831,7 @@ export function startServer(
               // cleanup has then already run, so a session set now would hold a
               // maxSessions slot until the idle sweep.
               if (ws.readyState !== WebSocket.OPEN) {
-                throw { code: -32000, message: 'Connection closed during launch' };
+                throw { code: -32000, message: 'Connection closed during launch', refused: true };
               }
               // Check and insert with no await between them: the map is shared
               // by every connection, and each connection has its own gate.
@@ -806,12 +845,14 @@ export function startServer(
                 throw {
                   code: -32000,
                   message: `Organization session limit reached (${limits.maxSessionsPerOrg}); try again later`,
+                  refused: true,
                 };
               }
               if (sessions.size >= limits.maxSessions) {
                 throw {
                   code: -32000,
                   message: `Session limit reached (${limits.maxSessions}); try again later`,
+                  refused: true,
                 };
               }
               const session = createBrowserSession(
@@ -851,7 +892,7 @@ export function startServer(
               // one may have replaced it since the message arrived.
               const session = sessions.get(ws);
               if (!session) {
-                throw { code: -32000, message: 'No active browser session' };
+                throw { code: -32000, message: 'No active browser session', refused: true };
               }
               await cleanupSession(ws, sessions, 'closed');
               return { success: true, message: 'Browser closed successfully' };
@@ -883,6 +924,7 @@ export function startServer(
                 throw {
                   code: -32000,
                   message: 'No active browser session. Call launchBrowser first.',
+                  refused: true,
                 };
               }
               return executeBrowserActions(
@@ -952,6 +994,8 @@ export function startServer(
         // `throw null` (or any primitive) must not make this catch block throw
         // in turn — that escapes the listener exactly like the frame crash (#330).
         const err = typeof thrown === 'object' && thrown !== null ? thrown : {};
+        // A refusal the client caused (no session, a session limit): not a server error.
+        refused = err.refused === true;
         res.error = {
           code: err.code || -32000,
           message: err.message || 'Server error',
@@ -962,18 +1006,29 @@ export function startServer(
       reply(res);
       // executeBrowserAction: the action types that ran, never their selectors or values.
       const ran = (res.result as { results?: ExecutionResult[] } | undefined)?.results;
-      observeRequest('rpc', rpcMethod(req), rpcOutcome(res.error?.code), t0, {
-        ...requestFields,
-        ...(res.error && { code: res.error.code }),
-        ...(Array.isArray(ran) && {
-          actions: ran.map((r) => r.action?.type),
-          success: res.result.success,
-        }),
-      });
+      const outcome = refused ? 'client_error' : rpcOutcome(res.error?.code);
+      observeRequest(
+        'rpc',
+        rpcMethod(req),
+        outcome,
+        t0,
+        {
+          ...requestFields,
+          ...(res.error && { code: res.error.code }),
+          ...(Array.isArray(ran) && {
+            actions: ran.map((r) => r.action?.type),
+            success: res.result.success,
+          }),
+        },
+        !closed,
+      );
     });
 
     ws.on('close', () => {
       tenants.delete(ws);
+      if (suppressed > 0 && !closed) {
+        log('info', 'rpc refusals suppressed', { ...who(principal), suppressed });
+      }
       cleanupSession(ws, sessions, 'disconnect');
     });
 
@@ -1008,6 +1063,9 @@ export function startServer(
     for (const [ws] of sessions.entries()) {
       cleanupSession(ws, sessions, 'shutdown');
     }
+    // After the shutdown's own lines: a request that finishes later is not logged (its
+    // server is gone, and in a test the run may be too).
+    closed = true;
   });
 
   return wss;

@@ -414,6 +414,24 @@ describe('worker logs and metrics (#275)', () => {
     expect(metrics.render()).toMatch(/^iris_jobs_total\{kind="a11y",outcome="error"\} 1$/m);
   });
 
+  it('still counts and logs the job when recording its failure throws', async () => {
+    const { processNextA11yJob, metrics } = await load('page crashed');
+    const out = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    await expect(
+      processNextA11yJob(
+        jobsWith({
+          fail: async () => {
+            throw new Error('database gone');
+          },
+        }),
+      ),
+    ).rejects.toThrow('database gone');
+    const text = out.mock.calls.flat().join('\n');
+    out.mockRestore();
+    expect(text).toMatch(/job error jobId=j-obs .*database gone/);
+    expect(metrics.render()).toMatch(/^iris_jobs_total\{kind="a11y",outcome="error"\} 1$/m);
+  });
+
   it('samples the queue depth each tick and counts reaped jobs', async () => {
     const { runWorker, metrics } = await load();
     const controller = new AbortController();

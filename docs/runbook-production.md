@@ -414,15 +414,18 @@ docker compose logs --no-log-prefix iris | jq -c 'select(.requestId == "<id>")'
 | Line (`msg`)                | Fields                                                              |
 | --------------------------- | ------------------------------------------------------------------- |
 | `rpc request`               | `requestId`, `orgId`, `keyId`, `method`, `latencyMs`, `outcome`, `code`; `actions` (types only) and `success` for `executeBrowserAction` |
-| `rest request`              | `requestId` (also the `X-Request-Id` response header), `method` (`POST /v1/a11y/jobs`, `GET /v1/jobs/:id`), `status`, `latencyMs`, `outcome`, `orgId`, `keyId` |
+| `rest request`              | `requestId` (also the `X-Request-Id` response header), `clientRequestId` (the client's own `X-Request-Id`, if it sent a plain one), `method` (`POST /v1/a11y/jobs`, `GET /v1/jobs/:id`), `status`, `latencyMs`, `outcome`, `orgId`, `keyId` |
 | `connection refused`        | `reason` (`origin`, `invalid_key`, `connection_limit`, `org_connection_limit`, `auth_unavailable`), `status` |
 | `session started` / `ended` | `sessionId`, `orgId`, `keyId`; `reason` (`closed`, `replaced`, `timeout`, `revoked`, `disconnect`, `socket_error`, `shutdown`) |
 | `job claimed` / `job finished`, `job error`, `job lost` | `jobId`, `orgId`, `kind`, `attempts`, `latencyMs` |
 | `better-auth: …`            | BetterAuth's own messages. A refused API key is `info` with its `code`; a database failure while checking one stays `error`. |
 
-`outcome` is `ok`, `client_error` (bad request, unknown method, 4xx), `rate_limited`
-or `error` (a server error, or a 5xx). A client may send its own `X-Request-Id`
-(letters, digits, `._:-`, up to 64); anything else is replaced. Logs never hold an API
+`outcome` is `ok`, `client_error` (bad request, unknown method, no session, a session
+limit, 4xx), `rate_limited`, `aborted` (the client left before the answer) or `error` (a
+server error, or a 5xx). Rate-limited and malformed frames are logged once per 10 s per
+connection, with a `suppressed` count (and a `rpc refusals suppressed` line on close);
+the metrics count every one. The server always makes its own `requestId`; a client's
+`X-Request-Id` (letters, digits, `._:-`, up to 64) is logged as `clientRequestId`. Logs never hold an API
 key, an `Authorization` header, a fill value, a database or SMTP URL's password, or a
 provider key: they carry key ids, and action types without their values.
 `IRIS_LOG_LEVEL` (`debug`, `info`, `warn`, `error`; default `info`) sets the threshold.
@@ -463,8 +466,11 @@ every minute from `iris-watchdog.timer`, as root, and:
 - scrapes both metrics listeners (`docker exec … node`). A failed scrape alerts: it is
   the uptime signal from inside the box;
 - alerts when, over the last `WATCHDOG_ERROR_WINDOW` seconds (300), at least
-  `WATCHDOG_ERROR_PERCENT` (5) of at least `WATCHDOG_MIN_REQUESTS` (20) requests (iris-api)
-  or jobs (worker) ended with `outcome="error"`.
+  `WATCHDOG_ERROR_PERCENT` (5) of at least `WATCHDOG_MIN_REQUESTS` (20) server-side
+  answers ended with `outcome="error"`: error / (ok + error) for requests, error /
+  (finished + error) for jobs. Client errors and rate-limited requests count in neither
+  part, so a tenant cannot trigger or mask the alert. A restarted process starts the
+  window again.
 
 A condition that stays true alerts again after `WATCHDOG_ALERT_REPEAT` seconds (3600);
 once it clears, the next occurrence alerts at once. Restarts always alert. State
@@ -506,7 +512,8 @@ call to it:
 ```
 
 `key` names the condition (`restarted-iris`, `restart-cap-worker`, `exited-portal`,
-`scrape-iris`, `error-rate-iris`, `docker`); `message` is one line of text. The hook
+`scrape-iris`, `error-rate-iris`, `docker`, `restart-failed-iris`); `message` is one line of
+printable text, at most 300 characters (container output in it is cleaned). The hook
 runs as root with a 60 s limit; its exit status is logged and otherwise ignored. Send
 mail, a chat message or a page from it. Example:
 

@@ -13,7 +13,8 @@ import { metrics } from './metrics';
  *
  * The rule is to never pass a secret: log a key's id, never the key; an action's type,
  * never what a fill typed. `redact()` is the safety net under that rule: fields whose
- * name looks secret are replaced, URL userinfo and bearer tokens in strings are cut.
+ * name looks secret are replaced; in strings (error messages too), URL userinfo,
+ * `Bearer`/`Basic` credentials, secret-looking query parameters and `iris_…` keys are cut.
  */
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -29,19 +30,28 @@ function threshold(): LogLevel {
 }
 
 /**
- * Field names never logged: credentials, connection URLs, and `text` / `value`, which
- * is what a fill types (src/actions.ts).
+ * Field names never logged: credentials, connection URLs, and request payloads: `text` /
+ * `value` (what a fill types, src/actions.ts), `instruction`, `params`, `body`.
  */
 const SECRET_FIELD =
-  /authorization|cookie|token|secret|passw(or)?d|api[-_]?key|^key$|credential|(database|smtp)[-_]?url|^(text|value)$/i;
+  /authorization|cookie|token|secret|passw(or)?d|api[-_]?key|^key$|credential|(database|smtp)[-_]?url|^(text|value|instruction|params|body)$/i;
 const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi;
-const BEARER = /\bBearer\s+\S+/gi;
+const AUTH_SCHEME = /\b(Bearer|Basic)\s+\S+/gi;
+/** A query or fragment parameter whose name looks secret: its value is cut. */
+const SECRET_PARAM =
+  /([?&;#][^=&;#\s]*?(?:token|key|passw(?:or)?d|secret|sig|auth|session|credential)[^=&;#\s]*=)[^&;#\s]*/gi;
+/** An API key's shape: the `iris_` prefix plus random letters and digits (no underscore). */
+const API_KEY = /\biris_[A-Za-z0-9]{16,}\b/g;
 const MAX_DEPTH = 4;
 
 /** A copy of `value` with secret-named fields replaced and credentials cut from strings. */
 export function redact(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') {
-    return value.replace(USERINFO, '$1[redacted]@').replace(BEARER, 'Bearer [redacted]');
+    return value
+      .replace(USERINFO, '$1[redacted]@')
+      .replace(AUTH_SCHEME, '$1 [redacted]')
+      .replace(SECRET_PARAM, '$1[redacted]')
+      .replace(API_KEY, 'iris_[redacted]');
   }
   if (value instanceof Error) return redact(value.message, depth);
   if (typeof value !== 'object' || value === null) {
@@ -81,3 +91,18 @@ export function log(level: LogLevel, msg: string, fields: Record<string, unknown
 /** An error's message, for a log field (never its stack or attached objects). */
 export const errMessage = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
+
+/**
+ * For modules shared with the local CLI: in hosted mode a JSON line through `log()`, so
+ * the server's output stays one object per line; locally, the module's own console
+ * output, unchanged.
+ */
+export function hostedLog(
+  level: LogLevel,
+  msg: string,
+  fields: Record<string, unknown>,
+  local: () => void,
+): void {
+  if (isHostedMode()) log(level, msg, fields);
+  else local();
+}

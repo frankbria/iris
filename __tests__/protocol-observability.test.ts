@@ -2,6 +2,7 @@
 process.env.IRIS_HOSTED = '1';
 
 import WebSocket from 'ws';
+import http from 'http';
 import { AddressInfo } from 'net';
 import * as translatorModule from '../src/translator';
 import { startServer, JsonRpcResponse, Principal, Authenticator } from '../src/protocol';
@@ -207,6 +208,96 @@ describe('RPC request logs', () => {
   }, 60_000);
 });
 
+describe('tenant-caused refusals are not server errors', () => {
+  it('20 actions without a session, and session limits, are client_error', async () => {
+    await serve({ limits: { maxSessionsPerOrg: 1 } });
+    const ws = await open(as('key-a'));
+    for (let i = 0; i < 20; i++) {
+      const res = await call(ws, 'executeBrowserAction', {
+        actions: [{ type: 'click', selector: '#a' }],
+      });
+      expect(res.error?.code).toBe(-32000);
+    }
+    await call(ws, 'launchBrowser');
+    const other = await open(as('key-a'));
+    expect((await call(other, 'launchBrowser')).error?.message).toMatch(/session limit/);
+    const outcomes = requestLines('rpc').map((l) => l.outcome);
+    expect(outcomes).toHaveLength(22);
+    expect(outcomes).not.toContain('error');
+    expect(outcomes.filter((o) => o === 'client_error')).toHaveLength(21);
+  });
+
+  it('a REST request the client abandons is aborted, not an error', async () => {
+    await serve();
+    const req = http.request(`${httpBase}/v1/a11y/jobs`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer key-a', 'content-length': '1000' },
+    });
+    req.on('error', () => undefined);
+    req.write('{"urls":');
+    await new Promise((r) => setTimeout(r, 200));
+    req.destroy();
+    for (let i = 0; i < 50 && !requestLines('rest').length; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(requestLines('rest')).toEqual([
+      expect.objectContaining({ outcome: 'aborted', status: 'aborted', orgId: 'org-a' }),
+    ]);
+  });
+});
+
+describe('a refusal flood does not flood the logs', () => {
+  it('10k rate-limited frames log a bounded number of lines, and all are counted', async () => {
+    await serve({ limits: { keyRequestsPerMinute: 1 } });
+    const series = 'iris_requests_total{method="getStatus",outcome="rate_limited"}';
+    const before = sample(await scrape(), series);
+    const ws = await open(as('key-a'));
+    await call(ws, 'getStatus');
+    let replies = 0;
+    const all = new Promise<void>((resolve) =>
+      ws.on('message', () => {
+        if (++replies === 10_000) resolve();
+      }),
+    );
+    const frame = JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'getStatus' });
+    for (let i = 0; i < 10_000; i++) ws.send(frame);
+    await all;
+    expect(sample(await scrape(), series)).toBe(before + 10_000);
+    ws.close();
+    for (let i = 0; i < 50 && !lines.some((l) => l.suppressed); i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const refusals = lines.filter((l) => l.outcome === 'rate_limited' || l.suppressed);
+    expect(refusals.length).toBeLessThanOrEqual(3);
+    // What was not printed is still accounted for: 1 printed + the suppressed count.
+    const shown = refusals.filter((l) => l.outcome === 'rate_limited').length;
+    const suppressed = refusals.reduce((n, l) => n + (l.suppressed ?? 0), 0);
+    expect(shown + suppressed).toBe(10_000);
+  }, 60_000);
+});
+
+describe('after close', () => {
+  it('a request that finishes after the server closed writes no line', async () => {
+    let release!: () => void;
+    jest.spyOn(translatorModule, 'translate').mockImplementation(async () => {
+      await new Promise<void>((r) => (release = r));
+      return { actions: [], method: 'pattern', confidence: 0, reasoning: 'stub' };
+    });
+    await serve();
+    const ws = await open(as('key-a'));
+    await call(ws, 'launchBrowser');
+    void call(ws, 'executeBrowserAction', { instruction: 'slow' });
+    while (!release) await new Promise((r) => setTimeout(r, 5));
+    ws.terminate(); // the server's close waits for its clients
+    await new Promise((r) => server.close(() => r(null)));
+    const count = lines.length;
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(lines.slice(count).filter((l) => l.msg === 'rpc request')).toEqual([]);
+    server = undefined as unknown as Server;
+  });
+});
+
 describe('REST request logs', () => {
   const post = (headers: Record<string, string> = {}) =>
     fetch(`${httpBase}/v1/a11y/jobs`, {
@@ -221,9 +312,9 @@ describe('REST request logs', () => {
     expect(generated.status).toBe(202);
     const id = generated.headers.get('x-request-id')!;
     expect(id).toMatch(UUID);
-    expect((await post({ 'x-request-id': 'client-id.42' })).headers.get('x-request-id')).toBe(
-      'client-id.42',
-    );
+    // A client's id is logged beside ours, never instead of it: it could collide.
+    const echoed = (await post({ 'x-request-id': 'client-id.42' })).headers.get('x-request-id');
+    expect(echoed).toMatch(UUID);
     const unsafe = await post({ 'x-request-id': `${'x'.repeat(65)}` });
     expect(unsafe.headers.get('x-request-id')).toMatch(UUID);
     const unauth = await fetch(`${httpBase}/v1/jobs/abc`);
@@ -241,7 +332,8 @@ describe('REST request logs', () => {
       orgId: 'org-a',
       keyId: 'id-a',
     });
-    expect(rest[1].requestId).toBe('client-id.42');
+    expect(rest[1]).toMatchObject({ requestId: echoed, clientRequestId: 'client-id.42' });
+    expect(rest[2].clientRequestId).toBeUndefined(); // not a safe id: dropped
     // No org before authentication; the id is folded out of the route label.
     expect(rest[3]).toMatchObject({ method: 'GET /v1/jobs/:id', status: 401 });
     expect(rest[3].orgId).toBeUndefined();

@@ -15,6 +15,7 @@ import { AIVisionCache } from './cache';
 import { CostTracker } from './cost-tracker';
 import { ImagePreprocessor } from './preprocessor';
 import { DEFAULT_MODELS, ModelProvider, ModelUnavailableError, resolveModel } from './models';
+import { hostedLog } from '../log';
 
 /**
  * Smart client configuration
@@ -190,9 +191,9 @@ export class SmartAIVisionClient {
         estimated: this.costTracker!.priceIsEstimated(provider, model),
       });
     } catch (error) {
-      console.error(
-        '[iris] failed to record AI usage:',
-        error instanceof Error ? error.message : String(error),
+      const message = error instanceof Error ? error.message : String(error);
+      hostedLog('error', 'failed to record AI usage', { err: message }, () =>
+        console.error('[iris] failed to record AI usage:', message),
       );
     }
   }
@@ -333,7 +334,9 @@ export class SmartAIVisionClient {
         try {
           this.cache.set(cacheKey, result, providerName, model);
         } catch (error) {
-          console.warn('⚠️  Could not cache the vision result:', formatError(error));
+          hostedLog('warn', 'could not cache the vision result', { err: formatError(error) }, () =>
+            console.warn('⚠️  Could not cache the vision result:', formatError(error)),
+          );
         }
       }
 

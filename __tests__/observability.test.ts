@@ -99,6 +99,38 @@ describe('log', () => {
     expect(obj.msg).toBe('could not reach postgres://[redacted]@db:5432/iris');
   });
 
+  it('redacts request payload fields: instruction, params, body, text, value', () => {
+    const { redact } = loadLog(true);
+    const MARK = 'payl0ad-m4rk';
+    const out = JSON.stringify(
+      redact({ instruction: MARK, params: { x: MARK }, body: MARK, text: MARK, value: MARK }),
+    );
+    expect(out).not.toContain(MARK);
+  });
+
+  it('cuts secrets out of free text: query tokens, Basic auth, embedded iris_ keys', () => {
+    const { redact } = loadLog(true);
+    const KEY = 'iris_' + 'AbCdEfGhIjKlMnOpQrStUvWxYz012345';
+    const text = [
+      'page.goto: net::ERR_ABORTED at https://a.example/x?token=t0k3n&page=2',
+      'https://b.example/?a=1&api_key=k3y&X-Amz-Signature=s1g&client_secret=s3c',
+      '?password=pw;&auth=au7h#frag',
+      'sent Basic dXNlcjpwYXNz to the proxy',
+      `connect failed with ${KEY}.`,
+      'metric iris_request_duration_seconds is fine, so is iris_jobs_total',
+    ].join('\n');
+    const out = redact(text) as string;
+    for (const secret of ['t0k3n', 'k3y', 's1g', 's3c', '=pw', 'au7h', 'dXNlcjpwYXNz', KEY]) {
+      expect(out).not.toContain(secret);
+    }
+    expect(out).toContain('page=2');
+    expect(out).toContain('#frag');
+    expect(out).toContain('iris_request_duration_seconds');
+    expect(out).toContain('iris_jobs_total');
+    // Error messages go through the same pass.
+    expect(redact(new Error('GET https://c.example/?sig=zzz9 failed'))).not.toContain('zzz9');
+  });
+
   it('counts every error-level line in iris_errors_total, logged or not', () => {
     const { log, metrics } = loadLog(true);
     const before = metrics.counter('iris_errors_total', '').get();
@@ -306,4 +338,43 @@ describe('--metrics-port', () => {
     },
     60_000,
   );
+});
+
+/**
+ * Hosted output stays one JSON object per line (#275): modules that the hosted server or
+ * worker reach and that are shared with the local CLI print through `hostedLog()`, whose
+ * local branch keeps the CLI's own console output. A bare console call there is a
+ * plain-text line in the middle of the JSON stream.
+ */
+describe('hosted paths log through the logger', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  it.each([
+    'src/translator.ts',
+    'src/db/postgres.ts',
+    'src/ai-client/factory.ts',
+    'src/ai-client/base.ts',
+    'src/ai-client/text.ts',
+    'src/ai-client/cost-tracker.ts',
+    'src/ai-client/smart-client.ts',
+    'src/billing/usage.ts',
+    'src/protocol.ts',
+    'src/jobs-api.ts',
+    'src/worker.ts',
+  ])('%s has no console call outside a hostedLog local branch', (file) => {
+    const source = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+    const bare = source.match(/(?<!\(\) =>\s*)console\.(error|warn|log)\(/g) ?? [];
+    expect(bare).toEqual([]);
+  });
+
+  it('hostedLog: a JSON line hosted, the local callback otherwise', () => {
+    const hosted = loadLog(true);
+    const local = jest.fn();
+    const out = capture(() => hosted.hostedLog('error', 'failed', { err: 'x' }, local));
+    expect(local).not.toHaveBeenCalled();
+    expect(JSON.parse(out[0])).toMatchObject({ level: 'error', msg: 'failed', err: 'x' });
+    const plain = loadLog(false);
+    expect(capture(() => plain.hostedLog('error', 'failed', {}, local))).toEqual([]);
+    expect(local).toHaveBeenCalledTimes(1);
+  });
 });

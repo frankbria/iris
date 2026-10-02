@@ -10,6 +10,7 @@ import {
   redactFenceMarkers,
 } from './base';
 import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
+import { hostedLog } from '../log';
 
 /**
  * OpenAI client for text-based instruction translation
@@ -136,7 +137,9 @@ ${
         usage,
       };
     } catch (error) {
-      console.error('OpenAI translation error:', formatError(error));
+      hostedLog('error', 'OpenAI translation error', { err: formatError(error) }, () =>
+        console.error('OpenAI translation error:', formatError(error)),
+      );
       return {
         actions: [],
         confidence: 0,
@@ -273,7 +276,9 @@ ${
         usage,
       };
     } catch (error) {
-      console.error('Anthropic translation error:', formatError(error));
+      hostedLog('error', 'Anthropic translation error', { err: formatError(error) }, () =>
+        console.error('Anthropic translation error:', formatError(error)),
+      );
       return {
         actions: [],
         confidence: 0,
@@ -386,7 +391,9 @@ Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
         usage,
       };
     } catch (error) {
-      console.error('Ollama translation error:', formatError(error));
+      hostedLog('error', 'Ollama translation error', { err: formatError(error) }, () =>
+        console.error('Ollama translation error:', formatError(error)),
+      );
       return {
         actions: [],
         confidence: 0,

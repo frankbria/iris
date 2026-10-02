@@ -566,15 +566,30 @@ alerts".
   call; default `info` hosted, `warn` locally (local `iris connect` prints no request
   lines). Tests spy `console.error`; the variable is on the `jest.setup.ts` scrub list.
 - **Never pass a secret.** Log `keyId`, never the key; action *types* (from the results),
-  never selectors or `text`. `redact()` (secret-named fields incl. `text`/`value`, URL
-  userinfo, `Bearer …`) is a net, not the rule. Errors are logged as their message only.
+  never selectors or `text`. `redact()` is a net, not the rule: secret-named fields (incl.
+  `text`/`value`/`instruction`/`params`/`body`), and in strings (error messages too) URL
+  userinfo, `Bearer`/`Basic …`, secret-looking query params (`?token=`, `sig`, `auth`…)
+  and `iris_<16+ alnum>` keys. Errors are logged as their message only.
+- **Modules shared with the local CLI** (translator, AI clients, cost tracker, usage
+  ledger, Postgres pool) print through `hostedLog(level, msg, fields, () => console…)`:
+  JSON hosted, their old console output locally. `observability.test.ts` fails on a bare
+  `console.*` in those files.
 - **Logging is synchronous**, so request lines add no await ahead of the SessionGate
   (#128). The RPC line is written after `reply()`; the REST line on `res` `'close'` (a
-  test reads it ~50 ms after the response).
+  test reads it ~50 ms after the response). Once the server has closed, request lines
+  are counted but not printed ("Cannot log after tests are done").
+- **Pre-dispatch refusals are throttled per connection** (rate-limited, unparseable,
+  not-a-request): one line per 10 s carrying `suppressed`, a summary on close; every one
+  is still counted. They cost a client nothing, so unthrottled they flushed the logs.
+- **REST `requestId` is always ours** (also the `X-Request-Id` header); a safe client
+  `X-Request-Id` is logged as `clientRequestId` only (it could collide).
 - **Bounded labels only**: RPC method from a fixed set (else `unknown`), REST route with
   the id folded (`GET /v1/jobs/:id`), outcome `ok|client_error|rate_limited|error`. No
   org id on any series; `usage_events` is the per-org record. `-32600/-32601/-32602`
-  are `client_error`; every other error code (including `-32000`) is `error`.
+  and tenant-caused `-32000`s (thrown with `refused: true`: no session, session limits,
+  closed during launch) are `client_error`; other codes are `error`. A REST response the
+  client abandoned is `aborted`. The watchdog's rate is error / (ok + error), so no tenant
+  can raise or dilute it.
 - **One process-wide registry** (`metrics`). `startServer` re-registers its gauges
   (sessions, browsers) on each call, so with several servers in one process the last
   wins. `iris_errors_total` counts every `log('error', …)` call, printed or not.
@@ -591,8 +606,11 @@ alerts".
 - **Watchdog** (`deploy/watchdog.sh`, root timer every minute, installed like the backup):
   restarts `unhealthy` containers (Docker never does; `unless-stopped` acts on exit only),
   capped per service per hour; alerts on Docker's own restarts (`RestartCount` up), failed
-  scrapes and the error share over a 5-minute window (samples in `/var/lib/iris-watchdog`;
-  a counter that went down restarts the window). Alerts: `logger -p crit -t iris-watchdog`
+  scrapes and the error share over a 5-minute window (samples in `/var/lib/iris-watchdog`
+  with `iris_start_time_seconds`; a new start time or counters below the *latest* sample
+  restart the window; times after now are dropped, so a clock stepping back neither
+  counts nor suppresses). Container text in alerts is cut to one printable line (300).
+  A container gone between `ps` and `inspect` is skipped (`|| continue`, `set -e`). Alerts: `logger -p crit -t iris-watchdog`
   plus `/etc/iris/alert-hook <key> <message>`, repeated per key only after
   `WATCHDOG_ALERT_REPEAT`. `container-config.test.ts` checks the script's default targets
   against the compose `--metrics-port` values.

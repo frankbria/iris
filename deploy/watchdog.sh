@@ -16,11 +16,13 @@
 # 3. Scrapes each WATCHDOG_METRICS target (`service:port`) inside its container with
 #    `docker exec ... node`, since the metrics listener binds the container's loopback
 #    and no port is published. A failed scrape alerts: it is the uptime signal.
-# 4. From the scraped counters, the share of requests (iris_requests_total) or jobs
-#    (iris_jobs_total) with outcome="error" over the last WATCHDOG_ERROR_WINDOW seconds;
-#    at or above WATCHDOG_ERROR_PERCENT with at least WATCHDOG_MIN_REQUESTS in the
-#    window, it alerts. Samples are kept in the state directory between runs; a counter
-#    that went down (the process restarted) starts the window again.
+# 4. From the scraped counters, error / (ok + error) of requests (iris_requests_total)
+#    or jobs (iris_jobs_total, `finished` for ok) over the last WATCHDOG_ERROR_WINDOW
+#    seconds; client errors and rate-limited requests count in neither part. At or above
+#    WATCHDOG_ERROR_PERCENT with at least WATCHDOG_MIN_REQUESTS (ok + error) in the
+#    window, it alerts. Samples are kept in the state directory between runs; a new
+#    iris_start_time_seconds or counters below the latest sample (the process restarted)
+#    start the window again. Times after now (the clock stepped back) are dropped.
 #
 # An alert is a critical journal entry (`logger -p crit -t iris-watchdog`) plus the
 # operator's hook, if WATCHDOG_ALERT_HOOK is executable: `<hook> <key> <message>`, where
@@ -64,10 +66,15 @@ install -d -m 700 "$state"
 now=$(date +%s)
 
 # alert <key> <message> [always]: journal + hook, at most once per $repeat s per key.
+# The message can carry container text (a label, a scrape error): it goes out as one
+# line of printable characters, at most 300.
 alert() {
-  local key=${1//[^A-Za-z0-9_.-]/_} msg=$2 stamp
+  local key=${1//[^A-Za-z0-9_.-]/_} msg stamp age
+  msg=$(printf '%s' "$2" | tr '\n\r\t' '   ' | LC_ALL=C tr -cd '[:print:]' | cut -c1-300)
   stamp=$state/alert.$key
-  if [ -z "${3:-}" ] && [ -e "$stamp" ] && ((now - $(stat -c %Y "$stamp") < repeat)); then
+  age=$((now - $(stat -c %Y "$stamp" 2>/dev/null || echo 0)))
+  # A stamp from the future (the clock stepped back) holds nothing back.
+  if [ -z "${3:-}" ] && [ -e "$stamp" ] && ((age >= 0 && age < repeat)); then
     log "still: $msg"
     return 0
   fi
@@ -85,15 +92,22 @@ docker info >/dev/null 2>&1 || {
   alert docker "the Docker daemon does not answer: no container is watched"
   exit 1
 }
+resolved docker
 
 project_filter=(--filter "label=com.docker.compose.project=$project")
 service_of() { docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$1"; }
 
-# 1. Unhealthy containers: restart, within the hourly cap.
+# 1. Unhealthy containers: restart, within the hourly cap. Times after now (a clock that
+# stepped back) are dropped, not counted for an hour of skew.
+unhealthy=' '
 for cid in $(docker ps -q "${project_filter[@]}" --filter health=unhealthy); do
-  svc=$(service_of "$cid")
+  # Gone since `ps` (removed, recreated by a deploy): nothing to restart.
+  svc=$(service_of "$cid") || continue
+  unhealthy+="$svc "
   file=$state/restarts.${svc//[^A-Za-z0-9_.-]/_}
-  if [ -f "$file" ]; then awk -v t=$((now - 3600)) '$1 > t' "$file" >"$file.tmp"; else : >"$file.tmp"; fi
+  if [ -f "$file" ]; then
+    awk -v t=$((now - 3600)) -v now="$now" '$1 > t && $1 <= now' "$file" >"$file.tmp"
+  else : >"$file.tmp"; fi
   mv -- "$file.tmp" "$file"
   n=$(wc -l <"$file")
   if ((n >= max_restarts)); then
@@ -104,6 +118,13 @@ for cid in $(docker ps -q "${project_filter[@]}" --filter health=unhealthy); do
   else
     alert "restart-failed-$svc" "$svc ($cid) is unhealthy and could not be restarted"
   fi
+done
+# A service healthy again: its failed-restart and cap alerts are over.
+for stamp in "$state"/alert.restart-failed-* "$state"/alert.restart-cap-*; do
+  [ -e "$stamp" ] || continue
+  svc=${stamp#"$state"/alert.restart-failed-}
+  svc=${svc#"$state"/alert.restart-cap-}
+  [[ "$unhealthy" == *" $svc "* ]] || rm -f -- "$stamp"
 done
 
 # 2. Restarts Docker made itself: the restart count went up since the last run.
@@ -139,18 +160,28 @@ for target in $targets; do
   fi
   resolved "scrape-$svc"
 
-  read -r total errors < <(awk '/^iris_(requests|jobs)_total[{ ]/ {
-      t += $NF; if ($0 ~ /outcome="error"/) e += $NF }
-    END { printf "%d %d\n", t, e }' <<<"$text")
+  # Server-side answers only: ok (or a finished job) and error. Client errors and
+  # rate-limited requests are tenant-caused, so a tenant cannot raise the rate, nor
+  # dilute it, by sending bad requests.
+  read -r total errors start < <(awk '
+    /^iris_(requests|jobs)_total[{ ]/ {
+      if ($0 ~ /outcome="error"/) e += $NF; else if ($0 ~ /outcome="(ok|finished)"/) o += $NF }
+    /^iris_start_time_seconds / { s = $NF }
+    END { printf "%d %d %s\n", o + e, e, (s == "" ? "-" : s) }' <<<"$text")
   file=$state/rate.${svc//[^A-Za-z0-9_.-]/_}
-  if [ -f "$file" ]; then awk -v t=$((now - window)) '$1 >= t' "$file" >"$file.tmp"; else : >"$file.tmp"; fi
+  if [ -f "$file" ]; then
+    awk -v t=$((now - window)) -v now="$now" '$1 >= t && $1 <= now' "$file" >"$file.tmp"
+  else : >"$file.tmp"; fi
   t0='' total0=0 errors0=0
-  read -r t0 total0 errors0 <"$file.tmp" || :
-  if [ -n "$t0" ] && ((total < total0 || errors < errors0)); then
-    : >"$file.tmp" # the process restarted: its counters began again
+  read -r t0 total0 errors0 _ <"$file.tmp" || :
+  # The process restarted (a new start time, or counters below the latest sample): its
+  # counters began again, so the window does too.
+  read -r _ last_total last_errors last_start < <(tail -n 1 "$file.tmp") || :
+  if [ -n "$t0" ] && { [ "$start" != "$last_start" ] || ((total < last_total || errors < last_errors)); }; then
+    : >"$file.tmp"
     t0=''
   fi
-  echo "$now $total $errors" >>"$file.tmp"
+  echo "$now $total $errors $start" >>"$file.tmp"
   mv -- "$file.tmp" "$file"
   [ -n "$t0" ] || continue
   requests=$((total - total0))

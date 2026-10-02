@@ -1,6 +1,7 @@
 import { Kysely, PostgresDialect, sql } from 'kysely';
 import { Pool } from 'pg';
 import { readSecretEnv } from '../secret-env';
+import { hostedLog } from '../log';
 
 /**
  * The hosted database URL (#248, ADR 0001 §2): `DATABASE_URL`, or
@@ -46,7 +47,13 @@ export function createPostgresDb<DB = unknown>(
   // listener, `pg`'s 'error' event is an uncaught exception that takes the process
   // down (#341: the hosted RPC server exited when Postgres restarted).
   pool.on('error', (err) => {
-    console.error(`[iris] idle Postgres connection lost; the pool replaces it: ${err.message}`);
+    hostedLog(
+      'warn',
+      'idle Postgres connection lost; the pool replaces it',
+      { err: err.message },
+      () =>
+        console.error(`[iris] idle Postgres connection lost; the pool replaces it: ${err.message}`),
+    );
   });
   return new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
 }
