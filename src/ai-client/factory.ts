@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import * as path from 'path';
 import { IrisConfig, resolveBudget } from '../config';
 import { resolveDataDir } from '../data-dir';
@@ -133,6 +134,7 @@ class MeteredTextClient implements AIClient {
       if (response.usage) {
         const costUsd = tracker.settle(reservation, response.usage);
         await this.report({
+          callId: randomUUID(),
           operation: this.operation,
           provider: this.provider,
           model: this.model,
@@ -173,6 +175,8 @@ class MeteredTextClient implements AIClient {
 
 /** A provider call that was billed, as the usage ledger needs it (#263). */
 export interface SettledAICall {
+  /** One per provider call: the usage row's idempotency key is built from it. */
+  callId: string;
   operation: CostOperation;
   provider: string;
   model: string;

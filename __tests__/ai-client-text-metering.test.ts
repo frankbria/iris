@@ -423,6 +423,7 @@ describe('settled calls reported for billing (#263)', () => {
     await client.translateInstruction({ instruction: 'click go' });
     expect(calls).toEqual([
       {
+        callId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         operation: 'text',
         provider: 'openai',
         model: 'gpt-4o-mini',

@@ -666,11 +666,21 @@ They apply only to connections with a principal; local mode is untouched.
   `translate(…, { onUsage })` and `SmartClientConfig.onUsage` (not for cache hits)
   report `SettledAICall { operation, provider, model, costUsd, estimated }`. A failed
   report is logged, never thrown: the call is already paid for.
-- **Hosted RPC** (`startServer({ usage })`, wired by `hostedServices()`): a tenant
-  session's browser minutes are recorded once when it ends, measured from its first page
-  (a session that never started a browser has no row). `BrowserSession.onEnd` runs on
-  the first cleanup only, which matters when `closeBrowser` and the socket's `close` race.
-  Each AI translation is a `text_call` on `byok` until managed credits (#346).
+- **Hosted RPC** (`startServer({ usage, usageCheckpointMs })`, wired by
+  `hostedServices()`): a tenant session's browser minutes are billed in segments
+  (`session:<id>:<n>`), one per checkpoint (default 5 min) and a last one when it ends,
+  so a crash or forced restart loses at most one interval and a session that spans a
+  month is billed to both months. Minutes run from the first page, idle time included
+  (Chromium is held either way), and are clamped at 0 against a backward clock.
+  `BrowserSession.onEnd` runs on the first cleanup only, which matters when
+  `closeBrowser` and the socket's `close` race. A settled AI call maps to its kind
+  explicitly (`usageKindOf`), keyed `<operation>:<callId>`. A translation is `byok`
+  until managed credits (#346).
+- **Constraints**: `billing_mode` null iff platform kind; an AI row must carry
+  `unit_cost_usd` (`usage_events_ai_cost_check`). A key already recorded is skipped and
+  logged (`returning`), so a reused key cannot hide an event silently.
+- **Writers not yet wired**: vision calls and jobs come with #268/#267 (the hooks
+  exist); agent turns come with #428 (the agent loop is CLI-only).
 
 ### BYOK Provider Keys (issue #344)
 

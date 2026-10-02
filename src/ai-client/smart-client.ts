@@ -175,6 +175,28 @@ export class SmartAIVisionClient {
     }
   }
 
+  /**
+   * Report a billed vision call to the usage ledger (#263). Never throws: the call was
+   * made and paid for, and its cost is on the budget ledger already.
+   */
+  private async reportUsage(provider: string, model: string, costUsd: number): Promise<void> {
+    try {
+      await this.config.onUsage?.({
+        callId: randomUUID(),
+        operation: 'vision-analysis',
+        provider,
+        model,
+        costUsd,
+        estimated: this.costTracker!.priceIsEstimated(provider, model),
+      });
+    } catch (error) {
+      console.error(
+        '[iris] failed to record AI usage:',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
   private needsBudget({ enableCostTracking = true, costConfig }: SmartClientConfig): boolean {
     return (
       enableCostTracking &&
@@ -284,7 +306,9 @@ export class SmartAIVisionClient {
         // A reply IRIS rejected was still billed; anything else never got one.
         if (reservation !== undefined) {
           if (error instanceof AIResponseRejectedError) {
-            this.costTracker!.settle(reservation, error.usage);
+            // Billed by the provider, so it is usage too (#263).
+            const costUsd = this.costTracker!.settle(reservation, error.usage);
+            await this.reportUsage(providerName, model, costUsd);
           } else {
             this.costTracker!.release(reservation);
           }
@@ -302,21 +326,7 @@ export class SmartAIVisionClient {
       // it to the next vendor, which would pay for the same answer twice.
       if (reservation !== undefined) {
         const costUsd = this.costTracker!.settle(reservation, result.usage);
-        try {
-          await this.config.onUsage?.({
-            operation: 'vision-analysis',
-            provider: providerName,
-            model,
-            costUsd,
-            estimated: this.costTracker!.priceIsEstimated(providerName, model),
-          });
-        } catch (error) {
-          // The call was made and paid for; its cost is on the budget ledger already.
-          console.error(
-            '[iris] failed to record AI usage:',
-            error instanceof Error ? error.message : String(error),
-          );
-        }
+        await this.reportUsage(providerName, model, costUsd);
       }
 
       if (this.cache && cacheKey) {

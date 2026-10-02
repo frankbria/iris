@@ -99,7 +99,8 @@ const JUNE = { from: new Date('2026-06-01T00:00:00Z'), to: new Date('2026-07-01T
         at: at('2026-05-31T23:59:59Z'),
       },
     ]);
-    // A retried write is a no-op, not a second charge.
+    // A retried write is a no-op, not a second charge, and the skip is logged.
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     await ledger.record('org-a', [
       {
         kind: 'text_call',
@@ -110,6 +111,8 @@ const JUNE = { from: new Date('2026-06-01T00:00:00Z'), to: new Date('2026-07-01T
         at: at('2026-06-03T10:01:00Z'),
       },
     ]);
+    expect(warn.mock.calls.flat()).toContainEqual(['text:1']);
+    warn.mockRestore();
     await ledger.record('org-b', [
       {
         kind: 'text_call',
@@ -155,6 +158,14 @@ const JUNE = { from: new Date('2026-06-01T00:00:00Z'), to: new Date('2026-07-01T
         { kind: 'browser_minutes', quantity: 1, billingMode: 'byok', idempotencyKey: 'modeful' },
       ]),
     ).rejects.toThrow();
+  });
+
+  it('refuses an AI call recorded without its cost', async () => {
+    await expect(
+      usageLedger(db).record('org-a', [
+        { kind: 'text_call', quantity: 1, billingMode: 'byok', idempotencyKey: 'free?' },
+      ]),
+    ).rejects.toThrow(/usage_events_ai_cost_check/);
   });
 
   it('refuses a negative quantity or an unknown kind', async () => {

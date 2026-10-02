@@ -93,8 +93,13 @@ export interface BrowserSession {
   principal?: Principal;
   /** Names the session's usage row, so it is recorded once (#263). */
   id: string;
-  /** When its first page was created: browser minutes count from here (#263). */
-  browserStartedAt?: number;
+  /**
+   * Browser minutes are billed up to here (#263): set when the first page is created,
+   * advanced by each recorded segment.
+   */
+  billedUntil?: number;
+  /** Segments recorded so far: each one's idempotency key is `session:<id>:<n>`. */
+  billedSegments: number;
   /** Called once, when the session ends, whichever path ends it. */
   onEnd?: (session: BrowserSession) => void;
 }
@@ -282,6 +287,12 @@ export function startServer(
      * each AI call its translations make. Local connections record nothing.
      */
     usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
+    /**
+     * How often an open tenant session's browser minutes are written (#263), so a
+     * crash or a forced restart loses at most one interval, and a session spanning a
+     * month boundary is billed to both months.
+     */
+    usageCheckpointMs?: number;
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
     limits?: Partial<ServerLimits>;
   },
@@ -358,19 +369,44 @@ export function startServer(
    * A tenant session's browser minutes, recorded when it ends (#263): from its first
    * page to the end, and only if a browser ever started. A failed write is logged.
    */
-  const meterMinutes =
-    (principal: Principal) =>
-    (session: BrowserSession): void => {
-      if (!options?.usage || !session.browserStartedAt) return;
-      const minutes = Math.round(((Date.now() - session.browserStartedAt) / 60_000) * 1e4) / 1e4;
-      options.usage
-        .record(principal.orgId, [
-          { kind: 'browser_minutes', quantity: minutes, idempotencyKey: `session:${session.id}` },
-        ])
-        .catch((err: unknown) =>
-          console.error('[iris] failed to record browser minutes:', (err as Error).message),
-        );
-    };
+  /**
+   * Record a tenant session's browser minutes since it was last billed, as one segment.
+   * Idle time with the browser open counts: Chromium is held for the tenant either way.
+   * A failed write is logged.
+   */
+  const billMinutes = (session: BrowserSession, until: number): void => {
+    const principal = session.principal;
+    if (!options?.usage || !principal || session.billedUntil === undefined) return;
+    // Clamped: a wall clock stepping backward (WSL2 does, #190) would make it negative,
+    // and the ledger refuses a negative quantity, losing the segment.
+    const minutes = Math.max(0, Math.round(((until - session.billedUntil) / 60_000) * 1e4) / 1e4);
+    const segment = session.billedSegments++;
+    session.billedUntil = until;
+    options.usage
+      .record(principal.orgId, [
+        {
+          kind: 'browser_minutes',
+          quantity: minutes,
+          idempotencyKey: `session:${session.id}:${segment}`,
+        },
+      ])
+      .catch((err: unknown) =>
+        console.error('[iris] failed to record browser minutes:', (err as Error).message),
+      );
+  };
+  const meterMinutes = (_principal: Principal) => (session: BrowserSession) =>
+    billMinutes(session, Date.now());
+  const checkpoint = setInterval(
+    () => {
+      const now = Date.now();
+      for (const session of sessions.values()) {
+        if (session.isActive) billMinutes(session, now);
+      }
+    },
+    options?.usageCheckpointMs ?? 5 * 60_000,
+  );
+  checkpoint.unref();
+  if (!options?.usage) clearInterval(checkpoint);
   const sessions = new Map<WebSocket, BrowserSession>();
   const sessionTimeout = options?.sessionTimeout || 30 * 60 * 1000; // 30 minutes default
   /** Server start, so `getStatus` can report real uptime rather than a constant (issue #80). */
@@ -740,6 +776,7 @@ export function startServer(
     clearInterval(cleanupInterval);
     clearInterval(heartbeat);
     clearInterval(recheck);
+    clearInterval(checkpoint);
     // Cleanup all sessions
     for (const [ws] of sessions.entries()) {
       cleanupSession(ws, sessions);
@@ -853,6 +890,7 @@ function createBrowserSession(
     busy: 0,
     principal,
     id: randomUUID(),
+    billedSegments: 0,
     onEnd,
   };
 
@@ -905,12 +943,12 @@ async function executeBrowserActions(
                 onUsage: (call: SettledAICall) =>
                   tenant.usage!.record(principal.orgId, [
                     {
-                      kind: call.operation === 'agent_turn' ? 'agent_turn' : 'text_call',
+                      kind: usageKindOf(call.operation),
                       quantity: 1,
                       unitCostUsd: call.costUsd,
                       estimated: call.estimated,
                       billingMode: 'byok',
-                      idempotencyKey: `${call.operation}:${randomUUID()}`,
+                      idempotencyKey: `${call.operation}:${call.callId}`,
                     },
                   ]),
               }),
@@ -980,7 +1018,7 @@ async function executeBrowserActions(
         });
       }
       session.page = await session.pageCreationPromise;
-      session.browserStartedAt ??= Date.now();
+      session.billedUntil ??= Date.now();
       // Closed while the browser was starting: cleanup found no browser to
       // close yet, so close the one that just arrived.
       if (!session.isActive) {
@@ -1044,6 +1082,23 @@ async function getBrowserSessionStatus(session?: BrowserSession): Promise<Browse
   }
 
   return status;
+}
+
+/**
+ * The usage kind of a billed AI call (#263). Explicit, so a new operation is an error
+ * (logged by the reporter) rather than billed as the wrong kind.
+ */
+export function usageKindOf(operation: SettledAICall['operation']): UsageEvent['kind'] {
+  switch (operation) {
+    case 'text':
+      return 'text_call';
+    case 'agent_turn':
+      return 'agent_turn';
+    case 'vision-analysis':
+      return 'vision_call';
+    default:
+      throw new Error(`No usage kind for AI operation ${String(operation)}`);
+  }
 }
 
 /**

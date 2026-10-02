@@ -14,8 +14,11 @@ const STATEMENTS = [
   `alter table usage_events add column unit_cost_usd numeric check (unit_cost_usd >= 0)`,
   `alter table usage_events add column estimated boolean not null default false`,
   `alter table usage_events alter column billing_mode drop not null`,
-  `alter table usage_events add constraint usage_events_billing_mode_check2 check (
+  `alter table usage_events add constraint usage_events_billing_mode_by_kind_check check (
     (kind in ('browser_minutes', 'a11y_job', 'visual_job')) = (billing_mode is null))`,
+  // An AI call without its cost would be billed at $0 without anyone noticing.
+  `alter table usage_events add constraint usage_events_ai_cost_check check (
+    billing_mode is null or unit_cost_usd is not null)`,
 ];
 
 export async function up(db: Kysely<unknown>): Promise<void> {

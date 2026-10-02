@@ -251,8 +251,9 @@ describe('migrate process against a server that never answers', () => {
 
   it('rejects a usage event replayed with the same idempotency key', async () => {
     const insert = () =>
-      sql`insert into usage_events (org_id, kind, quantity, billing_mode, idempotency_key)
-          values ('org_a', 'vision_call', 1, 'managed', 'k-1')`.execute(db);
+      // An AI row carries its unit cost since #263 (usage_events_ai_cost_check).
+      sql`insert into usage_events (org_id, kind, quantity, billing_mode, idempotency_key, unit_cost_usd)
+          values ('org_a', 'vision_call', 1, 'managed', 'k-1', 0.01)`.execute(db);
     await insert();
     await expect(insert()).rejects.toThrow(/duplicate key/);
   });

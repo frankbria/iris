@@ -4,7 +4,13 @@ import { AddressInfo } from 'net';
 import type { RunInput, TenantScope } from '../src/history-store';
 import type { UsageEvent } from '../src/billing/usage';
 import * as translatorModule from '../src/translator';
-import { startServer, JsonRpcResponse, Principal, Authenticator } from '../src/protocol';
+import {
+  startServer,
+  JsonRpcResponse,
+  Principal,
+  Authenticator,
+  usageKindOf,
+} from '../src/protocol';
 
 /**
  * Per-tenant authentication at the RPC upgrade (#341) and per-key / per-org limits
@@ -443,11 +449,37 @@ describe('hosted RPC history (#254)', () => {
       {
         kind: 'browser_minutes',
         quantity: expect.any(Number),
-        idempotencyKey: expect.stringMatching(/^session:[0-9a-f-]{36}$/),
+        idempotencyKey: expect.stringMatching(/^session:[0-9a-f-]{36}:0$/),
       },
     ]);
     expect(recorded[0].events[0].quantity).toBeGreaterThan(0);
   }, 60_000);
+
+  test('an open session is billed in segments, so a crash loses at most one interval', async () => {
+    const recorded: UsageEvent[] = [];
+    const usage = {
+      record: async (_org: string, events: UsageEvent[]) => void recorded.push(...events),
+    };
+    const url = await serve({ usage, usageCheckpointMs: 100 });
+    const a = await open(url, as('key-a'));
+    await call(a, 'launchBrowser');
+    await call(a, 'executeBrowserAction', { actions: [{ type: 'navigate', url: siteUrl }] });
+    await eventually(() => recorded.length >= 3);
+    await call(a, 'closeBrowser');
+    const keys = recorded.map((e) => e.idempotencyKey);
+    // One series per session, numbered in order, no key twice.
+    expect(new Set(keys).size).toBe(keys.length);
+    const id = keys[0].split(':')[1];
+    expect(keys).toEqual(keys.map((_k, i) => `session:${id}:${i}`));
+    expect(recorded.every((e) => e.kind === 'browser_minutes' && e.quantity >= 0)).toBe(true);
+  }, 60_000);
+
+  test('maps each AI operation to its usage kind, explicitly', () => {
+    expect(usageKindOf('text')).toBe('text_call');
+    expect(usageKindOf('agent_turn')).toBe('agent_turn');
+    expect(usageKindOf('vision-analysis')).toBe('vision_call');
+    expect(() => usageKindOf('mystery' as never)).toThrow(/No usage kind/);
+  });
 
   test('each billed AI call of a tenant becomes a text_call usage row (#263)', async () => {
     const recorded: Array<{ orgId: string; events: UsageEvent[] }> = [];
@@ -458,6 +490,7 @@ describe('hosted RPC history (#254)', () => {
       .spyOn(translatorModule, 'translate')
       .mockImplementation(async (_i, _c, scope) => {
         await scope?.onUsage?.({
+          callId: 'call-1',
           operation: 'text',
           provider: 'openai',
           model: 'gpt-4o-mini',
@@ -481,7 +514,7 @@ describe('hosted RPC history (#254)', () => {
               unitCostUsd: 0.0021,
               estimated: false,
               billingMode: 'byok',
-              idempotencyKey: expect.stringMatching(/^text:[0-9a-f-]{36}$/),
+              idempotencyKey: 'text:call-1',
             },
           ],
         },

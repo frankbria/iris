@@ -55,11 +55,21 @@ export async function insertUsage(
            ${e.idempotencyKey}, ${e.unitCostUsd ?? null}, ${e.estimated ?? false},
            ${e.at ?? new Date()})`,
   );
-  await sql`
+  const { rows } = await sql<{ idempotency_key: string }>`
     insert into usage_events
       (org_id, run_id, kind, quantity, billing_mode, idempotency_key, unit_cost_usd, estimated, created_at)
     values ${sql.join(values)}
-    on conflict (org_id, idempotency_key) do nothing`.execute(executor);
+    on conflict (org_id, idempotency_key) do nothing
+    returning idempotency_key`.execute(executor);
+  // A key already recorded is a retry: nothing new. But a caller that reuses a key for
+  // a different event loses that event, so say which keys were skipped.
+  if (rows.length < events.length) {
+    const written = new Set(rows.map((r) => r.idempotency_key));
+    console.warn(
+      '[iris] usage already recorded, skipped:',
+      events.filter((e) => !written.has(e.idempotencyKey)).map((e) => e.idempotencyKey),
+    );
+  }
 }
 
 export function usageLedger(db: Kysely<unknown>) {
