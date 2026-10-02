@@ -37,7 +37,11 @@ export function getAuth() {
     secret: required("BETTER_AUTH_SECRET"),
     baseURL: required("BETTER_AUTH_URL"),
     database: {
-      db: (db = createPostgresDb(resolveDatabaseUrl())),
+      // Bounded like the API's auth pool (#341): a database that accepts and never
+      // answers must fail requests and /api/health, not pile them up on the pool.
+      db: (db = createPostgresDb(resolveDatabaseUrl(), {
+        queryTimeoutMs: 5_000,
+      })),
       type: "postgres",
     },
     sendEmail: async ({ to, subject, text }) => {
