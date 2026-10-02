@@ -1,15 +1,13 @@
 name: CI
 # `push` with no filter is every branch and every tag, exactly as `[push, pull_request]`
-# was. A `v*` tag push also runs deploy-production (#273), as does a manual dispatch.
+# was. A `v*` tag push also runs deploy-production (#273), as does a manual dispatch
+# from a `v*` tag.
 on:
   push:
   pull_request:
+  # Production only: run it from a `v*` tag (Use workflow from: Tags). From a branch,
+  # deploy-production does not run; build does, as on a push.
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag to deploy to production (e.g. v1.2.3); staging must have deployed its commit'
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -547,7 +545,7 @@ jobs:
 
   # Promote what staging ran to production (issue #273, docs/runbook-production.md).
   #
-  # On a `v*` tag push, or by hand with a tag. Never builds or retags: it resolves the
+  # On a `v*` tag push, or a manual run from a `v*` tag. Never builds or retags: it resolves the
   # tag's commit, requires the `staged-<sha>` tags deploy-staging writes after a
   # successful deploy, and deploys those exact digests with deploy/deploy.sh, which
   # gates on the SMTP check and the migrations and rolls back on failed health.
@@ -558,10 +556,15 @@ jobs:
   # deploy-staging, whose comments explain them.
   deploy-production:
     needs: build
+    # The ref must be a `v*` tag for a dispatch too: a dispatch input would let a run
+    # from any branch reach the production environment. The security boundary is the
+    # protected `v*` tags plus the environment's tag-only rule and required reviewer
+    # (docs/runbook-production.md), not `staged-<sha>`.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment: production
     permissions:
       contents: read
@@ -570,7 +573,7 @@ jobs:
       group: deploy-production
       cancel-in-progress: false
     env:
-      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ github.ref_name }}
       DEPLOY_DIR: /opt/iris-production
     steps:
       - name: Check the tag
@@ -581,8 +584,6 @@ jobs:
           fi
 
       - uses: actions/checkout@v7
-        with:
-          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - id: preflight
         env:
@@ -629,7 +630,7 @@ jobs:
           REPO: ghcr.io/${{ github.repository }}
         run: |
           set -euo pipefail
-          sha=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")
+          sha=$(git rev-parse 'HEAD^{commit}') # the checkout is the tag's commit
           resolve() {
             local digest
             if ! digest=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$1:staged-$sha" 2>/dev/null); then
@@ -694,44 +695,53 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
-          box() { ssh -i ~/.ssh/deploy_key -o ConnectTimeout=10 "$DEPLOY_USER@$DEPLOY_HOST" "$@"; }
+          # Keepalives: a box that stops answering mid-deploy fails the step in about a
+          # minute instead of holding it until the job timeout.
+          ssh_opts=(-i ~/.ssh/deploy_key -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+          # Paths and digests in the remote commands expand here, on the runner, on purpose.
+          # shellcheck disable=SC2029
+          box() { ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$@"; }
 
-          box "mkdir -p $DEPLOY_DIR/docker"
-          scp -i ~/.ssh/deploy_key docker-compose.production.yml "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/docker-compose.yml"
-          scp -i ~/.ssh/deploy_key docker/seccomp-chromium.json "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/docker/seccomp-chromium.json"
-          scp -i ~/.ssh/deploy_key deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/deploy.sh"
+          # Each run stages its own release directory; the serving one is not touched
+          # until deploy.sh's SMTP and migration gates pass (see deploy/deploy.sh).
+          release="$DEPLOY_DIR/releases/$RELEASE_TAG-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          box "set -eu; umask 077; install -d -m 700 $DEPLOY_DIR/releases $DEPLOY_DIR/shared $DEPLOY_DIR/shared/secrets
+            install -d -m 700 $release $release/docker $release/secrets"
+          scp "${ssh_opts[@]}" docker-compose.production.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.yml"
+          scp "${ssh_opts[@]}" docker/seccomp-chromium.json "$DEPLOY_USER@$DEPLOY_HOST:$release/docker/seccomp-chromium.json"
+          scp "${ssh_opts[@]}" deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/deploy.sh"
           # Host ports only when set (defaults 4000 / 3000, nginx's upstreams).
           {
             printf "PORTAL_URL='%s'\nSMTP_FROM='%s'\n" "$PORTAL_URL" "$SMTP_FROM"
             [ -z "$IRIS_API_PORT" ] || printf 'IRIS_API_PORT=%d\n' "$IRIS_API_PORT"
             [ -z "$PORTAL_PORT" ] || printf 'PORTAL_PORT=%d\n' "$PORTAL_PORT"
-          } | box "cat > $DEPLOY_DIR/settings.env"
+          } | box "cat > $release/settings.env"
 
-          # Secret files over ssh's STDIN, never a remote command line (the process
-          # list of a shared box is readable by every user). App secrets are read by
-          # uid 1001 (pwuser, and the portal image's user).
+          # This release's secrets, over ssh's STDIN, never a remote command line (the
+          # process list of a shared box is readable by every user). Read by uid 1001
+          # (pwuser, and the portal image's user).
           put_secret() {
-            printf '%s' "$2" | box "set -eu; umask 077; install -d -m 700 $DEPLOY_DIR/secrets
-              cd $DEPLOY_DIR/secrets && cat > $1.tmp && chown 1001:1001 $1.tmp && chmod 400 $1.tmp && mv $1.tmp $1"
+            printf '%s' "$2" | box "set -eu; umask 077; cd $release/secrets
+              cat > $1 && chown 1001:1001 $1 && chmod 400 $1"
           }
           put_secret better_auth_secret "$BETTER_AUTH_SECRET"
           put_secret smtp_url "$SMTP_URL"
 
-          # Generated ON the box, once, and never overwritten: the Postgres password
-          # (the volume keeps the one it was initialised with) and the BYOK master
-          # key (it seals every org's stored provider key; losing it loses them).
-          # Back both up apart from the database (#274). The URL is rebuilt each time.
-          box "set -eu; umask 077; install -d -m 700 $DEPLOY_DIR/secrets; cd $DEPLOY_DIR/secrets
-            if [ ! -s pg_password ]; then head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > pg_password; fi
-            if [ ! -s master_key ]; then printf 'k1:%s' \"\$(head -c 32 /dev/urandom | base64 | tr -d '\n')\" > master_key; fi
-            printf 'postgres://iris:%s@postgres:5432/iris' \"\$(cat pg_password)\" > database_url
-            chown 70:70 pg_password
-            chown 1001:1001 master_key database_url
-            chmod 400 pg_password master_key database_url"
+          # Shared, generated ON the box once and never overwritten: the Postgres
+          # password (the volume keeps the one it was initialised with) and the BYOK
+          # master key (it seals every org's stored provider key; losing it loses them).
+          # Back both up apart from the database (#274). The URL is derived, and
+          # replaced only if it differs, since serving containers mount it.
+          box "set -eu; umask 077; cd $DEPLOY_DIR/shared/secrets
+            if [ ! -s pg_password ]; then head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > pg_password; chown 70:70 pg_password; chmod 400 pg_password; fi
+            if [ ! -s master_key ]; then printf 'k1:%s' \"\$(head -c 32 /dev/urandom | base64 | tr -d '\n')\" > master_key; chown 1001:1001 master_key; chmod 400 master_key; fi
+            printf 'postgres://iris:%s@postgres:5432/iris' \"\$(cat pg_password)\" > database_url.new
+            if cmp -s database_url.new database_url; then rm database_url.new; else
+              chown 1001:1001 database_url.new; chmod 400 database_url.new; mv database_url.new database_url; fi"
 
           printf '%s' "$GHCR_TOKEN" | box "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
           # The refs were checked against ghcr.io/...@sha256:<64 hex> above, so they
           # are safe on this command line.
-          box "cd $DEPLOY_DIR && chmod 700 deploy.sh \
+          box "cd $release && chmod 700 deploy.sh \
             && IRIS_IMAGE='$IRIS_IMAGE' PORTAL_IMAGE='$PORTAL_IMAGE' ./deploy.sh; \
             rc=\$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit \$rc"
