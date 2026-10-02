@@ -98,7 +98,7 @@ code is the ordering key.
 | `P0.25` | [#342](https://github.com/frankbria/iris/issues/342) | Server: per-key rate limits and session caps | P0.24 (#341) | DONE ([#416](https://github.com/frankbria/iris/pull/416)) |
 | `P0.26` | [#254](https://github.com/frankbria/iris/issues/254) | Tenant-scoped history store (storage seam: SQLite local, Postgres hosted) | P0.13 (#241), P0.20 (#248) | DONE ([#419](https://github.com/frankbria/iris/pull/419)) |
 | `P0.27` | [#255](https://github.com/frankbria/iris/issues/255) | Tenant-scoped cost ledger and vision cache | P0.16 (#244), P0.26 (#254) | DONE ([#422](https://github.com/frankbria/iris/pull/422)) |
-| `P0.28` | [#343](https://github.com/frankbria/iris/issues/343) | Visual artifacts: naming and per-run layout | — | TODO |
+| `P0.28` | [#343](https://github.com/frankbria/iris/issues/343) | Visual artifacts: naming and per-run layout | — | DONE ([#424](https://github.com/frankbria/iris/pull/424)) |
 | `P0.29` | [#257](https://github.com/frankbria/iris/issues/257) | Object storage for artifacts with tenant/run prefixes and signed URLs | P0.26 (#254), P0.28 (#343) | TODO |
 
 **G. BYOK**
