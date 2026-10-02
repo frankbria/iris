@@ -695,9 +695,17 @@ queues. Queue = the `runs` table (migration 0004: `params jsonb`, `error text`, 
 index), no broker (ADR 0001 §1).
 
 - **One `http.Server`**, handed to `WebSocketServer({ server })`. ws does not close a
-  listener it was given, so `startServer` wraps `wss.close` to close the server first
-  and call back after the port is free. Plain HTTP gets 426 as before unless `jobs` is
-  set (which requires `authenticate`).
+  listener it was given, so `startServer` wraps `wss.close`: it stops listening the
+  moment `close()` is called (REST must not keep queuing jobs during shutdown, while a
+  WS client lingers) and calls back after both ws and the listener have closed. Plain
+  HTTP gets 426 as before unless `jobs` is set (which requires `authenticate`).
+- **REST verification shares the upgrades' `verifying` count** (`admit()`): past
+  `maxConnections` pending verifications a REST request gets 503 + `Retry-After: 1`
+  without calling `verify`, so a bad-key flood cannot pile onto the auth pool. Only pending
+  verifications count, not idle WS sockets.
+- **`maxQueuedJobsPerOrg`** (default 10; queued + running): `enqueue` counts and inserts in
+  one transaction under `pg_advisory_xact_lock(hashtext(org_id))`; over it, 429 `Too many
+  queued jobs`. Without it one org could fill the global FIFO.
 - **Same key auth and rate buckets as RPC.** REST charges the key and org buckets (429
   with `Retry-After`); a 401 or 503 is answered before anything is charged. No CORS.
 - **`postgresJobs(db)`** (src/history-store.ts): `forOrg(scope)` gives the API
@@ -712,7 +720,10 @@ index), no broker (ADR 0001 §1).
   job is visible through `jobs.get` alone.
 - **The worker needs hosted mode** (exit 2 without `IRIS_HOSTED`): the runner's
   `urlPolicy` default and the egress proxy are what keep tenant URLs off internal hosts.
-  A page that fails navigation fails the whole job (one error, not per page).
+  A page that fails navigation fails the whole job (one error, not per page). Jobs set
+  `failOnHttpError`: the egress proxy answers a plain-HTTP request to an internal address
+  with a 403 *document*, which would otherwise be scanned and billed as a success.
+  A result that cannot be stored is recorded as a generic error; the detail is logged.
 - **A job left `running` by a crashed worker stays `running`** until a reaper exists
   (follow-up). Polling, not LISTEN/NOTIFY.
 - **Tests**: set `process.env.IRIS_HOSTED = '1'` at the top of the file and start

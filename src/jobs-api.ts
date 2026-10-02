@@ -34,6 +34,13 @@ export interface JobsApiDeps {
   jobs: { forOrg(scope: TenantScope): OrgJobs };
   /** Spends a request from the principal's key and org budgets; milliseconds to wait if refused, else 0. */
   charge(principal: Principal): number;
+  /**
+   * Takes one of the server's pending-verification slots (shared with WebSocket
+   * upgrades); `null` when none is free. Call the returned function to give it back.
+   */
+  admit(): (() => void) | null;
+  /** Queued + running jobs one org may have; the next submit gets 429. */
+  maxQueuedJobsPerOrg: number;
 }
 
 function send(
@@ -88,11 +95,18 @@ export async function handleJobsRequest(
       return send(res, 405, { error: 'Method not allowed' }, { allow: method });
     }
 
+    // Verification hits the shared auth pool: unauthenticated floods must not queue on it.
+    const release = deps.admit();
+    if (!release) {
+      return send(res, 503, { error: 'Server busy' }, { 'retry-after': '1' });
+    }
     let principal: Principal | null;
     try {
       principal = await deps.authenticate.verify(req.headers.authorization);
     } catch {
       return send(res, 503, { error: 'Authentication unavailable' });
+    } finally {
+      release();
     }
     if (!principal) return send(res, 401, { error: 'Unauthorized' });
 
@@ -145,7 +159,11 @@ export async function handleJobsRequest(
       });
     }
     const params: A11yJobParams = parsed.data;
-    const id = await store.enqueue({ kind: 'a11y', params });
+    const id = await store.enqueue(
+      { kind: 'a11y', params },
+      { maxOutstanding: deps.maxQueuedJobsPerOrg },
+    );
+    if (id === null) return send(res, 429, { error: 'Too many queued jobs' });
     return send(res, 202, { id, status: 'queued' });
   } catch (err) {
     console.error('[iris] job API request failed:', (err as Error).message);

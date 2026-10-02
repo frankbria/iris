@@ -327,8 +327,15 @@ export interface ClaimedJob {
 
 /** The org-scoped half: what the API does for a tenant. */
 export interface OrgJobs {
-  /** @returns the new job's id, status `queued` */
-  enqueue(job: { kind: 'a11y'; params: A11yJobParams }): Promise<string>;
+  /**
+   * @param options.maxOutstanding - cap on this org's queued + running jobs, checked in
+   *   the same transaction as the insert, so concurrent calls cannot exceed it
+   * @returns the new job's id (status `queued`), or `null` when the org is at the cap
+   */
+  enqueue(
+    job: { kind: 'a11y'; params: A11yJobParams },
+    options?: { maxOutstanding?: number },
+  ): Promise<string | null>;
   /** `null` for an id that is not this org's, or not a uuid. */
   get(id: string): Promise<StoredJob | null>;
 }
@@ -352,19 +359,31 @@ const JOB_ERROR_MAX = 500;
 export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
   return {
     forOrg: ({ orgId, apiKeyId }) => ({
-      async enqueue({ kind, params }) {
-        const insert = (keyId: string | null) =>
-          sql<{ id: string }>`
-            insert into runs (org_id, api_key_id, kind, status, params)
-            values (${orgId}, ${keyId}, ${kind}, 'queued', ${toJsonb(params)}::jsonb)
-            returning id`.execute(db);
+      async enqueue({ kind, params }, { maxOutstanding = Infinity } = {}) {
+        // One transaction under a per-org advisory lock: the count and the insert
+        // cannot interleave with another enqueue of the same org.
+        const attempt = (keyId: string | null) =>
+          db.transaction().execute(async (tx) => {
+            await sql`select pg_advisory_xact_lock(hashtext(${orgId}))`.execute(tx);
+            if (Number.isFinite(maxOutstanding)) {
+              const { rows } = await sql<{ n: string }>`
+                select count(*) as n from runs
+                where org_id = ${orgId} and status in ('queued', 'running')`.execute(tx);
+              if (Number(rows[0].n) >= maxOutstanding) return null;
+            }
+            const { rows } = await sql<{ id: string }>`
+              insert into runs (org_id, api_key_id, kind, status, params)
+              values (${orgId}, ${keyId}, ${kind}, 'queued', ${toJsonb(params)}::jsonb)
+              returning id`.execute(tx);
+            return rows[0].id;
+          });
         try {
-          return (await insert(apiKeyId ?? null)).rows[0].id;
+          return await attempt(apiKeyId ?? null);
         } catch (err) {
           // The key was revoked after authentication: keep the job, as `record` does.
           const e = err as { code?: string; constraint?: string };
           if (apiKeyId && e.code === '23503' && e.constraint === 'runs_org_id_api_key_id_fkey') {
-            return (await insert(null)).rows[0].id;
+            return attempt(null);
           }
           throw err;
         }

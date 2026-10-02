@@ -91,13 +91,21 @@ const PAGE =
     sitePort = (site.address() as AddressInfo).port;
 
     // Before the first launch: the one proxy of this process.
+    // Every address a refusal test might use is dialed to the site server, so a policy
+    // that let one through would show up as a hit in `seen`, not as a failed dial.
+    const INTERNAL = new Set(['10.0.0.5', '127.0.0.1', '169.254.169.254']);
     await hostedEgressProxy({
       lookup: async (host) => {
         if (host === 'site.test') return [PUBLIC];
+        if (host === 'internal.test') return ['10.0.0.5'];
+        if (host === 'localhost') return ['127.0.0.1'];
         throw new Error(`ENOTFOUND ${host}`);
       },
-      connect: (address, port) =>
-        net.connect({ host: '127.0.0.1', port: address === PUBLIC ? sitePort : port }),
+      connect: (address) =>
+        net.connect({
+          host: '127.0.0.1',
+          port: address === PUBLIC || INTERNAL.has(address) ? sitePort : 1,
+        }),
     });
 
     server = startServer(0, { authenticate, jobs: postgresJobs(db) });
@@ -173,18 +181,37 @@ const PAGE =
     ]);
   });
 
+  // `policy`: the URL policy refuses it before any request (literal hosts). `proxy`: only the
+  // egress proxy can, because the name resolves to an internal address.
   it.each([
-    ['loopback', () => `http://127.0.0.1:${sitePort}/`],
-    ['link-local metadata', () => 'http://169.254.169.254/latest/meta-data/'],
-    ['a name that resolves to loopback', () => `http://localhost:${sitePort}/`],
-  ])('refuses a job for %s: it fails, nothing is fetched, no usage', async (_name, url) => {
+    [
+      'loopback',
+      () => `http://127.0.0.1:${sitePort}/`,
+      /blocked by navigation policy: .*private\/loopback/,
+    ],
+    [
+      'link-local metadata',
+      () => 'http://169.254.169.254/latest/meta-data/',
+      /blocked by navigation policy: .*link-local/,
+    ],
+    [
+      'localhost',
+      () => `http://localhost:${sitePort}/`,
+      /blocked by navigation policy: .*private\/loopback/,
+    ],
+    [
+      'a name resolving to a private address',
+      () => `http://internal.test:${sitePort}/`,
+      /answered HTTP 403/,
+    ],
+  ])('refuses a job for %s: it fails, nothing is fetched, no usage', async (_name, url, reason) => {
     const id = await submit([url()]);
     await processNextA11yJob(postgresJobs(db));
     expect(seen).toEqual([]);
 
     const body = await (await api('GET', `/v1/jobs/${id}`)).json();
     expect(body.status).toBe('failed');
-    expect(typeof body.error).toBe('string');
+    expect(body.error).toMatch(reason);
     expect(body).not.toHaveProperty('results');
     const usage = await sql`select 1 from usage_events where run_id = ${id}`.execute(db);
     expect(usage.rows).toEqual([]);

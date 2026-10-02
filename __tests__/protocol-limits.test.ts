@@ -101,6 +101,7 @@ describe('defaults', () => {
       orgRequestsPerMinute: 300,
       maxSessionsPerOrg: 2,
       maxConnectionsPerOrg: 8,
+      maxQueuedJobsPerOrg: 10,
     });
   });
 });

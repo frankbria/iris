@@ -42,6 +42,7 @@ async function runA11y(params: A11yJobParams) {
       simulateScreenReader: false,
     },
     failureThreshold: Object.fromEntries(params.failOn.map((impact) => [impact, true])),
+    failOnHttpError: true,
     // No `output`: the result is stored, not written to the worker's disk.
   }).run();
 }
@@ -65,7 +66,9 @@ export async function processNextA11yJob(jobs: WorkerJobs): Promise<ClaimedJob |
     await jobs.finish(job, result);
   } catch (err) {
     // The outcome did not commit (nothing of it did): the job must not stay `running`.
-    await jobs.fail(job, `Could not store the result: ${(err as Error).message}`);
+    // The detail (a database error) is for the operator's log, not the tenant's job.
+    console.error(`[iris] worker could not store job ${job.id}:`, (err as Error).message);
+    await jobs.fail(job, 'Could not store the result');
   }
   return job;
 }

@@ -77,7 +77,8 @@ const result = {
   const jobs = () => postgresJobs(db);
   const A = { orgId: 'org-a' };
   const B = { orgId: 'org-b' };
-  const enqueue = (scope = A) => jobs().forOrg(scope).enqueue({ kind: 'a11y', params });
+  const enqueue = async (scope = A) =>
+    (await jobs().forOrg(scope).enqueue({ kind: 'a11y', params }))!;
 
   it('enqueues a queued job its org can read, with no results yet', async () => {
     const id = await enqueue();
@@ -169,5 +170,28 @@ const result = {
     expect(await postgresHistory(db).forOrg(A).get(id)).toBeNull();
     await jobs().finish((await jobs().claim('a11y'))!, result);
     expect(await postgresHistory(db).forOrg(A).list()).toHaveLength(1);
+  });
+
+  it('caps the outstanding jobs of an org jobs atomically, even for concurrent enqueues', async () => {
+    const cap = { maxOutstanding: 3 };
+    const ids = await Promise.all(
+      Array.from({ length: 8 }, () => jobs().forOrg(A).enqueue({ kind: 'a11y', params }, cap)),
+    );
+    expect(ids.filter((id) => id !== null)).toHaveLength(3);
+    // Other orgs have their own count.
+    expect(await jobs().forOrg(B).enqueue({ kind: 'a11y', params }, cap)).toEqual(
+      expect.any(String),
+    );
+    // A running job still counts; a finished one frees its slot.
+    const claimed = (await jobs().claim('a11y'))!;
+    expect(
+      await jobs()
+        .forOrg(claimed.orgId === 'org-a' ? A : B)
+        .enqueue({ kind: 'a11y', params }, cap),
+    ).toBeNull();
+    await jobs().fail(claimed, 'done');
+    expect(await jobs().forOrg(A).enqueue({ kind: 'a11y', params }, cap)).toEqual(
+      expect.any(String),
+    );
   });
 });

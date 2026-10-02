@@ -30,7 +30,11 @@ let stored: Map<string, StoredJob & { orgId: string; params: unknown; keyId?: st
 const jobs = {
   forOrg({ orgId, apiKeyId }: TenantScope): OrgJobs {
     return {
-      async enqueue({ kind, params }) {
+      async enqueue({ kind, params }, { maxOutstanding = Infinity } = {}) {
+        const outstanding = [...stored.values()].filter(
+          (j) => j.orgId === orgId && (j.status === 'queued' || j.status === 'running'),
+        ).length;
+        if (outstanding >= maxOutstanding) return null;
         const id = `00000000-0000-4000-8000-${String(stored.size).padStart(12, '0')}`;
         stored.set(id, {
           id,
@@ -59,8 +63,8 @@ const jobs = {
 let server: ReturnType<typeof startServer>;
 let base: string;
 
-async function serve(limits = {}) {
-  server = startServer(0, { authenticate, jobs, limits });
+async function serve(limits = {}, auth: Authenticator = authenticate) {
+  server = startServer(0, { authenticate: auth, jobs, limits });
   await new Promise<void>((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
@@ -217,5 +221,88 @@ describe('job REST API', () => {
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/a11y/jobs`;
     expect((await fetch(url, { method: 'POST' })).status).toBe(426);
     expect(() => startServer(0, { jobs, authToken: 't' })).toThrow('needs authenticate');
+  });
+
+  it('429 once an org has maxQueuedJobsPerOrg outstanding jobs; finishing one frees a slot', async () => {
+    await serve({ maxQueuedJobsPerOrg: 2 });
+    const first = await (await submit({ urls: ['https://a.example/'] })).json();
+    expect((await submit({ urls: ['https://a.example/'] })).status).toBe(202);
+    const over = await submit({ urls: ['https://a.example/'] });
+    expect(over.status).toBe(429);
+    expect(await over.json()).toEqual({ error: 'Too many queued jobs' });
+    // Another org is not affected.
+    expect((await submit({ urls: ['https://a.example/'] }, 'key-b')).status).toBe(202);
+    stored.get(first.id)!.status = 'succeeded';
+    expect((await submit({ urls: ['https://a.example/'] })).status).toBe(202);
+  });
+
+  describe('verification cap (maxConnections)', () => {
+    /** An authenticator whose verify calls stay pending until `release()`. */
+    function slowAuth() {
+      const calls: string[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const auth: Authenticator = {
+        async verify(header) {
+          calls.push(header ?? '');
+          await gate;
+          return authenticate.verify(header);
+        },
+        recheck: authenticate.recheck,
+      };
+      return { auth, calls, release };
+    }
+
+    it('503 with Retry-After without calling verify past the cap, and a WS upgrade is refused too', async () => {
+      const { auth, calls, release } = slowAuth();
+      await serve({ maxConnections: 2 }, auth);
+      const pending = [call('GET', '/v1/jobs/x'), call('GET', '/v1/jobs/x')];
+      await new Promise((r) => setTimeout(r, 200));
+      expect(calls).toHaveLength(2);
+
+      const refused = await call('GET', '/v1/jobs/x');
+      expect(refused.status).toBe(503);
+      expect(refused.headers.get('retry-after')).toBe('1');
+      expect(calls).toHaveLength(2);
+
+      const status = await new Promise<number>((resolve, reject) => {
+        const ws = new WebSocket(base.replace('http', 'ws'), {
+          headers: { authorization: 'Bearer key-a' },
+        });
+        ws.once('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0));
+        ws.once('open', () => reject(new Error('upgrade accepted')));
+        ws.once('error', () => undefined);
+      });
+      expect(status).toBe(503);
+
+      release();
+      expect((await Promise.all(pending)).map((r) => r.status)).toEqual([404, 404]);
+      // The slots are free again.
+      expect((await call('GET', '/v1/jobs/x')).status).toBe(404);
+    });
+  });
+});
+
+describe('shutdown', () => {
+  it('stops accepting REST requests as soon as close() is called, even with a WS client lingering', async () => {
+    await serve();
+    const ws = new WebSocket(base.replace('http', 'ws'), {
+      headers: { authorization: 'Bearer key-a' },
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    let closed = false;
+    server.close(() => (closed = true));
+    await new Promise((r) => setTimeout(r, 100));
+    await expect(submit({ urls: ['https://a.example/'] })).rejects.toThrow();
+    expect(stored.size).toBe(0);
+    // The callback waits for the lingering client.
+    expect(closed).toBe(false);
+    ws.close();
+    await new Promise((r) => ws.once('close', r));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(closed).toBe(true);
   });
 });

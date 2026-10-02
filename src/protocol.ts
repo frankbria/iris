@@ -173,6 +173,8 @@ export interface ServerLimits {
   maxSessionsPerOrg: number;
   /** Connections one org may hold; the next upgrade gets HTTP 429. */
   maxConnectionsPerOrg: number;
+  /** Queued + running jobs one org may have (#267); the next submit gets HTTP 429. */
+  maxQueuedJobsPerOrg: number;
 }
 
 /**
@@ -193,6 +195,7 @@ export const DEFAULT_SERVER_LIMITS: Readonly<ServerLimits> = Object.freeze({
   orgRequestsPerMinute: 300,
   maxSessionsPerOrg: 2,
   maxConnectionsPerOrg: 8,
+  maxQueuedJobsPerOrg: 10,
 });
 
 /** JSON-RPC error code for a request refused by a rate limit (#342). */
@@ -326,6 +329,17 @@ export function startServer(
       void handleJobsRequest(req, res, {
         authenticate: authenticate!,
         jobs: options.jobs,
+        maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
+        // REST verifications share the upgrades' `verifying` count, so a bad-key flood
+        // cannot pile onto the auth pool. Only pending ones count here: idle sockets
+        // should not make the API unavailable.
+        admit: () => {
+          if (verifying >= limits.maxConnections) return null;
+          verifying++;
+          return () => {
+            verifying--;
+          };
+        },
         charge: (principal) => {
           // Both buckets need a token before either is spent (see the RPC path).
           const now = performance.now();
@@ -809,14 +823,21 @@ export function startServer(
   });
 
   server.listen(port, host);
-  // ws does not close a listener it was handed: free the port when the server closes,
-  // and report 'close' to a `wss.close(cb)` caller only once it is free.
+  // ws does not close a listener it was handed. Stop listening the moment close() is
+  // called (REST must not keep queuing jobs during shutdown), and call back once both
+  // ws (its clients gone) and the listener (its connections gone) have closed.
   const closeWss = wss.close.bind(wss) as (cb?: (err?: Error) => void) => WebSocketServer;
-  wss.close = ((cb?: (err?: Error) => void) =>
-    closeWss((err) => {
-      server.close(() => cb?.(err));
-      server.closeAllConnections();
-    })) as typeof wss.close;
+  wss.close = ((cb?: (err?: Error) => void) => {
+    let pending = 2;
+    let firstError: Error | undefined;
+    const done = (err?: Error) => {
+      firstError ??= err;
+      if (--pending === 0) cb?.(firstError);
+    };
+    server.close(() => done());
+    server.closeAllConnections();
+    return closeWss(done);
+  }) as typeof wss.close;
 
   wss.on('close', () => {
     clearInterval(cleanupInterval);
