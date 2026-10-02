@@ -1,0 +1,10 @@
+# Runs iris-watchdog.service every minute (issue #275).
+[Unit]
+Description=IRIS production watchdog, every minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

@@ -12,6 +12,9 @@
 # secrets generated once on the box live in <deploy dir>/shared/secrets. Compose is
 # always run from the release's real path, so a container's bind mounts name its own
 # release's files and a restart never picks up another release's (deploy/deploy.sh).
+# `restart: unless-stopped` restarts a container that exits, not one whose healthcheck
+# fails: Docker only marks it unhealthy. deploy/watchdog.sh (a root timer, #275) restarts
+# unhealthy containers and alerts.
 # Secret files are readable by uid 1001 (pwuser in the IRIS image, `portal` in the
 # portal image), except pg_password (uid 70, postgres).
 
@@ -20,7 +23,9 @@ name: iris-production
 services:
   iris:
     image: ${IRIS_IMAGE:?set IRIS_IMAGE to the iris image by digest}
-    command: ['connect', '4000']
+    # Metrics (#275) on the container's loopback only; never published. The watchdog
+    # (deploy/watchdog.sh) scrapes them with `docker exec`.
+    command: ['connect', '4000', '--metrics-port', '9464']
     # Loopback only (#347): nginx forwards to it and sets X-Real-IP / clears
     # X-Iris-Probe. Must match the upstream port in deploy/nginx/iris.conf.
     ports:
@@ -83,7 +88,7 @@ services:
 
   worker:
     image: ${IRIS_IMAGE:?set IRIS_IMAGE to the iris image by digest}
-    command: ['worker']
+    command: ['worker', '--metrics-port', '9465']
     environment:
       IRIS_HOSTED: '1'
       IRIS_DB_PATH: /data/iris.db

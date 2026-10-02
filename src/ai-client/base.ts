@@ -1,5 +1,6 @@
 import { IrisConfig } from '../config';
 import { Action } from '../translator';
+import { hostedLog } from '../log';
 
 /**
  * Format an unknown error for logging without dumping the full object.
@@ -272,7 +273,9 @@ export abstract class BaseAIVisionClient extends BaseAIClient implements AIVisio
    * `return this.handleVisionError(...)` while the value never materializes.
    */
   protected handleVisionError(error: unknown, operation: string): never {
-    console.error(`${operation} error:`, formatError(error));
+    hostedLog('error', `${operation} error`, { err: formatError(error) }, () =>
+      console.error(`${operation} error:`, formatError(error)),
+    );
     throw error instanceof Error ? error : new Error(`Failed to ${operation}: ${String(error)}`);
   }
 }

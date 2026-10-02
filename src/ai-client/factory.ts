@@ -7,6 +7,7 @@ import { CostOperation, CostTracker, RESERVATION_CEILING } from './cost-tracker'
 import { OpenAITextClient, AnthropicTextClient, OllamaTextClient } from './text';
 import { OpenAIVisionClient, AnthropicVisionClient, OllamaVisionClient } from './vision';
 import { resolveModel } from './models';
+import { hostedLog } from '../log';
 
 /**
  * Client type - text for instruction translation, vision for visual analysis
@@ -165,9 +166,9 @@ class MeteredTextClient implements AIClient {
     try {
       await this.onUsage?.(call);
     } catch (error) {
-      console.error(
-        '[iris] failed to record AI usage:',
-        error instanceof Error ? error.message : String(error),
+      const message = error instanceof Error ? error.message : String(error);
+      hostedLog('error', 'failed to record AI usage', { err: message }, () =>
+        console.error('[iris] failed to record AI usage:', message),
       );
     }
   }

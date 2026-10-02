@@ -1,4 +1,5 @@
 import { sql, type Kysely } from 'kysely';
+import { hostedLog } from '../log';
 
 /**
  * Billable usage (#263, ADR 0001 §6): `usage_events` in Postgres is the system of
@@ -65,9 +66,11 @@ export async function insertUsage(
   // a different event loses that event, so say which keys were skipped.
   if (rows.length < events.length) {
     const written = new Set(rows.map((r) => r.idempotency_key));
-    console.warn(
-      '[iris] usage already recorded, skipped:',
-      events.filter((e) => !written.has(e.idempotencyKey)).map((e) => e.idempotencyKey),
+    const skipped = events
+      .filter((e) => !written.has(e.idempotencyKey))
+      .map((e) => e.idempotencyKey);
+    hostedLog('warn', 'usage already recorded, skipped', { orgId, skipped }, () =>
+      console.warn('[iris] usage already recorded, skipped:', skipped),
     );
   }
 }

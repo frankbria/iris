@@ -104,6 +104,16 @@ const result = {
     expect(await jobs().claim('a11y')).toBeNull();
   });
 
+  it('queueDepth counts queued jobs of a kind across orgs, not running ones (#275)', async () => {
+    expect(await jobs().queueDepth('a11y')).toBe(0);
+    await enqueue(A);
+    await enqueue(B);
+    await enqueue(B);
+    expect(await jobs().queueDepth('a11y')).toBe(3);
+    await jobs().claim('a11y');
+    expect(await jobs().queueDepth('a11y')).toBe(2);
+  });
+
   it('gives two concurrent claims different jobs (SKIP LOCKED)', async () => {
     await enqueue();
     await enqueue();

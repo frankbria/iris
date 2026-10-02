@@ -555,6 +555,27 @@ interface ConnectOptions {
   ratePerOrg?: number;
   maxSessionsPerOrg?: number;
   maxConnectionsPerOrg?: number;
+  metricsPort?: number;
+}
+
+/** `--metrics-port` (#275): Prometheus metrics on 127.0.0.1 only, off unless given. */
+const METRICS_PORT_HELP =
+  'Serve Prometheus metrics at http://127.0.0.1:<port>/metrics (default off)';
+const parseMetricsPort = (v: string) =>
+  parseIntOption(v, { min: 1, max: 65535, name: 'metrics-port' });
+
+/** Starts the metrics listener, or exits 3 (environment error) when it cannot bind. */
+async function startMetrics(port: number | undefined): Promise<boolean> {
+  if (port === undefined) return true;
+  const { serveMetrics } = await import('./metrics');
+  try {
+    await serveMetrics(port);
+    return true;
+  } catch (err) {
+    console.error(`Cannot serve metrics on 127.0.0.1:${port}: ${(err as Error).message}`);
+    process.exit(3); // Environment/runtime error
+    return false;
+  }
 }
 
 program
@@ -597,6 +618,7 @@ program
   .option('--max-connections-per-org <n>', 'Hosted: connections per org (default 8)', (v) =>
     parseIntOption(v, { min: 1, max: 10_000, name: 'max-connections-per-org' }),
   )
+  .option('--metrics-port <port>', METRICS_PORT_HELP, parseMetricsPort)
   .action(async (port: number, options: ConnectOptions) => {
     const { startServer, installProcessErrorPolicy } = await import('./protocol');
     const { randomBytes } = await import('crypto');
@@ -714,6 +736,10 @@ program
       process.exit(3); // Environment/runtime error
       return;
     }
+    if (!(await startMetrics(options.metricsPort))) {
+      wss.close();
+      return;
+    }
     installProcessErrorPolicy();
     // Advertise the address actually bound. Hardcoding 127.0.0.1 here would
     // describe a container as unreachable while it works fine, and advertising
@@ -757,7 +783,8 @@ program
   .option('--poll-ms <ms>', 'Wait between polls of an empty queue', (v) =>
     parseIntOption(v, { min: 100, max: 60_000, name: 'poll-ms' }),
   )
-  .action(async (options: { pollMs?: number }) => {
+  .option('--metrics-port <port>', METRICS_PORT_HELP, parseMetricsPort)
+  .action(async (options: { pollMs?: number; metricsPort?: number }) => {
     const { isHostedMode } = await import('./hosted');
     // Jobs scan tenant-supplied URLs: without the hosted URL policy and egress proxy
     // that is an SSRF engine, so a worker outside hosted mode refuses to start.
@@ -778,6 +805,10 @@ program
       console.error(`Cannot start the worker: ${(err as Error).message}`);
       await db?.destroy();
       process.exit(3); // Environment/runtime error
+      return;
+    }
+    if (!(await startMetrics(options.metricsPort))) {
+      await db.destroy();
       return;
     }
     // SIGTERM stops the loop after the current job; a second signal ends it now.

@@ -131,6 +131,8 @@ for (const key of [
   'SMTP_URL_FILE',
   'SMTP_FROM',
   'IRIS_WORKER_HEARTBEAT_FILE',
+  // #275: a developer's IRIS_LOG_LEVEL would change which lines the log tests see.
+  'IRIS_LOG_LEVEL',
 ]) {
   delete process.env[key];
 }

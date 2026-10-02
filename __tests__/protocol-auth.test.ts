@@ -554,9 +554,11 @@ describe('AI spend is charged to the org (#255)', () => {
       await call(a, 'executeBrowserAction', { instruction: 'check the order total' });
       // No credentials resolver: the tenant has no AI, and the operator's process-wide
       // keys are never used for it (#258).
+      // onUsage is there even without a ledger: settled calls feed the spend metric (#275).
       expect(translate).toHaveBeenCalledWith('check the order total', undefined, {
         orgId: 'org-a',
         credentials: expect.any(Function),
+        onUsage: expect.any(Function),
       });
       expect(await (translate.mock.calls[0][2] as any).credentials()).toBeNull();
     } finally {

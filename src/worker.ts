@@ -1,5 +1,7 @@
 import * as fs from 'fs';
 import type { A11yJobParams, ClaimedJob, PostgresJobs } from './history-store';
+import { errMessage, log } from './log';
+import { metrics } from './metrics';
 
 /**
  * The hosted job worker (#267, ADR 0001 §1): claims queued jobs from Postgres and
@@ -18,7 +20,22 @@ export const DEFAULT_STALE_MS = 180_000;
 export type WorkerJobs = Pick<
   PostgresJobs,
   'claim' | 'finish' | 'fail' | 'heartbeat' | 'reapStuck'
->;
+> &
+  Partial<Pick<PostgresJobs, 'queueDepth'>>;
+
+// Worker metrics (#275), served by `iris worker --metrics-port`. Outcome: `finished` (a
+// verdict was stored, pass or fail), `error` (the job could not run or be stored, and is
+// failed) or `lost` (reaped meanwhile; nothing written).
+const jobsTotal = metrics.counter('iris_jobs_total', 'Jobs run, by kind and outcome');
+const jobSeconds = metrics.histogram(
+  'iris_job_duration_seconds',
+  'Time from claim to stored outcome, by kind',
+  [1, 5, 10, 30, 60, 120, 300, 600, 1800],
+);
+const jobsReaped = metrics.counter(
+  'iris_jobs_reaped_total',
+  'Stuck jobs taken back by the reaper, by result (requeued, failed)',
+);
 
 /** The axe tags of a WCAG level: each level includes the ones below, like `--tags`. */
 export function axeTagsFor(level: A11yJobParams['wcagLevel']): string[] {
@@ -71,11 +88,29 @@ export async function processNextA11yJob(
 ): Promise<ClaimedJob | null> {
   const job = await jobs.claim('a11y');
   if (!job) return null;
+  const t0 = performance.now();
+  const fields = { jobId: job.id, orgId: job.orgId, kind: job.kind, attempts: job.attempts };
+  log('info', 'job claimed', fields);
   let reported = false;
   const lost = (what: string) => {
     if (reported) return;
     reported = true;
-    console.error(`[iris] worker: claim on job ${job.id} was lost; not recording its ${what}`);
+    log('warn', `claim on job ${job.id} was lost; not recording its ${what}`, fields);
+  };
+  /** One line and one sample per job, once its outcome is written (or refused). */
+  let recorded = false;
+  const done = (outcome: 'finished' | 'error', written: boolean, err?: string) => {
+    recorded = true;
+    const result = written ? outcome : 'lost';
+    if (!written) lost(outcome === 'finished' ? 'result' : 'failure');
+    const seconds = (performance.now() - t0) / 1000;
+    jobsTotal.inc({ kind: job.kind, outcome: result });
+    jobSeconds.observe({ kind: job.kind }, seconds);
+    log(result === 'finished' ? 'info' : 'warn', `job ${result}`, {
+      ...fields,
+      latencyMs: Math.round(seconds * 1000),
+      ...(err !== undefined && { err }),
+    });
   };
   // Once the outcome is being written, a heartbeat answer means nothing: one in flight
   // waits on finish's row lock and then sees a finished row.
@@ -88,7 +123,7 @@ export async function processNextA11yJob(
         clearInterval(timer);
         lost('outcome');
       },
-      (err) => console.error(`[iris] worker job heartbeat ${job.id}:`, (err as Error).message),
+      (err) => log('error', `job heartbeat failed ${job.id}`, { ...fields, err: errMessage(err) }),
     );
   }, heartbeatMs);
   try {
@@ -97,19 +132,38 @@ export async function processNextA11yJob(
       result = await runA11y(job.params);
     } catch (err) {
       writing = true;
-      if (!(await jobs.fail(job, (err as Error).message || 'Job failed'))) lost('failure');
+      const message = (err as Error).message || 'Job failed';
+      done('error', await jobs.fail(job, message), message);
       return job;
     }
     writing = true;
+    let stored: boolean;
     try {
-      if (!(await jobs.finish(job, result))) lost('result');
+      stored = await jobs.finish(job, result);
     } catch (err) {
       // The outcome did not commit (nothing of it did): the job must not stay `running`.
       // The detail (a database error) is for the operator's log, not the tenant's job.
-      console.error(`[iris] worker could not store job ${job.id}:`, (err as Error).message);
-      if (!(await jobs.fail(job, 'Could not store the result'))) lost('failure');
+      log('error', `worker could not store job ${job.id}`, { ...fields, err: errMessage(err) });
+      done(
+        'error',
+        await jobs.fail(job, 'Could not store the result'),
+        'Could not store the result',
+      );
+      return job;
     }
+    done('finished', stored);
     return job;
+  } catch (err) {
+    // Recording the outcome itself failed (the database is gone): still a job that ran
+    // and errored, for the log and the metrics, before the caller hears of it.
+    if (!recorded) {
+      log('error', `could not record the outcome of job ${job.id}`, {
+        ...fields,
+        err: errMessage(err),
+      });
+      done('error', true, errMessage(err));
+    }
+    throw err;
   } finally {
     clearInterval(timer);
   }
@@ -154,9 +208,12 @@ export async function runWorker(options: {
     try {
       fs.writeFileSync(heartbeatFile, `${Date.now()}\n`);
     } catch (err) {
-      console.error('[iris] worker heartbeat:', (err as Error).message);
+      log('error', 'worker heartbeat file write failed', { err: errMessage(err) });
     }
   };
+  // Sampled once per tick, so a scrape costs no query (#275).
+  let depth = 0;
+  metrics.gauge('iris_job_queue_depth', 'Queued jobs, sampled each worker tick', () => depth);
   while (!signal?.aborted) {
     beat();
     const timer = heartbeatFile ? setInterval(beat, heartbeatMs) : undefined;
@@ -166,14 +223,26 @@ export async function runWorker(options: {
       try {
         const { requeued, failed } = await jobs.reapStuck({ staleMs, maxAttempts });
         if (requeued || failed) {
-          console.error(`[iris] worker reaped stuck jobs: ${requeued} requeued, ${failed} failed`);
+          jobsReaped.inc({ result: 'requeued' }, requeued);
+          jobsReaped.inc({ result: 'failed' }, failed);
+          log('warn', `worker reaped stuck jobs: ${requeued} requeued, ${failed} failed`, {
+            requeued,
+            failed,
+          });
         }
       } catch (err) {
-        console.error('[iris] worker reaper error:', (err as Error).message);
+        log('error', 'worker reaper error', { err: errMessage(err) });
+      }
+      if (jobs.queueDepth) {
+        try {
+          depth = await jobs.queueDepth('a11y');
+        } catch (err) {
+          log('error', 'worker queue depth query failed', { err: errMessage(err) });
+        }
       }
       ran = (await processNextA11yJob(jobs, { heartbeatMs })) !== null;
     } catch (err) {
-      console.error('[iris] worker error:', (err as Error).message);
+      log('error', 'worker error', { err: errMessage(err) });
     } finally {
       clearInterval(timer);
     }

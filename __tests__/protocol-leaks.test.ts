@@ -39,6 +39,7 @@ jest.mock('../src/executor', () => ({
 }));
 
 import { ActionExecutor } from '../src/executor';
+import { metrics } from '../src/metrics';
 
 describe('Protocol session/page resource leaks (issue #69)', () => {
   let wss: ReturnType<typeof startServer>;
@@ -325,5 +326,58 @@ describe('Protocol session/page resource leaks (issue #69)', () => {
         ws.close();
       }
     });
+  });
+
+  // #275: a browser that will not start is a server fault the error rate must see, even
+  // though the reply keeps its `{ success: false, error }` shape; a failed action is not.
+  test('a launch failure is an error outcome; a failed action and a bad request are not', async () => {
+    const count = (outcome: string) => {
+      const line = metrics
+        .render()
+        .split('\n')
+        .find((l) =>
+          l.startsWith(`iris_requests_total{method="executeBrowserAction",outcome="${outcome}"} `),
+        );
+      return line ? Number(line.split(' ')[1]) : 0;
+    };
+    const before = { error: count('error'), ok: count('ok'), client: count('client_error') };
+    const ws = await createPersistentConnection();
+    try {
+      await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 30, method: 'launchBrowser' });
+      const executor = mockInstances[0];
+      executor.createPage.mockRejectedValueOnce(new Error('Chromium failed to launch'));
+      const act = (id: number, params: object) =>
+        sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id,
+          method: 'executeBrowserAction',
+          params,
+        });
+      const click = { actions: [{ type: 'click', selector: '#missing' }] };
+
+      const launch = await act(31, click);
+      expect(launch.result).toEqual({
+        success: false,
+        results: [],
+        error: 'Chromium failed to launch',
+      });
+      expect(count('error')).toBe(before.error + 1);
+
+      executor.executeActions.mockResolvedValueOnce([
+        { success: false, action: { type: 'click', selector: '#missing' }, error: 'not found' },
+      ]);
+      expect((await act(32, click)).result.success).toBe(false);
+      expect(count('ok')).toBe(before.ok + 1);
+
+      const neither = await act(33, {});
+      expect(neither.result).toMatchObject({
+        success: false,
+        error: 'Either instruction or actions must be provided',
+      });
+      expect(count('client_error')).toBe(before.client + 1);
+      expect(count('error')).toBe(before.error + 1);
+    } finally {
+      ws.close();
+    }
   });
 });

@@ -225,9 +225,11 @@ describe('docker-compose.production.yml (issue #273)', () => {
   };
 
   it('runs postgres, hosted iris-api, the worker and the portal', () => {
-    expect(service('iris')).toMatch(/^\s+command: \['connect', '4000'\]$/m);
+    expect(service('iris')).toMatch(
+      /^\s+command: \['connect', '4000', '--metrics-port', '9464'\]$/m,
+    );
     expect(service('iris')).toMatch(/^\s+IRIS_HOSTED: '1'$/m);
-    expect(service('worker')).toMatch(/^\s+command: \['worker'\]$/m);
+    expect(service('worker')).toMatch(/^\s+command: \['worker', '--metrics-port', '9465'\]$/m);
     expect(service('worker')).toMatch(/^\s+IRIS_HOSTED: '1'$/m);
     expect(service('portal')).toBeTruthy();
     expect(service('postgres')).toMatch(/^\s+image: postgres:17-alpine@sha256:[0-9a-f]{64}$/m);
@@ -293,6 +295,18 @@ describe('docker-compose.production.yml (issue #273)', () => {
     const nginx = read('deploy/nginx/iris.conf');
     expect(nginx).toMatch(/127\.0\.0\.1:4000/);
     expect(nginx).toMatch(/127\.0\.0\.1:3000/);
+  });
+
+  // The metrics listeners bind the containers' loopback and publish nothing (#275); the
+  // watchdog scrapes each one inside its container, at the port the command names.
+  it("serves metrics where the watchdog's default targets look for them", () => {
+    const watchdog = read('deploy/watchdog.sh');
+    const targets = watchdog.match(/^targets=\$\{WATCHDOG_METRICS-([^}]*)\}$/m)![1];
+    for (const target of targets.split(' ')) {
+      const [name, port] = target.split(':');
+      expect(service(name)).toMatch(new RegExp(`'--metrics-port', '${port}'`));
+      expect(service(name)).not.toMatch(new RegExp(`:${port}'`));
+    }
   });
 
   it('passes every secret as a file, never as an environment value', () => {

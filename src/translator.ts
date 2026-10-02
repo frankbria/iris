@@ -14,6 +14,7 @@ import { createResolvedAIClient, AITranslationRequest } from './ai-client';
 // the schema without creating an import cycle (translator -> ai-client -> here).
 // Re-exported so existing `from './translator'` imports keep working.
 import type { Action, AssertKind } from './actions';
+import { hostedLog } from './log';
 export type { Action, AssertKind } from './actions';
 export { ActionSchema, parseActions, describeAction } from './actions';
 
@@ -191,9 +192,12 @@ async function askCredentials(
   try {
     return (await source()) ?? null;
   } catch (err) {
-    console.error(
-      '[iris] AI credentials lookup failed; translating without AI:',
-      err instanceof Error ? err.message : String(err),
+    const message = err instanceof Error ? err.message : String(err);
+    hostedLog(
+      'error',
+      'AI credentials lookup failed; translating without AI',
+      { err: message },
+      () => console.error('[iris] AI credentials lookup failed; translating without AI:', message),
     );
     return null;
   }

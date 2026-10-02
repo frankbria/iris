@@ -396,6 +396,146 @@ Restore times include the decrypt check, the serving-database check and starting
 disposable container: about 9 s on the loaded host of the first drill (an empty
 database took 9.0 s), about 4 s at the second.
 
+## Monitoring and alerts (issue #275)
+
+### Logs
+
+iris-api and the worker run in hosted mode, so every log line is one JSON object on
+stderr (`ts`, `level`, `msg`, then fields). Docker keeps them (json-file, 3 x 10 MB per
+service):
+
+```bash
+cd "$(readlink -f /opt/iris-production/current)"
+docker compose logs --since 1h iris worker
+docker compose logs --no-log-prefix iris | jq -c 'select(.level == "error")'
+docker compose logs --no-log-prefix iris | jq -c 'select(.requestId == "<id>")'
+```
+
+| Line (`msg`)                | Fields                                                              |
+| --------------------------- | ------------------------------------------------------------------- |
+| `rpc request`               | `requestId`, `orgId`, `keyId`, `method`, `latencyMs`, `outcome`, `code`; `actions` (types only) and `success` for `executeBrowserAction` |
+| `rest request`              | `requestId` (also the `X-Request-Id` response header), `clientRequestId` (the client's own `X-Request-Id`, if it sent a plain one), `method` (`POST /v1/a11y/jobs`, `GET /v1/jobs/:id`), `status`, `latencyMs`, `outcome`, `orgId`, `keyId` |
+| `connection refused`        | `reason` (`origin`, `invalid_key`, `connection_limit`, `org_connection_limit`, `auth_unavailable`), `status` |
+| `session started` / `ended` | `sessionId`, `orgId`, `keyId`; `reason` (`closed`, `replaced`, `timeout`, `revoked`, `disconnect`, `socket_error`, `shutdown`) |
+| `job claimed` / `job finished`, `job error`, `job lost` | `jobId`, `orgId`, `kind`, `attempts`, `latencyMs` |
+| `better-auth: …`            | BetterAuth's own messages. A refused API key is `info` with its `code`; a database failure while checking one stays `error`. |
+
+`outcome` is `ok`, `client_error` (bad request, unknown method, no session, a session
+limit, 4xx), `rate_limited`, `aborted` (the client left before the answer) or `error` (a
+server error, a 5xx, or a browser that would not start or died mid-request; an action
+that simply failed, such as a missing selector, is `ok`). Rate-limited and malformed frames are logged once per 10 s per
+connection, with a `suppressed` count (and a `rpc refusals suppressed` line on close);
+the metrics count every one. The server always makes its own `requestId`; a client's
+`X-Request-Id` (letters, digits, `._:-`, up to 64) is logged as `clientRequestId`. Logs never hold an API
+key, an `Authorization` header, a fill value, a database or SMTP URL's password, or a
+provider key: they carry key ids, and action types without their values.
+`IRIS_LOG_LEVEL` (`debug`, `info`, `warn`, `error`; default `info`) sets the threshold.
+
+### Metrics
+
+Each process serves Prometheus metrics on its own container's loopback:
+iris-api on port 9464, the worker on 9465 (`--metrics-port` in the compose file). No
+port is published and nginx never routes to them. To read them on the box:
+
+```bash
+c=$(docker ps -q --filter label=com.docker.compose.project=iris-production --filter label=com.docker.compose.service=iris)
+docker exec "$c" node -e 'fetch("http://127.0.0.1:9464/metrics").then(r => r.text()).then(console.log)'
+```
+
+- iris-api: `iris_requests_total{method,outcome}`, `iris_request_duration_seconds`
+  (histogram), `iris_sessions_active`, `iris_browsers_active`,
+  `iris_ai_spend_usd_total{provider,kind,billing_mode}` (settled AI calls),
+  `iris_errors_total` (lines logged at `error`), `iris_up`, `iris_start_time_seconds`.
+- worker: `iris_jobs_total{kind,outcome}` (`finished`, `error`, `lost`),
+  `iris_job_duration_seconds`, `iris_jobs_reaped_total{result}`,
+  `iris_job_queue_depth`, plus `iris_errors_total`, `iris_up`, `iris_start_time_seconds`.
+
+No series carries an org id. Per-org usage is in the `usage_events` table (#263). A
+Prometheus server is optional; if you run one, run it on the box and scrape through the
+compose network or `docker exec`, never by publishing the ports.
+
+### Watchdog
+
+`restart: unless-stopped` restarts a container that exits. It does not restart one
+whose healthcheck fails: Docker only marks it `unhealthy`. `deploy/watchdog.sh` runs
+every minute from `iris-watchdog.timer`, as root, and:
+
+- restarts each `iris-production` container that is `unhealthy`, at most
+  `WATCHDOG_MAX_RESTARTS` (3) times per service per hour. Past that it alerts and
+  leaves the container alone;
+- alerts when Docker restarted a container that exited (a crash, an OOM kill);
+- scrapes both metrics listeners (`docker exec … node`). A failed scrape alerts: it is
+  the uptime signal from inside the box;
+- alerts when, over the last `WATCHDOG_ERROR_WINDOW` seconds (300), at least
+  `WATCHDOG_ERROR_PERCENT` (5) of at least `WATCHDOG_MIN_REQUESTS` (20) server-side
+  answers ended with `outcome="error"`: error / (ok + error) for requests, error /
+  (finished + error) for jobs. Client errors and rate-limited requests count in neither
+  part, so a tenant cannot trigger or mask the alert. A restarted process starts the
+  window again.
+
+A condition that stays true alerts again after `WATCHDOG_ALERT_REPEAT` seconds (3600);
+once it clears, the next occurrence alerts at once. Restarts always alert. State
+(restart times, counter samples, alert stamps) is in `/var/lib/iris-watchdog`.
+
+It is installed like the backup, and for the same reason: root runs only root-owned
+files outside the deploy user's tree.
+
+| What           | Where                                                  | Owner, mode    |
+| -------------- | ------------------------------------------------------ | -------------- |
+| The script     | `/usr/local/sbin/iris-watchdog` (a reviewed copy)      | root:root 0755 |
+| Settings       | `/etc/iris/watchdog.env` (optional, `WATCHDOG_*`)      | root:root 0600 |
+| Alert hook     | `/etc/iris/alert-hook` (optional)                      | root:root 0755 |
+| State          | `/var/lib/iris-watchdog/` (systemd `StateDirectory`)   | root:root 0700 |
+| The units      | `/etc/systemd/system/iris-watchdog.{service,timer}`    | root:root 0644 |
+
+```bash
+r=$(readlink -f /opt/iris-production/current)
+git show <tag>:deploy/watchdog.sh | diff - "$r/watchdog.sh"   # review first
+sudo install -o root -g root -m 0755 "$r/watchdog.sh" /usr/local/sbin/iris-watchdog
+sudo install -o root -g root -m 0644 "$r"/systemd/iris-watchdog.service \
+  "$r"/systemd/iris-watchdog.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now iris-watchdog.timer
+sudo systemctl start iris-watchdog.service
+journalctl -u iris-watchdog.service -n 20    # "checked project iris-production"
+```
+
+Repeat the install when a release changes `deploy/watchdog.sh` or its units.
+
+### Alerts
+
+Every alert is a `crit` journal entry tagged `iris-watchdog` ("IRIS ALERT: …";
+`journalctl -t iris-watchdog -p crit`) and, if `/etc/iris/alert-hook` is executable, a
+call to it:
+
+```
+/etc/iris/alert-hook <key> <message>
+```
+
+`key` names the condition (`restarted-iris`, `restart-cap-worker`, `exited-portal`,
+`scrape-iris`, `error-rate-iris`, `docker`, `restart-failed-iris`); `message` is one line of
+printable text, at most 300 characters (container output in it is cleaned). The hook
+runs as root with a 60 s limit; its exit status is logged and otherwise ignored. Send
+mail, a chat message or a page from it. Example:
+
+```sh
+#!/bin/sh
+printf '%s\n' "$2" | mail -s "IRIS alert: $1" ops@example.com
+```
+
+Test it: `sudo /etc/iris/alert-hook test "IRIS alert hook test"`. The backup's failure
+alert keeps its own hook (`/etc/iris/backup-failed-hook`, above); it may simply run this
+one.
+
+### Uptime from outside
+
+The watchdog runs on the box it watches, so it cannot report the box itself being down
+or unreachable. Add an external uptime monitor (any hosted service) on:
+
+- `https://<portal host>/`: the portal (200 or a redirect to `/login`);
+- `https://<portal host>/v1/jobs/x` without a key: iris-api through nginx answers
+  **401**. Alert on anything else.
+
 ## Troubleshooting
 
 Run these from the serving release: `cd "$(readlink -f /opt/iris-production/current)"`.

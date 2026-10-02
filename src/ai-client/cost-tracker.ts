@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { ensureDatabaseDir } from '../db';
 import { DEFAULT_BUDGET_LIMITS } from '../config';
+import { hostedLog } from '../log';
 
 /**
  * AI provider pricing configuration
@@ -624,9 +625,15 @@ export class CostTracker {
     const key = `${provider}:${model}`;
     if (estimated && !unpricedWarned.has(key)) {
       unpricedWarned.add(key);
-      console.warn(
-        `⚠️  No pricing registered for ${key}; its cost is estimated at the most expensive ` +
-          `known rate. Register it with setPricing() for accurate accounting.`,
+      hostedLog(
+        'warn',
+        'no pricing registered; cost estimated at the dearest known rate',
+        { model: key },
+        () =>
+          console.warn(
+            `⚠️  No pricing registered for ${key}; its cost is estimated at the most expensive ` +
+              `known rate. Register it with setPricing() for accurate accounting.`,
+          ),
       );
     }
   }
