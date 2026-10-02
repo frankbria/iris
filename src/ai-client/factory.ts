@@ -97,12 +97,15 @@ class MeteredTextClient implements AIClient {
     private readonly provider: string,
     private readonly model: string,
     private readonly operation: CostOperation,
+    /** The tenant charged for the call, whose budget gates it (#255). */
+    private readonly orgId?: string,
   ) {}
 
   async translateInstruction(request: AITranslationRequest): Promise<AITranslationResponse> {
     const tracker = new CostTracker(
       path.join(resolveDataDir(), 'cache', 'cost-tracking.db'),
       resolveBudget(),
+      { orgId: this.orgId },
     );
     try {
       // Refused before the provider is contacted, counting calls already in
@@ -159,7 +162,14 @@ class MeteredTextClient implements AIClient {
  */
 export async function createResolvedAIClient(
   config: IrisConfig,
-  { operation = 'text' }: { operation?: Extract<CostOperation, 'text' | 'agent_turn'> } = {},
+  {
+    operation = 'text',
+    orgId,
+  }: {
+    operation?: Extract<CostOperation, 'text' | 'agent_turn'>;
+    /** Hosted: the org the call is charged to and budgeted against (#255). */
+    orgId?: string;
+  } = {},
 ): Promise<AIClient> {
   const model = await resolveModel({
     provider: config.ai.provider,
@@ -169,5 +179,5 @@ export async function createResolvedAIClient(
   });
 
   const client = AIClientFactory.create({ ...config, ai: { ...config.ai, model } }, 'text');
-  return new MeteredTextClient(client, config.ai.provider, model, operation);
+  return new MeteredTextClient(client, config.ai.provider, model, operation, orgId);
 }

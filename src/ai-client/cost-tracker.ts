@@ -273,8 +273,23 @@ export class CostTracker {
   private budget: Required<BudgetConfig>;
   private pricing: Map<string, number>;
   private tokenPricing: Map<string, TokenRates>;
+  private readonly orgId: string | null;
+  private readonly runId: string | null;
 
-  constructor(dbPath: string = ':memory:', budget: BudgetConfig = {}) {
+  /**
+   * @param scope - Whose spend this tracker records and counts (#255). Every row it
+   *   writes carries `orgId` and `runId`, and its budget sums only `orgId`'s rows, so
+   *   one org's spend never trips another's breaker. Without an org it is local mode:
+   *   the rows with no org, exactly what a ledger held before. `runId` narrows
+   *   {@link getStats} totals to one run; daily and monthly spend stay org-wide.
+   */
+  constructor(
+    dbPath: string = ':memory:',
+    budget: BudgetConfig = {},
+    scope: { orgId?: string; runId?: string } = {},
+  ) {
+    this.orgId = scope.orgId ?? null;
+    this.runId = scope.runId ?? null;
     ensureDatabaseDir(dbPath);
     this.db = new Database(dbPath);
     this.budget = { ...DEFAULT_BUDGET, ...budget };
@@ -337,6 +352,17 @@ export class CostTracker {
     if (!names.has('pending')) {
       this.db.exec('ALTER TABLE cost_tracking ADD COLUMN pending INTEGER NOT NULL DEFAULT 0');
     }
+    // #255: rows written before tenants existed have no org, which is local mode's scope.
+    if (!names.has('org_id')) {
+      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN org_id TEXT');
+    }
+    if (!names.has('run_id')) {
+      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN run_id TEXT');
+    }
+    // After the columns exist: the budget sums read by org and time.
+    this.db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_org_timestamp ON cost_tracking(org_id, timestamp)',
+    );
   }
 
   /**
@@ -475,8 +501,8 @@ export class CostTracker {
     this.warnIfEstimated(provider, model, estimated);
     this.db
       .prepare(
-        `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cached, input_tokens, output_tokens, estimated)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cached, input_tokens, output_tokens, estimated, org_id, run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         Date.now(),
@@ -488,6 +514,8 @@ export class CostTracker {
         usage?.inputTokens ?? null,
         usage?.outputTokens ?? null,
         estimated ? 1 : 0,
+        this.orgId,
+        this.runId,
       );
     return cost;
   }
@@ -524,10 +552,10 @@ export class CostTracker {
         const { cost } = this.computeCost(provider, model, false, ceiling);
         const { lastInsertRowid } = this.db
           .prepare(
-            `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, pending)
-             VALUES (?, ?, ?, ?, ?, 1)`,
+            `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, pending, org_id, run_id)
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
           )
-          .run(Date.now(), provider, model, operation, cost);
+          .run(Date.now(), provider, model, operation, cost, this.orgId, this.runId);
         return Number(lastInsertRowid);
       })
       .immediate();
@@ -650,10 +678,11 @@ export class CostTracker {
     // upper bound at all (issue #132) — this stays bounded for genuine range
     // and reporting queries, where excluding what falls outside the range is
     // the entire point.
+    // `IS`, not `=`: local mode's scope is the rows with no org.
     const stmt = this.db.prepare(
-      'SELECT SUM(cost) as total FROM cost_tracking WHERE timestamp >= ? AND timestamp <= ?',
+      'SELECT SUM(cost) as total FROM cost_tracking WHERE org_id IS ? AND timestamp >= ? AND timestamp <= ?',
     );
-    const result = stmt.get(startTime, endTime) as { total: number | null };
+    const result = stmt.get(this.orgId, startTime, endTime) as { total: number | null };
     return result.total || 0;
   }
 
@@ -694,28 +723,32 @@ export class CostTracker {
    * @returns Cost statistics
    */
   getStats(): CostStats {
+    // This tracker's run when it has one, else its whole scope (#255): a run's
+    // summary must not report another run's, or another org's, spend.
+    const where = this.runId === null ? 'org_id IS ?' : 'org_id IS ? AND run_id = ?';
+    const params = this.runId === null ? [this.orgId] : [this.orgId, this.runId];
     const totalStmt = this.db.prepare(
-      'SELECT SUM(cost) as total, COUNT(*) as count FROM cost_tracking',
+      `SELECT SUM(cost) as total, COUNT(*) as count FROM cost_tracking WHERE ${where}`,
     );
-    const totalResult = totalStmt.get() as { total: number | null; count: number };
+    const totalResult = totalStmt.get(...params) as { total: number | null; count: number };
 
     const cacheStmt = this.db.prepare(
-      'SELECT COUNT(*) as count FROM cost_tracking WHERE cached = 1',
+      `SELECT COUNT(*) as count FROM cost_tracking WHERE ${where} AND cached = 1`,
     );
-    const cacheResult = cacheStmt.get() as { count: number };
+    const cacheResult = cacheStmt.get(...params) as { count: number };
 
     const providerStmt = this.db.prepare(
-      'SELECT provider, SUM(cost) as total FROM cost_tracking GROUP BY provider',
+      `SELECT provider, SUM(cost) as total FROM cost_tracking WHERE ${where} GROUP BY provider`,
     );
-    const providerResults = providerStmt.all() as Array<{
+    const providerResults = providerStmt.all(...params) as Array<{
       provider: string;
       total: number;
     }>;
 
     const modelStmt = this.db.prepare(
-      'SELECT model, SUM(cost) as total FROM cost_tracking GROUP BY model',
+      `SELECT model, SUM(cost) as total FROM cost_tracking WHERE ${where} GROUP BY model`,
     );
-    const modelResults = modelStmt.all() as Array<{
+    const modelResults = modelStmt.all(...params) as Array<{
       model: string;
       total: number;
     }>;
@@ -800,8 +833,9 @@ export class CostTracker {
   /**
    * Clear all cost tracking data
    */
+  /** Delete this tracker's org's rows (local mode: the rows with no org). */
   clear(): void {
-    this.db.prepare('DELETE FROM cost_tracking').run();
+    this.db.prepare('DELETE FROM cost_tracking WHERE org_id IS ?').run(this.orgId);
   }
 
   /**

@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import http from 'http';
 import { AddressInfo } from 'net';
 import type { RunInput, TenantScope } from '../src/history-store';
+import * as translatorModule from '../src/translator';
 import { startServer, JsonRpcResponse, Principal, Authenticator } from '../src/protocol';
 
 /**
@@ -432,4 +433,23 @@ describe('hosted RPC history (#254)', () => {
     await call(ws, 'closeBrowser');
     expect(recorded).toEqual([]);
   }, 60_000);
+});
+
+describe('AI spend is charged to the org (#255)', () => {
+  test("an instruction is translated on the principal's org", async () => {
+    const translate = jest
+      .spyOn(translatorModule, 'translate')
+      .mockResolvedValue({ actions: [], method: 'ai', confidence: 0, reasoning: 'stub' });
+    try {
+      const url = await serve();
+      const a = await open(url, as('key-a'));
+      await call(a, 'launchBrowser');
+      await call(a, 'executeBrowserAction', { instruction: 'check the order total' });
+      expect(translate).toHaveBeenCalledWith('check the order total', undefined, {
+        orgId: 'org-a',
+      });
+    } finally {
+      translate.mockRestore();
+    }
+  });
 });

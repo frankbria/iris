@@ -151,6 +151,9 @@ export class AIVisionCache {
    *   diff)` and `(no context, diff: "X")` would produce the same key. Callers
    *   passing a `context` that could itself start with `diff=` would defeat
    *   that — in-repo it is always a JSON object.
+   * @param orgId - The tenant the answer was made for (#255). A verdict is never
+   *   served to another org: it was paid for by, and may describe pages of, the org
+   *   that asked. Omitted in local mode, so local keys keep their old format.
    * @returns Cache key string
    */
   generateKey(
@@ -160,8 +163,12 @@ export class AIVisionCache {
     model: string,
     context = '',
     diffHash = '',
+    orgId = '',
   ): string {
     const parts = [provider, model, baselineHash, currentHash];
+    // First, with a marker like `diff=`: a context string, which comes last, cannot
+    // then imitate another org's key.
+    if (orgId) parts.splice(0, 0, `org=${orgId}`);
     // Omitted when absent, so keys for diff-less requests stay byte-identical
     // to the pre-#124 format and existing cache entries survive the upgrade.
     if (diffHash) parts.push(`diff=${diffHash}`);

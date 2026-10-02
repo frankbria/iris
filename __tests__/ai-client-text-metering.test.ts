@@ -348,3 +348,60 @@ describe('text LLM metering (#242)', () => {
     await long;
   });
 });
+
+describe('text LLM metering per org (#255)', () => {
+  const orgRows = (): Array<{ org_id: string | null; operation: string }> => {
+    if (!fs.existsSync(ledgerPath())) return [];
+    const db = new Database(ledgerPath(), { readonly: true });
+    try {
+      return db.prepare('SELECT org_id, operation FROM cost_tracking ORDER BY id').all() as never;
+    } finally {
+      db.close();
+    }
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.IRIS_DAILY_BUDGET_USD = '1';
+    fs.rmSync(ledgerPath(), { force: true });
+  });
+
+  afterAll(() => {
+    delete process.env.IRIS_DAILY_BUDGET_USD;
+  });
+
+  it("charges the org that asked, and only that org's spend trips its breaker", async () => {
+    mockOpenAICreate.mockResolvedValue(openaiReply);
+    // Org A has spent its whole budget.
+    const a = new CostTracker(ledgerPath(), {}, { orgId: 'org-a' });
+    a.trackOperation('openai', 'gpt-4o', false, { inputTokens: 1_000_000, outputTokens: 0 });
+    a.close();
+
+    const forA = await createResolvedAIClient(config({ apiKey: 'sk-test' }), { orgId: 'org-a' });
+    await expect(forA.translateInstruction({ instruction: 'click go' })).rejects.toThrow(
+      /Budget limit exceeded/,
+    );
+    expect(mockOpenAICreate).not.toHaveBeenCalled();
+
+    const forB = await createResolvedAIClient(config({ apiKey: 'sk-test' }), { orgId: 'org-b' });
+    await expect(forB.translateInstruction({ instruction: 'click go' })).resolves.toBeDefined();
+    expect(orgRows()).toEqual([
+      { org_id: 'org-a', operation: 'vision-analysis' },
+      { org_id: 'org-b', operation: 'text' },
+    ]);
+  });
+
+  it('passes the org from translate() to the metered client', async () => {
+    mockOpenAICreate.mockResolvedValue(openaiReply);
+    process.env.OPENAI_API_KEY = 'sk-test';
+    try {
+      const result = await translate('make sure the order total is shown', undefined, {
+        orgId: 'org-b',
+      });
+      expect(result.method).toBe('ai');
+    } finally {
+      delete process.env.OPENAI_API_KEY;
+    }
+    expect(orgRows()).toEqual([{ org_id: 'org-b', operation: 'text' }]);
+  });
+});
