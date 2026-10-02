@@ -111,6 +111,27 @@ describe('CostTracker scoped to an org', () => {
     }
   });
 
+  it("cannot settle, release or clear another org's rows", () => {
+    const a = new CostTracker(ledger(), {}, { orgId: 'org-a' });
+    const b = new CostTracker(ledger(), {}, { orgId: 'org-b' });
+    try {
+      const held = a.reserve('openai', 'gpt-4o');
+      a.trackOperation('openai', 'gpt-4o', false, SPEND);
+      expect(() => b.settle(held, { inputTokens: 1, outputTokens: 1 })).toThrow(
+        /No open cost reservation/,
+      );
+      b.release(held);
+      b.clear();
+      // Org A's spend and its reservation are both still there.
+      expect(a.getDailyCost()).toBeCloseTo(2.5 + 0.03);
+      a.clear();
+      expect(a.getDailyCost()).toBe(0);
+    } finally {
+      a.close();
+      b.close();
+    }
+  });
+
   it('keeps a ledger written before #255 (no org or run columns) working', () => {
     const db = new Database(ledger());
     db.exec(`CREATE TABLE cost_tracking (

@@ -336,29 +336,37 @@ export class CostTracker {
     // Idempotent upgrade: databases created before token columns existed get
     // them added here. CREATE TABLE IF NOT EXISTS won't alter an existing table,
     // so check the schema and ALTER only the missing columns.
-    const columns = this.db.prepare('PRAGMA table_info(cost_tracking)').all() as Array<{
-      name: string;
-    }>;
-    const names = new Set(columns.map((c) => c.name));
-    if (!names.has('input_tokens')) {
-      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN input_tokens INTEGER');
-    }
-    if (!names.has('output_tokens')) {
-      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN output_tokens INTEGER');
-    }
-    if (!names.has('estimated')) {
-      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0');
-    }
-    if (!names.has('pending')) {
-      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN pending INTEGER NOT NULL DEFAULT 0');
-    }
-    // #255: rows written before tenants existed have no org, which is local mode's scope.
-    if (!names.has('org_id')) {
-      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN org_id TEXT');
-    }
-    if (!names.has('run_id')) {
-      this.db.exec('ALTER TABLE cost_tracking ADD COLUMN run_id TEXT');
-    }
+    // In one IMMEDIATE transaction: two processes upgrading the same old ledger
+    // (iris connect and a CLI run on one data dir) would otherwise both read the
+    // schema before either ALTER lands, and the second ALTER would throw
+    // "duplicate column name".
+    this.db
+      .transaction(() => {
+        const columns = this.db.prepare('PRAGMA table_info(cost_tracking)').all() as Array<{
+          name: string;
+        }>;
+        const names = new Set(columns.map((c) => c.name));
+        if (!names.has('input_tokens')) {
+          this.db.exec('ALTER TABLE cost_tracking ADD COLUMN input_tokens INTEGER');
+        }
+        if (!names.has('output_tokens')) {
+          this.db.exec('ALTER TABLE cost_tracking ADD COLUMN output_tokens INTEGER');
+        }
+        if (!names.has('estimated')) {
+          this.db.exec('ALTER TABLE cost_tracking ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0');
+        }
+        if (!names.has('pending')) {
+          this.db.exec('ALTER TABLE cost_tracking ADD COLUMN pending INTEGER NOT NULL DEFAULT 0');
+        }
+        // #255: rows written before tenants existed have no org, which is local mode's scope.
+        if (!names.has('org_id')) {
+          this.db.exec('ALTER TABLE cost_tracking ADD COLUMN org_id TEXT');
+        }
+        if (!names.has('run_id')) {
+          this.db.exec('ALTER TABLE cost_tracking ADD COLUMN run_id TEXT');
+        }
+      })
+      .immediate();
     // After the columns exist: the budget sums read by org and time.
     this.db.exec(
       'CREATE INDEX IF NOT EXISTS idx_org_timestamp ON cost_tracking(org_id, timestamp)',
@@ -570,8 +578,12 @@ export class CostTracker {
    */
   settle(id: number, usage?: TokenUsage): number {
     const row = this.db
-      .prepare('SELECT provider, model FROM cost_tracking WHERE id = ? AND pending = 1')
-      .get(id) as { provider: string; model: string } | undefined;
+      // Scoped like every read (#255): an id from elsewhere cannot settle another
+      // org's reservation.
+      .prepare(
+        'SELECT provider, model FROM cost_tracking WHERE id = ? AND pending = 1 AND org_id IS ?',
+      )
+      .get(id, this.orgId) as { provider: string; model: string } | undefined;
     if (!row) throw new Error(`No open cost reservation ${id}`);
 
     const { cost, estimated } = this.computeCost(row.provider, row.model, false, usage);
@@ -580,9 +592,16 @@ export class CostTracker {
       .prepare(
         `UPDATE cost_tracking
          SET cost = ?, input_tokens = ?, output_tokens = ?, estimated = ?, pending = 0
-         WHERE id = ? AND pending = 1`,
+         WHERE id = ? AND pending = 1 AND org_id IS ?`,
       )
-      .run(cost, usage?.inputTokens ?? null, usage?.outputTokens ?? null, estimated ? 1 : 0, id);
+      .run(
+        cost,
+        usage?.inputTokens ?? null,
+        usage?.outputTokens ?? null,
+        estimated ? 1 : 0,
+        id,
+        this.orgId,
+      );
     return cost;
   }
 
@@ -590,7 +609,9 @@ export class CostTracker {
    * Drop a reservation for a call that got no reply, so nothing was billed.
    */
   release(id: number): void {
-    this.db.prepare('DELETE FROM cost_tracking WHERE id = ? AND pending = 1').run(id);
+    this.db
+      .prepare('DELETE FROM cost_tracking WHERE id = ? AND pending = 1 AND org_id IS ?')
+      .run(id, this.orgId);
   }
 
   /**
