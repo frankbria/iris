@@ -665,7 +665,10 @@ program
       }).filter(([, v]) => v !== undefined),
     );
 
-    const wss = startServer(port, authenticate ? { host, authenticate, limits } : { host, authToken, limits });
+    const wss = startServer(
+      port,
+      authenticate ? { host, authenticate, limits } : { host, authToken, limits },
+    );
     // Wait for the bind before claiming it. `listen` fails asynchronously, so
     // logging straight after startServer() announced a server that then died
     // on an unhandled 'error' event when the port was taken (#330). `once`
