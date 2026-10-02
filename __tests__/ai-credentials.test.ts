@@ -127,6 +127,18 @@ describe('translate with injected credentials', () => {
     expect(result.reasoning).toMatch(/no AI credentials/i);
   });
 
+  it('a source that rejects is no AI, not an exception out of translate()', async () => {
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const result = await translate(NEEDS_AI, undefined, {
+      credentials: async () => {
+        throw new Error('key store unreachable');
+      },
+    });
+    expect(calls).toEqual([]);
+    expect(result.reasoning).toMatch(/no AI credentials/i);
+    expect(errors.mock.calls.flat().join(' ')).toMatch(/key store unreachable/);
+  });
+
   it('in hosted mode, omitting credentials is no AI too, never the process keys', async () => {
     // isHostedMode() is read once per module registry, so load a fresh one with it on.
     process.env.IRIS_HOSTED = '1';

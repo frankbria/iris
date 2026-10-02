@@ -175,6 +175,24 @@ function translateWithPatterns(instruction: string): TranslationResult {
   };
 }
 
+/**
+ * Ask a lazy credentials source. Anything but credentials is no AI: a lookup that
+ * resolves nothing, or fails, must never open the process configuration (#258).
+ */
+async function askCredentials(
+  source: () => Promise<AICredentials | null>,
+): Promise<AICredentials | null> {
+  try {
+    return (await source()) ?? null;
+  } catch (err) {
+    console.error(
+      '[iris] AI credentials lookup failed; translating without AI:',
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
 async function translateWithAI(
   instruction: string,
   context: { url?: string } | undefined,
@@ -185,7 +203,7 @@ async function translateWithAI(
   // caller that forgets them must not spend the process-wide ones (ADR 0001 §5).
   const credentials =
     typeof scope.credentials === 'function'
-      ? ((await scope.credentials()) ?? null)
+      ? await askCredentials(scope.credentials)
       : scope.credentials === undefined && isHostedMode()
         ? null
         : scope.credentials;
