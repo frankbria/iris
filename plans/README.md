@@ -124,7 +124,7 @@ code is the ordering key.
 
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
-| `P0.39` | [#267](https://github.com/frankbria/iris/issues/267) | Hosted a11y job API | P0.8 (#335), P0.24 (#341), P0.26 (#254) | TODO |
+| `P0.39` | [#267](https://github.com/frankbria/iris/issues/267) | Hosted a11y job API | P0.8 (#335), P0.24 (#341), P0.26 (#254) | DONE (PR #434) |
 | `P0.40` | [#268](https://github.com/frankbria/iris/issues/268) | Hosted visual-diff job API with project baselines and approval | P0.29 (#257), P0.39 (#267) | TODO |
 | `P0.41` | [#269](https://github.com/frankbria/iris/issues/269) | Results retrieval API: runs, run detail, artifact URLs | P0.26 (#254), P0.29 (#257) | TODO |
 | `P0.42` | [#270](https://github.com/frankbria/iris/issues/270) | Portal: runs and results pages | P0.41 (#269) | TODO |
@@ -147,6 +147,7 @@ code is the ordering key.
 | `P0.49` | [#277](https://github.com/frankbria/iris/issues/277) | Privacy policy, subprocessor list and DPA | P0.19 (#247) | TODO |
 | `P0.50` | [#348](https://github.com/frankbria/iris/issues/348) | Abuse handling and security contact | P0.24 (#341) | TODO |
 | `P0.51` | [#349](https://github.com/frankbria/iris/issues/349) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | TODO |
+| `P0.52` | [#435](https://github.com/frankbria/iris/issues/435) | Reap jobs stuck in running after a worker crash | P0.39 (#267) | TODO |
 
 ### P1 — Pre-launch hardening
 
