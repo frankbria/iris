@@ -1,5 +1,4 @@
 import * as fs from 'fs';
-import { DEFAULT_STALE_MS } from './history-store';
 import type { A11yJobParams, ClaimedJob, PostgresJobs } from './history-store';
 
 /**
@@ -8,6 +7,13 @@ import type { A11yJobParams, ClaimedJob, PostgresJobs } from './history-store';
  * so the runner's browser goes through the egress proxy and its pages through the
  * hosted URL policy.
  */
+
+/**
+ * A running job with no heartbeat for this long is reaped (#435): six missed 30 s beats.
+ * Kept here, not imported from the store: a runtime import of it would load the store's
+ * dependencies into every worker test (measured: it made a timing test flaky).
+ */
+export const DEFAULT_STALE_MS = 180_000;
 
 export type WorkerJobs = Pick<
   PostgresJobs,
@@ -136,14 +142,12 @@ export async function runWorker(options: {
     pollMs = 2_000,
     heartbeatFile,
     heartbeatMs = 30_000,
-    staleMs,
+    staleMs = DEFAULT_STALE_MS,
     maxAttempts,
   } = options;
   // A live job beats every heartbeatMs; the reaper must not mistake one late beat for death.
-  if (heartbeatMs * 2 >= (staleMs ?? DEFAULT_STALE_MS)) {
-    throw new Error(
-      `heartbeatMs (${heartbeatMs}) must be under half of staleMs (${staleMs ?? DEFAULT_STALE_MS})`,
-    );
+  if (heartbeatMs * 2 >= staleMs) {
+    throw new Error(`heartbeatMs (${heartbeatMs}) must be under half of staleMs (${staleMs})`);
   }
   const beat = () => {
     if (!heartbeatFile) return;
