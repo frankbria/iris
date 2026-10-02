@@ -16,7 +16,9 @@ import {
   getVisualTestResults,
   getTestRuns,
   initializeDatabase,
+  insertTestRun,
 } from '../src/db';
+import { sqliteHistoryStore } from '../src/history-store';
 import type { VisualTestResult as VisualRunResult } from '../src/visual/visual-runner';
 import type { AccessibilityTestResult } from '../src/a11y/a11y-runner';
 
@@ -235,5 +237,94 @@ describe('run history persistence (issue #77)', () => {
 
       warn.mockRestore();
     });
+  });
+});
+
+describe('sqliteHistoryStore: the local history behind the HistoryStore seam (#254)', () => {
+  beforeEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.mkdirSync(tempDir, { recursive: true });
+  });
+
+  afterAll(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('lists what the CLI recorded and reads each run back with its results', async () => {
+    process.env.IRIS_DB_PATH = dbPath;
+    try {
+      recordVisualRun(
+        visualRun,
+        new Date('2026-10-01T10:00:00Z'),
+        new Date('2026-10-01T10:00:05Z'),
+      );
+      recordA11yRun(a11yRun, new Date('2026-10-01T11:00:00Z'), new Date('2026-10-01T11:00:03Z'));
+    } finally {
+      delete process.env.IRIS_DB_PATH;
+    }
+    // A row `iris run` writes is not a run of this store.
+    const db = initializeDatabase(dbPath);
+    insertTestRun(db, {
+      instruction: 'click the login button',
+      status: 'success',
+      startTime: new Date(),
+    });
+    // ...even one whose instruction happens to start like a run summary.
+    insertTestRun(db, {
+      instruction: 'visual: compare the homepage',
+      status: 'success',
+      startTime: new Date(),
+    });
+    // `created_at` has one-second resolution, so runs recorded together tie on it.
+    // Force the tie: the order must come from insertion order, not from luck.
+    db.prepare("UPDATE test_results SET created_at = '2026-10-01 00:00:00'").run();
+    // A later comparison stamped a second later: an order taken from created_at
+    // (newest first) would put it first.
+    db.prepare(
+      "UPDATE visual_test_results SET created_at = CASE page WHEN '/about' THEN '2026-10-01 00:00:01' ELSE '2026-10-01 00:00:00' END",
+    ).run();
+    db.close();
+
+    const store = sqliteHistoryStore(dbPath);
+    const runs = await store.list();
+    expect(runs.map((r) => [r.kind, r.status, r.summary])).toEqual([
+      ['a11y', 'failed', 'a11y: 1 page(s), 3 violation(s)'],
+      ['visual', 'failed', 'visual: 2 comparison(s), 1 failed'],
+    ]);
+    const visual = await store.get(runs[1].id);
+    // In the order they ran, like the Postgres store.
+    expect(visual!.results.map((r) => [r.url, r.passed])).toEqual([
+      ['/home', true],
+      ['/about', false],
+    ]);
+    const a11y = await store.get(runs[0].id);
+    expect(a11y!.results).toEqual([
+      {
+        url: '/home',
+        passed: false,
+        result: expect.objectContaining({
+          violations: { critical: 1, serious: 1, moderate: 1, minor: 0 },
+          keyboardPassed: false,
+        }),
+      },
+    ]);
+    expect(await store.get('999')).toBeNull();
+    expect(await store.list({ limit: 1 })).toHaveLength(1);
+  });
+
+  it('records through the store with the same rows the CLI writes', async () => {
+    const store = sqliteHistoryStore(dbPath);
+    const id = await store.record({
+      kind: 'visual',
+      result: visualRun,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+    });
+    const db = initializeDatabase(dbPath);
+    try {
+      expect(getVisualTestResults(db, { testRunId: Number(id) })).toHaveLength(2);
+    } finally {
+      db.close();
+    }
   });
 });

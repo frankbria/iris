@@ -1,4 +1,5 @@
 import { sql, type Kysely } from 'kysely';
+import type { PostgresHistory } from './history-store';
 import type { Authenticator, Principal } from './protocol';
 
 /** The slice of a BetterAuth instance (`createAuth()`) this module uses. */
@@ -105,16 +106,16 @@ export function postgresKeyStore(db: Kysely<unknown>): KeyStore {
 }
 
 /**
- * The hosted server's authenticator, from the process environment (ADR 0001 §5: no
+ * The hosted server's authenticator and run history, from the process environment (ADR 0001 §5: no
  * ambient config files). Needs the portal's `BETTER_AUTH_SECRET` and
  * `BETTER_AUTH_URL`, and `DATABASE_URL` or `DATABASE_URL_FILE`.
  *
  * @throws naming what is missing, or when the database does not answer, so
  *   `iris connect` refuses to start rather than serve nothing but 503s
  */
-export async function hostedAuthenticator(
+export async function hostedServices(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<Authenticator> {
+): Promise<{ authenticate: Authenticator; history: PostgresHistory }> {
   const missing = ['BETTER_AUTH_SECRET', 'BETTER_AUTH_URL'].filter((name) => !env[name]);
   if (missing.length) throw new Error(`Hosted mode needs ${missing.join(' and ')}`);
   // Loaded here, not at the top: BetterAuth is ESM-only (require(esm)), and this
@@ -139,5 +140,10 @@ export async function hostedAuthenticator(
     await db.destroy();
     throw new Error(`Cannot reach the database: ${(err as Error).message}`);
   }
-  return apiKeyAuthenticator(auth, postgresKeyStore(db));
+  // Run history shares the pool, and its query timeout (#254).
+  const { postgresHistory } = await import('./history-store');
+  return {
+    authenticate: apiKeyAuthenticator(auth, postgresKeyStore(db)),
+    history: postgresHistory(db),
+  };
 }

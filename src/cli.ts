@@ -632,6 +632,7 @@ program
     // keys, and the shared token is off. A token set anyway is refused rather than
     // ignored: whoever set it expects it to be what guards the server.
     let authenticate: import('./protocol').Authenticator | undefined;
+    let history: import('./history-store').PostgresHistory | undefined;
     if (isHostedMode()) {
       if (tokenFile || process.env.IRIS_CONNECT_TOKEN) {
         console.error(
@@ -641,8 +642,8 @@ program
         return;
       }
       try {
-        const { hostedAuthenticator } = await import('./api-key-auth');
-        authenticate = await hostedAuthenticator();
+        const { hostedServices } = await import('./api-key-auth');
+        ({ authenticate, history } = await hostedServices());
       } catch (err) {
         console.error(`Cannot start in hosted mode: ${(err as Error).message}`);
         process.exit(3); // Environment/runtime error
@@ -688,7 +689,7 @@ program
 
     const wss = startServer(
       port,
-      authenticate ? { host, authenticate, limits } : { host, authToken, limits },
+      authenticate ? { host, authenticate, history, limits } : { host, authToken, limits },
     );
     // Wait for the bind before claiming it. `listen` fails asynchronously, so
     // logging straight after startServer() announced a server that then died
