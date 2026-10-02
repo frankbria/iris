@@ -142,13 +142,17 @@ function resultsOf(run: RunInput): StoredRunResult[] {
           passed: r.success,
           result: {
             action: describeAction(action),
-            // Bounded: an error message is page-influenced text of any length.
-            ...(r.error && { error: r.error.slice(0, 500) }),
+            // Bounded: an error message is page-influenced text of any length. It
+            // also quotes URLs (guardedGoto, Playwright's goto), credentials and all.
+            ...(r.error && { error: stripUserinfo(r.error).slice(0, 500) }),
           },
         };
       });
   }
 }
+
+/** Every `scheme://user:password@` in free text, without the userinfo. */
+const stripUserinfo = (text: string) => text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
 
 /**
  * A URL without its `user:password@`: history is readable by everyone in the org.
@@ -330,6 +334,10 @@ export function recordSqliteRun(db: Database.Database, run: RunInput): number {
 
 const SUMMARY_KIND = /^(rpc|a11y|visual): /;
 
+/** In the order they ran: the db.ts getters return newest first by `created_at`. */
+const sortById = <T extends { id?: number }>(rows: T[]) =>
+  [...rows].sort((x, y) => (x.id ?? 0) - (y.id ?? 0));
+
 /**
  * The local history as a `HistoryStore` (#254). Local mode has one tenant, so there
  * is no scope. `test_results` has no kind column: a run's kind is the prefix of its
@@ -380,7 +388,7 @@ export function sqliteHistoryStore(dbPath: string): HistoryStore {
         const testRunId = Number(id);
         const results: StoredRunResult[] =
           run.kind === 'visual'
-            ? getVisualTestResults(db, { testRunId }).map((v) => ({
+            ? sortById(getVisualTestResults(db, { testRunId })).map((v) => ({
                 url: v.page,
                 passed: v.status === 'passed',
                 result: {
@@ -390,7 +398,7 @@ export function sqliteHistoryStore(dbPath: string): HistoryStore {
                 },
               }))
             : run.kind === 'a11y'
-              ? getA11yTestResults(db, { testRunId }).map((a) => ({
+              ? sortById(getA11yTestResults(db, { testRunId })).map((a) => ({
                   url: a.page,
                   passed: a.status === 'passed',
                   result: {

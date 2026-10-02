@@ -239,6 +239,29 @@ const a11yRun = {
     expect(JSON.stringify(run)).not.toContain('user:pw');
   });
 
+  it('strips credentials from URLs quoted in an error message too', async () => {
+    const id = await history()
+      .forOrg(A)
+      .record({
+        kind: 'rpc',
+        success: false,
+        startedAt: started,
+        finishedAt: finished,
+        results: [
+          {
+            success: false,
+            action: { type: 'navigate', url: 'https://admin:s3cret@site.example/x' },
+            // guardedGoto and Playwright both quote the URL they were given.
+            error: 'Navigation to https://admin:s3cret@site.example/x refused; see ftp://u:p@h/',
+          },
+        ],
+      });
+    const run = await history().forOrg(A).get(id);
+    expect(run!.results[0].result.error).toBe(
+      'Navigation to https://site.example/x refused; see ftp://h/',
+    );
+  });
+
   it('keeps the run when its key is deleted, with no key recorded', async () => {
     await sql`insert into apikey (id, "configId", "referenceId", key, "createdAt", "updatedAt")
       values ('key-temp', 'default', 'org-a', 'hash-temp', now(), now())`.execute(db);

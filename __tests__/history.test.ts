@@ -272,6 +272,11 @@ describe('sqliteHistoryStore: the local history behind the HistoryStore seam (#2
     // `created_at` has one-second resolution, so runs recorded together tie on it.
     // Force the tie: the order must come from insertion order, not from luck.
     db.prepare("UPDATE test_results SET created_at = '2026-10-01 00:00:00'").run();
+    // A later comparison stamped a second later: an order taken from created_at
+    // (newest first) would put it first.
+    db.prepare(
+      "UPDATE visual_test_results SET created_at = CASE page WHEN '/about' THEN '2026-10-01 00:00:01' ELSE '2026-10-01 00:00:00' END",
+    ).run();
     db.close();
 
     const store = sqliteHistoryStore(dbPath);
@@ -281,12 +286,11 @@ describe('sqliteHistoryStore: the local history behind the HistoryStore seam (#2
       ['visual', 'failed', 'visual: 2 comparison(s), 1 failed'],
     ]);
     const visual = await store.get(runs[1].id);
-    expect(visual!.results.map((r) => [r.url, r.passed])).toEqual(
-      expect.arrayContaining([
-        ['/home', true],
-        ['/about', false],
-      ]),
-    );
+    // In the order they ran, like the Postgres store.
+    expect(visual!.results.map((r) => [r.url, r.passed])).toEqual([
+      ['/home', true],
+      ['/about', false],
+    ]);
     const a11y = await store.get(runs[0].id);
     expect(a11y!.results).toEqual([
       {
