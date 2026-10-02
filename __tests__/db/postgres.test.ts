@@ -101,6 +101,31 @@ describe('migrate process against a server that never answers', () => {
   }, 30_000);
 });
 
+(ADMIN_URL ? describe : describe.skip)(
+  'createPostgresDb when the server ends an idle connection',
+  () => {
+    // A Postgres restart terminates every pooled connection. `pg` then emits 'error'
+    // on the pool, and with no listener that is an uncaught exception: the hosted
+    // server exited mid-demo when the database was stopped (#341).
+    it('survives and serves the next query on a fresh connection', async () => {
+      const db = createPostgresDb(ADMIN_URL!);
+      const admin = new Client({ connectionString: ADMIN_URL });
+      await admin.connect();
+      try {
+        const { rows } = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(db);
+        // The pool now holds that connection idle; end it from the server side.
+        await admin.query('select pg_terminate_backend($1)', [rows[0].pid]);
+        await new Promise((r) => setTimeout(r, 300));
+        const after = await sql<{ pid: number }>`select pg_backend_pid() as pid`.execute(db);
+        expect(after.rows[0].pid).not.toBe(rows[0].pid);
+      } finally {
+        await admin.end();
+        await db.destroy();
+      }
+    });
+  },
+);
+
 (ADMIN_URL ? describe : describe.skip)('createPostgresDb query timeout', () => {
   // A server that accepted the connection and then stopped answering: connect
   // timeouts do not cover it. pg_sleep stands in for the stall (#341).

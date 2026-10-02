@@ -46,5 +46,12 @@ export function createPostgresDb<DB = unknown>(
       query_timeout: queryTimeoutMs + 1_000,
     }),
   });
+  // An idle connection the server ends (a restart, an admin kill) is reported here
+  // and dropped from the pool, which opens a new one on the next query. Without a
+  // listener, `pg`'s 'error' event is an uncaught exception that takes the process
+  // down (#341: the hosted RPC server exited when Postgres restarted).
+  pool.on('error', (err) => {
+    console.error(`[iris] idle Postgres connection lost; the pool replaces it: ${err.message}`);
+  });
   return new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
 }
