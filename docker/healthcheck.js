@@ -58,8 +58,10 @@ if (!TOKEN) {
 // Always loopback: this runs *inside* the container, where the server is bound
 // to 0.0.0.0. It deliberately does not use IRIS_CONNECT_HOST — probing the
 // external bind address would test routing rather than the service.
+// `X-Iris-Probe` claims the slot the server reserves for a loopback probe beyond
+// `--max-connections` (#342): a server at capacity is busy, not unhealthy.
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}`, {
-  headers: { Authorization: `Bearer ${TOKEN}` },
+  headers: { Authorization: `Bearer ${TOKEN}`, 'X-Iris-Probe': '1' },
 });
 
 const timer = setTimeout(() => fail(`no response within ${TIMEOUT_MS}ms`), TIMEOUT_MS);

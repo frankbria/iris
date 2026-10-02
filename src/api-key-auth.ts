@@ -1,5 +1,5 @@
 import { sql, type Kysely } from 'kysely';
-import type { Authenticator } from './protocol';
+import type { Authenticator, Principal } from './protocol';
 
 /** The slice of a BetterAuth instance (`createAuth()`) this module uses. */
 export interface KeyVerifier {
@@ -11,59 +11,80 @@ export interface KeyVerifier {
   };
 }
 
+/** Read-only checks against the key rows, independent of `verifyApiKey`. */
+export interface KeyStore {
+  /** Whether the row for this plaintext key would let it verify. */
+  isUsable(key: string): Promise<boolean>;
+  /** Whether the key with this id still belongs to this org and would verify. */
+  isLive(principal: Principal): Promise<boolean>;
+}
+
 /**
  * Per-tenant key authentication for the hosted RPC server (#341, ADR 0001 §4).
  *
- * Reads `Authorization: Bearer <key>` and verifies the key with the api-key plugin.
- * Keys are org-owned, so the verified key's `referenceId` is the org the
+ * `verify` reads `Authorization: Bearer <key>` and verifies the key with the api-key
+ * plugin. Keys are org-owned, so the verified key's `referenceId` is the org the
  * connection acts for.
  *
  * `verifyApiKey` reports a backend failure the same way as an unknown key
  * (`valid: false`, `INVALID_API_KEY`): the plugin catches every error, including a
  * timed-out lookup, a locked table and the write it makes on a read-only database.
- * So a refusal is only believed when `isUsable(key)`, a read of the key's own row,
- * agrees the key is gone, disabled, expired or used up. For a key whose row is fine
- * this throws, and the server answers 503 (or keeps a live connection) rather than
- * telling a valid key it is invalid.
+ * So a refusal is only believed when `store.isUsable(key)`, a read of the key's own
+ * row, agrees the key is gone, disabled, expired or used up. For a key whose row is
+ * fine this throws, and the server answers 503 rather than telling a valid key it is
+ * invalid.
+ *
+ * `recheck` asks the store by key id only (#342): `verifyApiKey` writes `lastRequest`
+ * and spends `remaining` on every call, and a connection need not keep the key.
  */
-export function apiKeyAuthenticator(
-  auth: KeyVerifier,
-  isUsable: (key: string) => Promise<boolean>,
-): Authenticator {
-  return async (authorization) => {
-    const key = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
-    if (!key) return null;
-    const result = await auth.api.verifyApiKey({ body: { key } });
-    if (result.valid && result.key) {
-      return { orgId: result.key.referenceId, keyId: result.key.id };
-    }
-    if (await isUsable(key)) throw new Error('API key verification failed for a usable key');
-    return null;
+export function apiKeyAuthenticator(auth: KeyVerifier, store: KeyStore): Authenticator {
+  return {
+    async verify(authorization) {
+      const key = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
+      if (!key) return null;
+      const result = await auth.api.verifyApiKey({ body: { key } });
+      if (result.valid && result.key) {
+        return { orgId: result.key.referenceId, keyId: result.key.id };
+      }
+      if (await store.isUsable(key)) {
+        throw new Error('API key verification failed for a usable key');
+      }
+      return null;
+    },
+    recheck: (principal) => store.isLive(principal),
   };
 }
 
-/**
- * Whether the key's own row would let it verify: present, enabled, not expired and
- * not used up. Read-only, by the plugin's own hash of the key.
- */
-export function keyIsUsable(db: Kysely<unknown>): (key: string) => Promise<boolean> {
-  return async (key) => {
-    // ESM-only, like BetterAuth: loaded on use (require(esm)).
-    const { defaultKeyHasher } = await import('@better-auth/api-key');
-    const { rows } = await sql<{
-      enabled: boolean | null;
-      expiresAt: Date | null;
-      remaining: number | null;
-    }>`select enabled, "expiresAt", remaining from apikey where key = ${await defaultKeyHasher(key)}`.execute(
-      db,
-    );
-    const row = rows[0];
-    return (
-      !!row &&
-      row.enabled !== false &&
-      (!row.expiresAt || row.expiresAt.getTime() > Date.now()) &&
-      row.remaining !== 0
-    );
+interface KeyRow {
+  enabled: boolean | null;
+  expiresAt: Date | null;
+  remaining: number | null;
+}
+
+/** The plugin's own conditions for a key row to verify (validateApiKey). */
+const usableRow = (row: KeyRow | undefined) =>
+  !!row &&
+  row.enabled !== false &&
+  (!row.expiresAt || row.expiresAt.getTime() > Date.now()) &&
+  row.remaining !== 0;
+
+/** `KeyStore` over the `apikey` table. Plaintext keys are looked up by the plugin's own hash. */
+export function postgresKeyStore(db: Kysely<unknown>): KeyStore {
+  return {
+    async isUsable(key) {
+      // ESM-only, like BetterAuth: loaded on use (require(esm)).
+      const { defaultKeyHasher } = await import('@better-auth/api-key');
+      const hash = await defaultKeyHasher(key);
+      const { rows } = await sql<KeyRow>`
+        select enabled, "expiresAt", remaining from apikey where key = ${hash}`.execute(db);
+      return usableRow(rows[0]);
+    },
+    async isLive({ keyId, orgId }) {
+      const { rows } = await sql<KeyRow>`
+        select enabled, "expiresAt", remaining from apikey
+        where id = ${keyId} and "referenceId" = ${orgId}`.execute(db);
+      return usableRow(rows[0]);
+    },
   };
 }
 
@@ -102,5 +123,5 @@ export async function hostedAuthenticator(
     await db.destroy();
     throw new Error(`Cannot reach the database: ${(err as Error).message}`);
   }
-  return apiKeyAuthenticator(auth, keyIsUsable(db));
+  return apiKeyAuthenticator(auth, postgresKeyStore(db));
 }

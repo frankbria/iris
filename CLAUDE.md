@@ -604,10 +604,37 @@ Kysely and calls `verifyApiKey`; the key's `referenceId` is the org.
   admitted. Decrement right before `done()`: ws adds the client synchronously.
 - **Revocation ends live connections** on a timer (`authRecheckMs`, default 60 s),
   closing with `1008` and reclaiming the browser at once. Not per message: an await
-  ahead of the `SessionGate` would reorder pipelined messages (#128).
+  ahead of the `SessionGate` would reorder pipelined messages (#128). The re-check is
+  `Authenticator.recheck(principal)`: a read-only lookup by key id and org
+  (`postgresKeyStore().isLive`), because `verifyApiKey` writes `lastRequest` and spends
+  `remaining` on every call. A connection keeps no plaintext key (#342).
 - The principal rides on the connection and its `BrowserSession`. Hosted `getStatus`
-  counts only the caller's org sessions. `maxSessions` stays server-wide; per-key
-  caps are #342.
+  counts only the caller's org sessions.
+
+### Tenant Limits (issue #342)
+
+`ServerLimits` gained four hosted-only limits: `keyRequestsPerMinute` (120),
+`orgRequestsPerMinute` (300), `maxSessionsPerOrg` (2), `maxConnectionsPerOrg` (8).
+They apply only to connections with a principal; local mode is untouched.
+
+- **Rate limits are token buckets keyed by key id and org id** (`RateBuckets` in
+  src/protocol.ts), checked synchronously before dispatch, not after an await (#128).
+  Both buckets must have a token before either is spent. A refused request gets
+  `-32029` with `data.retryAfterMs` and never runs. Buckets outlive connections, so
+  reconnecting gains nothing; full buckets are pruned on the heartbeat. In memory, one
+  process (#316 for several).
+- **The per-org connection cap is checked in the async `verify` callback**, against
+  `tenants`. That is safe only because ws emits `'connection'` synchronously inside
+  `done(true)` and the handler registers the tenant before returning.
+- **The api-key plugin's own limiter stays off for good.** It limits verifications,
+  not requests, and every key row created so far has `rateLimitEnabled = false`, so
+  turning it on would need a backfill migration (#340 comment). No backfill is needed.
+- **The healthcheck probe slot**: a loopback peer sending `X-Iris-Probe: 1` gets one
+  connection beyond `maxConnections`. Loopback only: a published port arrives on the
+  container's interface. The test reaches the server through the host's own interface
+  address to prove a remote header gets no slot.
+- Per-IP pre-auth throttling is #347's: without a trusted client-IP source, everyone
+  behind the ingress shares one address.
 - `startServer` itself does not enforce hosted mode: `protocol.test.ts` runs under
   `IRIS_HOSTED=1` with a token or no auth. `iris connect` is the enforcing caller.
 - Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`

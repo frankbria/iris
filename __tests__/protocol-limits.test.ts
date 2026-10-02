@@ -97,6 +97,10 @@ describe('defaults', () => {
       maxRetryDelayMs: 10_000,
       maxSlowMoMs: 1_000,
       heartbeatIntervalMs: 30_000,
+      keyRequestsPerMinute: 120,
+      orgRequestsPerMinute: 300,
+      maxSessionsPerOrg: 2,
+      maxConnectionsPerOrg: 8,
     });
   });
 });
@@ -148,6 +152,43 @@ describe('maxConnections', () => {
     const c = await open(url);
     expect((await call(c, 'getStatus')).result.status).toBe('ready');
   });
+});
+
+describe('the healthcheck probe slot (#342)', () => {
+  test('a loopback probe gets one slot beyond maxConnections, and only one', async () => {
+    const url = await serve({ maxConnections: 1 });
+    const PROBE = { headers: { ...AUTH, 'x-iris-probe': '1' } };
+    await open(url);
+    expect(await statusOf(open(url))).toBe(503);
+    // At capacity, the container's own probe still gets in, so a full server does
+    // not read as unhealthy...
+    const probe = await open(url, PROBE);
+    expect((await call(probe, 'getStatus')).result.status).toBe('ready');
+    // ...but the header buys one slot, not an unlimited bypass.
+    expect(await statusOf(open(url, PROBE))).toBe(503);
+  });
+
+  // A published port arrives on the container's interface, never its loopback, so
+  // a remote client sending the header must not get the slot. Reaching the server
+  // through this host's own interface address makes the peer non-loopback.
+  const external = Object.values(os.networkInterfaces())
+    .flat()
+    .find((i) => i && i.family === 'IPv4' && !i.internal)?.address;
+  (external ? test : test.skip)(
+    'the probe header from a non-loopback peer gets no slot',
+    async () => {
+      const wss = startServer(0, {
+        authToken: TOKEN,
+        host: '0.0.0.0',
+        limits: { maxConnections: 1 },
+      });
+      servers.push(wss);
+      await new Promise<void>((resolve) => wss.once('listening', resolve));
+      const url = `ws://${external}:${(wss.address() as AddressInfo).port}`;
+      await open(url);
+      expect(await statusOf(open(url, { headers: { ...AUTH, 'x-iris-probe': '1' } }))).toBe(503);
+    },
+  );
 });
 
 describe('maxSessions', () => {

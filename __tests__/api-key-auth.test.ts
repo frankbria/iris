@@ -138,7 +138,7 @@ test('a database that never answers exits 3 instead of serving 503s', async () =
 const PROBE = `
 const { Pool } = require('pg');
 const { createAuth } = require('./src/auth/config.ts');
-const { apiKeyAuthenticator, keyIsUsable } = require('./src/api-key-auth.ts');
+const { apiKeyAuthenticator, postgresKeyStore } = require('./src/api-key-auth.ts');
 const { createPostgresDb } = require('./src/db/postgres.ts');
 const PASSWORD = 'correct-horse-battery-staple';
 (async () => {
@@ -172,24 +172,36 @@ const PASSWORD = 'correct-horse-battery-staple';
 
   // The authenticator itself: a verdict only when the key's own row agrees.
   const kdb = createPostgresDb(process.env.PROBE_URL);
-  const usable = keyIsUsable(kdb);
+  const store = postgresKeyStore(kdb);
   r.usable = {};
-  for (const k of ['a', 'revoked', 'disabled']) r.usable[k] = await usable(r[k].key);
-  r.usable.unknown = await usable('iris_nope');
-  const authn = apiKeyAuthenticator(auth, usable);
-  r.live = await authn('Bearer ' + r.a.key);
-  r.unknown = await authn('Bearer iris_nope');
-  r.revokedNow = await authn('Bearer ' + r.revoked.key);
-  r.notBearer = await authn('Basic ' + r.a.key);
+  for (const k of ['a', 'revoked', 'disabled']) r.usable[k] = await store.isUsable(r[k].key);
+  r.usable.unknown = await store.isUsable('iris_nope');
+  // The re-check by id (#342): live only while the key exists, is enabled and is the org's.
+  r.live2 = {
+    a: await store.isLive({ orgId: r.A, keyId: r.a.id }),
+    revoked: await store.isLive({ orgId: r.A, keyId: r.revoked.id }),
+    disabled: await store.isLive({ orgId: r.B, keyId: r.disabled.id }),
+    otherOrg: await store.isLive({ orgId: r.B, keyId: r.a.id }),
+  };
+  const lastBefore = (await pool.query('select "lastRequest" from apikey where id = $1', [r.a.id])).rows[0].lastRequest;
+  await store.isLive({ orgId: r.A, keyId: r.a.id });
+  const lastAfter = (await pool.query('select "lastRequest" from apikey where id = $1', [r.a.id])).rows[0].lastRequest;
+  r.recheckWrites = String(lastBefore) !== String(lastAfter);
+  const authn = apiKeyAuthenticator(auth, store);
+  r.live = await authn.verify('Bearer ' + r.a.key);
+  r.unknown = await authn.verify('Bearer iris_nope');
+  r.revokedNow = await authn.verify('Bearer ' + r.revoked.key);
+  r.notBearer = await authn.verify('Basic ' + r.a.key);
   const outcome = (p) => p.then((v) => ({ value: v }), (e) => ({ threw: String(e.message) }));
   // BetterAuth's database path fails (its pool is gone) while the key row reads fine:
   // a locked table or a read-only database looks like this to the plugin.
   await pool.end();
-  r.brokenVerify = await outcome(authn('Bearer ' + r.a.key));
-  r.brokenUnknown = await outcome(authn('Bearer iris_nope'));
+  r.brokenVerify = await outcome(authn.verify('Bearer ' + r.a.key));
+  r.brokenUnknown = await outcome(authn.verify('Bearer iris_nope'));
   // Nothing answers at all.
   await kdb.destroy();
-  r.down = await outcome(authn('Bearer iris_nope'));
+  r.down = await outcome(authn.verify('Bearer iris_nope'));
+  r.downRecheck = await outcome(authn.recheck({ orgId: r.A, keyId: r.a.id }));
   process.stdout.write(JSON.stringify(r));
 })().catch((e) => { console.error(e); process.exit(1); });
 `;
@@ -286,6 +298,10 @@ const PASSWORD = 'correct-horse-battery-staple';
 
   test('the authenticator maps a key to its org, and refuses only when the key row agrees', () => {
     expect(r.usable).toEqual({ a: true, revoked: false, disabled: false, unknown: false });
+    // Re-check by id: no plaintext, no write to the key row, and bound to the org.
+    expect(r.live2).toEqual({ a: true, revoked: false, disabled: false, otherOrg: false });
+    expect(r.recheckWrites).toBe(false);
+    expect(r.downRecheck).toHaveProperty('threw');
     expect(r.live).toEqual({ orgId: r.A, keyId: r.a.id });
     expect(r.unknown).toBeNull();
     expect(r.revokedNow).toBeNull();

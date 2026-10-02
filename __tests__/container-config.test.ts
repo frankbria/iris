@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import type { WebSocketServer } from 'ws';
+import WebSocket, { type WebSocketServer } from 'ws';
 import { startServer } from '../src/protocol';
 
 /**
@@ -193,5 +193,21 @@ describe('docker/healthcheck.js reads IRIS_CONNECT_TOKEN_FILE (issue #332)', () 
 
   it('fails when the file holds the wrong token', async () => {
     expect(await probe('wrong-token')).toBe(1);
+  });
+
+  it('passes on a server at --max-connections: busy is not unhealthy (#342)', async () => {
+    wss.close();
+    wss = startServer(0, { authToken: 'right-token', limits: { maxConnections: 1 } });
+    await once(wss, 'listening');
+    port = (wss.address() as net.AddressInfo).port;
+    const client = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { authorization: 'Bearer right-token' },
+    });
+    await once(client, 'open');
+    try {
+      expect(await probe('right-token')).toBe(0);
+    } finally {
+      client.terminate();
+    }
   });
 });
