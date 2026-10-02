@@ -215,6 +215,16 @@ interface Reply {
     expect(portal.seen.map((s) => s.path)).toEqual(['/', '/api/auth/get-session', '/dashboard']);
   });
 
+  // The portal's readiness route runs a database query per request; it is for the
+  // container's own healthcheck, never the internet (#273).
+  it('does not expose the portal health route', async () => {
+    portal.seen.length = 0;
+    for (const p of ['/api/health', '/api/health/', '/api/%68ealth', '/api//health']) {
+      expect((await get(p)).status).toBe(404);
+    }
+    expect(portal.seen).toEqual([]);
+  });
+
   // nginx answers a prefix location's slashless form with a redirect to it; either
   // way the request itself never reaches iris-api.
   it('does not send /v1 without its slash, or /v1x, to iris-api', async () => {
