@@ -84,6 +84,7 @@ src/
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
+├── secret-env.ts          # readSecretEnv(NAME): NAME or NAME_FILE, the one `_FILE` reader (#273)
 ├── url-policy-guard.ts    # Makes that stick per-request (CDP Fetch): redirect hops, sub-resources, popups (#337)
 ├── egress-proxy.ts        # Hosted: resolve-and-pin HTTP/CONNECT proxy under all Chromium traffic (#336)
 ├── report-encoding.ts     # One encoder per report format: HTML, XML (JUnit), Markdown, safe hrefs (#339)
@@ -124,6 +125,8 @@ __tests__/
 ├── ingress.test.ts                # Real nginx (Docker) over deploy/nginx/iris.conf: routing, header overwrite, WSS, 429, headers, TLS (#347)
 ├── auth-client-ip.test.ts         # Real Postgres: BetterAuth rate limits key on X-Real-IP, not a rotated X-Forwarded-For (#347)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
+├── deploy-script.test.ts          # deploy/deploy.sh on local Docker + a throwaway registry: gates, rollback, rerun (#273)
+├── portal-image.test.ts           # Built portal image (IRIS_TEST_PORTAL_IMAGE): SMTP check, /login, sign-up via _FILE secrets (#273)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
 │   ├── diff.test.ts
@@ -147,9 +150,11 @@ docs/                               # Detailed project documentation
 ├── phase2c_roadmap.md             # Phase 2C roadmap (ROADMAP — not started)
 ├── integration-surfaces.md        # Which integration surfaces exist and why (decision record)
 ├── adr/0001-hosted-architecture.md # Hosted SaaS architecture — anchors every Cycle 4 platform issue
+├── runbook-production.md          # Production setup, promote, rollback (#273)
 └── archive/                       # Superseded planning docs (historical)
 
 deploy/
+├── deploy.sh                      # On-box deploy by digest: SMTP + migration gates, rollback (#273)
 └── nginx/iris.conf                # TLS ingress site template for the host's nginx (#347)
 
 plans/
@@ -437,6 +442,47 @@ portal. No host details in the repo (`repo-hygiene.test.ts`).
   under `CI`, skipped locally without Docker. "Per IP" is shown with `127.0.0.1` vs
   `::1`. The image's OpenSSL refuses TLS 1.1 on its own too, so the TLS check pins the
   outcome, not the `ssl_protocols` line.
+
+### Production Deploy (issue #273)
+
+`deploy-production` (ci.yml) promotes digests; it never builds. Runbook:
+`docs/runbook-production.md`. Compose: `docker-compose.production.yml` (iris-api, worker,
+portal, postgres; images only from `${IRIS_IMAGE:?}` / `${PORTAL_IMAGE:?}`).
+
+- **`staged-<sha>` is the record that staging ran a digest.** deploy-staging tags both
+  images (`imagetools create`, no rebuild) as its *last* step, so a failed staging
+  deploy records nothing. Production resolves the tag's commit and refuses a sha
+  without both tags. Staging does not run the portal yet: it only boots the pushed
+  portal digest on the runner (`/login` 200) before tagging.
+- **Portal image** (`Dockerfile.portal`, context = repo root): Next `output:
+  'standalone'` traced from the repo root (`outputFileTracingRoot`), server at
+  `apps/portal/server.js`. Its ignore file is `Dockerfile.portal.dockerignore`, which
+  only BuildKit reads (the legacy builder ignores it and fails on `apps/`). Keep
+  `apps/portal/e2e` and `__tests__` in the context: `next build` type-checks them.
+  `next start` (portal E2E) still works with standalone output.
+- **The SMTP check is compiled separately**: `scripts/verify-smtp.ts` → tsc CommonJS
+  into `/app/verify` (own `{"type":"commonjs"}`), plus `node_modules/nodemailer`
+  copied in, since Next bundles nodemailer into chunks and does not trace it. It
+  shares `lib/mail.ts` with the portal and has its own 15s timer (nodemailer waits 2
+  min on a blackhole).
+- **uid 1001 everywhere.** The portal image runs as `portal` (1001) like pwuser, so the
+  deploy writes every app secret file once, owned by 1001. `pg_password` is 70.
+- **`_FILE` secrets go through `readSecretEnv()`** (src/secret-env.ts): `resolveDatabaseUrl`,
+  `resolveKeyring`, `hostedServices`' `BETTER_AUTH_SECRET`, and the portal's
+  `BETTER_AUTH_SECRET` / `SMTP_URL`. Do not add another reader.
+- **Hosted iris-api health = `GET /` returns 404** (the job API, before auth). The token
+  healthcheck cannot authenticate in hosted mode (#309); 426 means token mode.
+- **`deploy.sh` keeps `.env` = what runs** (settings.env + image refs), restored by an
+  EXIT trap on failure, so manual `docker compose` works in the deploy dir. The rollback
+  target is read from the running containers (`.Config.Image`), not from a file.
+  Migrations are forward-only: expand/contract, never down-migrations.
+- **`deploy-script.test.ts`** pushes busybox images to a `registry:2` on a loopback port
+  so refs are real digests. COPY-only Dockerfiles (each RUN is a container: tens of
+  seconds on a loaded WSL daemon) and `BUILDX_BUILDER=default` (CI's
+  setup-buildx-action makes a docker-container builder current, which would not load
+  the image). 4-10 min on a loaded WSL host (load ~3.5); not yet timed on CI.
+- **Tag pushes already ran `build`** (`on: push` has no filter); adding
+  `workflow_dispatch` leaves push/PR behaviour unchanged.
 
 ### Container Deployment (issue #192)
 
