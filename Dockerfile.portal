@@ -60,8 +60,11 @@ RUN adduser -D -H -u 1001 portal
 USER portal
 EXPOSE 3000
 
-# /login renders without the database or SMTP, so this says the server answers.
+# Readiness, not just liveness (#273): /api/health answers 200 only when the auth
+# settings, the BYOK master key and the database all work. The deploy waits on it.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-  CMD ["node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+  CMD ["node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+
+CMD ["node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
 
 CMD ["node", "apps/portal/server.js"]

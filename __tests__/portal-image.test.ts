@@ -5,8 +5,8 @@
  *
  * - the deploy's SMTP check passes against Mailpit and fails, quickly, against a
  *   closed port (`[::1]`: a closed 127.0.0.1 port blackholes on WSL, #382);
- * - the server serves /login, and /api/auth/get-session, which builds BetterAuth
- *   from the secret files.
+ * - the server serves /login and /api/auth/get-session, signs up (database + mail),
+ *   and its readiness route answers 200, or 503 with a bad master key.
  *
  * Required under CI; skipped locally unless IRIS_TEST_PORTAL_IMAGE is set
  * (`docker build -f Dockerfile.portal -t iris-portal:local .` needs BuildKit).
@@ -99,7 +99,7 @@ async function freePort(host: string): Promise<number> {
   });
 
   afterAll(async () => {
-    spawnSync('docker', ['rm', '-f', name]);
+    spawnSync('docker', ['rm', '-f', name, `${name}-bad`]);
     fs.rmSync(dir, { recursive: true, force: true });
     await admin(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
   });
@@ -118,17 +118,20 @@ async function freePort(host: string): Promise<number> {
     expect(r.status).toBe(1);
   });
 
-  it('serves /login, and signs up through the secret files (database, auth, SMTP)', async () => {
+  /** Starts the server as production runs it; resolves once /login answers 200. */
+  async function serve(container: string, masterKeyFile: string): Promise<string> {
     const port = await freePort('127.0.0.1');
     const base = `http://127.0.0.1:${port}`;
     secret('smtp_url', SMTP_URL);
     secret('auth_secret', 'x'.repeat(64));
     secret('database_url', databaseUrl);
+    secret('master_key', `k1:${randomBytes(32).toString('base64')}`);
+    secret('master_key_bad', 'not-a-key');
     execFileSync('docker', [
       'run',
       '-d',
       '--name',
-      name,
+      container,
       '--network',
       'host',
       '--read-only',
@@ -152,6 +155,8 @@ async function freePort(host: string): Promise<number> {
       'SMTP_URL_FILE=/run/secrets/smtp_url',
       '-e',
       'SMTP_FROM=IRIS <no-reply@iris.test>',
+      '-e',
+      `IRIS_KEY_ENCRYPTION_KEY_FILE=/run/secrets/${masterKeyFile}`,
       IMAGE!,
     ]);
     let login = 0;
@@ -163,6 +168,13 @@ async function freePort(host: string): Promise<number> {
       if (login !== 200) await new Promise((resolve) => setTimeout(resolve, 500));
     }
     expect(login).toBe(200);
+    return base;
+  }
+
+  it('is ready (/api/health), and signs up through the secret files (database, auth, SMTP)', async () => {
+    const base = await serve(name, 'master_key');
+    const health = await fetch(`${base}/api/health`);
+    expect(health.status).toBe(200);
     const session = await fetch(`${base}/api/auth/get-session`);
     expect(session.status).toBe(200);
     expect(await session.text()).toBe('null');
@@ -184,5 +196,12 @@ async function freePort(host: string): Promise<number> {
       if (mails === 0) await new Promise((resolve) => setTimeout(resolve, 250));
     }
     expect(mails).toBe(1);
+  }, 60_000);
+
+  it('answers 503, and says nothing more, when the master key does not load', async () => {
+    const base = await serve(`${name}-bad`, 'master_key_bad');
+    const health = await fetch(`${base}/api/health`);
+    expect(health.status).toBe(503);
+    expect(await health.text()).toBe('unavailable');
   }, 60_000);
 });
