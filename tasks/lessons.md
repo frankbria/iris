@@ -380,3 +380,10 @@ Write/Edit, not as a pre-push afterthought.
 - An off-box copy of "just today's file" never retries a failed day; copy the whole directory idempotently.
 - Bash reads `08` as octal in `$(( ))`: validate numeric settings with `10#` before the first side effect.
 - Before blaming a change for browser-suite failures in a full run, rerun them alone: these 10 failed under Docker-heavy concurrent work and passed 15/15 alone.
+
+## #275 / PR #448 (2026-10-02)
+- An error-rate alert must only count outcomes the server is responsible for. Client refusals (no session, limits), aborted responses and rate-limited frames either let a tenant page the operator or dilute real errors. Count error / (ok + error).
+- Faults caught and folded into a "success: false" result are invisible to metrics unless tagged. Record the outcome beside the result (a WeakMap) without changing the reply shape.
+- Log volume per tenant needs a bound: throttle repeated refusal lines per connection, with a suppressed count, and keep counting them in metrics.
+- A loopback-only metrics listener inside a container can't be published (Docker forwards to the container's interface): scrape it with `docker exec` rather than weakening the bind.
+- Before reporting full-suite failures, check the load average: these 8 failed at load 7 and passed alone, 82/82.

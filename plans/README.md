@@ -137,7 +137,7 @@ code is the ordering key.
 | `P0.44` | [#347](https://github.com/frankbria/iris/issues/347) | TLS ingress and reverse proxy | P0.24 (#341) | DONE (PR #437) |
 | `P0.45` | [#273](https://github.com/frankbria/iris/issues/273) | Production environment and deploy pipeline | P0.20 (#248), P0.44 (#347) | DONE (PR #439) |
 | `P0.46` | [#274](https://github.com/frankbria/iris/issues/274) | Backups and restore drill for Postgres and object storage | P0.45 (#273) | DONE (PR #446; bucket half split to #445) |
-| `P0.47` | [#275](https://github.com/frankbria/iris/issues/275) | Observability: structured logs, metrics, alerting | P0.45 (#273) | TODO |
+| `P0.47` | [#275](https://github.com/frankbria/iris/issues/275) | Observability: structured logs, metrics, alerting | P0.45 (#273) | DONE (PR #448) |
 
 **K. Legal, trust & data lifecycle**
 
