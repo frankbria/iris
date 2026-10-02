@@ -173,9 +173,12 @@ describe('migrate process against a server that never answers', () => {
     await admin(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
   });
 
-  it('applies the initial migration to an empty database', async () => {
+  it('applies every migration, in order, to an empty database', async () => {
     const results = await migrateToLatest(db);
-    expect(results.map((r) => [r.migrationName, r.status])).toEqual([['0001_initial', 'Success']]);
+    expect(results.map((r) => [r.migrationName, r.status])).toEqual([
+      ['0001_initial', 'Success'],
+      ['0002_history', 'Success'],
+    ]);
 
     const tables = await sql<{ table_name: string }>`
       select table_name from information_schema.tables
@@ -197,7 +200,7 @@ describe('migrate process against a server that never answers', () => {
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('1');
+    expect(applied.rows[0].n).toBe('2');
   });
 
   it('gives every IRIS table org_id NOT NULL and an index that leads with it', async () => {

@@ -80,7 +80,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
@@ -88,6 +88,7 @@ src/
 ├── egress-proxy.ts        # Hosted: resolve-and-pin HTTP/CONNECT proxy under all Chromium traffic (#336)
 ├── report-encoding.ts     # One encoder per report format: HTML, XML (JUnit), Markdown, safe hrefs (#339)
 ├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
+├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
 └── config.ts              # Configuration types and validation
 
 __tests__/
@@ -111,6 +112,7 @@ __tests__/
 ├── protocol-auth.test.ts          # RPC upgrade auth seam: 401/503, pending upgrades vs cap, org-scoped status, revocation re-check (#341)
 ├── api-key-auth.test.ts           # Real Postgres + spawned hosted `iris connect`: real keys, revoked/disabled 401, startup refusals (#341)
 ├── db/postgres.test.ts            # Real Postgres: migrate, idempotency, org_id catalog check, BetterAuth round trip (#248)
+├── db/history-store.test.ts       # Real Postgres: runs per org, cross-org list/get empty, same-org key FK, no typed values (#254)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
 │   ├── capture.test.ts
@@ -586,7 +588,7 @@ Under `IRIS_HOSTED`, `iris connect` authenticates **org API keys**
 (`Authorization: Bearer iris_…`) through `startServer({ authenticate })`, and the shared
 `IRIS_CONNECT_TOKEN(_FILE)` is refused at startup (exit 2), not ignored. Missing
 `BETTER_AUTH_SECRET` / `BETTER_AUTH_URL` / `DATABASE_URL(_FILE)` exits 3.
-`hostedAuthenticator()` (src/api-key-auth.ts) builds the shared `createAuth()` over
+`hostedServices()` (src/api-key-auth.ts) builds the shared `createAuth()` over
 Kysely and calls `verifyApiKey`; the key's `referenceId` is the org.
 
 - **`verifyApiKey` cannot tell a backend failure from a bad key.** The plugin catches
@@ -643,6 +645,32 @@ They apply only to connections with a principal; local mode is untouched.
   `IRIS_HOSTED=1` with a token or no auth. `iris connect` is the enforcing caller.
 - Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`
   (real Postgres, spawned hosted `iris connect`, keys made through BetterAuth).
+
+### Run History Store (issue #254)
+
+`src/history-store.ts` puts run history behind one seam. `RunInput` is what the
+code that ran it has: a `VisualTestResult`, an `AccessibilityTestResult`, or an
+`executeBrowserAction` request's `ExecutionResult[]`. Each store maps it to its own
+tables.
+
+- **Hosted: `postgresHistory(db).forOrg({ orgId, apiKeyId })` is the only way in**,
+  and every query filters by that org. No read path exists without a tenant. `get`
+  of another org's run id returns `null`, as does a non-uuid id (checked before
+  Postgres rejects the cast). Records are one transaction (run plus its results).
+- **`runs.api_key_id` has a same-org FK** (migration 0002): `(org_id, api_key_id)`
+  references `apikey ("referenceId", id)`, `on delete set null (api_key_id)`, so a
+  run cannot name another org's key, and revoking a key keeps its runs.
+- **Hosted RPC records each `executeBrowserAction`** (`startServer({ history })`,
+  wired by `hostedServices()` over the auth pool). An action is stored as
+  `describeAction()`, which never includes what a `fill` typed. Errors are cut to
+  500 characters. A failed write is logged, and the request still succeeds. Local
+  (token) connections record nothing.
+- **Local: `sqliteHistoryStore(path)`** over the #77 tables. `test_results` has no kind
+  column, so a run's kind is its summary prefix (`visual:`, `a11y:`, `rpc:`); rows
+  `iris run` / `iris watch` write are not runs of the store. It lists by insertion
+  order, because SQLite's `created_at` has one-second resolution.
+- Hosted CLI `a11y` / `visual` are not tenant surfaces. Hosted a11y/visual runs arrive
+  with the job APIs (#267/#268), which call the same store.
 
 ### Browser Session Lifecycle (issue #240)
 
