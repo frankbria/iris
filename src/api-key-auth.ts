@@ -118,6 +118,7 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   authenticate: Authenticator;
   history: PostgresHistory;
   aiCredentials: (principal: Principal) => Promise<AICredentials | null>;
+  usage: ReturnType<typeof import('./billing/usage').usageLedger>;
 }> {
   const missing = ['BETTER_AUTH_SECRET', 'BETTER_AUTH_URL'].filter((name) => !env[name]);
   if (missing.length) throw new Error(`Hosted mode needs ${missing.join(' and ')}`);
@@ -151,10 +152,13 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   const { postgresHistory } = await import('./history-store');
   const { providerKeyStore } = await import('./byok/store');
   const providerKeys = providerKeyStore(db, keyring);
+  const { usageLedger } = await import('./billing/usage');
   return {
     authenticate: apiKeyAuthenticator(auth, postgresKeyStore(db)),
     history: postgresHistory(db),
     // BYOK (#344): a tenant's AI runs on the key its org stored, or not at all (#258).
     aiCredentials: (principal) => providerKeys.credentialsFor(principal.orgId),
+    // Billable usage of tenant sessions and AI calls (#263).
+    usage: usageLedger(db),
   };
 }

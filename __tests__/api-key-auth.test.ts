@@ -418,6 +418,27 @@ const PASSWORD = 'correct-horse-battery-staple';
     // Org B stored none: no AI, and nothing reaches the vendor, operator key or not.
     expect((await ask(r.b.key)).reasoning).toMatch(/no AI credentials/i);
     expect(vendorKeys).toEqual([tenantKey]);
+
+    // Billable usage (#263): A's call on its own key, and A's browser minutes.
+    const client = new Client({ connectionString: dbUrl });
+    await client.connect();
+    try {
+      const { rows } = await client.query(
+        `select org_id, kind, billing_mode, quantity::float as q, unit_cost_usd::float as cost
+         from usage_events order by kind, org_id`,
+      );
+      const text = rows.filter((x) => x.kind === 'text_call');
+      expect(text).toEqual([
+        { org_id: r.A, kind: 'text_call', billing_mode: 'byok', q: 1, cost: expect.any(Number) },
+      ]);
+      expect(text[0].cost).toBeGreaterThan(0);
+      const minutes = rows.filter((x) => x.kind === 'browser_minutes');
+      // B's instruction ran no action, so no browser ever started: no minutes for B.
+      expect(minutes.map((x) => x.org_id)).toEqual([r.A]);
+      expect(minutes.every((x) => x.billing_mode === null && x.q > 0)).toBe(true);
+    } finally {
+      await client.end();
+    }
   }, 60_000);
 
   test("records each executeBrowserAction as a run of the key's org (#254)", async () => {

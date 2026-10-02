@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { SettledAICall } from './factory';
 import * as path from 'path';
 import { DEFAULT_BUDGET_LIMITS, IrisConfig, ProviderCredentials, resolveBudget } from '../config';
 import { resolveDataDir } from '../data-dir';
@@ -48,6 +49,12 @@ export interface SmartClientConfig {
   orgId?: string;
 
   /**
+   * Told about each vision call the provider billed, for the usage ledger (#263).
+   * Not called for cache hits. A failing report is logged, not thrown.
+   */
+  onUsage?: (call: SettledAICall) => void | Promise<void>;
+
+  /**
    * Cache configuration
    */
   cacheConfig?: {
@@ -67,10 +74,11 @@ export interface SmartClientConfig {
 }
 
 type ResolvedConfig = Required<
-  Omit<SmartClientConfig, 'cacheConfig' | 'costConfig' | 'enableFallback' | 'orgId'>
+  Omit<SmartClientConfig, 'cacheConfig' | 'costConfig' | 'enableFallback' | 'orgId' | 'onUsage'>
 > & {
   enableFallback?: boolean;
   orgId?: string;
+  onUsage?: SmartClientConfig['onUsage'];
   cacheConfig: { maxMemoryEntries: number; ttlMs: number; dbPath: string };
   costConfig: { dbPath: string; dailyLimit: number; monthlyLimit: number };
 };
@@ -293,7 +301,22 @@ export class SmartAIVisionClient {
       // From here on the call is paid for and answered. Nothing below may send
       // it to the next vendor, which would pay for the same answer twice.
       if (reservation !== undefined) {
-        this.costTracker!.settle(reservation, result.usage);
+        const costUsd = this.costTracker!.settle(reservation, result.usage);
+        try {
+          await this.config.onUsage?.({
+            operation: 'vision-analysis',
+            provider: providerName,
+            model,
+            costUsd,
+            estimated: this.costTracker!.priceIsEstimated(providerName, model),
+          });
+        } catch (error) {
+          // The call was made and paid for; its cost is on the budget ledger already.
+          console.error(
+            '[iris] failed to record AI usage:',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
       }
 
       if (this.cache && cacheKey) {

@@ -633,6 +633,7 @@ program
     // ignored: whoever set it expects it to be what guards the server.
     let authenticate: import('./protocol').Authenticator | undefined;
     let history: import('./history-store').PostgresHistory | undefined;
+    let usage: ReturnType<typeof import('./billing/usage').usageLedger> | undefined;
     let aiCredentials:
       | ((
           p: import('./protocol').Principal,
@@ -648,7 +649,7 @@ program
       }
       try {
         const { hostedServices } = await import('./api-key-auth');
-        ({ authenticate, history, aiCredentials } = await hostedServices());
+        ({ authenticate, history, aiCredentials, usage } = await hostedServices());
       } catch (err) {
         console.error(`Cannot start in hosted mode: ${(err as Error).message}`);
         process.exit(3); // Environment/runtime error
@@ -695,7 +696,7 @@ program
     const wss = startServer(
       port,
       authenticate
-        ? { host, authenticate, history, aiCredentials, limits }
+        ? { host, authenticate, history, aiCredentials, usage, limits }
         : { host, authToken, limits },
     );
     // Wait for the bind before claiming it. `listen` fails asynchronously, so

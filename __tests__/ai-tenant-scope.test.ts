@@ -245,6 +245,30 @@ describe('SmartAIVisionClient scoped to an org', () => {
     }
   });
 
+  it('reports each billed vision call for the usage ledger, but not a cache hit (#263)', async () => {
+    const calls: Array<{ operation: string; costUsd: number; estimated: boolean }> = [];
+    const smart = createSmartClient(config, {
+      orgId: 'org-a',
+      cacheConfig: { dbPath: path.join(dir(), 'cache.db') },
+      costConfig: { dbPath: ledger(), dailyLimit: 100, monthlyLimit: 100 },
+      onUsage: (call) => void calls.push(call),
+    });
+    try {
+      await smart.analyzeVisualDiff(request);
+      await smart.analyzeVisualDiff(request); // served from the cache
+    } finally {
+      smart.close();
+    }
+    expect(calls).toEqual([
+      expect.objectContaining({
+        operation: 'vision-analysis',
+        provider: 'openai',
+        estimated: false,
+      }),
+    ]);
+    expect(calls[0].costUsd).toBeGreaterThan(0);
+  });
+
   it("charges the org that asked, and reports only this client's run in its stats", async () => {
     const a1 = client('org-a');
     const a2 = client('org-a');

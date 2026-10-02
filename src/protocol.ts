@@ -1,6 +1,6 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import { IncomingMessage } from 'http';
-import { timingSafeEqual } from 'crypto';
+import { randomUUID, timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { translateSync, translate, Action, ActionSchema } from './translator';
 import {
@@ -13,6 +13,8 @@ import { chromiumIsInstalled } from './browser';
 import { Page } from 'playwright';
 import type { HistoryStore, TenantScope } from './history-store';
 import type { AICredentials } from './ai-client/credentials';
+import type { UsageEvent } from './billing/usage';
+import type { SettledAICall } from './ai-client/factory';
 
 export interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -89,6 +91,12 @@ export interface BrowserSession {
   busy: number;
   /** The tenant whose key opened the connection (#341); unset under the shared token. */
   principal?: Principal;
+  /** Names the session's usage row, so it is recorded once (#263). */
+  id: string;
+  /** When its first page was created: browser minutes count from here (#263). */
+  browserStartedAt?: number;
+  /** Called once, when the session ends, whichever path ends it. */
+  onEnd?: (session: BrowserSession) => void;
 }
 
 /** Who a connection acts for: the org that owns its API key, and the key (#341). */
@@ -269,6 +277,11 @@ export function startServer(
      * (ADR 0001 §5). Local (token) connections keep the process configuration.
      */
     aiCredentials?: (principal: Principal) => Promise<AICredentials | null>;
+    /**
+     * The usage ledger (#263): a tenant session's browser minutes when it ends, and
+     * each AI call its translations make. Local connections record nothing.
+     */
+    usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
     limits?: Partial<ServerLimits>;
   },
@@ -341,6 +354,23 @@ export function startServer(
   const tenants = new Map<WebSocket, Principal>();
   const keyRate = new RateBuckets(limits.keyRequestsPerMinute);
   const orgRate = new RateBuckets(limits.orgRequestsPerMinute);
+  /**
+   * A tenant session's browser minutes, recorded when it ends (#263): from its first
+   * page to the end, and only if a browser ever started. A failed write is logged.
+   */
+  const meterMinutes =
+    (principal: Principal) =>
+    (session: BrowserSession): void => {
+      if (!options?.usage || !session.browserStartedAt) return;
+      const minutes = Math.round(((Date.now() - session.browserStartedAt) / 60_000) * 1e4) / 1e4;
+      options.usage
+        .record(principal.orgId, [
+          { kind: 'browser_minutes', quantity: minutes, idempotencyKey: `session:${session.id}` },
+        ])
+        .catch((err: unknown) =>
+          console.error('[iris] failed to record browser minutes:', (err as Error).message),
+        );
+    };
   const sessions = new Map<WebSocket, BrowserSession>();
   const sessionTimeout = options?.sessionTimeout || 30 * 60 * 1000; // 30 minutes default
   /** Server start, so `getStatus` can report real uptime rather than a constant (issue #80). */
@@ -550,7 +580,14 @@ export function startServer(
                   message: `Session limit reached (${limits.maxSessions}); try again later`,
                 };
               }
-              sessions.set(ws, createBrowserSession(launchOptions, principal));
+              sessions.set(
+                ws,
+                createBrowserSession(
+                  launchOptions,
+                  principal,
+                  principal && meterMinutes(principal),
+                ),
+              );
               return {
                 success: true,
                 // Says what happened. This used to claim "Browser launched
@@ -621,7 +658,7 @@ export function startServer(
                 actions,
                 url,
                 limits.maxActionsPerRequest,
-                options?.aiCredentials,
+                { aiCredentials: options?.aiCredentials, usage: options?.usage },
               );
             });
             if (principal && options?.history) {
@@ -803,6 +840,7 @@ function clampLaunchOptions(
 function createBrowserSession(
   browserOptions?: ActionExecutorOptions,
   principal?: Principal,
+  onEnd?: (session: BrowserSession) => void,
 ): BrowserSession {
   const executor = new ActionExecutor(browserOptions);
 
@@ -814,6 +852,8 @@ function createBrowserSession(
     lastActivity: Date.now(),
     busy: 0,
     principal,
+    id: randomUUID(),
+    onEnd,
   };
 
   return session;
@@ -828,7 +868,10 @@ async function executeBrowserActions(
   actions: Action[] | undefined,
   url: string | undefined,
   maxActions: number,
-  aiCredentials?: (principal: Principal) => Promise<AICredentials | null>,
+  tenant: {
+    aiCredentials?: (principal: Principal) => Promise<AICredentials | null>;
+    usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
+  } = {},
 ): Promise<{
   success: boolean;
   results: ExecutionResult[];
@@ -857,10 +900,24 @@ async function executeBrowserActions(
               orgId: principal.orgId,
               // Lazy: asked only if patterns do not match. A failed lookup is no AI
               // for this request; its message stays in the server log, not the reply.
+              // Each billed call goes to the usage ledger, on the org's own key (#263).
+              ...(tenant.usage && {
+                onUsage: (call: SettledAICall) =>
+                  tenant.usage!.record(principal.orgId, [
+                    {
+                      kind: call.operation === 'agent_turn' ? 'agent_turn' : 'text_call',
+                      quantity: 1,
+                      unitCostUsd: call.costUsd,
+                      estimated: call.estimated,
+                      billingMode: 'byok',
+                      idempotencyKey: `${call.operation}:${randomUUID()}`,
+                    },
+                  ]),
+              }),
               credentials: async () => {
-                if (!aiCredentials) return null;
+                if (!tenant.aiCredentials) return null;
                 try {
-                  return await aiCredentials(principal);
+                  return await tenant.aiCredentials(principal);
                 } catch (err) {
                   console.error(
                     '[iris] AI credentials lookup failed; translating without AI:',
@@ -923,6 +980,7 @@ async function executeBrowserActions(
         });
       }
       session.page = await session.pageCreationPromise;
+      session.browserStartedAt ??= Date.now();
       // Closed while the browser was starting: cleanup found no browser to
       // close yet, so close the one that just arrived.
       if (!session.isActive) {
@@ -997,6 +1055,8 @@ async function cleanupSession(
 ): Promise<void> {
   const session = sessions.get(ws);
   if (session) {
+    // The first cleanup ends the session; a second (close after error) does not.
+    if (session.isActive) session.onEnd?.(session);
     // Before the await: an action already holding this session checks the flag
     // before it creates a page, and must see it at once.
     session.isActive = false;
