@@ -345,3 +345,97 @@ describe('runWorker', () => {
     await done;
   });
 });
+
+describe('worker logs and metrics (#275)', () => {
+  const job = {
+    id: 'j-obs',
+    orgId: 'org-o',
+    apiKeyId: null,
+    kind: 'a11y',
+    startedAt: new Date(),
+    claimToken: 't',
+    attempts: 2,
+    params: { urls: ['https://a.example/'], wcagLevel: 'AA', failOn: [] },
+  };
+  afterEach(() => {
+    delete process.env.IRIS_LOG_LEVEL;
+    jest.dontMock('../src/a11y/a11y-runner');
+  });
+
+  /** A fresh registry with a runner that succeeds, or throws `fails`. */
+  async function load(fails?: string) {
+    jest.resetModules();
+    jest.doMock('../src/a11y/a11y-runner', () => ({
+      AccessibilityRunner: class {
+        async run() {
+          if (fails) throw new Error(fails);
+          return { summary: {}, results: [] };
+        }
+      },
+    }));
+    const worker = await import('../src/worker');
+    const { metrics } = await import('../src/metrics');
+    return { ...worker, metrics };
+  }
+
+  const jobsWith = (over: Record<string, unknown> = {}) => ({
+    claim: async () => job as never,
+    finish: async () => true,
+    fail: async () => true,
+    heartbeat: async () => true,
+    reapStuck: async () => ({ requeued: 0, failed: 0 }),
+    ...over,
+  });
+
+  it('logs claim and outcome with latency and attempts, and counts each outcome', async () => {
+    process.env.IRIS_LOG_LEVEL = 'info';
+    const { processNextA11yJob, metrics } = await load();
+    const out = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    await processNextA11yJob(jobsWith());
+    await processNextA11yJob(jobsWith({ finish: async () => false })); // reaped meanwhile
+    const lines = out.mock.calls.map((c) => String(c[0]));
+    out.mockRestore();
+    expect(lines[0]).toMatch(/^\[iris\] job claimed jobId=j-obs orgId=org-o kind=a11y attempts=2$/);
+    expect(lines[1]).toMatch(/^\[iris\] job finished jobId=j-obs .*latencyMs=\d+$/);
+    expect(lines.some((l) => /job lost/.test(l))).toBe(true);
+    const text = metrics.render();
+    expect(text).toMatch(/^iris_jobs_total\{kind="a11y",outcome="finished"\} 1$/m);
+    expect(text).toMatch(/^iris_jobs_total\{kind="a11y",outcome="lost"\} 1$/m);
+    expect(text).toMatch(/^iris_job_duration_seconds_count\{kind="a11y"\} 2$/m);
+  });
+
+  it('counts a job that could not run as error, and logs its reason', async () => {
+    const { processNextA11yJob, metrics } = await load('net::ERR_NAME_NOT_RESOLVED');
+    const out = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    await processNextA11yJob(jobsWith());
+    const text = out.mock.calls.flat().join('\n');
+    out.mockRestore();
+    expect(text).toMatch(/job error jobId=j-obs .*err=net::ERR_NAME_NOT_RESOLVED/);
+    expect(metrics.render()).toMatch(/^iris_jobs_total\{kind="a11y",outcome="error"\} 1$/m);
+  });
+
+  it('samples the queue depth each tick and counts reaped jobs', async () => {
+    const { runWorker, metrics } = await load();
+    const controller = new AbortController();
+    const out = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    let ticks = 0;
+    await runWorker({
+      signal: controller.signal,
+      pollMs: 1,
+      jobs: jobsWith({
+        claim: async () => {
+          if (++ticks === 2) controller.abort();
+          return null;
+        },
+        reapStuck: async () =>
+          ticks === 0 ? { requeued: 2, failed: 1 } : { requeued: 0, failed: 0 },
+        queueDepth: async () => 7 + ticks,
+      }),
+    });
+    out.mockRestore();
+    const text = metrics.render();
+    expect(text).toMatch(/^iris_job_queue_depth 8$/m); // the second tick's sample
+    expect(text).toMatch(/^iris_jobs_reaped_total\{result="requeued"\} 2$/m);
+    expect(text).toMatch(/^iris_jobs_reaped_total\{result="failed"\} 1$/m);
+  });
+});

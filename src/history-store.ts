@@ -366,6 +366,8 @@ export interface PostgresJobs {
    * heartbeat (claimed before migration 0005) is judged by its start time.
    */
   reapStuck(options?: { staleMs?: number; maxAttempts?: number }): Promise<ReapResult>;
+  /** Queued jobs of a kind, across orgs: the worker's queue-depth metric (#275). */
+  queueDepth(kind: 'a11y'): Promise<number>;
 }
 
 export interface ReapResult {
@@ -514,6 +516,13 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
         where id = ${job.id} and org_id = ${job.orgId} and status = 'running'
               and claim_token = ${job.claimToken}`.execute(db);
       return Boolean(updated.numAffectedRows);
+    },
+
+    async queueDepth(kind) {
+      // Served by runs_claim_idx (kind, status, created_at).
+      const { rows } = await sql<{ n: string }>`
+        select count(*) as n from runs where kind = ${kind} and status = 'queued'`.execute(db);
+      return Number(rows[0].n);
     },
 
     // staleMs: the worker passes its DEFAULT_STALE_MS (src/worker.ts); this default matches it.
