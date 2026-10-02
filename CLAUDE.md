@@ -1174,7 +1174,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1856/1857 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 1889/1890 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

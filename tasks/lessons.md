@@ -358,3 +358,11 @@ Write/Edit, not as a pre-push afterthought.
 - A TLS-version test can pass because of the client's or the image's OpenSSL defaults, not the config. Test a setting only the config line can decide (a non-forward-secret cipher), and mutation-check it.
 - nginx `add_header` and `proxy_set_header` are inherited only by locations that set none of their own: repeat the full set or keep it at server level, and test every location.
 - Showboat waits for every child holding its pipes: start long-running services outside `showboat exec` and record only the checks.
+
+## #273 / PR #439 (2026-10-02)
+- A deploy pointer (`current`) must move only after the new release is healthy, not before the health wait: a deploy cut off mid-way otherwise loses its rollback target. Test it by killing the script during the health wait.
+- When a test waits for "the new container", filter out compose's one-off `run` containers (`com.docker.compose.oneoff=False`). The migration's `run` container matched first, so the kill landed early and the test passed without the fix.
+- `--no-recreate` on a database service protects it from a floating tag. Once the image is pinned by digest, the same flag silently blocks deliberate upgrades. Revisit a guard when the thing it guarded against goes away.
+- A rollback to an older release meets a schema it doesn't know: the Kysely Migrator refuses ("corrupted migrations") unless the runner treats "schema ahead, nothing pending" as a no-op.
+- Killing a Jest run mid-suite skips its `afterAll`: clean up the test's Docker containers, networks and volumes by hand.
+- This repo's Jest config prints no per-test lines even with `--verbose`; for demo evidence, use `--json --outputFile` and print the titles.
