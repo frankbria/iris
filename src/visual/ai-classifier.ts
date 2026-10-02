@@ -42,6 +42,11 @@ export interface AIProviderConfig {
   credentials?: ProviderCredentials;
   /** Try other vendors when `provider` fails. Off by default (#245). */
   fallback?: boolean;
+  /**
+   * Hosted: the org the analysis is for (#255). Its cache entries, ledger rows and
+   * budget are that org's. The hosted visual job API (#268) must set it.
+   */
+  orgId?: string;
 }
 
 /**
@@ -137,6 +142,7 @@ export class AIVisualClassifier {
     const smartConfig: SmartClientConfig = {
       enableCache: true,
       enableCostTracking: true,
+      orgId: config.orgId,
     };
 
     this.smartClient = new SmartAIVisionClient(this.irisConfig, smartConfig);

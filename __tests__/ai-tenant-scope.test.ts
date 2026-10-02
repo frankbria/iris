@@ -17,6 +17,7 @@ import { createSmartClient, SmartAIVisionClient } from '../src/ai-client';
 import { AIClientFactory } from '../src/ai-client/factory';
 import { ImagePreprocessor } from '../src/ai-client/preprocessor';
 import { resolveDataDir } from '../src/data-dir';
+import { AIVisualClassifier } from '../src/visual/ai-classifier';
 import type { IrisConfig } from '../src/config';
 
 const dir = () => path.join(resolveDataDir(), 'tenant-scope');
@@ -214,6 +215,33 @@ describe('SmartAIVisionClient scoped to an org', () => {
     } finally {
       a.close();
       b.close();
+    }
+  });
+
+  it('the visual classifier passes its org through (the path #268 will use)', async () => {
+    const defaultLedger = path.join(resolveDataDir(), 'cache', 'cost-tracking.db');
+    fs.rmSync(defaultLedger, { force: true });
+    const classifier = new AIVisualClassifier({
+      provider: 'openai',
+      apiKey: 'sk-test',
+      model: 'gpt-4o',
+      orgId: 'org-a',
+    });
+    try {
+      await classifier.analyzeChange({
+        baselineImage: Buffer.from('b1'),
+        currentImage: Buffer.from('c1'),
+      });
+    } finally {
+      classifier.close();
+    }
+    const db = new Database(defaultLedger, { readonly: true });
+    try {
+      expect(db.prepare('SELECT DISTINCT org_id FROM cost_tracking').all()).toEqual([
+        { org_id: 'org-a' },
+      ]);
+    } finally {
+      db.close();
     }
   });
 
