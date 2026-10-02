@@ -88,6 +88,8 @@ src/
 ├── egress-proxy.ts        # Hosted: resolve-and-pin HTTP/CONNECT proxy under all Chromium traffic (#336)
 ├── report-encoding.ts     # One encoder per report format: HTML, XML (JUnit), Markdown, safe hrefs (#339)
 ├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
+├── jobs-api.ts            # Hosted job REST: POST /v1/a11y/jobs, GET /v1/jobs/:id on the RPC listener (#267)
+├── worker.ts              # `iris worker`: claims queued a11y jobs, runs the hardened runner, stores the result (#267)
 ├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
 └── config.ts              # Configuration types and validation
 
@@ -111,6 +113,10 @@ __tests__/
 ├── auth-config.test.ts            # Spawned Node loads src/auth/config via require(esm); Jest's sandbox can't (#247)
 ├── auth-org.test.ts               # Real Postgres: personal org on sign-in, invitations, roles, org A cannot read org B (#250)
 ├── auth-apikey.test.ts            # Real Postgres: org-owned keys hashed, roles, org A cannot touch org B's keys, verify, revoke (#340)
+├── api-jobs.test.ts               # Job REST over real sockets: 401/503/400/413/404/405/429, org isolation, WS upgrade intact (#267)
+├── hosted-a11y-job.test.ts        # Real Postgres + Chromium, IRIS_HOSTED=1: HTTP submit -> worker -> HTTP result, usage row, refusals (#267)
+├── worker-cli.test.ts             # `iris worker` refuses outside hosted mode (exit 2) / without a database (3) (#267)
+├── db/jobs.test.ts                # Real Postgres: enqueue/claim (SKIP LOCKED)/finish in one tx/fail, org isolation (#267)
 ├── protocol-auth.test.ts          # RPC upgrade auth seam: 401/503, pending upgrades vs cap, org-scoped status, revocation re-check (#341)
 ├── api-key-auth.test.ts           # Real Postgres + spawned hosted `iris connect`: real keys, revoked/disabled 401, startup refusals (#341)
 ├── db/postgres.test.ts            # Real Postgres: migrate, idempotency, org_id catalog check, BetterAuth round trip (#248)
@@ -681,6 +687,50 @@ They apply only to connections with a principal; local mode is untouched.
   logged (`returning`), so a reused key cannot hide an event silently.
 - **Writers not yet wired**: vision calls and jobs come with #268/#267 (the hooks
   exist); agent turns come with #428 (the agent loop is CLI-only).
+
+### Hosted Job API (issue #267)
+
+`iris connect` (hosted) serves REST beside the WebSocket; `iris worker` runs what it
+queues. Queue = the `runs` table (migration 0004: `params jsonb`, `error text`, claim
+index), no broker (ADR 0001 §1).
+
+- **One `http.Server`**, handed to `WebSocketServer({ server })`. ws does not close a
+  listener it was given, so `startServer` wraps `wss.close`: it stops listening the
+  moment `close()` is called (REST must not keep queuing jobs during shutdown, while a
+  WS client lingers) and calls back after both ws and the listener have closed. Plain
+  HTTP gets 426 as before unless `jobs` is set (which requires `authenticate`).
+- **REST verification shares the upgrades' `verifying` count** (`admit()`): past
+  `maxConnections` pending verifications a REST request gets 503 + `Retry-After: 1`
+  without calling `verify`, so a bad-key flood cannot pile onto the auth pool. Only pending
+  verifications count, not idle WS sockets.
+- **`maxQueuedJobsPerOrg`** (default 10; queued + running): `enqueue` counts and inserts in
+  one transaction under `pg_advisory_xact_lock(hashtext(org_id))`; over it, 429 `Too many
+  queued jobs`. Without it one org could fill the global FIFO.
+- **Same key auth and rate buckets as RPC.** REST charges the key and org buckets (429
+  with `Retry-After`); a 401 or 503 is answered before anything is charged. No CORS.
+- **A URL with credentials (`user:pw@`) is a 400.** Params and results are readable by the
+  whole org, so basic-auth pages cannot be scanned through the API.
+- **`postgresJobs(db)`** (src/history-store.ts): `forOrg(scope)` gives the API
+  `enqueue` / `get`; `claim` / `finish` / `fail` are worker-only and cross-tenant.
+  `claim` is `UPDATE ... WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1)`.
+  `finish` writes status, summary, results and the `a11y_job` usage (`job:<id>`, no
+  billing mode) in one transaction, and only for a job still `running`.
+- **Status is the run's verdict**, as for `record()`: a scan that breaches `failOn`
+  is `failed` with `results` and no `error`. A job that could not run is `failed` with
+  `error` (bounded, userinfo stripped) and no results, and **no usage**.
+- **History lists finished runs only** (`finished_at is not null`); a queued or running
+  job is visible through `jobs.get` alone.
+- **The worker needs hosted mode** (exit 2 without `IRIS_HOSTED`): the runner's
+  `urlPolicy` default and the egress proxy are what keep tenant URLs off internal hosts.
+  A page that fails navigation fails the whole job (one error, not per page). Jobs set
+  `failOnHttpError`: the egress proxy answers a plain-HTTP request to an internal address
+  with a 403 *document*, which would otherwise be scanned and billed as a success.
+  A result that cannot be stored is recorded as a generic error; the detail is logged.
+- **A job left `running` by a crashed worker stays `running`** until a reaper exists
+  (follow-up). Polling, not LISTEN/NOTIFY.
+- **Tests**: set `process.env.IRIS_HOSTED = '1'` at the top of the file and start
+  `hostedEgressProxy({ lookup, connect })` before the first launch; no isolateModules is
+  needed, because the worker loads the runner lazily.
 
 ### BYOK Provider Keys (issue #344)
 

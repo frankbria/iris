@@ -67,6 +67,13 @@ export interface AccessibilityRunnerConfig {
    * are model-supplied and may be derived from untrusted page content.
    */
   urlPolicy?: UrlPolicyOptions;
+  /**
+   * Fail a page whose final navigation answers HTTP 400 or above, instead of scanning
+   * the error page (hosted jobs: the egress proxy refuses a plain-HTTP request to an
+   * internal address with a 403, which is a document to the browser and would be
+   * scanned, recorded and billed as a success).
+   */
+  failOnHttpError?: boolean;
 }
 
 export interface AccessibilityTestResult {
@@ -241,7 +248,18 @@ export class AccessibilityRunner {
       // Report where it LANDED, not where it was pointed: a scan of `http://host/`
       // that redirects to `/login` measured `/login`, and labelling that result
       // with the original URL would misattribute every violation on it.
+      let status = 0;
+      if (this.config.failOnHttpError) {
+        page.on('response', (r) => {
+          if (r.request().isNavigationRequest() && r.frame() === page.mainFrame()) {
+            status = r.status();
+          }
+        });
+      }
       const scannedUrl = await guardedGoto(page, url, { waitUntil: 'networkidle' });
+      if (this.config.failOnHttpError && status >= 400) {
+        throw new Error(`${pagePattern} answered HTTP ${status}`);
+      }
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
 

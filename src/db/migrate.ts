@@ -3,6 +3,7 @@ import { type MigrationResult, Migrator } from 'kysely/migration';
 import * as initial from './migrations/0001_initial';
 import * as history from './migrations/0002_history';
 import * as usage from './migrations/0003_usage';
+import * as jobs from './migrations/0004_jobs';
 import { createPostgresDb, resolveDatabaseUrl } from './postgres';
 
 /**
@@ -10,7 +11,12 @@ import { createPostgresDb, resolveDatabaseUrl } from './postgres';
  * name a new one `NNNN_<what>` and add it here. A static map rather than a
  * directory scan: it resolves the same under ts-node, `dist/` and the image.
  */
-const MIGRATIONS = { '0001_initial': initial, '0002_history': history, '0003_usage': usage };
+const MIGRATIONS = {
+  '0001_initial': initial,
+  '0002_history': history,
+  '0003_usage': usage,
+  '0004_jobs': jobs,
+};
 
 /**
  * Applies every pending migration (ADR 0001 §2, #248). Idempotent: applied names

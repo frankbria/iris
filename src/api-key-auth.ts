@@ -1,6 +1,6 @@
 import { sql, type Kysely } from 'kysely';
 import type { AICredentials } from './ai-client/credentials';
-import type { PostgresHistory } from './history-store';
+import type { PostgresHistory, PostgresJobs } from './history-store';
 import type { Authenticator, Principal } from './protocol';
 
 /** The slice of a BetterAuth instance (`createAuth()`) this module uses. */
@@ -119,6 +119,7 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   history: PostgresHistory;
   aiCredentials: (principal: Principal) => Promise<AICredentials | null>;
   usage: ReturnType<typeof import('./billing/usage').usageLedger>;
+  jobs: PostgresJobs;
 }> {
   const missing = ['BETTER_AUTH_SECRET', 'BETTER_AUTH_URL'].filter((name) => !env[name]);
   if (missing.length) throw new Error(`Hosted mode needs ${missing.join(' and ')}`);
@@ -149,7 +150,7 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
     throw new Error(`Cannot reach the database: ${(err as Error).message}`);
   }
   // Run history and the orgs' own AI keys share the pool, and its query timeout.
-  const { postgresHistory } = await import('./history-store');
+  const { postgresHistory, postgresJobs } = await import('./history-store');
   const { providerKeyStore } = await import('./byok/store');
   const providerKeys = providerKeyStore(db, keyring);
   const { usageLedger } = await import('./billing/usage');
@@ -160,5 +161,7 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
     aiCredentials: (principal) => providerKeys.credentialsFor(principal.orgId),
     // Billable usage of tenant sessions and AI calls (#263).
     usage: usageLedger(db),
+    // The job API (#267): `iris worker` runs what it queues.
+    jobs: postgresJobs(db),
   };
 }

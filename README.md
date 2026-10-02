@@ -353,6 +353,25 @@ up to one minute's worth; reconnecting does not reset it. The container healthch
 sends `X-Iris-Probe: 1` from loopback and gets one slot beyond `--max-connections`, so
 a full server reads as busy, not unhealthy.
 
+**Hosted job API.** The same hosted server answers REST on its port, with the same
+`Authorization: Bearer <org API key>` and the same per-key / per-org request limits
+(`429` with `Retry-After`):
+
+```bash
+curl -X POST http://host:8080/v1/a11y/jobs -H "Authorization: Bearer $KEY" \
+  -H 'content-type: application/json' \
+  -d '{"urls":["https://example.com/"],"wcagLevel":"AA","failOn":["critical","serious"]}'
+# 202 {"id":"<uuid>","status":"queued"}
+curl http://host:8080/v1/jobs/<uuid> -H "Authorization: Bearer $KEY"
+# {"status":"queued|running|succeeded|failed", "summary", "results", "error", ...}
+```
+
+Up to 20 http(s) URLs per job; `wcagLevel` is `A`, `AA` (default) or `AAA`. A finished
+job is `failed` with `results` when a violation breaches `failOn`, and `failed` with
+`error` when it could not run (for example an internal URL refused by the hosted
+policy). Another org's job id is `404`. Jobs are run by `iris worker` (hosted mode only,
+same image and `DATABASE_URL` as `iris connect`; SIGTERM stops it after the current job).
+
 Clients may not ask for a visible browser or devtools (`-32602`). Their `timeout`,
 `retryAttempts`, `retryDelay` and `slowMo` are clamped to 120 s, 5, 10 s and 1 s,
 and `launchBrowser` returns the values it will actually use under `options`. A

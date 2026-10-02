@@ -1,5 +1,6 @@
 import WebSocket, { WebSocketServer } from 'ws';
-import { IncomingMessage } from 'http';
+import { createServer, IncomingMessage, STATUS_CODES } from 'http';
+import { handleJobsRequest } from './jobs-api';
 import { randomUUID, timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { translateSync, translate, Action, ActionSchema } from './translator';
@@ -11,7 +12,7 @@ import {
 } from './executor';
 import { chromiumIsInstalled } from './browser';
 import { Page } from 'playwright';
-import type { HistoryStore, TenantScope } from './history-store';
+import type { HistoryStore, OrgJobs, TenantScope } from './history-store';
 import type { AICredentials } from './ai-client/credentials';
 import type { UsageEvent } from './billing/usage';
 import type { SettledAICall } from './ai-client/factory';
@@ -172,6 +173,8 @@ export interface ServerLimits {
   maxSessionsPerOrg: number;
   /** Connections one org may hold; the next upgrade gets HTTP 429. */
   maxConnectionsPerOrg: number;
+  /** Queued + running jobs one org may have (#267); the next submit gets HTTP 429. */
+  maxQueuedJobsPerOrg: number;
 }
 
 /**
@@ -192,6 +195,7 @@ export const DEFAULT_SERVER_LIMITS: Readonly<ServerLimits> = Object.freeze({
   orgRequestsPerMinute: 300,
   maxSessionsPerOrg: 2,
   maxConnectionsPerOrg: 8,
+  maxQueuedJobsPerOrg: 10,
 });
 
 /** JSON-RPC error code for a request refused by a rate limit (#342). */
@@ -293,6 +297,12 @@ export function startServer(
      * month boundary is billed to both months.
      */
     usageCheckpointMs?: number;
+    /**
+     * The hosted job API (#267), served over HTTP on the same port: `POST
+     * /v1/a11y/jobs`, `GET /v1/jobs/:id`. Needs `authenticate`; it shares the key and
+     * org request budgets with the RPC messages. Unset, plain HTTP gets 426 as before.
+     */
+    jobs?: { forOrg(scope: TenantScope): OrgJobs };
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
     limits?: Partial<ServerLimits>;
   },
@@ -301,6 +311,7 @@ export function startServer(
   if (authenticate && options?.authToken) {
     throw new Error('Pass authToken or authenticate, one at a time');
   }
+  if (options?.jobs && !authenticate) throw new Error('The job API needs authenticate');
   const host = options?.host ?? '127.0.0.1';
   const limits: ServerLimits = { ...DEFAULT_SERVER_LIMITS, ...options?.limits };
   const allowedOrigins = options?.allowedOrigins ?? [];
@@ -312,9 +323,48 @@ export function startServer(
   /** Upgrades whose key is still being verified; they count against the connection cap. */
   let verifying = 0;
 
+  // One listener for both: the WebSocket upgrade, and the job REST API (#267).
+  const server = createServer((req, res) => {
+    if (options?.jobs) {
+      void handleJobsRequest(req, res, {
+        authenticate: authenticate!,
+        jobs: options.jobs,
+        maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
+        // REST verifications share the upgrades' `verifying` count, so a bad-key flood
+        // cannot pile onto the auth pool. Only pending ones count here: idle sockets
+        // should not make the API unavailable.
+        admit: () => {
+          if (verifying >= limits.maxConnections) return null;
+          verifying++;
+          return () => {
+            verifying--;
+          };
+        },
+        charge: (principal) => {
+          // Both buckets need a token before either is spent (see the RPC path).
+          const now = performance.now();
+          const wait = Math.max(
+            keyRate.wait(principal.keyId, now),
+            orgRate.wait(principal.orgId, now),
+          );
+          if (wait === 0) {
+            keyRate.take(principal.keyId);
+            orgRate.take(principal.orgId);
+          }
+          return wait;
+        },
+      });
+      return;
+    }
+    // What ws answers a plain HTTP request with when it owns the listener.
+    res.writeHead(426, {
+      'content-type': 'text/plain',
+      'content-length': STATUS_CODES[426]!.length,
+    });
+    res.end(STATUS_CODES[426]);
+  });
   const wss: WebSocketServer = new WebSocketServer({
-    port,
-    host,
+    server,
     maxPayload: limits.maxPayloadBytes,
     // Every check runs before the upgrade completes, so a refused client never
     // holds a socket, a message listener or a connection slot (#338). This used
@@ -771,6 +821,23 @@ export function startServer(
       cleanupSession(ws, sessions);
     });
   });
+
+  server.listen(port, host);
+  // ws does not close a listener it was handed. Stop listening the moment close() is
+  // called (REST must not keep queuing jobs during shutdown), and call back once both
+  // ws (its clients gone) and the listener (its connections gone) have closed.
+  const closeWss = wss.close.bind(wss) as (cb?: (err?: Error) => void) => WebSocketServer;
+  wss.close = ((cb?: (err?: Error) => void) => {
+    let pending = 2;
+    let firstError: Error | undefined;
+    const done = (err?: Error) => {
+      firstError ??= err;
+      if (--pending === 0) cb?.(firstError);
+    };
+    server.close(() => done());
+    server.closeAllConnections();
+    return closeWss(done);
+  }) as typeof wss.close;
 
   wss.on('close', () => {
     clearInterval(cleanupInterval);

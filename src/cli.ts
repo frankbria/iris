@@ -634,6 +634,7 @@ program
     let authenticate: import('./protocol').Authenticator | undefined;
     let history: import('./history-store').PostgresHistory | undefined;
     let usage: ReturnType<typeof import('./billing/usage').usageLedger> | undefined;
+    let jobs: import('./history-store').PostgresJobs | undefined;
     let aiCredentials:
       | ((
           p: import('./protocol').Principal,
@@ -649,7 +650,7 @@ program
       }
       try {
         const { hostedServices } = await import('./api-key-auth');
-        ({ authenticate, history, aiCredentials, usage } = await hostedServices());
+        ({ authenticate, history, aiCredentials, usage, jobs } = await hostedServices());
       } catch (err) {
         console.error(`Cannot start in hosted mode: ${(err as Error).message}`);
         process.exit(3); // Environment/runtime error
@@ -696,7 +697,7 @@ program
     const wss = startServer(
       port,
       authenticate
-        ? { host, authenticate, history, aiCredentials, usage, limits }
+        ? { host, authenticate, history, aiCredentials, usage, jobs, limits }
         : { host, authToken, limits },
     );
     // Wait for the bind before claiming it. `listen` fails asynchronously, so
@@ -748,6 +749,49 @@ program
     };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
+  });
+
+program
+  .command('worker')
+  .description('Run hosted jobs from the queue (hosted mode only, #267)')
+  .option('--poll-ms <ms>', 'Wait between polls of an empty queue', (v) =>
+    parseIntOption(v, { min: 100, max: 60_000, name: 'poll-ms' }),
+  )
+  .action(async (options: { pollMs?: number }) => {
+    const { isHostedMode } = await import('./hosted');
+    // Jobs scan tenant-supplied URLs: without the hosted URL policy and egress proxy
+    // that is an SSRF engine, so a worker outside hosted mode refuses to start.
+    if (!isHostedMode()) {
+      console.error('iris worker runs in hosted mode only: set IRIS_HOSTED=1');
+      process.exit(2); // Invalid usage
+      return;
+    }
+    const { createPostgresDb, resolveDatabaseUrl } = await import('./db/postgres');
+    const { postgresJobs } = await import('./history-store');
+    const { runWorker } = await import('./worker');
+    let db: ReturnType<typeof createPostgresDb>;
+    try {
+      db = createPostgresDb(resolveDatabaseUrl(), { queryTimeoutMs: 5_000 });
+    } catch (err) {
+      console.error(`Cannot start the worker: ${(err as Error).message}`);
+      process.exit(3); // Environment/runtime error
+      return;
+    }
+    // SIGTERM stops the loop after the current job; a second signal ends it now.
+    const stop = new AbortController();
+    const onSignal = () => {
+      if (stop.signal.aborted) process.exit(1);
+      console.log('Stopping after the current job...');
+      stop.abort();
+    };
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
+    console.log('iris worker: waiting for jobs');
+    try {
+      await runWorker({ jobs: postgresJobs(db), signal: stop.signal, pollMs: options.pollMs });
+    } finally {
+      await db.destroy();
+    }
   });
 
 /** Documented default port for a local Ollama daemon. */
