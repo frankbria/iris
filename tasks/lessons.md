@@ -284,3 +284,11 @@ Write/Edit, not as a pre-push afterthought.
 - A native `window.confirm` hangs the whole agent-browser session (even `get url` times out). In a demo, replace `window.confirm` with an eval before the click.
 - Two full local E2E runs failed 4 and 6 specs, mostly in files the diff never touched; `vmstat` showed 24-29% iowait while otherwise idle. The changed spec run on its own, plus CI, settled it in minutes.
 - opencode worked this time on both passes (about 15 minutes each). Each pass read the plugin source and ran the suites itself.
+
+## #341 / PR #414 (2026-10-02)
+- BetterAuth's `verifyApiKey` catches every error, including a closed pool, and returns `valid: false, code: INVALID_API_KEY`, the same as an unknown key. `select 1` is not a fix: it succeeds while the `apikey` table is locked. Confirm a refusal by reading the key's own row with the plugin's exported `defaultKeyHasher`. Codex found the hole in the probe-and-retry rule I shipped first.
+- The demo found a crash the suite did not: stopping Postgres made `pg` emit `error` on a pool with no listener, an uncaught exception that took the server down. Any long-lived `pg.Pool` needs `pool.on('error')`. Demo the outage paths for real (`docker stop` the DB), not only through injected failures.
+- I hit the `pkill -f` / `pgrep -f` self-match twice more (the #248 lesson): a wait loop on `pgrep -f "<pattern>"` never exits because it matches its own command line, and `pkill -f 'connect 4734'` killed the demo step's own shell (exit 144). Kill by recorded PID (`$!`), and test liveness with `ps -eo pid,comm` or `kill -0 <pid>`.
+- A mutation that makes a spawned server keep listening hangs Jest until the hook timeout, not just the one test. Tests that expect a child to exit should race the exit against a timer and SIGKILL the child (`exitCode()` in `api-key-auth.test.ts`).
+- `codex review` writes nothing until it finishes, so an empty output file is not a stall. opencode/GLM stalled for the 4th run in a row; codex plus the CI GLM workflow covered the cross-family passes.
+
