@@ -656,14 +656,20 @@ tables.
 - **Hosted: `postgresHistory(db).forOrg({ orgId, apiKeyId })` is the only way in**,
   and every query filters by that org. No read path exists without a tenant. `get`
   of another org's run id returns `null`, as does a non-uuid id (checked before
-  Postgres rejects the cast). Records are one transaction (run plus its results).
+  Postgres rejects the cast). Records are one transaction (run plus its results,
+  one multi-row insert). Results are ordered by `run_results.position`: every row
+  of the transaction shares `created_at`, and ids are random uuids.
 - **`runs.api_key_id` has a same-org FK** (migration 0002): `(org_id, api_key_id)`
   references `apikey ("referenceId", id)`, `on delete set null (api_key_id)`, so a
-  run cannot name another org's key, and revoking a key keeps its runs.
+  run cannot name another org's key, and revoking a key keeps its runs. A key
+  revoked between authentication and the write raises `23503`; the store retries
+  once without the key, which is where `set null` would have left it anyway.
+  `(org_id, api_key_id)` is indexed so a revoke does not scan the org's runs.
 - **Hosted RPC records each `executeBrowserAction`** (`startServer({ history })`,
   wired by `hostedServices()` over the auth pool). An action is stored as
-  `describeAction()`, which never includes what a `fill` typed. Errors are cut to
-  500 characters. A failed write is logged, and the request still succeeds. Local
+  `describeAction()`, which never includes what a `fill` typed, and a navigate URL
+  loses its `user:password@`. Errors are cut to 500 characters. The write is awaited
+  before the reply, so a reply means the run is recorded (#269 reads it). A failed write is logged, and the request still succeeds. Local
   (token) connections record nothing.
 - **Local: `sqliteHistoryStore(path)`** over the #77 tables. `test_results` has no kind
   column, so a run's kind is its summary prefix (`visual:`, `a11y:`, `rpc:`); rows

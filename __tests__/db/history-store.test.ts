@@ -205,10 +205,40 @@ const a11yRun = {
     expect(await history().forOrg(A).list({ limit: 1 })).toHaveLength(1);
   });
 
-  it("refuses to record a run against another org's API key", async () => {
+  it("never records another org's key, or a key revoked mid-request: the run stays, keyless", async () => {
+    for (const apiKeyId of ['key-org-a', 'key-already-revoked']) {
+      const id = await history().forOrg({ orgId: 'org-b', apiKeyId }).record(rpcRun);
+      const row = await sql<{ org_id: string; api_key_id: string | null }>`
+        select org_id, api_key_id from runs where id = ${id}`.execute(db);
+      expect(row.rows[0]).toEqual({ org_id: 'org-b', api_key_id: null });
+    }
+    // The constraint is what refuses it, not the store being lax.
     await expect(
-      history().forOrg({ orgId: 'org-b', apiKeyId: 'key-org-a' }).record(rpcRun),
+      sql`insert into runs (org_id, api_key_id, kind) values ('org-b', 'key-org-a', 'rpc')`.execute(
+        db,
+      ),
     ).rejects.toThrow(/foreign key/);
+  });
+
+  it('keeps results in the order they ran, and strips credentials from URLs', async () => {
+    const actions = Array.from({ length: 8 }, (_, i) => ({
+      success: i % 2 === 0,
+      action: { type: 'navigate' as const, url: `https://user:pw@site.example/${i}?q=${i}` },
+    }));
+    const id = await history()
+      .forOrg(A)
+      .record({
+        kind: 'rpc',
+        success: false,
+        startedAt: started,
+        finishedAt: finished,
+        results: actions,
+      });
+    const run = await history().forOrg(A).get(id);
+    expect(run!.results.map((r) => r.url)).toEqual(
+      actions.map((_, i) => `https://site.example/${i}?q=${i}`),
+    );
+    expect(JSON.stringify(run)).not.toContain('user:pw');
   });
 
   it('keeps the run when its key is deleted, with no key recorded', async () => {
@@ -224,6 +254,9 @@ const a11yRun = {
   it('has the (org_id, created_at) index the list query uses', async () => {
     const idx = await sql<{ indexdef: string }>`
       select indexdef from pg_indexes where tablename = 'runs'`.execute(db);
-    expect(idx.rows.map((r) => r.indexdef).join('\n')).toMatch(/\(org_id, created_at\)/);
+    const defs = idx.rows.map((r) => r.indexdef).join('\n');
+    expect(defs).toMatch(/\(org_id, created_at\)/);
+    // Revoking a key looks its runs up by this.
+    expect(defs).toMatch(/\(org_id, api_key_id\)/);
   });
 });

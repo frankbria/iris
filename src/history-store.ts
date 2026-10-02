@@ -132,15 +132,37 @@ function resultsOf(run: RunInput): StoredRunResult[] {
         };
       });
     case 'rpc':
-      return run.results.map((r) => ({
-        url: r.action.type === 'navigate' ? r.action.url : null,
-        passed: r.success,
-        result: {
-          action: describeAction(r.action),
-          // Bounded: an error message is page-influenced text of any length.
-          ...(r.error && { error: r.error.slice(0, 500) }),
-        },
-      }));
+      return run.results.map((r) => {
+        const action =
+          r.action.type === 'navigate'
+            ? { ...r.action, url: withoutCredentials(r.action.url) }
+            : r.action;
+        return {
+          url: action.type === 'navigate' ? action.url : null,
+          passed: r.success,
+          result: {
+            action: describeAction(action),
+            // Bounded: an error message is page-influenced text of any length.
+            ...(r.error && { error: r.error.slice(0, 500) }),
+          },
+        };
+      });
+  }
+}
+
+/**
+ * A URL without its `user:password@`: history is readable by everyone in the org.
+ * ponytail: query-string tokens are kept; they are often what the page under test is.
+ */
+function withoutCredentials(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.username && !parsed.password) return url;
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    return url;
   }
 }
 
@@ -177,23 +199,39 @@ export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
       async record(run) {
         const { summary, passed } = summarize(run);
         const results = resultsOf(run);
-        // One transaction: a run is never visible without its results.
-        return db.transaction().execute(async (tx) => {
-          const { rows } = await sql<{ id: string }>`
-            insert into runs (org_id, api_key_id, kind, status, summary, started_at, finished_at)
-            values (${orgId}, ${apiKeyId ?? null}, ${run.kind}, ${passed ? 'succeeded' : 'failed'},
-                    ${summary}, ${run.startedAt}, ${run.finishedAt})
-            returning id`.execute(tx);
-          const runId = rows[0].id;
-          for (const r of results) {
-            await sql`
-              insert into run_results (org_id, run_id, url, passed, result)
-              values (${orgId}, ${runId}, ${r.url}, ${r.passed}, ${JSON.stringify(r.result)}::jsonb)`.execute(
-              tx,
-            );
+        // One transaction: a run is never visible without its results. `position`
+        // keeps their order: every row of the transaction has the same created_at.
+        const insert = (keyId: string | null) =>
+          db.transaction().execute(async (tx) => {
+            const { rows } = await sql<{ id: string }>`
+              insert into runs (org_id, api_key_id, kind, status, summary, started_at, finished_at)
+              values (${orgId}, ${keyId}, ${run.kind}, ${passed ? 'succeeded' : 'failed'},
+                      ${summary}, ${run.startedAt}, ${run.finishedAt})
+              returning id`.execute(tx);
+            const runId = rows[0].id;
+            if (results.length) {
+              const values = results.map(
+                (r, position) =>
+                  sql`(${orgId}, ${runId}, ${position}, ${r.url}, ${r.passed}, ${JSON.stringify(r.result)}::jsonb)`,
+              );
+              await sql`
+                insert into run_results (org_id, run_id, position, url, passed, result)
+                values ${sql.join(values)}`.execute(tx);
+            }
+            return runId;
+          });
+        try {
+          return await insert(apiKeyId ?? null);
+        } catch (err) {
+          // The key was revoked between authentication and this write (or is not
+          // this org's). Keep the run, without a key: the state `on delete set null`
+          // would have left it in a moment later.
+          const e = err as { code?: string; constraint?: string };
+          if (apiKeyId && e.code === '23503' && e.constraint === 'runs_org_id_api_key_id_fkey') {
+            return insert(null);
           }
-          return runId;
-        });
+          throw err;
+        }
       },
 
       async list({ limit = 50 } = {}) {
@@ -212,7 +250,7 @@ export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
         if (!rows[0]) return null;
         const results = await sql<StoredRunResult>`
           select url, passed, result from run_results
-          where org_id = ${orgId} and run_id = ${id} order by created_at, id`.execute(db);
+          where org_id = ${orgId} and run_id = ${id} order by position`.execute(db);
         return { ...toStoredRun(rows[0]), results: results.rows };
       },
     }),
