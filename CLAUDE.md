@@ -667,6 +667,24 @@ They apply only to connections with a principal; local mode is untouched.
   session's principal. Every org gets the operator's limits; per-plan limits are
   #260/#346, and Postgres `usage_events` stays the billing record (#263).
 
+### Visual Artifact Layout (issue #343)
+
+- **Names come from `artifactName(page, device)`** (src/visual/artifacts.ts): a slug of
+  the page and device plus 10 hex characters of a hash of the exact pair. Only
+  `[A-Za-z0-9_-]`, at most 100 characters. The hash is what makes names collision-free;
+  the old `page.replace('/', '_')` mapped `/a/b` and `/a_b` to one screenshot and one
+  baseline.
+- **Each run has its own directory**: `<artifactsDir>/runs/<runId>/{current,diff,baseline}/`
+  (`artifactsDir` defaults to `.iris`). Run output no longer sits in `.iris/baselines`,
+  where `current`/`diff`/`baseline` took the place of a branch name. `runId` (config, or
+  `newRunId()`: UTC time plus 8 random hex characters) is returned on the result;
+  `runArtifactPath()` refuses a run id or name outside `[A-Za-z0-9_-]`.
+- **Baselines use the new name**, but `loadBaseline` falls back to
+  `legacyArtifactName()` once, so an upgrade does not orphan existing baselines. The
+  next `--update-baseline` writes the new name.
+- Runner tests set `artifactsDir` to a temp directory: the runner really creates the
+  run directories (only `writeFileSync` is mocked there).
+
 ### Run History Store (issue #254)
 
 `src/history-store.ts` puts run history behind one seam. `RunInput` is what the
