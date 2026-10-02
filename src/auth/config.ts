@@ -8,6 +8,7 @@ import {
   memberAc,
   ownerAc,
 } from 'better-auth/plugins/organization/access';
+import { log, type LogLevel } from '../log';
 
 /** One outgoing account email: verification or password reset. */
 export interface AuthEmail {
@@ -82,6 +83,38 @@ function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
 }
 
 /**
+ * Refusals of a key that is simply not usable: unknown, disabled, expired, used up. The
+ * api-key plugin logs each at ERROR ("Failed to validate API key"), so on the hosted
+ * server any client sending bad keys filled the error log (#341). They are info here.
+ */
+const EXPECTED_KEY_REFUSALS = new Set([
+  'INVALID_API_KEY',
+  'KEY_NOT_FOUND',
+  'KEY_DISABLED',
+  'KEY_EXPIRED',
+  'USAGE_EXCEEDED',
+]);
+
+/**
+ * BetterAuth's log calls, routed into the IRIS logger (#275). Expected key refusals
+ * (an `APIError` with one of the codes above) drop to info; anything else at error, such
+ * as a database failure while validating a key, stays at error. Of the arguments only
+ * strings and error messages are kept: BetterAuth may pass rows (users, sessions).
+ * BetterAuth's own threshold stays at its default, warn.
+ */
+function betterAuthLog(level: LogLevel, message: string, ...args: unknown[]): void {
+  const code = (args[0] as { body?: { code?: unknown } } | undefined)?.body?.code;
+  const expected = typeof code === 'string' && EXPECTED_KEY_REFUSALS.has(code);
+  const detail = args
+    .map((a) => (a instanceof Error ? a.message : typeof a === 'string' ? a : undefined))
+    .filter((a) => a !== undefined);
+  log(level === 'error' && expected ? 'info' : level, `better-auth: ${message}`, {
+    ...(typeof code === 'string' && { code }),
+    ...(detail.length && { err: detail.join('; ') }),
+  });
+}
+
+/**
  * Org roles with an `apiKey` resource (#340), and a `providerKey` one for BYOK keys (#344). The api-key plugin checks it for every
  * org-owned key operation, and BetterAuth's default roles do not have it, so without
  * it only the org's creator could manage keys. Owners and admins manage keys; members
@@ -119,7 +152,7 @@ const roles = {
  * `require` does not implement that, so the test spawns a real Node process.
  */
 export function createAuth(
-  options: Omit<BetterAuthOptions, 'plugins' | 'databaseHooks'> & {
+  options: Omit<BetterAuthOptions, 'plugins' | 'databaseHooks' | 'logger'> & {
     secret: string;
     baseURL: string;
     /** Delivers verification and password-reset mail. Required: no mail means no accounts. */
@@ -132,6 +165,8 @@ export function createAuth(
   // keys (a shorter link lifetime, shared rate-limit storage for #316) survive.
   const auth = betterAuth({
     ...rest,
+    // Through the IRIS logger: JSON in hosted mode, expected key refusals at info (#275).
+    logger: { log: betterAuthLog },
     emailAndPassword: { ...rest.emailAndPassword, ...policy.emailAndPassword },
     emailVerification: { ...rest.emailVerification, ...policy.emailVerification },
     rateLimit: { ...rest.rateLimit, ...policy.rateLimit },
