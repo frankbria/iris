@@ -307,3 +307,9 @@ Write/Edit, not as a pre-push afterthought.
 - An edit made after `prettier --write` failed CI's `format:check`. Run `npm run format:check` as the last step before every push.
 - opencode/GLM completed a review for the first time in six runs, and it read the repo at HEAD rather than the stale diff it was given.
 
+## #255 / PR #422 (2026-10-02)
+- A demo step that starts a helper server with a bare `&` hangs Showboat: the child inherits the step's stdout, and Showboat waits for EOF. Start helpers with `(nohup … > file 2>&1 &)`.
+- Two of my test failures were my fixtures, not the code: a vision fake returning `severity: 'low'` (not in `AIVisionResponseSchema`, so the cache silently refuses to store it), and a reservation-limit miscount (admission is spend + reservations < limit). Read the schema and the admission rule before blaming the change.
+- In a demo script, a "query or fallback" (`cmd || other`) that runs a broken query prints nothing and looks like an empty result. Write one query that is right.
+- `gh run list --workflow CI` returned nothing for a branch whose run is named CI. Look up the run id with `--json databaseId,name` and read that run, and make a doc script fail before it edits anything.
+
