@@ -551,6 +551,10 @@ interface ConnectOptions {
   maxConnections?: number;
   maxSessions?: number;
   maxActions?: number;
+  ratePerKey?: number;
+  ratePerOrg?: number;
+  maxSessionsPerOrg?: number;
+  maxConnectionsPerOrg?: number;
 }
 
 program
@@ -579,6 +583,19 @@ program
   )
   .option('--max-actions <n>', 'Actions per executeBrowserAction request (default 100)', (v) =>
     parseIntOption(v, { min: 1, max: 10_000, name: 'max-actions' }),
+  )
+  // Tenant limits (#342): hosted mode only, where each connection has an API key.
+  .option('--rate-per-key <n>', 'Hosted: requests per minute per API key (default 120)', (v) =>
+    parseIntOption(v, { min: 1, max: 1_000_000, name: 'rate-per-key' }),
+  )
+  .option('--rate-per-org <n>', 'Hosted: requests per minute per org (default 300)', (v) =>
+    parseIntOption(v, { min: 1, max: 1_000_000, name: 'rate-per-org' }),
+  )
+  .option('--max-sessions-per-org <n>', 'Hosted: browser sessions per org (default 2)', (v) =>
+    parseIntOption(v, { min: 1, max: 1000, name: 'max-sessions-per-org' }),
+  )
+  .option('--max-connections-per-org <n>', 'Hosted: connections per org (default 8)', (v) =>
+    parseIntOption(v, { min: 1, max: 10_000, name: 'max-connections-per-org' }),
   )
   .action(async (port: number, options: ConnectOptions) => {
     const { startServer, installProcessErrorPolicy } = await import('./protocol');
@@ -662,6 +679,10 @@ program
         maxConnections: options.maxConnections,
         maxSessions: options.maxSessions,
         maxActionsPerRequest: options.maxActions,
+        keyRequestsPerMinute: options.ratePerKey,
+        orgRequestsPerMinute: options.ratePerOrg,
+        maxSessionsPerOrg: options.maxSessionsPerOrg,
+        maxConnectionsPerOrg: options.maxConnectionsPerOrg,
       }).filter(([, v]) => v !== undefined),
     );
 

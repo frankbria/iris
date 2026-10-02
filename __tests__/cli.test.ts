@@ -210,6 +210,29 @@ describe('CLI Commands', () => {
       });
     });
 
+    // #342: the tenant limits, which apply to hosted (API-key) connections.
+    it('passes the per-key and per-org flags through as server limits', async () => {
+      await runCli([
+        'node',
+        'iris',
+        'connect',
+        '--rate-per-key',
+        '60',
+        '--rate-per-org',
+        '200',
+        '--max-sessions-per-org',
+        '1',
+        '--max-connections-per-org',
+        '4',
+      ]);
+      expect((startArgs()[1] as { limits?: object }).limits).toEqual({
+        keyRequestsPerMinute: 60,
+        orgRequestsPerMinute: 200,
+        maxSessionsPerOrg: 1,
+        maxConnectionsPerOrg: 4,
+      });
+    });
+
     it('rejects a limit of 0 before starting the server', async () => {
       jest.spyOn(process.stderr, 'write').mockReturnValue(true);
       jest.spyOn(process, 'exit').mockImplementation(((code: number) => {

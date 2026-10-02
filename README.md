@@ -318,7 +318,8 @@ verified before the WebSocket upgrade: a missing, unknown, revoked or disabled
 key gets HTTP `401`, and a key store that cannot be reached gets `503`.
 The key's org is bound to the connection and its browser session, so `getStatus`
 counts only that org's sessions. Keys are verified again every minute, and a
-connection whose key was revoked or disabled is closed with `1008`. Hosted mode
+connection whose key was revoked or disabled is closed with `1008` (the re-check reads
+the key by id; it does not re-verify or keep the key). Hosted mode
 needs `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` (the portal's values) and
 `DATABASE_URL` or `DATABASE_URL_FILE`; it exits 3 naming whichever is missing.
 
@@ -331,6 +332,16 @@ without limit:
 | open connections | `--max-connections <n>` | 16 | handshake refused, HTTP `503` |
 | browser sessions, server-wide | `--max-sessions <n>` | 4 | `launchBrowser` error `-32000` |
 | actions per `executeBrowserAction` | `--max-actions <n>` | 100 | `-32602` for an `actions` array; `success: false` when an `instruction` translates to more |
+| requests per minute, per API key (hosted) | `--rate-per-key <n>` | 120 | error `-32029` "Rate limit exceeded", `data.retryAfterMs`; the request is not run |
+| requests per minute, per org (hosted) | `--rate-per-org <n>` | 300 | same; all of an org's keys share it |
+| browser sessions per org (hosted) | `--max-sessions-per-org <n>` | 2 | `launchBrowser` error `-32000` |
+| connections per org (hosted) | `--max-connections-per-org <n>` | 8 | handshake refused, HTTP `429` |
+
+The four hosted limits apply only to API-key connections; local mode's shared-token
+clients are not rate limited. A rate budget refills continuously and allows a burst of
+up to one minute's worth; reconnecting does not reset it. The container healthcheck
+sends `X-Iris-Probe: 1` from loopback and gets one slot beyond `--max-connections`, so
+a full server reads as busy, not unhealthy.
 
 Clients may not ask for a visible browser or devtools (`-32602`). Their `timeout`,
 `retryAttempts`, `retryDelay` and `slowMo` are clamped to 120 s, 5, 10 s and 1 s,

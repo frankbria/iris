@@ -95,12 +95,21 @@ export interface Principal {
   keyId: string;
 }
 
-/**
- * Checks a connection's `Authorization` header (#341). Resolves to the tenant on a
- * valid key and to `null` on any other header. Throws only when it cannot decide
- * (the key store is unreachable), which the server answers with 503, not 401.
- */
-export type Authenticator = (authorization: string | undefined) => Promise<Principal | null>;
+/** Per-tenant authentication for hosted connections (#341). */
+export interface Authenticator {
+  /**
+   * Checks a connection's `Authorization` header at the upgrade. Resolves to the
+   * tenant on a valid key and to `null` on any other header. Throws only when it
+   * cannot decide (the key store is unreachable), which the server answers with 503.
+   */
+  verify(authorization: string | undefined): Promise<Principal | null>;
+  /**
+   * Whether a connected principal's key is still valid, by key id: read-only, and
+   * without the key itself, which a connection therefore does not keep (#342).
+   * Throws when it cannot tell, and the connection is kept until the next round.
+   */
+  recheck(principal: Principal): Promise<boolean>;
+}
 
 export interface BrowserStatus {
   isActive: boolean;
@@ -137,6 +146,17 @@ export interface ServerLimits {
   maxSlowMoMs: number;
   /** Ping interval; a peer that has not answered the previous ping is terminated. */
   heartbeatIntervalMs: number;
+  /**
+   * Tenant limits (#342), applied to hosted connections only (a principal from an
+   * API key). Requests per minute per key and per org, so an org cannot multiply
+   * its rate by minting keys; over either, a request gets `-32029` and is not run.
+   */
+  keyRequestsPerMinute: number;
+  orgRequestsPerMinute: number;
+  /** Browser sessions one org may hold, so it cannot take every `maxSessions` slot. */
+  maxSessionsPerOrg: number;
+  /** Connections one org may hold; the next upgrade gets HTTP 429. */
+  maxConnectionsPerOrg: number;
 }
 
 /**
@@ -153,7 +173,72 @@ export const DEFAULT_SERVER_LIMITS: Readonly<ServerLimits> = Object.freeze({
   maxRetryDelayMs: 10_000,
   maxSlowMoMs: 1_000,
   heartbeatIntervalMs: 30_000,
+  keyRequestsPerMinute: 120,
+  orgRequestsPerMinute: 300,
+  maxSessionsPerOrg: 2,
+  maxConnectionsPerOrg: 8,
 });
+
+/** JSON-RPC error code for a request refused by a rate limit (#342). */
+export const RATE_LIMITED = -32029;
+
+/**
+ * Request budgets, one token bucket per id (#342). A bucket holds up to a minute's
+ * worth and refills continuously, so a burst is allowed and the sustained rate is
+ * `perMinute`. Checking is synchronous: an await ahead of the SessionGate would
+ * reorder pipelined messages (#128). Times are `performance.now()`, a monotonic
+ * clock: on wall time, a clock stepping backward (WSL2 does, #190) would subtract
+ * tokens, and one stepping forward would hand them out.
+ *
+ * ponytail: in memory, so the budget is per server process; several processes need
+ * a shared store (#316).
+ */
+class RateBuckets {
+  private readonly buckets = new Map<string, { tokens: number; at: number }>();
+  constructor(private readonly perMinute: number) {}
+
+  private refill(id: string, now: number) {
+    const bucket = this.buckets.get(id) ?? { tokens: this.perMinute, at: now };
+    bucket.tokens = Math.min(
+      this.perMinute,
+      bucket.tokens + ((now - bucket.at) * this.perMinute) / 60_000,
+    );
+    bucket.at = now;
+    this.buckets.set(id, bucket);
+    return bucket;
+  }
+
+  /** Milliseconds until `id` has a whole token; 0 when it has one now. */
+  wait(id: string, now: number): number {
+    const { tokens } = this.refill(id, now);
+    return tokens >= 1 ? 0 : Math.ceil(((1 - tokens) * 60_000) / this.perMinute);
+  }
+
+  /** Spend a token `wait()` just reported. */
+  take(id: string): void {
+    this.buckets.get(id)!.tokens -= 1;
+  }
+
+  /** Forget refilled buckets: a full one is the same as none, so reconnecting gains nothing. */
+  prune(now: number): void {
+    for (const id of [...this.buckets.keys()]) {
+      if (this.refill(id, now).tokens >= this.perMinute) this.buckets.delete(id);
+    }
+  }
+}
+
+/**
+ * The container healthcheck's reserved slot (#342): a loopback peer that says it is
+ * the probe may connect one beyond `maxConnections`, so a full server does not read
+ * as unhealthy. Loopback only, because a published port arrives on the container's
+ * network interface, never on its loopback (#192).
+ */
+function isProbe(req: IncomingMessage): boolean {
+  const address = req.socket.remoteAddress ?? '';
+  const loopback =
+    address === '::1' || address.startsWith('127.') || address.startsWith('::ffff:127.');
+  return loopback && req.headers['x-iris-probe'] === '1';
+}
 
 /**
  * Start a JSON-RPC 2.0 over WebSocket server on the given port.
@@ -209,16 +294,25 @@ export function startServer(
       if (options?.authToken && !hasValidToken(req.headers.authorization, options.authToken)) {
         return done(false, 401, 'Unauthorized');
       }
-      if (wss.clients.size + verifying >= limits.maxConnections) {
+      const cap = limits.maxConnections + (isProbe(req) ? 1 : 0);
+      if (wss.clients.size + verifying >= cap) {
         return done(false, 503, 'Connection limit reached');
       }
       if (!authenticate) return done(true);
       verifying++;
-      authenticate(req.headers.authorization).then(
+      authenticate.verify(req.headers.authorization).then(
         (principal) => {
-          // Decrement right before done(): ws adds an accepted client synchronously.
+          // Decrement right before done(): ws adds an accepted client synchronously,
+          // and its 'connection' handler registers it in `tenants` before returning,
+          // so the org count below cannot miss a client admitted a moment earlier.
           verifying--;
           if (!principal) return done(false, 401, 'Unauthorized');
+          const orgConnections = [...tenants.values()].filter(
+            (t) => t.orgId === principal.orgId,
+          ).length;
+          if (orgConnections >= limits.maxConnectionsPerOrg) {
+            return done(false, 429, 'Organization connection limit reached');
+          }
           verified.set(req, principal);
           done(true);
         },
@@ -229,8 +323,10 @@ export function startServer(
       );
     },
   });
-  /** Each tenant connection's header, re-verified every `authRecheckMs`. */
-  const tenants = new Map<WebSocket, { principal: Principal; authorization?: string }>();
+  /** Each tenant connection's principal, re-checked every `authRecheckMs`. */
+  const tenants = new Map<WebSocket, Principal>();
+  const keyRate = new RateBuckets(limits.keyRequestsPerMinute);
+  const orgRate = new RateBuckets(limits.orgRequestsPerMinute);
   const sessions = new Map<WebSocket, BrowserSession>();
   const sessionTimeout = options?.sessionTimeout || 30 * 60 * 1000; // 30 minutes default
   /** Server start, so `getStatus` can report real uptime rather than a constant (issue #80). */
@@ -257,6 +353,8 @@ export function startServer(
   // the ordinary session cleanup.
   const alive = new WeakSet<WebSocket>();
   const heartbeat = setInterval(() => {
+    keyRate.prune(performance.now());
+    orgRate.prune(performance.now());
     for (const ws of wss.clients) {
       if (!alive.has(ws)) {
         ws.terminate();
@@ -277,15 +375,13 @@ export function startServer(
     rechecking = true;
     try {
       await Promise.all(
-        [...tenants].map(async ([ws, { principal, authorization }]) => {
-          let now: Principal | null;
+        [...tenants].map(async ([ws, principal]) => {
           try {
-            now = await authenticate!(authorization);
+            if (await authenticate!.recheck(principal)) return;
           } catch {
             // ponytail: an unreachable key store keeps connections up; the next round decides.
             return;
           }
-          if (now?.orgId === principal.orgId && now.keyId === principal.keyId) return;
           tenants.delete(ws);
           ws.close(1008, 'API key no longer valid');
           // Not waiting for the close handshake: the browser goes now.
@@ -301,7 +397,7 @@ export function startServer(
 
   wss.on('connection', (ws, req) => {
     const principal = verified.get(req);
-    if (principal) tenants.set(ws, { principal, authorization: req.headers.authorization });
+    if (principal) tenants.set(ws, principal);
     alive.add(ws);
     ws.on('pong', () => alive.add(ws));
 
@@ -319,11 +415,40 @@ export function startServer(
 
     ws.on('message', async (data) => {
       let parsed: unknown;
+      let unparseable = false;
       try {
         parsed = JSON.parse(data.toString());
       } catch {
-        return;
+        unparseable = true;
       }
+
+      // Tenant request budgets (#342), before anything else, so a malformed frame
+      // spends one too. Both must have a token before either is spent, so a refusal
+      // by the org costs the key nothing.
+      if (principal) {
+        const now = performance.now();
+        const wait = Math.max(
+          keyRate.wait(principal.keyId, now),
+          orgRate.wait(principal.orgId, now),
+        );
+        if (wait > 0) {
+          const id = (parsed as { id?: unknown } | null)?.id;
+          reply({
+            jsonrpc: '2.0',
+            id: typeof id === 'string' || typeof id === 'number' ? id : null,
+            error: {
+              code: RATE_LIMITED,
+              message: 'Rate limit exceeded',
+              data: { retryAfterMs: wait },
+            },
+          });
+          return;
+        }
+        keyRate.take(principal.keyId);
+        orgRate.take(principal.orgId);
+      }
+      // Charged above, then dropped without a reply, as before.
+      if (unparseable) return;
 
       // Valid JSON is not necessarily a request: `null`, `1`, `[]` and `"x"`
       // all parse. Reading `.id` off `null` used to throw here, outside every
@@ -393,6 +518,18 @@ export function startServer(
               }
               // Check and insert with no await between them: the map is shared
               // by every connection, and each connection has its own gate.
+              // This connection's own session was cleaned up above, so a relaunch
+              // is never counted against its org.
+              if (
+                principal &&
+                [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId)
+                  .length >= limits.maxSessionsPerOrg
+              ) {
+                throw {
+                  code: -32000,
+                  message: `Organization session limit reached (${limits.maxSessionsPerOrg}); try again later`,
+                };
+              }
               if (sessions.size >= limits.maxSessions) {
                 throw {
                   code: -32000,
