@@ -836,7 +836,12 @@ async function executeBrowserActions(
 
     // If instruction provided, translate it to actions
     if (instruction) {
-      const translation = await translate(instruction, url ? { url } : undefined);
+      // A tenant's AI translation is charged to, and gated by, its org's budget (#255).
+      const translation = await translate(
+        instruction,
+        url ? { url } : undefined,
+        session.principal ? { orgId: session.principal.orgId } : {},
+      );
       translationResult = translation;
       actionsToExecute = translation.actions;
     } else if (actions) {

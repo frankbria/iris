@@ -33,6 +33,8 @@ function assertInstructionLength(instruction: string): void {
 export async function translate(
   instruction: string,
   context?: { url?: string },
+  /** Hosted: the org an AI translation is charged to (#255). */
+  scope: { orgId?: string } = {},
 ): Promise<TranslationResult> {
   assertInstructionLength(instruction);
 
@@ -43,7 +45,7 @@ export async function translate(
   }
 
   // Fall back to AI translation
-  return await translateWithAI(instruction, context);
+  return await translateWithAI(instruction, context, scope);
 }
 
 /**
@@ -162,7 +164,8 @@ function translateWithPatterns(instruction: string): TranslationResult {
 
 async function translateWithAI(
   instruction: string,
-  context?: { url?: string },
+  context: { url?: string } | undefined,
+  scope: { orgId?: string },
 ): Promise<TranslationResult> {
   try {
     const config = loadConfig();
@@ -179,7 +182,7 @@ async function translateWithAI(
 
     // Resolved, not just constructed: a retired pin or a typo'd model is
     // caught here and reported by name instead of returning an opaque 404 (#184).
-    const aiClient = await createResolvedAIClient(config);
+    const aiClient = await createResolvedAIClient(config, { orgId: scope.orgId });
     const isAvailable = await aiClient.isAvailable();
 
     if (!isAvailable) {

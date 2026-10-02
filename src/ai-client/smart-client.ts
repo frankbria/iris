@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import * as path from 'path';
 import { DEFAULT_BUDGET_LIMITS, IrisConfig, ProviderCredentials, resolveBudget } from '../config';
 import { resolveDataDir } from '../data-dir';
@@ -41,6 +42,12 @@ export interface SmartClientConfig {
   fallbackChain?: string[];
 
   /**
+   * The tenant this client works for (#255): its cache entries and ledger rows are
+   * the org's, and its budget is the org's. Unset in local mode.
+   */
+  orgId?: string;
+
+  /**
    * Cache configuration
    */
   cacheConfig?: {
@@ -60,9 +67,10 @@ export interface SmartClientConfig {
 }
 
 type ResolvedConfig = Required<
-  Omit<SmartClientConfig, 'cacheConfig' | 'costConfig' | 'enableFallback'>
+  Omit<SmartClientConfig, 'cacheConfig' | 'costConfig' | 'enableFallback' | 'orgId'>
 > & {
   enableFallback?: boolean;
+  orgId?: string;
   cacheConfig: { maxMemoryEntries: number; ttlMs: number; dbPath: string };
   costConfig: { dbPath: string; dailyLimit: number; monthlyLimit: number };
 };
@@ -146,10 +154,16 @@ export class SmartAIVisionClient {
 
     // Initialize cost tracker
     if (this.config.enableCostTracking) {
-      this.costTracker = new CostTracker(this.config.costConfig.dbPath, {
-        dailyLimit: this.config.costConfig.dailyLimit,
-        monthlyLimit: this.config.costConfig.monthlyLimit,
-      });
+      // One client per run: its own run id scopes getCostStats() (#255), so a run's
+      // cost summary does not report other runs, or other orgs, sharing the ledger.
+      this.costTracker = new CostTracker(
+        this.config.costConfig.dbPath,
+        {
+          dailyLimit: this.config.costConfig.dailyLimit,
+          monthlyLimit: this.config.costConfig.monthlyLimit,
+        },
+        { orgId: this.config.orgId, runId: randomUUID() },
+      );
     }
   }
 
@@ -217,6 +231,7 @@ export class SmartAIVisionClient {
         model,
         contextKey,
         diffProcessed?.hash ?? '',
+        this.config.orgId ?? '',
       );
 
       // Check cache for this provider+model (cache hits are free, so this runs

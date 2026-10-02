@@ -99,6 +99,7 @@ __tests__/
 ├── ai-client-preprocessor.test.ts # Preprocessor tests (24 tests)
 ├── ai-client-batch4.test.ts       # Cache + cost tracker tests (19 tests)
 ├── ai-client-models.test.ts       # Model pins, provider probe, resolution (26 tests)
+├── ai-tenant-scope.test.ts        # Ledger and vision cache per org: breakers, reservations, run-scoped stats, cache isolation (#255)
 ├── browser-hardening.test.ts      # One launch factory: spawned argv has no --no-sandbox; context hardening; src/ guard (#331)
 ├── egress-proxy.test.ts           # Proxy over real sockets: resolved-address refusals, rebinding pin, positive controls (#336)
 ├── egress-proxy-browser.test.ts   # Hosted Chromium: worker/SharedWorker/WebSocket egress and WebRTC UDP (#336)
@@ -645,6 +646,26 @@ They apply only to connections with a principal; local mode is untouched.
   `IRIS_HOSTED=1` with a token or no auth. `iris connect` is the enforcing caller.
 - Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`
   (real Postgres, spawned hosted `iris connect`, keys made through BetterAuth).
+
+### Tenant-Scoped Ledger and Vision Cache (issue #255)
+
+- **`CostTracker(dbPath, budget, { orgId, runId })`**: every row it writes carries the
+  org and run (`org_id`, `run_id`, added by idempotent ALTER; `(org_id, timestamp)`
+  index), and every budget sum, reservation check and `clear()` reads only its org
+  (`org_id IS ?`). So one org's spend, or its calls in flight, never trips another
+  org's breaker. No org is local mode: the rows with no org, i.e. everything a ledger
+  held before, so local behaviour is unchanged.
+- **`getStats()` totals are the tracker's run** when it has a `runId` (daily and monthly
+  stay org-wide). `SmartAIVisionClient` opens its tracker with a fresh run id, so a
+  visual run's `costSummary` no longer reports every run that ever used the ledger.
+- **Cache keys carry `org=<id>` first** when an org is set (`generateKey(..., orgId)`),
+  so a verdict one org paid for is never served to another. Local keys keep the old
+  format, and existing cache entries survive.
+- **The org flows from the request**: `SmartClientConfig.orgId` for vision (the hosted
+  visual job API #268 sets it), `createResolvedAIClient(config, { orgId })` for text,
+  `translate(instruction, context, { orgId })`, and the RPC server passes the
+  session's principal. Every org gets the operator's limits; per-plan limits are
+  #260/#346, and Postgres `usage_events` stays the billing record (#263).
 
 ### Run History Store (issue #254)
 
