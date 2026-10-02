@@ -305,8 +305,9 @@ export function recordSqliteRun(db: Database.Database, run: RunInput): number {
       });
     }
   } else if (run.kind === 'a11y') {
+    const stored = resultsOf(run);
     for (const [i, page] of run.result.results.entries()) {
-      const { result } = resultsOf(run)[i];
+      const { result } = stored[i];
       const counts = violationCounts(page);
       insertA11yTestResult(db, {
         testRunId,
