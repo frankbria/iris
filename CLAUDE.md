@@ -371,12 +371,22 @@ paths and https).
 - **Sign-up is enforced in `createAuth()`**: a `hooks.before` on `/sign-up/email` refuses
   with `400 TERMS_NOT_ACCEPTED` unless the body's `acceptedTerms` equals `ACCEPTED_TERMS`
   (so every caller, tests included, must send it), and `hooks.after` records the rows
-  with the client IP. `createAuth()` takes no `hooks` from its caller, and needs a `pg`
-  Pool or `{ db }` Kysely as `database`. The after-hook cannot undo the user: a failed
+  with the client IP. It is clickwrap: the server refuses a sign-up without the
+  current-versions token, but a scripted client can still send it. `createAuth()` takes
+  no `hooks` from its caller, and needs a `pg` Pool or `{ db }` Kysely as `database`.
+  `socialProviders` is omitted from its options type (a test pins that): OAuth callbacks
+  create users without passing `/sign-up/email`, so enforce acceptance there first.
+  The rows are inserted only for a user row that exists: with email verification on,
+  BetterAuth answers a duplicate-email sign-up with a made-up user, and that must neither
+  log an error nor reveal that the address exists. The after-hook cannot undo the user: a failed
   write is logged and the user meets `/accept-terms` at the next page.
 - **Re-acceptance**: `requireOrg()` redirects a user missing a current version to
   `/accept-terms` (server page + server action; the form carries the versions it was
-  rendered for). Only portal pages are gated; API keys and the RPC are unaffected.
+  rendered for) which also needs the `agree` field (`on`), else it records nothing and
+  returns to the page with an error; the IP is `getIP()`'s validated value. The gate covers
+  portal pages (`requireOrg()`) only, by design for now: server actions on `/api-keys` and
+  `/provider-keys`, BetterAuth's endpoints and invitation acceptance stay usable for a user
+  who has not re-accepted. API keys and the RPC are unaffected.
 - E2E uses a version bump simulated by aging the user's rows (`terms.spec.ts`).
 
 ### Portal Organizations (issue #250)

@@ -1,6 +1,7 @@
 "use server"
 
 import { headers } from "next/headers"
+import { getIP } from "better-auth/api"
 import { redirect } from "next/navigation"
 
 import { recordCurrentAcceptance } from "../../../../src/legal/acceptance"
@@ -16,12 +17,17 @@ export async function acceptTerms(form: FormData) {
   const requestHeaders = await headers()
   const session = await getAuth().api.getSession({ headers: requestHeaders })
   if (!session) redirect("/login")
-  if (form.get("acceptedTerms") === ACCEPTED_TERMS)
-    await recordCurrentAcceptance(
-      getDb(),
-      session.user.id,
-      requestHeaders.get("x-real-ip")
-    )
-  // Accepted, or not: the dashboard sends them back here if it is still missing.
+  // Explicit agreement and the versions the form showed: anything else records nothing.
+  if (
+    form.get("agree") !== "on" ||
+    form.get("acceptedTerms") !== ACCEPTED_TERMS
+  )
+    redirect("/accept-terms?error=1")
+  await recordCurrentAcceptance(
+    getDb(),
+    session.user.id,
+    // Validated and normalised like the sign-up path's (null for a malformed header).
+    getIP(requestHeaders, getAuth().options)
+  )
   redirect("/dashboard")
 }

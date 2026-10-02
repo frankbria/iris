@@ -543,8 +543,8 @@ and `acceptable-use.md`. To publish a change:
 
 1. Edit the text and set a new `version:` (a date) in its front matter.
 2. Set the same value in `src/legal/versions.ts` (`LEGAL_VERSIONS`). A test fails if they differ.
-3. Deploy. A new sign-up must carry the new versions, and every signed-in user is sent to
-   `/accept-terms` before any portal page until they accept. API keys keep working.
+3. Deploy. A new sign-up must carry the new versions (the server refuses one that does not), and
+   every signed-in user is sent to `/accept-terms` before any portal page until they accept. API keys keep working.
    Earlier acceptances stay in `terms_acceptances` as history.
 
 A changed file with an unchanged version is not re-accepted: bump it for any change that

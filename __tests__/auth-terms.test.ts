@@ -49,6 +49,8 @@ const { ACCEPTED_TERMS } = require('./src/legal/versions.ts');
   r.half = await attempt({ email: 'half@iris.test', acceptedTerms: ACCEPTED_TERMS.split(':')[0] });
   r.ok = await attempt({ email: 'ok@iris.test', acceptedTerms: ACCEPTED_TERMS },
     new Headers({ 'x-real-ip': '203.0.113.9' }));
+  // The same address again: BetterAuth answers as if it were new.
+  r.dup = await attempt({ email: 'ok@iris.test', acceptedTerms: ACCEPTED_TERMS });
   await pool.end();
   process.stdout.write(JSON.stringify(r));
 })().catch((e) => { console.error(e); process.exit(1); });
@@ -58,6 +60,7 @@ const { ACCEPTED_TERMS } = require('./src/legal/versions.ts');
   const dbName = `iris_terms_${process.pid}_${randomBytes(4).toString('hex')}`;
   let url: string;
   let r: Record<string, string>;
+  let probeStderr = '';
 
   async function admin(query: string): Promise<void> {
     const client = new Client({ connectionString: ADMIN_URL });
@@ -95,7 +98,7 @@ const { ACCEPTED_TERMS } = require('./src/legal/versions.ts');
     } finally {
       await db.destroy();
     }
-    const { stdout } = await promisify(execFile)(
+    const { stdout, stderr } = await promisify(execFile)(
       process.execPath,
       ['-r', 'ts-node/register', '-e', PROBE],
       {
@@ -110,6 +113,7 @@ const { ACCEPTED_TERMS } = require('./src/legal/versions.ts');
       },
     );
     r = JSON.parse(stdout);
+    probeStderr = stderr;
   }, 60_000);
 
   afterAll(async () => {
@@ -138,6 +142,17 @@ const { ACCEPTED_TERMS } = require('./src/legal/versions.ts');
       ['terms', LEGAL_VERSIONS.terms, '203.0.113.9'],
     ]);
     expect(Math.abs(Date.now() - new Date(rows[0].accepted_at).getTime())).toBeLessThan(120_000);
+  });
+
+  it('a duplicate-email sign-up writes no rows, logs no error, and answers as before', async () => {
+    expect(r.dup).toBe('ok');
+    expect(probeStderr).not.toMatch(/terms acceptance|foreign key/i);
+    expect(await rowsFor('ok@iris.test')).toHaveLength(2);
+    const client = new Client({ connectionString: url });
+    await client.connect();
+    const n = await client.query('select count(*)::int as n from terms_acceptances');
+    await client.end();
+    expect(n.rows[0].n).toBe(2);
   });
 
   it('finds a user who has not accepted the current versions, and records the re-acceptance', async () => {

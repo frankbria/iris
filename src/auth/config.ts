@@ -157,7 +157,13 @@ const roles = {
  * `require` does not implement that, so the test spawns a real Node process.
  */
 export function createAuth(
-  options: Omit<BetterAuthOptions, 'plugins' | 'databaseHooks' | 'hooks' | 'logger'> & {
+  options: Omit<
+    BetterAuthOptions,
+    // `socialProviders` would create users through OAuth callbacks, which skip the
+    // `/sign-up/email` hook that enforces the terms (#276). Adding one means enforcing
+    // acceptance on that path first (e.g. in `databaseHooks.user.create.before`).
+    'plugins' | 'databaseHooks' | 'hooks' | 'logger' | 'socialProviders'
+  > & {
     secret: string;
     baseURL: string;
     /** Delivers verification and password-reset mail. Required: no mail means no accounts. */

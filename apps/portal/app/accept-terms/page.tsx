@@ -17,7 +17,12 @@ import {
 import { getAuth, getDb } from "@/lib/auth"
 
 /** Where a signed-in user who has not accepted the current terms lands (#276). */
-export default async function AcceptTermsPage() {
+export default async function AcceptTermsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>
+}) {
+  const { error } = await searchParams
   const requestHeaders = await headers()
   const session = await getAuth().api.getSession({ headers: requestHeaders })
   if (!session) redirect("/login")
@@ -34,7 +39,12 @@ export default async function AcceptTermsPage() {
         </CardHeader>
         <form action={acceptTerms}>
           <input type="hidden" name="acceptedTerms" value={ACCEPTED_TERMS} />
-          <CardContent>
+          <CardContent className="grid gap-3">
+            {error && (
+              <p role="alert" className="text-sm text-destructive">
+                Tick the box to accept the terms and continue.
+              </p>
+            )}
             <label className="flex items-start gap-2 text-sm">
               <input type="checkbox" name="agree" required className="mt-1" />
               <span>

@@ -5,7 +5,10 @@ const DOCUMENTS = Object.keys(LEGAL_VERSIONS) as LegalDocument[];
 
 /**
  * Records that a user accepted the current version of both documents (#276). Idempotent:
- * a repeat is skipped, so the first acceptance's time and address stay.
+ * a repeat is skipped, so the first acceptance's time and address stay. A user id with no
+ * row is skipped too, quietly: with email verification required BetterAuth answers a
+ * duplicate-email sign-up with a made-up user, and an error here would be noise and a
+ * signal that the address exists.
  */
 export async function recordCurrentAcceptance(
   db: Kysely<unknown>,
@@ -15,7 +18,8 @@ export async function recordCurrentAcceptance(
   for (const document of DOCUMENTS) {
     await sql`
       insert into terms_acceptances (user_id, document, version, ip)
-      values (${userId}, ${document}, ${LEGAL_VERSIONS[document]}, ${ip})
+      select ${userId}, ${document}, ${LEGAL_VERSIONS[document]}, ${ip}
+      where exists (select 1 from "user" where id = ${userId})
       on conflict (user_id, document, version) do nothing`.execute(db);
   }
 }

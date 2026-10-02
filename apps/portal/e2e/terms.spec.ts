@@ -80,6 +80,43 @@ test("a new version of the terms sends a signed-in user to accept it", async ({
       await expect(page).toHaveURL(/\/accept-terms$/)
     }
 
+    // A scripted POST without the `agree` field records nothing and the gate stays.
+    await page
+      .getByLabel(/I agree to the/)
+      .evaluate((el) => el.removeAttribute("required"))
+    await page.getByRole("button", { name: "Accept and continue" }).click()
+    await expect(page).toHaveURL(/\/accept-terms\?error=1$/)
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Tick the box" })
+    ).toBeVisible()
+    await page.goto("/dashboard")
+    await expect(page).toHaveURL(/\/accept-terms$/)
+    const none = await db.query(
+      `select count(*)::int as n from terms_acceptances where version <> '2000-01-01'
+       and user_id = (select id from "user" where email = $1)`,
+      [email]
+    )
+    expect(none.rows[0].n).toBe(0)
+
+    // A malformed X-Real-IP is not stored; a valid one is.
+    await context.setExtraHTTPHeaders({ "x-real-ip": "not-an-ip" })
+    await page.reload()
+    await page.getByLabel(/I agree to the/).check()
+    await page.getByRole("button", { name: "Accept and continue" }).click()
+    await expect(page).toHaveURL(/\/dashboard$/)
+    const bad = await db.query(
+      `select ip from terms_acceptances where version <> '2000-01-01'
+       and user_id = (select id from "user" where email = $1)`,
+      [email]
+    )
+    expect(bad.rows.map((r) => r.ip)).toEqual([null, null])
+    await db.query(
+      `delete from terms_acceptances where version <> '2000-01-01'
+       and user_id = (select id from "user" where email = $1)`,
+      [email]
+    )
+    await context.setExtraHTTPHeaders({ "x-real-ip": "198.51.100.77" })
+    await page.goto("/accept-terms")
     await page.getByLabel(/I agree to the/).check()
     await page.getByRole("button", { name: "Accept and continue" }).click()
     await expect(page).toHaveURL(/\/dashboard$/)
@@ -90,6 +127,12 @@ test("a new version of the terms sends a signed-in user to accept it", async ({
       [email]
     )
     expect(rows[0]).toEqual({ n: 4, old: 2 })
+    const ips = await db.query(
+      `select distinct ip from terms_acceptances where version <> '2000-01-01'
+       and user_id = (select id from "user" where email = $1)`,
+      [email]
+    )
+    expect(ips.rows).toEqual([{ ip: "198.51.100.77" }])
   } finally {
     await db.end()
   }
