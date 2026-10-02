@@ -287,6 +287,27 @@ const a11yRun = {
     });
   });
 
+  it('records a run whose strings hold a NUL instead of losing it', async () => {
+    // Postgres rejects U+0000 in jsonb and in text. A selector can carry one as a
+    // JSON escape from the wire, and a navigate URL keeps it in the url column.
+    const nul = String.fromCharCode(0);
+    const id = await history()
+      .forOrg(A)
+      .record({
+        kind: 'rpc',
+        success: false,
+        startedAt: started,
+        finishedAt: finished,
+        results: [
+          { success: false, action: { type: 'click', selector: `#a${nul}` }, error: `bad${nul}` },
+          { success: false, action: { type: 'navigate', url: `https://site.example/${nul}` } },
+        ],
+      });
+    const run = await history().forOrg(A).get(id);
+    expect(run!.results[0].result).toEqual({ action: 'click #a\ufffd', error: 'bad\ufffd' });
+    expect(run!.results[1].url).toBe('https://site.example/\ufffd');
+  });
+
   it('strips credentials from an action description too', async () => {
     const id = await history()
       .forOrg(A)

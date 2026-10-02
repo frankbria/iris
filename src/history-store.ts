@@ -154,7 +154,7 @@ function resultsOf(run: RunInput): StoredRunResult[] {
 }
 
 /**
- * A result as jsonb input, with every string well-formed. A lone UTF-16 surrogate
+ * A result as jsonb input, with every string storable. A lone UTF-16 surrogate
  * (a client can send one as a JSON escape in a selector, and errors quote selectors)
  * survives JSON.stringify as an escape Postgres's jsonb input rejects, and the whole
  * run would be lost. It becomes U+FFFD instead.
@@ -162,9 +162,12 @@ function resultsOf(run: RunInput): StoredRunResult[] {
 const toJsonb = (value: unknown) =>
   JSON.stringify(value, (_key, v: unknown) => (typeof v === 'string' ? wellFormed(v) : v));
 
-/** `String.prototype.toWellFormed()`, which the ES2020 lib does not declare. */
-const wellFormed = (text: string) => text.replace(LONE_SURROGATE, '\uFFFD');
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+/**
+ * What Postgres cannot store, as U+FFFD: a lone surrogate (`toWellFormed()`, which
+ * the ES2020 lib does not declare) and U+0000, which neither jsonb nor text accepts.
+ */
+const wellFormed = (text: string) => text.replace(UNSTORABLE, '\uFFFD');
+const UNSTORABLE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]|\u0000/g;
 
 /** Every `scheme://user:password@` in free text, without the userinfo. */
 const stripUserinfo = (text: string) => text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
