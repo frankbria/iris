@@ -18,6 +18,9 @@ export default async function DashboardPage() {
       <Link href="/org" className="text-sm underline">
         Members
       </Link>
+      <Link href="/api-keys" className="text-sm underline">
+        API keys
+      </Link>
       <div>
         <LogOutButton />
       </div>

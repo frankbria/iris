@@ -106,6 +106,7 @@ __tests__/
 ├── report-encoding.test.ts         # Every report format parsed for real (DOMParser, markdown-it): hostile input keeps the structure (#339)
 ├── auth-config.test.ts            # Spawned Node loads src/auth/config via require(esm); Jest's sandbox can't (#247)
 ├── auth-org.test.ts               # Real Postgres: personal org on sign-in, invitations, roles, org A cannot read org B (#250)
+├── auth-apikey.test.ts            # Real Postgres: org-owned keys hashed, roles, org A cannot touch org B's keys, verify, revoke (#340)
 ├── db/postgres.test.ts            # Real Postgres: migrate, idempotency, org_id catalog check, BetterAuth round trip (#248)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
 ├── visual/                        # Visual testing tests
@@ -339,6 +340,34 @@ The org is the tenant (ADR 0001 §4). The organization plugin's options live in
   checks the parsed path as well as the origin.
 - Org deletion is disabled (`disableOrganizationDeletion`) until offboarding (#349):
   `runs`, `usage_events` and the other tenant tables reference the org with no cascade.
+
+### Portal API Keys (issue #340)
+
+The api-key plugin (`@better-auth/api-key`, its own ESM-only package since 1.7) issues
+**org-owned** keys: `references: 'organization'`, so a key's `referenceId` is the org id.
+The portal page is `/api-keys`.
+
+- **The org roles carry an `apiKey` resource** (`ac` / `roles` in `createAuth()`). The
+  plugin checks it for every org-key operation, and BetterAuth's default roles do not
+  have it, so without it only the org's creator could manage keys. Owners and admins
+  create, update and delete; members only read. The roles are BetterAuth's defaults
+  plus that resource, so the org permissions from #250 are unchanged.
+- **Hashed at rest, shown once.** Only `create` returns the plaintext. List and get
+  strip it, and the portal keeps it in component state only. Keys start `iris_` by
+  default; an owner or admin may pass another prefix to create, so treat the prefix as
+  a convention, not a guarantee. The list shows the first 11 characters (prefix plus 6
+  random), set by `startingCharactersConfig`: the default 6 is the prefix plus one.
+- **The plugin's own limiter is off.** Its default is 10 verifications per day, and
+  `create` copies the setting onto each key row (`rateLimitEnabled`, `rateLimitMax`).
+  Per-key limits are #342's. Rows created now carry `rateLimitEnabled = false`.
+- **Revoke deletes the row.** The key stops verifying at once. A deleted key leaves no
+  record; the audit log is #361.
+- **A key outlives its creator's membership.** It belongs to the org and records no
+  creator, so after removing an admin, rotate the keys they could have copied.
+- `enableSessionForAPIKeys` stays off: a key must never become a portal session.
+- **Do not let `npm install -w @iris/portal` pick the package's latest version.** It
+  nested a second `better-auth` under `apps/portal`. Pin the range the root uses and
+  check the lockfile diff.
 
 ### Container Deployment (issue #192)
 

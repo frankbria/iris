@@ -32,6 +32,8 @@ const { createAuth } = require('./src/auth/config.ts');
   process.stdout.write(JSON.stringify({
     handler: typeof auth.handler,
     createOrganization: typeof auth.api.createOrganization,
+    apiKey: [auth.api.createApiKey, auth.api.listApiKeys, auth.api.deleteApiKey, auth.api.verifyApiKey]
+      .map((fn) => typeof fn),
     cookie: ctx.authCookies.sessionToken.attributes,
     rateLimit: ctx.rateLimit.enabled,
     rateLimitStorage: ctx.options.rateLimit.storage,
@@ -67,6 +69,13 @@ describe('shared auth config (require(esm))', () => {
   it('loads better-auth and its organization plugin from CommonJS', async () => {
     const out = await probe('http://localhost:3000');
     expect(out).toMatchObject({ handler: 'function', createOrganization: 'function' });
+  }, 30_000);
+
+  // #340: the api-key plugin is its own ESM-only package (@better-auth/api-key in 1.7),
+  // so it is a second require(esm) load, not part of better-auth/plugins.
+  it('loads the api-key plugin: create, list, delete and verify endpoints', async () => {
+    const out = await probe('http://localhost:3000');
+    expect(out.apiKey).toEqual(['function', 'function', 'function', 'function']);
   }, 30_000);
 
   // #249: the account policy lives in the shared config, so the portal and the
