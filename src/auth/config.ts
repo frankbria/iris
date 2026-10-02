@@ -1,6 +1,13 @@
 import { apiKey } from '@better-auth/api-key';
 import { betterAuth, type BetterAuthOptions } from 'better-auth';
 import { organization } from 'better-auth/plugins';
+import { createAccessControl } from 'better-auth/plugins/access';
+import {
+  adminAc,
+  defaultStatements,
+  memberAc,
+  ownerAc,
+} from 'better-auth/plugins/organization/access';
 
 /** One outgoing account email: verification or password reset. */
 export interface AuthEmail {
@@ -63,6 +70,23 @@ function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
 }
 
 /**
+ * Org roles with an `apiKey` resource (#340). The api-key plugin checks it for every
+ * org-owned key operation, and BetterAuth's default roles do not have it, so without
+ * it only the org's creator could manage keys. Owners and admins manage keys; members
+ * can see the list (names and first characters, never a key) but not change it.
+ */
+const ac = createAccessControl({
+  ...defaultStatements,
+  apiKey: ['create', 'read', 'update', 'delete'],
+} as const);
+const keyManager = { apiKey: ['create', 'read', 'update', 'delete'] as const };
+const roles = {
+  owner: ac.newRole({ ...ownerAc.statements, ...keyManager }),
+  admin: ac.newRole({ ...adminAc.statements, ...keyManager }),
+  member: ac.newRole({ ...memberAc.statements, apiKey: ['read'] }),
+};
+
+/**
  * The one BetterAuth configuration shared by `apps/portal` and `iris-api`
  * (ADR 0001 §4), so neither owns a second user table.
  *
@@ -106,7 +130,10 @@ export function createAuth(
     },
     plugins: [
       organization({
-        // Default roles: owner, admin, member. Owners and admins invite; members do not.
+        // owner, admin, member, as BetterAuth defines them plus `apiKey` (above).
+        // Owners and admins invite; members do not.
+        ac,
+        roles,
         sendInvitationEmail: ({ id, email, organization: org, inviter }) =>
           sendEmail({
             to: email,
@@ -119,7 +146,16 @@ export function createAuth(
         // offboarding, which decides what happens to that data (#349).
         disableOrganizationDeletion: true,
       }),
-      apiKey({ references: 'organization' }),
+      apiKey({
+        references: 'organization',
+        // Hashed at rest and returned once, by create (the plugin's defaults). The
+        // prefix lets secret scanners and people recognise a leaked key.
+        defaultPrefix: 'iris_',
+        requireName: true,
+        // The plugin's limiter defaults to 10 verifications a day and copies that onto
+        // each key as it is created. Per-key limits are #342's; until then, none.
+        rateLimit: { enabled: false },
+      }),
     ],
   });
   /**

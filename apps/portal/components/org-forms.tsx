@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { authClient } from "@/lib/auth-client"
 
 /** Org calls are made signed in: pass BetterAuth's message through. */
-const explain = (error: { status: number; message?: string }) =>
+export const explain = (error: { status: number; message?: string }) =>
   error.status === 429
     ? "Too many attempts. Wait a minute and try again."
     : error.message || "Something went wrong. Try again."
