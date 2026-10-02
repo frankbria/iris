@@ -84,6 +84,8 @@ src/
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
+├── log.ts                 # log(): JSON lines hosted, `[iris] …` locally; redaction net (#275)
+├── metrics.ts             # Prometheus registry + serveMetrics(): loopback-only listener (#275)
 ├── secret-env.ts          # readSecretEnv(NAME): NAME or NAME_FILE, the one `_FILE` reader (#273)
 ├── url-policy-guard.ts    # Makes that stick per-request (CDP Fetch): redirect hops, sub-resources, popups (#337)
 ├── egress-proxy.ts        # Hosted: resolve-and-pin HTTP/CONNECT proxy under all Chromium traffic (#336)
@@ -125,6 +127,10 @@ __tests__/
 ├── ingress.test.ts                # Real nginx (Docker) over deploy/nginx/iris.conf: routing, header overwrite, WSS, 429, headers, TLS (#347)
 ├── auth-client-ip.test.ts         # Real Postgres: BetterAuth rate limits key on X-Real-IP, not a rotated X-Forwarded-For (#347)
 ├── repo-hygiene.test.ts           # Public repo: no operator IPs/hosts/home paths; no raw tailscale output in workflows (#329)
+├── observability.test.ts          # Logger redaction/levels, exposition format, loopback refusal, spawned --metrics-port (#275)
+├── protocol-observability.test.ts # Request logs (RPC + REST, X-Request-Id), no fill value or key in logs, metrics content (#275)
+├── auth-logger.test.ts            # Spawned Node: BetterAuth key refusals logged at info, backend failures at error (#275)
+├── watchdog-script.test.ts        # deploy/watchdog.sh vs Docker: unhealthy restart + cap, Docker restarts, scrape, error rate (#275)
 ├── deploy-script.test.ts          # deploy/deploy.sh on local Docker + a throwaway registry: gates, rollback, rerun (#273)
 ├── backup-script.test.ts          # backup.sh/restore.sh on real Postgres + age: encrypted, restore matches, retention, failure (#274)
 ├── portal-image.test.ts           # Built portal image (IRIS_TEST_PORTAL_IMAGE): SMTP check, /login, sign-up via _FILE secrets (#273)
@@ -548,6 +554,52 @@ runs or installs them. Object storage is #445.
   healthy early and the first connection is cut. `age` comes from PATH (CI installs the
   apt package) or the pinned, checksummed release tarball cached in the temp dir. Each
   restore is one container start (~30 s on a loaded WSL daemon).
+
+### Observability (issue #275)
+
+`src/log.ts` and `src/metrics.ts`, no dependencies. Ops side: runbook "Monitoring and
+alerts".
+
+- **Logs go to stderr, always** (`console.error`): JSON in hosted mode, `[iris] msg
+  k=v` locally. stdout is program output; `api-key-auth.test.ts`'s probe parses its
+  stdout as JSON, and a log line there broke it. Level from `IRIS_LOG_LEVEL`, read per
+  call; default `info` hosted, `warn` locally (local `iris connect` prints no request
+  lines). Tests spy `console.error`; the variable is on the `jest.setup.ts` scrub list.
+- **Never pass a secret.** Log `keyId`, never the key; action *types* (from the results),
+  never selectors or `text`. `redact()` (secret-named fields incl. `text`/`value`, URL
+  userinfo, `Bearer …`) is a net, not the rule. Errors are logged as their message only.
+- **Logging is synchronous**, so request lines add no await ahead of the SessionGate
+  (#128). The RPC line is written after `reply()`; the REST line on `res` `'close'` (a
+  test reads it ~50 ms after the response).
+- **Bounded labels only**: RPC method from a fixed set (else `unknown`), REST route with
+  the id folded (`GET /v1/jobs/:id`), outcome `ok|client_error|rate_limited|error`. No
+  org id on any series; `usage_events` is the per-org record. `-32600/-32601/-32602`
+  are `client_error`; every other error code (including `-32000`) is `error`.
+- **One process-wide registry** (`metrics`). `startServer` re-registers its gauges
+  (sessions, browsers) on each call, so with several servers in one process the last
+  wins. `iris_errors_total` counts every `log('error', …)` call, printed or not.
+- **AI spend** is counted in the translate `onUsage` callback, which is now attached for
+  every tenant request, ledger or not (`protocol-auth.test.ts` asserts it).
+- **The metrics listener refuses non-loopback hosts**, so in a container it is reachable
+  only from inside it (a published port reaches the container's interface, #192). That is
+  why compose publishes nothing for 9464/9465 and the watchdog scrapes with `docker exec
+  <c> node -e fetch(...)`. Do not "fix" it by binding 0.0.0.0.
+- **BetterAuth's logger** is pinned in `createAuth()` (`logger` is omitted from its
+  options type): an `APIError` with `INVALID_API_KEY`, `KEY_NOT_FOUND`, `KEY_DISABLED`,
+  `KEY_EXPIRED` or `USAGE_EXCEEDED` drops to info; anything else stays at its level. Only
+  string and error-message arguments are logged (BetterAuth may pass rows).
+- **Watchdog** (`deploy/watchdog.sh`, root timer every minute, installed like the backup):
+  restarts `unhealthy` containers (Docker never does; `unless-stopped` acts on exit only),
+  capped per service per hour; alerts on Docker's own restarts (`RestartCount` up), failed
+  scrapes and the error share over a 5-minute window (samples in `/var/lib/iris-watchdog`;
+  a counter that went down restarts the window). Alerts: `logger -p crit -t iris-watchdog`
+  plus `/etc/iris/alert-hook <key> <message>`, repeated per key only after
+  `WATCHDOG_ALERT_REPEAT`. `container-config.test.ts` checks the script's default targets
+  against the compose `--metrics-port` values.
+- **`watchdog-script.test.ts`** runs `node:24-alpine` containers with compose labels; a
+  healthcheck on `/tmp/sick` makes one unhealthy on demand, and the file survives a
+  restart, which is how the cap is reached. `logger` and the hook are PATH/file stubs.
+  ~90 s on a loaded WSL daemon.
 
 ### Container Deployment (issue #192)
 
