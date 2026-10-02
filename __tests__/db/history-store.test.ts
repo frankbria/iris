@@ -225,15 +225,13 @@ const a11yRun = {
       success: i % 2 === 0,
       action: { type: 'navigate' as const, url: `https://user:pw@site.example/${i}?q=${i}` },
     }));
-    const id = await history()
-      .forOrg(A)
-      .record({
-        kind: 'rpc',
-        success: false,
-        startedAt: started,
-        finishedAt: finished,
-        results: actions,
-      });
+    const id = await history().forOrg(A).record({
+      kind: 'rpc',
+      success: false,
+      startedAt: started,
+      finishedAt: finished,
+      results: actions,
+    });
     const run = await history().forOrg(A).get(id);
     expect(run!.results.map((r) => r.url)).toEqual(
       actions.map((_, i) => `https://site.example/${i}?q=${i}`),
