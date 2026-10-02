@@ -415,10 +415,11 @@ export function startServer(
 
     ws.on('message', async (data) => {
       let parsed: unknown;
+      let unparseable = false;
       try {
         parsed = JSON.parse(data.toString());
       } catch {
-        return;
+        unparseable = true;
       }
 
       // Tenant request budgets (#342), before anything else, so a malformed frame
@@ -446,6 +447,8 @@ export function startServer(
         keyRate.take(principal.keyId);
         orgRate.take(principal.orgId);
       }
+      // Charged above, then dropped without a reply, as before.
+      if (unparseable) return;
 
       // Valid JSON is not necessarily a request: `null`, `1`, `[]` and `"x"`
       // all parse. Reading `.id` off `null` used to throw here, outside every

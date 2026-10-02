@@ -274,6 +274,14 @@ describe('request rate limits (#342)', () => {
     expect(replies.map((r) => r.error?.code)).toEqual([-32600, -32600, -32029]);
   });
 
+  test('frames that are not JSON spend the budget too, though they get no reply', async () => {
+    const url = await serve({ limits: { keyRequestsPerMinute: 2 } });
+    const a = await open(url, as('key-a'));
+    a.send('not json');
+    a.send('{');
+    expect((await limited(a))?.code).toBe(-32029);
+  });
+
   test('a wall clock stepping backward does not drain a budget', async () => {
     // WSL2's clock steps backward (#190). Measured on wall time, the negative
     // elapsed time would subtract tokens and refuse a client that sent nothing.
