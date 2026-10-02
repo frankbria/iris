@@ -332,7 +332,10 @@ export function recordSqliteRun(db: Database.Database, run: RunInput): number {
   return testRunId;
 }
 
-const SUMMARY_KIND = /^(rpc|a11y|visual): /;
+// The exact shape summarize() writes, so a user's own instruction for `iris run`
+// that starts with "visual: " is not taken for a run.
+const SUMMARY_KIND =
+  /^(rpc|a11y|visual): \d+ (?:action|page|comparison)\(s\), \d+ (?:failed|violation\(s\))$/;
 
 /** In the order they ran: the db.ts getters return newest first by `created_at`. */
 const sortById = <T extends { id?: number }>(rows: T[]) =>

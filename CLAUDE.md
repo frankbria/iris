@@ -672,8 +672,9 @@ tables.
   before the reply, so a reply means the run is recorded (#269 reads it). A failed write is logged, and the request still succeeds. Local
   (token) connections record nothing.
 - **Local: `sqliteHistoryStore(path)`** over the #77 tables. `test_results` has no kind
-  column, so a run's kind is its summary prefix (`visual:`, `a11y:`, `rpc:`); rows
-  `iris run` / `iris watch` write are not runs of the store. It lists by insertion
+  column, so a run is recognised by the exact summary shape `summarize()` writes
+  (`visual: N comparison(s), M failed`, …); rows `iris run` / `iris watch` write are
+  not runs of the store, even when a user's instruction starts with `visual: `. It lists by insertion
   order, because SQLite's `created_at` has one-second resolution.
 - Hosted CLI `a11y` / `visual` are not tenant surfaces. Hosted a11y/visual runs arrive
   with the job APIs (#267/#268), which call the same store.

@@ -269,6 +269,12 @@ describe('sqliteHistoryStore: the local history behind the HistoryStore seam (#2
       status: 'success',
       startTime: new Date(),
     });
+    // ...even one whose instruction happens to start like a run summary.
+    insertTestRun(db, {
+      instruction: 'visual: compare the homepage',
+      status: 'success',
+      startTime: new Date(),
+    });
     // `created_at` has one-second resolution, so runs recorded together tie on it.
     // Force the tie: the order must come from insertion order, not from luck.
     db.prepare("UPDATE test_results SET created_at = '2026-10-01 00:00:00'").run();
