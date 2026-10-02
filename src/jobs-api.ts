@@ -20,7 +20,12 @@ const A11yJobBody = z
         z
           .string()
           .max(2048)
-          .refine((u) => /^https?:\/\//i.test(u) && URL.canParse(u), 'must be an http(s) URL'),
+          .refine((u) => /^https?:\/\//i.test(u) && URL.canParse(u), 'must be an http(s) URL')
+          // Params and results are stored and readable by the whole org.
+          .refine((u) => {
+            const url = URL.parse(u);
+            return !url || (!url.username && !url.password);
+          }, 'must not contain credentials'),
       )
       .min(1)
       .max(20),

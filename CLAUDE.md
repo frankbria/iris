@@ -708,6 +708,8 @@ index), no broker (ADR 0001 §1).
   queued jobs`. Without it one org could fill the global FIFO.
 - **Same key auth and rate buckets as RPC.** REST charges the key and org buckets (429
   with `Retry-After`); a 401 or 503 is answered before anything is charged. No CORS.
+- **A URL with credentials (`user:pw@`) is a 400.** Params and results are readable by the
+  whole org, so basic-auth pages cannot be scanned through the API.
 - **`postgresJobs(db)`** (src/history-store.ts): `forOrg(scope)` gives the API
   `enqueue` / `get`; `claim` / `finish` / `fail` are worker-only and cross-tenant.
   `claim` is `UPDATE ... WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1)`.

@@ -162,6 +162,10 @@ describe('job REST API', () => {
     ['bad level', { urls: ['https://a.example/'], wcagLevel: 'B' }],
     ['bad impact', { urls: ['https://a.example/'], failOn: ['huge'] }],
     ['unknown field', { urls: ['https://a.example/'], extra: 1 }],
+    // Credentials in a URL would be stored in params and results, readable org-wide.
+    // Built at runtime so secret scanners do not flag a literal.
+    ['URL with credentials', { urls: [`https://${['user', 'pw'].join(':')}@a.example/`] }],
+    ['URL with a user name', { urls: [`https://${'user'}@a.example/`] }],
   ])('400 for %s, and queues nothing', async (_name, body) => {
     await serve();
     const res = await submit(body);
