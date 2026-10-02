@@ -1,4 +1,7 @@
 import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as net from 'net';
+import * as os from 'os';
 import path from 'path';
 import { axeTagsFor } from '../src/worker';
 
@@ -26,6 +29,59 @@ describe('iris worker', () => {
     const { status, stderr } = run({ IRIS_HOSTED: '1', DATABASE_URL: '', DATABASE_URL_FILE: '' });
     expect(status).toBe(3);
     expect(stderr).toContain('DATABASE_URL');
+  });
+
+  it('exits 3 in hosted mode when the database does not answer (#273)', async () => {
+    // A closed port on [::1]: refused at once (a closed 127.0.0.1 port blackholes on WSL).
+    const s = net.createServer();
+    await new Promise<void>((resolve) => s.listen(0, '::1', resolve));
+    const { port } = s.address() as net.AddressInfo;
+    await new Promise((resolve) => s.close(resolve));
+    const { status, stderr } = run({
+      IRIS_HOSTED: '1',
+      DATABASE_URL: `postgres://[::1]:${port}/x`,
+    });
+    expect(stderr).toContain('Cannot reach the database');
+    expect(status).toBe(3);
+  });
+});
+
+describe('runWorker heartbeat (#273)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-heartbeat-'));
+  const file = path.join(dir, 'beat');
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('writes the file at every tick, and from a timer while a claim or job is in flight', async () => {
+    const { runWorker } = await import('../src/worker');
+    const stop = new AbortController();
+    let claims = 0;
+    const jobs = {
+      // The second claim stands in for a long job: it does not return for 600ms.
+      claim: jest.fn(async () => {
+        if (++claims === 2) await sleep(600);
+        return null;
+      }),
+      finish: jest.fn(),
+      fail: jest.fn(),
+    };
+    const done = runWorker({
+      jobs: jobs as never,
+      signal: stop.signal,
+      pollMs: 20,
+      heartbeatFile: file,
+      heartbeatMs: 50,
+    });
+    try {
+      while (claims < 2) await sleep(5); // inside the long claim now
+      fs.rmSync(file, { force: true });
+      await sleep(200); // still inside it: only the timer can have written the file
+      expect(claims).toBe(2);
+      expect(fs.existsSync(file)).toBe(true);
+    } finally {
+      stop.abort();
+      await done;
+    }
   });
 });
 

@@ -134,7 +134,7 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   const keyring = resolveKeyring(env);
   // Loaded here, not at the top: BetterAuth is ESM-only (require(esm)), and this
   // module is itself only loaded in hosted mode.
-  const { createPostgresDb, resolveDatabaseUrl } = await import('./db/postgres');
+  const { createPostgresDb, probeDatabase, resolveDatabaseUrl } = await import('./db/postgres');
   const { createAuth } = await import('./auth/config');
   // Bounded: a stalled query would hold an upgrade's connection slot, and stall
   // every later revocation re-check behind it.
@@ -149,10 +149,10 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
     },
   });
   try {
-    await sql`select 1`.execute(db);
+    await probeDatabase(db as Kysely<unknown>);
   } catch (err) {
     await db.destroy();
-    throw new Error(`Cannot reach the database: ${(err as Error).message}`);
+    throw err;
   }
   // Run history and the orgs' own AI keys share the pool, and its query timeout.
   const { postgresHistory, postgresJobs } = await import('./history-store');

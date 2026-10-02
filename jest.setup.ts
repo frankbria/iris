@@ -130,6 +130,7 @@ for (const key of [
   'SMTP_URL',
   'SMTP_URL_FILE',
   'SMTP_FROM',
+  'IRIS_WORKER_HEARTBEAT_FILE',
 ]) {
   delete process.env[key];
 }

@@ -1,4 +1,4 @@
-import { Kysely, PostgresDialect } from 'kysely';
+import { Kysely, PostgresDialect, sql } from 'kysely';
 import { Pool } from 'pg';
 import { readSecretEnv } from '../secret-env';
 
@@ -49,4 +49,21 @@ export function createPostgresDb<DB = unknown>(
     console.error(`[iris] idle Postgres connection lost; the pool replaces it: ${err.message}`);
   });
   return new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
+}
+
+/**
+ * A trivial query, for startup and readiness checks: hosted `iris connect`, `iris
+ * worker` and the portal's /api/health (#273).
+ *
+ * @throws `Cannot reach the database: <message or code>`. Never the URL: an
+ *   inspected `pg` error can carry it, password included. A refused connection is
+ *   an AggregateError with an empty message, hence the code.
+ */
+export async function probeDatabase(db: Kysely<unknown>): Promise<void> {
+  try {
+    await sql`select 1`.execute(db);
+  } catch (err) {
+    const e = err as { message?: string; code?: string };
+    throw new Error(`Cannot reach the database: ${e?.message || e?.code || 'unknown error'}`);
+  }
 }
