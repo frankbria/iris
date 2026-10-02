@@ -24,6 +24,16 @@ export function configFromCredentials(
   credentials: AICredentials,
   { kind, fallback = false }: { kind: 'text' | 'vision'; fallback?: boolean },
 ): IrisConfig {
+  // The AI clients fetch from the server process, outside the browser's egress
+  // controls (#336): a tenant-chosen endpoint would be a request to wherever the
+  // tenant points it (an internal host, cloud metadata). Injected credentials are
+  // for the hosted vendors only.
+  if (credentials.provider === 'ollama') {
+    throw new Error('Injected AI credentials cannot use ollama: its endpoint is server-side');
+  }
+  if (credentials.endpoint !== undefined) {
+    throw new Error('Injected AI credentials cannot set an endpoint');
+  }
   return {
     ai: {
       provider: credentials.provider,

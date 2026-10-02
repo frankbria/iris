@@ -8,6 +8,8 @@
  * tenant without one must never fall back to them.
  */
 
+import { OpenAI } from 'openai';
+import { Anthropic } from '@anthropic-ai/sdk';
 import { translate } from '../src/translator';
 import { configFromCredentials } from '../src/ai-client/credentials';
 import { createSmartClient, SmartAIVisionClient } from '../src/ai-client';
@@ -105,13 +107,77 @@ describe('translate with injected credentials', () => {
     expect(nav.actions).toEqual([{ type: 'navigate', url: 'https://example.com' }]);
   });
 
+  it('asks a lazy credentials source only when patterns did not match', async () => {
+    let asked = 0;
+    const credentials = async () => (asked++, { provider: 'openai' as const, apiKey: 'sk-lazy' });
+    await translate('navigate to https://example.com', undefined, { credentials });
+    expect(asked).toBe(0);
+    await translate(NEEDS_AI, undefined, { credentials });
+    expect(asked).toBe(1);
+    expect(calls).toEqual([{ vendor: 'openai', apiKey: 'sk-lazy' }]);
+  });
+
+  it('in hosted mode, omitting credentials is no AI too, never the process keys', async () => {
+    // isHostedMode() is read once per module registry, so load a fresh one with it on.
+    process.env.IRIS_HOSTED = '1';
+    try {
+      let hostedTranslate!: typeof translate;
+      jest.isolateModules(() => {
+        hostedTranslate = require('../src/translator').translate;
+      });
+      const result = await hostedTranslate(NEEDS_AI, undefined, { orgId: 'org-forgot-creds' });
+      expect(calls).toEqual([]);
+      expect(result.reasoning).toMatch(/no AI credentials/i);
+    } finally {
+      delete process.env.IRIS_HOSTED;
+    }
+  });
+
   it('without injected credentials (local mode), still uses the process configuration', async () => {
     await translate(NEEDS_AI);
     expect(calls).toEqual([{ vendor: 'openai', apiKey: 'sk-process' }]);
   });
 });
 
+describe('process environment never rides along on a request', () => {
+  // The SDK constructors read these when the option is undefined: an operator's
+  // ANTHROPIC_AUTH_TOKEN would be sent next to the tenant's key as a second
+  // credential, and OPENAI_ORG_ID / OPENAI_PROJECT_ID would bill the tenant's key to
+  // the operator's org.
+  it('pins authToken, organization and project to none on every SDK client', async () => {
+    await translate(NEEDS_AI, undefined, {
+      credentials: { provider: 'openai', apiKey: 'sk-tenant' },
+    });
+    await translate(NEEDS_AI, undefined, {
+      credentials: { provider: 'anthropic', apiKey: 'sk-ant-tenant' },
+    });
+    expect(OpenAI).toHaveBeenLastCalledWith(
+      expect.objectContaining({ apiKey: 'sk-tenant', organization: null, project: null }),
+    );
+    expect(Anthropic).toHaveBeenLastCalledWith(
+      expect.objectContaining({ apiKey: 'sk-ant-tenant', authToken: null }),
+    );
+  });
+});
+
 describe('configFromCredentials', () => {
+  it('refuses a tenant endpoint or a local provider: the server would fetch it itself', () => {
+    // Node fetch from the server process is outside the browser egress controls, so a
+    // tenant-chosen endpoint is a request to wherever the tenant points it.
+    expect(() =>
+      configFromCredentials(
+        { provider: 'openai', apiKey: 'k', endpoint: 'http://169.254.169.254/' },
+        { kind: 'text' },
+      ),
+    ).toThrow(/endpoint/);
+    expect(() =>
+      configFromCredentials(
+        { provider: 'ollama', endpoint: 'http://10.0.0.5:11434' },
+        { kind: 'text' },
+      ),
+    ).toThrow(/ollama/i);
+  });
+
   it("carries only the tenant's vendor, with fallback off unless the org opted in", () => {
     const config = configFromCredentials({ provider: 'openai', apiKey: 'sk-t' }, { kind: 'text' });
     expect(config.ai).toMatchObject({ provider: 'openai', apiKey: 'sk-t', fallback: false });

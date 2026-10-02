@@ -855,7 +855,20 @@ async function executeBrowserActions(
         principal
           ? {
               orgId: principal.orgId,
-              credentials: aiCredentials ? await aiCredentials(principal) : null,
+              // Lazy: asked only if patterns do not match. A failed lookup is no AI
+              // for this request; its message stays in the server log, not the reply.
+              credentials: async () => {
+                if (!aiCredentials) return null;
+                try {
+                  return await aiCredentials(principal);
+                } catch (err) {
+                  console.error(
+                    '[iris] AI credentials lookup failed; translating without AI:',
+                    (err as Error).message,
+                  );
+                  return null;
+                }
+              },
             }
           : {},
       );

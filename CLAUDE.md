@@ -655,16 +655,26 @@ They apply only to connections with a principal; local mode is untouched.
   fallback })` builds the client config from it alone: no env, no `.env`, no
   `~/.iris/config.json`, no other vendor's key, and `fallback` only from the caller (the
   org's opt-in), never the process config's `ai.fallback`.
-- **`translate(…, { orgId, credentials })`**: injected credentials replace the process
-  configuration; `credentials: null` means the tenant has no AI (pattern translation
-  only), and is never a reason to use the process-wide keys (ADR 0001 §5). Omitted is
-  local mode, unchanged.
+- **`translate(…, { orgId, credentials })`**: `credentials` is an `AICredentials`, `null`
+  (the tenant has no AI: pattern translation only), or a function asked only after
+  patterns miss. Omitted is local mode, the process configuration, **except under
+  `IRIS_HOSTED`, where omitted means `null`**: a caller that forgets them must not spend
+  the operator's keys (ADR 0001 §5).
+- **Injected credentials refuse `endpoint` and `ollama`**: AI clients fetch from the
+  server process, outside the browser egress controls (#336), so a tenant-chosen URL
+  would be an SSRF.
+- **The SDK clients pin `authToken: null` (Anthropic) and `organization`/`project: null`
+  (OpenAI)**: left undefined, the SDKs read `ANTHROPIC_AUTH_TOKEN` (sent as a second
+  credential next to the tenant's key) and `OPENAI_ORG_ID`/`OPENAI_PROJECT_ID` from the
+  process. Those variables, and the SDKs' `*_BASE_URL`, are on the `jest.setup.ts`
+  scrub list. Base URLs from env are kept: that is the operator's own routing.
 - **Vision**: construct `SmartAIVisionClient` / the classifier with
   `configFromCredentials(creds, { kind: 'vision' })`. Its existing vendor scoping
   (`credentialsFor`, #74/#245) then has only the tenant's vendor, so even with the org's
   fallback on, no other vendor is contacted.
 - **Hosted RPC**: `startServer({ aiCredentials: (principal) => … })` resolves a tenant's
-  credentials per request. Hosted `iris connect` passes none yet, so tenants get pattern
+  credentials per request, lazily; a lookup that throws is logged and becomes no AI, so
+  its message never reaches the client. Hosted `iris connect` passes none yet, so tenants get pattern
   translation only until BYOK (#344) and managed credits (#346) supply the resolver.
 
 ### Tenant-Scoped Ledger and Vision Cache (issue #255)

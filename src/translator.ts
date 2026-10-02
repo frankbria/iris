@@ -1,5 +1,12 @@
 import { loadConfig, validateConfig } from './config';
 import { configFromCredentials, type AICredentials } from './ai-client/credentials';
+import { isHostedMode } from './hosted';
+
+/**
+ * A request's AI credentials (#258): injected, `null` for none, or a function asked
+ * only when the instruction needs the model.
+ */
+export type CredentialsSource = AICredentials | null | (() => Promise<AICredentials | null>);
 import { createResolvedAIClient, AITranslationRequest } from './ai-client';
 
 // The action vocabulary lives in its own leaf module so the AI client can share
@@ -40,7 +47,7 @@ export async function translate(
    * entirely; `null` means this tenant has no AI, and never falls back to the
    * process-wide keys. Omitted (local mode): the process configuration.
    */
-  scope: { orgId?: string; credentials?: AICredentials | null } = {},
+  scope: { orgId?: string; credentials?: CredentialsSource } = {},
 ): Promise<TranslationResult> {
   assertInstructionLength(instruction);
 
@@ -171,9 +178,18 @@ function translateWithPatterns(instruction: string): TranslationResult {
 async function translateWithAI(
   instruction: string,
   context: { url?: string } | undefined,
-  scope: { orgId?: string; credentials?: AICredentials | null },
+  scope: { orgId?: string; credentials?: CredentialsSource },
 ): Promise<TranslationResult> {
-  if (scope.credentials === null) {
+  // Asked for only now, after patterns failed: a lookup can cost a database read.
+  // In hosted mode, omitting credentials is no AI too, never the operator's keys: a
+  // caller that forgets them must not spend the process-wide ones (ADR 0001 §5).
+  const credentials =
+    typeof scope.credentials === 'function'
+      ? await scope.credentials()
+      : scope.credentials === undefined && isHostedMode()
+        ? null
+        : scope.credentials;
+  if (credentials === null) {
     return {
       actions: [],
       method: 'ai',
@@ -182,8 +198,8 @@ async function translateWithAI(
     };
   }
   try {
-    const config = scope.credentials
-      ? configFromCredentials(scope.credentials, { kind: 'text' })
+    const config = credentials
+      ? configFromCredentials(credentials, { kind: 'text' })
       : loadConfig();
     const configErrors = validateConfig(config);
 
