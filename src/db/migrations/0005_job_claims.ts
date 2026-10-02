@@ -7,6 +7,10 @@ import { type Kysely, sql } from 'kysely';
  * The partial index serves the reaper's scan of running rows.
  */
 const STATEMENTS = [
+  // These take an exclusive lock on `runs` while the old release still serves it. Behind
+  // a long transaction the lock would queue, and every query on `runs` would queue
+  // behind it: fail fast instead, and the deploy keeps the old release (#273).
+  `set local lock_timeout = '5s'`,
   `alter table runs add column attempts int not null default 0`,
   `alter table runs add column claim_token uuid`,
   `alter table runs add column heartbeat_at timestamptz`,

@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { DEFAULT_STALE_MS } from './history-store';
 import type { A11yJobParams, ClaimedJob, PostgresJobs } from './history-store';
 
 /**
@@ -64,11 +65,23 @@ export async function processNextA11yJob(
 ): Promise<ClaimedJob | null> {
   const job = await jobs.claim('a11y');
   if (!job) return null;
-  const lost = (what: string) =>
+  let reported = false;
+  const lost = (what: string) => {
+    if (reported) return;
+    reported = true;
     console.error(`[iris] worker: claim on job ${job.id} was lost; not recording its ${what}`);
+  };
+  // Once the outcome is being written, a heartbeat answer means nothing: one in flight
+  // waits on finish's row lock and then sees a finished row.
+  let writing = false;
   const timer = setInterval(() => {
     jobs.heartbeat(job).then(
-      (held) => held || lost('outcome'),
+      (held) => {
+        if (held || writing) return;
+        // Reaped: say so once and stop asking. The scan runs on; its write will be refused.
+        clearInterval(timer);
+        lost('outcome');
+      },
       (err) => console.error(`[iris] worker job heartbeat ${job.id}:`, (err as Error).message),
     );
   }, heartbeatMs);
@@ -77,9 +90,11 @@ export async function processNextA11yJob(
     try {
       result = await runA11y(job.params);
     } catch (err) {
+      writing = true;
       if (!(await jobs.fail(job, (err as Error).message || 'Job failed'))) lost('failure');
       return job;
     }
+    writing = true;
     try {
       if (!(await jobs.finish(job, result))) lost('result');
     } catch (err) {
@@ -124,6 +139,12 @@ export async function runWorker(options: {
     staleMs,
     maxAttempts,
   } = options;
+  // A live job beats every heartbeatMs; the reaper must not mistake one late beat for death.
+  if (heartbeatMs * 2 >= (staleMs ?? DEFAULT_STALE_MS)) {
+    throw new Error(
+      `heartbeatMs (${heartbeatMs}) must be under half of staleMs (${staleMs ?? DEFAULT_STALE_MS})`,
+    );
+  }
   const beat = () => {
     if (!heartbeatFile) return;
     try {

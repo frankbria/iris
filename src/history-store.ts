@@ -293,6 +293,9 @@ export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
 
 // --- Jobs (#267): queued `runs` rows, claimed by a worker --------------------------
 
+/** A running job with no heartbeat for this long is reaped (#435): six missed 30 s beats. */
+export const DEFAULT_STALE_MS = 180_000;
+
 /** What a job runs, as the request stated it. */
 export interface A11yJobParams {
   urls: string[];
@@ -516,7 +519,7 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
       return Boolean(updated.numAffectedRows);
     },
 
-    async reapStuck({ staleMs = 180_000, maxAttempts = 3 } = {}) {
+    async reapStuck({ staleMs = DEFAULT_STALE_MS, maxAttempts = 3 } = {}) {
       const { rows } = await sql<{ status: string; n: string }>`
         with stale as (
           select id, attempts < ${maxAttempts} as retry from runs

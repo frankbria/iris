@@ -192,6 +192,73 @@ describe('job claims (#435)', () => {
     log.mockRestore();
   });
 
+  it('stops heartbeating after the first lost claim, and says so once', async () => {
+    slowRunner(200);
+    const { processNextA11yJob } = await import('../src/worker');
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const heartbeat = jest.fn().mockResolvedValue(false); // reaped: the claim is gone
+    await processNextA11yJob(
+      {
+        claim: async () => job as never,
+        finish: async () => false,
+        fail: jest.fn(),
+        heartbeat,
+        reapStuck: jest.fn(),
+      },
+      { heartbeatMs: 20 },
+    );
+    expect(heartbeat).toHaveBeenCalledTimes(1);
+    const lostLines = log.mock.calls.filter((c) => String(c[0]).includes('was lost'));
+    expect(lostLines).toHaveLength(1);
+    log.mockRestore();
+  });
+
+  it('a heartbeat answered after a successful finish is not a lost claim', async () => {
+    slowRunner(0);
+    const { processNextA11yJob } = await import('../src/worker');
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    // The heartbeat blocks on finish's row lock and then sees a finished row: false.
+    let release!: () => void;
+    const heartbeat = jest.fn(
+      () => new Promise<boolean>((resolve) => (release = () => resolve(false))),
+    );
+    await processNextA11yJob(
+      {
+        claim: async () => job as never,
+        finish: async () => {
+          await sleep(60); // a heartbeat tick fires meanwhile
+          return true;
+        },
+        fail: jest.fn(),
+        heartbeat,
+        reapStuck: jest.fn(),
+      },
+      { heartbeatMs: 20 },
+    );
+    expect(heartbeat).toHaveBeenCalled();
+    release();
+    await sleep(10);
+    expect(log.mock.calls.flat().join(' ')).not.toContain('was lost');
+    log.mockRestore();
+  });
+
+  it('refuses a heartbeat interval too close to the reap threshold', async () => {
+    const { runWorker } = await import('../src/worker');
+    await expect(
+      runWorker({
+        jobs: {
+          claim: jest.fn(),
+          finish: jest.fn(),
+          fail: jest.fn(),
+          heartbeat: jest.fn(),
+          reapStuck: jest.fn(),
+        },
+        heartbeatMs: 60_000,
+        staleMs: 90_000,
+      }),
+    ).rejects.toThrow(/heartbeat/i);
+  });
+
   it('runs the reaper before each claim, logs counts, and survives a reaper error', async () => {
     const { runWorker } = await import('../src/worker');
     const controller = new AbortController();
@@ -207,6 +274,7 @@ describe('job claims (#435)', () => {
       signal: controller.signal,
       pollMs: 1,
       staleMs: 1234,
+      heartbeatMs: 100,
       maxAttempts: 5,
       jobs: {
         claim: async () => {

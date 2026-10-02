@@ -857,6 +857,13 @@ index; 0005: `attempts`, `claim_token`, `heartbeat_at`, #435), no broker (ADR 00
   with no heartbeat (pre-0005) is judged by `started_at`. A reaper error is logged and
   the loop continues. A scan that is legitimately slower than `staleMs` without beating
   (a hung event loop) is reaped too; the old claim's late write is then refused.
+  A reaped worker's heartbeat stops after its first "claim lost" (said once), and a
+  heartbeat answered while the outcome is being written is ignored (it waited on
+  finish's row lock). `runWorker` refuses `heartbeatMs * 2 >= staleMs`. Migration 0005
+  sets `lock_timeout = 5s`: its exclusive lock on `runs` must not queue behind a long
+  transaction while the old release serves. A browser that hangs while the worker's event
+  loop still beats is never reaped (#442). During a rollout, a pre-0005 worker finishes
+  without a token check until it is recreated (seconds; usage stays idempotent).
   Polling, not LISTEN/NOTIFY.
 - **Tests**: set `process.env.IRIS_HOSTED = '1'` at the top of the file and start
   `hostedEgressProxy({ lookup, connect })` before the first launch; no isolateModules is
