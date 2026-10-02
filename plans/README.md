@@ -136,7 +136,7 @@ code is the ordering key.
 |----------|-------|-------|-----------|--------|
 | `P0.44` | [#347](https://github.com/frankbria/iris/issues/347) | TLS ingress and reverse proxy | P0.24 (#341) | DONE (PR #437) |
 | `P0.45` | [#273](https://github.com/frankbria/iris/issues/273) | Production environment and deploy pipeline | P0.20 (#248), P0.44 (#347) | DONE (PR #439) |
-| `P0.46` | [#274](https://github.com/frankbria/iris/issues/274) | Backups and restore drill for Postgres and object storage | P0.45 (#273) | TODO |
+| `P0.46` | [#274](https://github.com/frankbria/iris/issues/274) | Backups and restore drill for Postgres and object storage | P0.45 (#273) | DONE (PR #446; bucket half split to #445) |
 | `P0.47` | [#275](https://github.com/frankbria/iris/issues/275) | Observability: structured logs, metrics, alerting | P0.45 (#273) | TODO |
 
 **K. Legal, trust & data lifecycle**
@@ -148,6 +148,7 @@ code is the ordering key.
 | `P0.50` | [#348](https://github.com/frankbria/iris/issues/348) | Abuse handling and security contact | P0.24 (#341) | TODO |
 | `P0.51` | [#349](https://github.com/frankbria/iris/issues/349) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | TODO |
 | `P0.52` | [#435](https://github.com/frankbria/iris/issues/435) | Reap jobs stuck in running after a worker crash | P0.39 (#267) | DONE (PR #443) |
+| `P0.53` | [#445](https://github.com/frankbria/iris/issues/445) | Object storage backups: bucket versioning/replication and a restore drill | P0.29 (#257) | BLOCKED (on #257) |
 
 ### P1 — Pre-launch hardening
 
