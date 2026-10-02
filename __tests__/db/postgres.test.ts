@@ -101,6 +101,25 @@ describe('migrate process against a server that never answers', () => {
   }, 30_000);
 });
 
+(ADMIN_URL ? describe : describe.skip)('createPostgresDb query timeout', () => {
+  // A server that accepted the connection and then stopped answering: connect
+  // timeouts do not cover it. pg_sleep stands in for the stall (#341).
+  it('fails a query that outlives queryTimeoutMs, and leaves the default unbounded', async () => {
+    const bounded = createPostgresDb(ADMIN_URL!, { queryTimeoutMs: 200 });
+    const unbounded = createPostgresDb(ADMIN_URL!);
+    try {
+      await expect(sql`select pg_sleep(2)`.execute(bounded)).rejects.toThrow(/timeout/i);
+      // The pool is still usable afterwards.
+      expect((await sql<{ n: number }>`select 1 as n`.execute(bounded)).rows[0].n).toBe(1);
+      // Migrations use the default: a long statement must not be cut off.
+      await expect(sql`select pg_sleep(0.5)`.execute(unbounded)).resolves.toBeDefined();
+    } finally {
+      await bounded.destroy();
+      await unbounded.destroy();
+    }
+  });
+});
+
 (ADMIN_URL ? describe : describe.skip)('Postgres migrations', () => {
   const dbName = `iris_test_${process.pid}_${randomBytes(4).toString('hex')}`;
   let url: string;

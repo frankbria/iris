@@ -65,7 +65,9 @@ export async function hostedAuthenticator(
   const { createPostgresDb, resolveDatabaseUrl } = await import('./db/postgres');
   const { createAuth } = await import('./auth/config');
   const { sql } = await import('kysely');
-  const db = createPostgresDb(resolveDatabaseUrl(env));
+  // Bounded: a stalled query would hold an upgrade's connection slot, and stall
+  // every later revocation re-check behind it.
+  const db = createPostgresDb(resolveDatabaseUrl(env), { queryTimeoutMs: 5_000 });
   const auth = createAuth({
     secret: env.BETTER_AUTH_SECRET!,
     baseURL: env.BETTER_AUTH_URL!,

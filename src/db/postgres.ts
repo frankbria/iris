@@ -26,8 +26,25 @@ export function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string
  *
  * `pg` waits forever for a server that accepts and never answers, so a deploy's
  * migration step against a blackholed host would hang instead of failing.
+ *
+ * `queryTimeoutMs` also bounds each query, for callers on a request path (#341):
+ * the server cancels a slow statement, and the client gives up on a connection
+ * that stopped answering mid-query, which the connect timeout does not cover.
+ * Unset by default, because a migration may legitimately run long.
  */
-export function createPostgresDb<DB = unknown>(connectionString: string): Kysely<DB> {
-  const pool = new Pool({ connectionString, connectionTimeoutMillis: 10_000 });
+export function createPostgresDb<DB = unknown>(
+  connectionString: string,
+  options: { queryTimeoutMs?: number } = {},
+): Kysely<DB> {
+  const { queryTimeoutMs } = options;
+  const pool = new Pool({
+    connectionString,
+    connectionTimeoutMillis: 10_000,
+    ...(queryTimeoutMs && {
+      statement_timeout: queryTimeoutMs,
+      // A little later than the server's own cancel, so a live server answers first.
+      query_timeout: queryTimeoutMs + 1_000,
+    }),
+  });
   return new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
 }
