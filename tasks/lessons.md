@@ -350,3 +350,11 @@ Write/Edit, not as a pre-push afterthought.
 - Refuse credentials at the API boundary rather than sanitising each place they get stored: params, results and error text all held the URL.
 - Demonstrating a shared rate budget with a background burst raced the 2/s refill; drain first, then send the other surface's burst, in sequence.
 - `showboat verify` replays every step, background servers included: stop them again afterwards.
+
+## #347 / PR #437 (2026-10-02)
+- A `Write` that fails ("modified since read") leaves the old file in place, and the next command happily posts it. Check the write result before a step that publishes the file (the #347 plan comment went out with #267's plan and had to be edited).
+- Rate limiting by client IP needs the IPv6 prefix, not the address: `$binary_remote_addr` is a /128, and a /64 holder rotates through fresh budgets. Key nginx zones and BetterAuth (`ipv6Subnet`, pinned) on the /64, the same as each other.
+- Check a reviewer's claim about a library against node_modules before acting: the CI bot said BetterAuth keys IPv6 per address, while the source defaults to /64. What survived was the settable option behind it, which is now pinned.
+- A TLS-version test can pass because of the client's or the image's OpenSSL defaults, not the config. Test a setting only the config line can decide (a non-forward-secret cipher), and mutation-check it.
+- nginx `add_header` and `proxy_set_header` are inherited only by locations that set none of their own: repeat the full set or keep it at server level, and test every location.
+- Showboat waits for every child holding its pipes: start long-running services outside `showboat exec` and record only the checks.
