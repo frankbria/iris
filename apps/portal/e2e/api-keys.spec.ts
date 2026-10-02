@@ -79,7 +79,10 @@ test("an owner creates a key, sees it once, and revokes it", async ({
   // Shown once: after a reload the key is nowhere on the page.
   await page.reload()
   await expect(page.getByLabel("Your new key")).toHaveCount(0)
-  expect(await page.content()).not.toContain(key.slice(11))
+  const html = await page.content()
+  expect(html).not.toContain(key.slice(11))
+  // A piece of the key rendered on its own would slip past the check above.
+  expect(html).not.toContain(key.slice(20, 36))
 
   page.once("dialog", (dialog) => dialog.accept())
   await page.getByRole("button", { name: "Revoke ci" }).click()

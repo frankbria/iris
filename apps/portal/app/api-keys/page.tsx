@@ -9,7 +9,9 @@ import { getAuth } from "@/lib/auth"
 import { requireOrg } from "@/lib/org"
 
 const when = (date: Date | string | null) =>
-  date ? new Date(date).toISOString().slice(0, 16).replace("T", " ") : "never"
+  date
+    ? `${new Date(date).toISOString().slice(0, 16).replace("T", " ")} UTC`
+    : "never"
 
 /**
  * The active org's API keys (#340). BetterAuth checks the caller's role in the org on
