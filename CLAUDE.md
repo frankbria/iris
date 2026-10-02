@@ -260,6 +260,10 @@ stays the local-mode store. `docker-compose.dev.yml` runs a dev Postgres on
 - **The pool has a 10s connect timeout.** Without it, `pg` waits forever on a host
   that accepts connections and never answers, and a deploy step hangs instead of
   failing.
+- **The pool has an `error` listener** (#341). A Postgres restart ends every idle
+  pooled connection, and `pg` reports that as an `error` event on the pool. With no
+  listener it is an uncaught exception, and the process exits: the hosted RPC server
+  dropped every tenant in the #341 demo. The pool replaces the client by itself.
 - **Deploy order** (ci.yml): `pull`, then `up -d --wait postgres`, then migrate
   from the new image, then force-recreate `iris` only. A failed migration leaves the
   old container serving. The Postgres password is generated on the box **once**,
