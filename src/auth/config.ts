@@ -1,7 +1,7 @@
 import { apiKey } from '@better-auth/api-key';
 import { betterAuth, type BetterAuthOptions } from 'better-auth';
-import { APIError, createAuthMiddleware, getIP } from 'better-auth/api';
-import { Kysely, PostgresDialect } from 'kysely';
+import { APIError, createAuthMiddleware, getIP, getSessionFromCtx } from 'better-auth/api';
+import { Kysely, PostgresDialect, sql } from 'kysely';
 import type { Pool } from 'pg';
 import { organization } from 'better-auth/plugins';
 import { createAccessControl } from 'better-auth/plugins/access';
@@ -14,6 +14,7 @@ import {
 import { recordCurrentAcceptance } from '../legal/acceptance';
 import { ACCEPTED_TERMS } from '../legal/versions';
 import { log, type LogLevel } from '../log';
+import { suspendedSql } from '../org-suspension';
 
 /** One outgoing account email: verification or password reset. */
 export interface AuthEmail {
@@ -190,6 +191,7 @@ export function createAuth(
       // Sign-up must carry the current versions of the terms (#276). A client that skips
       // the checkbox, or names an old version, is refused here, not in the form.
       before: createAuthMiddleware(async (ctx) => {
+        if (API_KEY_WRITES.has(ctx.path)) return refuseSuspendedKeyWrite(ctx, rest.database);
         if (ctx.path !== '/sign-up/email') return;
         if ((ctx.body as { acceptedTerms?: unknown } | undefined)?.acceptedTerms !== ACCEPTED_TERMS)
           throw new APIError('BAD_REQUEST', {
@@ -282,6 +284,38 @@ export function createAuth(
     return org.id;
   };
   return auth;
+}
+
+/** The api-key plugin's endpoints that change an org's keys. */
+const API_KEY_WRITES = new Set(['/api-key/create', '/api-key/update', '/api-key/delete']);
+
+/**
+ * A suspended org's keys cannot be created, changed or revoked (#348). Refused only
+ * for a member of that org, so a request naming another tenant's org still gets the
+ * plugin's own "not a member" and learns nothing about its state. One query: the
+ * org (named, or the key's), its suspension and the caller's membership.
+ */
+async function refuseSuspendedKeyWrite(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  const session = await getSessionFromCtx(ctx);
+  if (!session) return; // the endpoint refuses it
+  const body = (ctx.body ?? {}) as { organizationId?: unknown; keyId?: unknown };
+  const orgId = typeof body.organizationId === 'string' ? body.organizationId : null;
+  const keyId = typeof body.keyId === 'string' ? body.keyId : null;
+  if (!orgId && !keyId) return;
+  const { rows } = await sql<{ refused: boolean }>`
+    with k as (
+      select coalesce(${orgId}::text, (select "referenceId" from apikey where id = ${keyId})) as org)
+    select ${suspendedSql(sql.ref('k.org'))} and exists (
+      select 1 from member m where m."organizationId" = k.org and m."userId" = ${session.user.id}
+    ) as refused from k`.execute(termsDb(database));
+  if (rows[0]?.refused)
+    throw new APIError('FORBIDDEN', {
+      code: 'ORGANIZATION_SUSPENDED',
+      message: 'This organization is suspended.',
+    });
 }
 
 /** Kysely over whichever database the caller gave BetterAuth: its own `{ db }` or a `pg` pool. */
