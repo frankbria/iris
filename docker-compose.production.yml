@@ -149,6 +149,11 @@ services:
       IRIS_KEY_ENCRYPTION_KEY_FILE: /run/secrets/master_key
       SMTP_URL_FILE: /run/secrets/smtp_url
       SMTP_FROM: ${SMTP_FROM:?set SMTP_FROM to the sender address}
+      # Published contacts (#348): optional; empty is unset (placeholder on /contact,
+      # no /.well-known/security.txt without a security contact).
+      IRIS_SECURITY_CONTACT: ${IRIS_SECURITY_CONTACT:-}
+      IRIS_ABUSE_CONTACT: ${IRIS_ABUSE_CONTACT:-}
+      IRIS_SUPPORT_CONTACT: ${IRIS_SUPPORT_CONTACT:-}
     secrets:
       - database_url
       - better_auth_secret
