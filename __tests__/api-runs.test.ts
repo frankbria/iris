@@ -195,6 +195,24 @@ const rpcRun = (success: boolean, startedAt: Date): RunInput => ({
     }
   });
 
+  it('a job that could not run says why: its error, no results', async () => {
+    const { rows } = await sql<{ id: string }>`
+      insert into runs (org_id, kind, status, error, started_at, finished_at)
+      values ('org-a', 'a11y', 'failed', 'Organization suspended', now(), now())
+      returning id`.execute(db);
+    try {
+      const body = await (await get(`/v1/runs/${rows[0].id}`)).json();
+      expect(body).toMatchObject({
+        status: 'failed',
+        summary: null,
+        error: 'Organization suspended',
+        results: [],
+      });
+    } finally {
+      await sql`delete from runs where id = ${rows[0].id}`.execute(db);
+    }
+  });
+
   it("answers 404 for another org's run, an unknown id and a non-uuid", async () => {
     expect((await get(`/v1/runs/${bRun}`)).status).toBe(404);
     expect((await get(`/v1/runs/${aRuns[0]}`, 'key-b')).status).toBe(404);

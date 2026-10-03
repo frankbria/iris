@@ -17,6 +17,9 @@ export default async function DashboardPage() {
       </p>
       <OrgSwitcher orgs={orgs} activeId={org.id} />
       <p className="text-sm text-muted-foreground">Your role: {role}</p>
+      <Link href="/runs" className="text-sm underline">
+        Runs
+      </Link>
       <Link href="/org" className="text-sm underline">
         Members
       </Link>

@@ -65,6 +65,20 @@ export function redactString(text: string): string {
     .replace(API_KEY, 'iris_[redacted]');
 }
 
+/**
+ * A copy of `value` with `redactString` applied to every string inside, keeping field
+ * names, dates and shape: for data shown to a tenant (run detail, #269/#270), where a
+ * field named `text` is a result, not a secret to drop.
+ */
+export function redactStrings(value: unknown): unknown {
+  if (typeof value === 'string') return redactString(value);
+  if (Array.isArray(value)) return value.map(redactStrings);
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactStrings(v)]));
+  }
+  return value;
+}
+
 /** A copy of `value` with secret-named fields replaced and credentials cut from strings. */
 export function redact(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') return redactString(value);

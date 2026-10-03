@@ -144,6 +144,26 @@ describe('log', () => {
     expect(redact(new Error('GET https://c.example/?sig=zzz9 failed'))).not.toContain('zzz9');
   });
 
+  // #270: run detail is shown by the API and the portal alike; both use this.
+  it('redactStrings cuts secrets from every string, keeping field names, dates and shape', () => {
+    const { redactStrings } = loadLog(true);
+    const at = new Date('2026-06-01T00:00:00Z');
+    const out = redactStrings({
+      id: 'r1',
+      finishedAt: at,
+      results: [
+        { url: 'https://a.example/?token=t0k&page=2', passed: true, result: { text: 'kept' } },
+        null,
+        3,
+      ],
+    }) as { finishedAt: Date; results: Array<{ url: string; result: { text: string } }> };
+    expect(out.results[0].url).toBe('https://a.example/?token=[redacted]&page=2');
+    // A field named like a secret is not replaced here: this is data, not a log line.
+    expect(out.results[0].result.text).toBe('kept');
+    expect(out.finishedAt).toBe(at);
+    expect(out.results.slice(1)).toEqual([null, 3]);
+  });
+
   it('counts every error-level line in iris_errors_total, logged or not', () => {
     const { log, metrics } = loadLog(true);
     const before = metrics.counter('iris_errors_total', '').get();
