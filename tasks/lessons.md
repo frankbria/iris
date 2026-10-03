@@ -393,3 +393,8 @@ Write/Edit, not as a pre-push afterthought.
 - Clickwrap enforcement must check the agreement on the server: a hidden token alone is the same for every client, so the server action also requires the box (`agree === 'on'`).
 - Close latent bypasses at the type level: omit `socialProviders` from the shared auth factory's options, so a future caller can't add a sign-up path the terms hook doesn't cover.
 - Legal wording isn't the agent's to decide. Ship the mechanism with plainly marked drafts and `[placeholder]` tokens, and file a needs-owner issue for the text.
+
+## #277 / PR #453 (2026-10-02)
+- A link check of "starts with / but not //" lets `/\evil.com` and `/<tab>/evil.com` through: browsers treat `\` as `/` and drop tabs. Refuse backslash and whitespace, then resolve with `new URL()` and check the origin.
+- Writing a data-flows inventory from the code turns up gaps nobody filed: unpurged sessions, unbacked-up volumes, off-box copies never deleted. Route each one to the owning issue (#349) rather than guessing a retention period.
+- Keep "published" document versions apart from "must accept" versions: putting the privacy version in the acceptance set would have forced every user to re-accept for a document that needs no consent.
