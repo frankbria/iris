@@ -106,6 +106,16 @@ is processed in Chromium's memory for the duration of the job.
 | Access | Operators. |
 | Retention | Deleted with the user (`on delete cascade`). Otherwise **undecided (#349)**. |
 
+### Audit log
+
+| | |
+|---|---|
+| Data | `audit_log`: org, `actor_user_id`, `actor_api_key_id` (plain ids, no foreign keys, so an entry outlives its actor), action, target, `metadata jsonb`, time. |
+| Purpose | An org's audit trail (#361). |
+| Where | Postgres, `0001_initial.ts`. |
+| Status | **The table exists; nothing writes to it yet (#361).** Update this entry when #361 defines what is recorded. |
+| Retention | **Undecided (#349).** |
+
 ### AI cost ledger
 
 | | |

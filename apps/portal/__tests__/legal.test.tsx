@@ -42,6 +42,45 @@ describe("legal documents", () => {
     expect(() => parseLegal("# no front matter")).toThrow(/front matter/)
   })
 
+  it("parses a file with CRLF line endings", () => {
+    const d = parseLegal(
+      "---\r\ntitle: T\r\nversion: 2026-01-01\r\ndraft: true\r\n---\r\n| A | B |\r\n|---|---|\r\n| 1 | 2 |\r\n"
+    )
+    expect(d).toMatchObject({ title: "T", version: "2026-01-01", draft: true })
+    render(<LegalDocument doc={d} />)
+    expect(screen.getAllByRole("row")).toHaveLength(2)
+  })
+
+  // Browsers read `\` as `/` and drop tab/newline from URLs, so `/\evil.com` and
+  // `/<TAB>/evil.com` are protocol-relative links off the site.
+  const REFUSED = [
+    "/\\evil.com",
+    "//evil.com",
+    "/\t/evil.com",
+    "data:text/html,x",
+    " JaVaScRiPt:void0",
+    "https:/\\x",
+    "http://plain.example/",
+  ]
+  const KEPT = ["/terms", "https://ok.example/"]
+
+  it.each([
+    ["a paragraph", (md: string) => md],
+    ["a table cell", (md: string) => `| H |\n|---|\n| ${md} |`],
+  ])("keeps only site paths and https links in %s", (_, wrap) => {
+    for (const href of [...REFUSED, ...KEPT]) {
+      const { unmount } = render(
+        <LegalDocument doc={doc("", wrap(`[go](${href})`))} />
+      )
+      const link = screen.queryByRole("link", { name: "go" })
+      if (KEPT.includes(href)) expect(link?.getAttribute("href")).toBe(href)
+      else expect(link).toBeNull()
+      // A refused link is still its label.
+      expect(screen.getByText("go")).toBeTruthy()
+      unmount()
+    }
+  })
+
   it("the shipped files parse, and carry the versions the server enforces", async () => {
     const { LEGAL_VERSIONS } = await import("../../../src/legal/versions")
     for (const name of ["terms", "acceptable-use"] as const) {

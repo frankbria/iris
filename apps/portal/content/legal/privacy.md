@@ -47,7 +47,7 @@ We use service providers (subprocessors) to host the service, send email and, wh
 
 ## 7. How long we keep it
 
-- Sessions expire 7 days after they were last used, and password-reset links after 1 hour. Invitations expire after 48 hours.
+- Sessions expire about 7 days after the session was last extended (sessions are extended at most once a day while in use), and password-reset links after 1 hour. Invitations expire after 48 hours.
 - When you revoke an API key or remove an AI provider key, we delete it at once.
 - AI vision results we cache to avoid repeat charges are kept for 30 days.
 - Service logs are rotated by size and overwritten as new logs are written.

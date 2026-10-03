@@ -3,9 +3,28 @@ import type { ReactNode } from "react"
 
 import type { LegalContent } from "@/lib/legal"
 
+const SITE = "https://portal.invalid"
+
+/**
+ * `href` if it is a link on this site or an https URL, else null. Browsers read `\` as
+ * `/` and drop tab/newline, so `/\evil.com` would leave the site: any backslash, space
+ * or control character is refused before the URL is resolved.
+ */
+function safeHref(href: string): string | null {
+  if (/[\\\s\x00-\x1f\x7f]/.test(href)) return null
+  let url: URL
+  try {
+    url = new URL(href, SITE)
+  } catch {
+    return null
+  }
+  if (url.origin === SITE) return href.startsWith("/") ? href : null
+  return url.protocol === "https:" && /^https:\/\//i.test(href) ? href : null
+}
+
 /**
  * Inline `**bold**` and `[text](href)`. React escapes every string, so the text cannot
- * inject markup; a link is kept only when it is a site path or https URL.
+ * inject markup; a link is kept only when {@link safeHref} accepts it.
  */
 function inline(text: string): ReactNode[] {
   return text.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/).map((part, i) => {
@@ -13,14 +32,15 @@ function inline(text: string): ReactNode[] {
     if (bold) return <strong key={i}>{bold[1]}</strong>
     const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part)
     if (link) {
-      const [, label, href] = link
-      if (href.startsWith("/") && !href.startsWith("//"))
+      const [, label, raw] = link
+      const href = safeHref(raw)
+      if (href?.startsWith("/"))
         return (
           <Link key={i} href={href} className="underline">
             {label}
           </Link>
         )
-      if (href.startsWith("https://"))
+      if (href)
         return (
           <a key={i} href={href} className="underline">
             {label}
