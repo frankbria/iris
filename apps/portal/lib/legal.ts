@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 
-import type { LegalDocument } from "../../../src/legal/versions"
+import type {
+  LegalDocument,
+  PublishedDocument,
+} from "../../../src/legal/versions"
 
 /** A legal document from `content/legal/` (#276). Trusted repo files, never user input. */
 export type LegalContent = {
@@ -32,7 +35,9 @@ export function parseLegal(source: string): LegalContent {
   }
 }
 
-export function readLegal(name: LegalDocument): LegalContent {
+export function readLegal(
+  name: LegalDocument | PublishedDocument
+): LegalContent {
   return parseLegal(
     readFileSync(
       path.join(process.cwd(), "content", "legal", `${name}.md`),

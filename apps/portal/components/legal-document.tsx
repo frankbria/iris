@@ -32,7 +32,53 @@ function inline(text: string): ReactNode[] {
   })
 }
 
-/** Headings (`##`), `-` lists and paragraphs: all the legal files use. */
+/** `| a | b |` -> ["a", "b"]. Cells may not contain `|`. */
+const cells = (line: string) =>
+  line
+    .slice(1, -1)
+    .split("|")
+    .map((c) => c.trim())
+
+/**
+ * A pipe table: a header row, a `|---|` separator, then body rows, every line starting
+ * and ending with `|`. Cells go through `inline()`, so they are escaped like any text.
+ */
+function table(lines: string[], key: number): ReactNode | null {
+  if (
+    lines.length < 2 ||
+    !lines.every((l) => l.startsWith("|") && l.endsWith("|")) ||
+    !/^\|(\s*:?-+:?\s*\|)+$/.test(lines[1])
+  )
+    return null
+  return (
+    <div key={key} className="overflow-x-auto">
+      <table className="w-full border-collapse text-left">
+        <thead>
+          <tr>
+            {cells(lines[0]).map((c, j) => (
+              <th key={j} className="border-b px-2 py-1 font-medium">
+                {inline(c)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {lines.slice(2).map((row, r) => (
+            <tr key={r}>
+              {cells(row).map((c, j) => (
+                <td key={j} className="border-b px-2 py-1 align-top">
+                  {inline(c)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/** Headings (`##`), `-` lists, pipe tables and paragraphs: all the legal files use. */
 function blocks(markdown: string): ReactNode[] {
   return markdown.split(/\n{2,}/).map((chunk, i) => {
     const heading = /^## (.+)$/.exec(chunk)
@@ -43,6 +89,8 @@ function blocks(markdown: string): ReactNode[] {
         </h2>
       )
     const lines = chunk.split("\n")
+    const tabular = table(lines, i)
+    if (tabular) return tabular
     if (lines.every((l) => l.startsWith("- ")))
       return (
         <ul key={i} className="list-disc space-y-1 pl-5">
@@ -74,6 +122,37 @@ export function LegalDocument({ doc }: { doc: LegalContent }) {
           Back to the portal
         </Link>
       </p>
+      <LegalFooter />
     </main>
+  )
+}
+
+/** Every public legal document, linked from the legal pages and the sign-in pages (#277). */
+export const LEGAL_LINKS = [
+  ["/terms", "Terms"],
+  ["/acceptable-use", "Acceptable Use"],
+  ["/privacy", "Privacy"],
+  ["/subprocessors", "Subprocessors"],
+  ["/dpa", "DPA"],
+] as const
+
+export function LegalFooter() {
+  return (
+    <footer className="border-t px-6 py-4 text-xs text-muted-foreground">
+      <nav
+        aria-label="Legal"
+        className="flex flex-wrap justify-center gap-x-4 gap-y-1"
+      >
+        {LEGAL_LINKS.map(([href, label]) => (
+          <Link
+            key={href}
+            href={href}
+            className="underline-offset-4 hover:underline"
+          >
+            {label}
+          </Link>
+        ))}
+      </nav>
+    </footer>
   )
 }
