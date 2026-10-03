@@ -520,7 +520,7 @@ export class VisualTestRunner {
       } else if (!diffResult.passed) {
         // Without AI, estimate severity from the share of pixels that differ
         // (`pixelDifference` is a count; `similarity` is 1 minus that share).
-        severity = this.estimateSeverity(1 - diffResult.similarity);
+        severity = this.estimateSeverity(diffResult.similarity);
       }
 
       return {
@@ -575,9 +575,11 @@ export class VisualTestRunner {
   /**
    * Estimate severity without AI based on metrics
    */
-  private estimateSeverity(differingShare: number): 'minor' | 'moderate' | 'breaking' {
-    if (differingShare > 0.15) return 'breaking';
-    if (differingShare > 0.05) return 'moderate';
+  private estimateSeverity(similarity: number): 'minor' | 'moderate' | 'breaking' {
+    // Compared as similarity, not `1 - similarity`: 1 - 0.95 is 0.050000000000000044 in
+    // floating point, which would push exactly 5% (and 15%) up a level.
+    if (similarity < 0.85) return 'breaking';
+    if (similarity < 0.95) return 'moderate';
     return 'minor';
   }
 

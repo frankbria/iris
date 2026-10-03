@@ -810,7 +810,9 @@ describe('VisualTestRunner', () => {
 
     it.each([
       [20, 'breaking'],
+      [15, 'moderate'], // boundary: exactly 15% is not breaking
       [10, 'moderate'],
+      [5, 'minor'], // boundary: exactly 5% is not moderate
       [3, 'minor'],
     ])('%i%% of pixels changed is %s', async (rows, severity) => {
       const real = await new RealDiffEngine().compare(await png(0), await png(rows as number), {
