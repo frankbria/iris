@@ -6,6 +6,7 @@ import * as usage from './migrations/0003_usage';
 import * as jobs from './migrations/0004_jobs';
 import * as jobClaims from './migrations/0005_job_claims';
 import * as terms from './migrations/0006_terms_acceptances';
+import * as suspensions from './migrations/0007_org_suspensions';
 import { createPostgresDb, resolveDatabaseUrl } from './postgres';
 
 /**
@@ -20,6 +21,7 @@ export const MIGRATIONS = {
   '0004_jobs': jobs,
   '0005_job_claims': jobClaims,
   '0006_terms_acceptances': terms,
+  '0007_org_suspensions': suspensions,
 };
 
 /**
