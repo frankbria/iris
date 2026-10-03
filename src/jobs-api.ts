@@ -8,7 +8,7 @@ import {
   type TenantScope,
 } from './history-store';
 import type { Authenticator, Principal } from './protocol';
-import { errMessage, log, redactString } from './log';
+import { errMessage, log, redactStrings } from './log';
 
 /**
  * The hosted job REST API (#267, ADR 0001 §1): `POST /v1/a11y/jobs` queues a scan,
@@ -115,16 +115,6 @@ function readBody(req: IncomingMessage): Promise<string | null> {
   });
 }
 
-/** A copy with `redactString` applied to every string inside (dates kept as dates). */
-function cutSecrets(value: unknown): unknown {
-  if (typeof value === 'string') return redactString(value);
-  if (Array.isArray(value)) return value.map(cutSecrets);
-  if (value && typeof value === 'object' && !(value instanceof Date)) {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cutSecrets(v)]));
-  }
-  return value;
-}
-
 const JOB_PATH = /^\/v1\/jobs\/([^/]+)$/;
 const RUN_PATH = /^\/v1\/runs\/([^/]+)$/;
 
@@ -210,7 +200,7 @@ export async function handleJobsRequest(
       if (!run) return send(res, 404, { error: 'Not found' });
       // Every key of the org reads this. #254 stored the run without typed values or URL
       // userinfo; secret-looking query values (a reset link's token) are cut here too.
-      return send(res, 200, cutSecrets(run));
+      return send(res, 200, redactStrings(run));
     }
 
     const store = deps.jobs.forOrg(scope);
