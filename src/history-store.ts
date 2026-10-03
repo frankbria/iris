@@ -36,7 +36,8 @@ export interface StoredRun {
   id: string;
   kind: RunKind;
   status: 'succeeded' | 'failed';
-  summary: string;
+  /** `null` for a job that could not run (it has an `error` instead). */
+  summary: string | null;
   startedAt: Date;
   finishedAt: Date;
   createdAt: Date;
