@@ -17,6 +17,9 @@ import { metrics } from './metrics';
  */
 export const DEFAULT_STALE_MS = 180_000;
 
+/** The error a suspended org's claimed job is failed with (#348). */
+export const ORG_SUSPENDED = 'Organization suspended';
+
 export type WorkerJobs = Pick<
   PostgresJobs,
   'claim' | 'finish' | 'fail' | 'heartbeat' | 'reapStuck'
@@ -91,6 +94,7 @@ export async function processNextA11yJob(
   const t0 = performance.now();
   const fields = { jobId: job.id, orgId: job.orgId, kind: job.kind, attempts: job.attempts };
   log('info', 'job claimed', fields);
+
   let reported = false;
   const lost = (what: string) => {
     if (reported) return;
@@ -99,19 +103,27 @@ export async function processNextA11yJob(
   };
   /** One line and one sample per job, once its outcome is written (or refused). */
   let recorded = false;
-  const done = (outcome: 'finished' | 'error', written: boolean, err?: string) => {
+  // `refused`: the job was not run (a suspended org, #348). Not `error`, which is the
+  // watchdog's server-fault signal (#275): suspending an org must not page anyone.
+  const done = (outcome: 'finished' | 'error' | 'refused', written: boolean, err?: string) => {
     recorded = true;
     const result = written ? outcome : 'lost';
     if (!written) lost(outcome === 'finished' ? 'result' : 'failure');
     const seconds = (performance.now() - t0) / 1000;
     jobsTotal.inc({ kind: job.kind, outcome: result });
     jobSeconds.observe({ kind: job.kind }, seconds);
-    log(result === 'finished' ? 'info' : 'warn', `job ${result}`, {
+    log(result === 'finished' || result === 'refused' ? 'info' : 'warn', `job ${result}`, {
       ...fields,
       latencyMs: Math.round(seconds * 1000),
       ...(err !== undefined && { err }),
     });
   };
+  // A suspended org's job is not run (#348): failed with no usage, no browser started.
+  // The message is the job's tenant-visible error, so it gives no operator reason.
+  if (job.orgSuspended) {
+    done('refused', await jobs.fail(job, ORG_SUSPENDED), ORG_SUSPENDED);
+    return job;
+  }
   // Once the outcome is being written, a heartbeat answer means nothing: one in flight
   // waits on finish's row lock and then sees a finished row.
   let writing = false;

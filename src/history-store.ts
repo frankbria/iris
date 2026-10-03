@@ -15,6 +15,7 @@ import {
 import type { ExecutionResult } from './executor';
 import { insertUsage, type UsageEvent } from './billing/usage';
 import type { VisualTestResult as VisualRunResult } from './visual/visual-runner';
+import { suspendedSql } from './org-suspension';
 
 /**
  * Run history behind one seam (#254): SQLite for local mode, Postgres keyed by
@@ -327,6 +328,8 @@ export interface ClaimedJob {
   claimToken: string;
   /** How many times the job has been claimed, this claim included. */
   attempts: number;
+  /** The org was suspended when the job was claimed (#348): the worker fails it unrun. */
+  orgSuspended: boolean;
 }
 
 /** The org-scoped half: what the API does for a tenant. */
@@ -451,12 +454,14 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
         started_at: Date;
         claim_token: string;
         attempts: number;
+        org_suspended: boolean;
       }>`
         update runs set status = 'running', started_at = now(), attempts = attempts + 1,
                claim_token = gen_random_uuid(), heartbeat_at = now()
         where id = (select id from runs where status = 'queued' and kind = ${kind}
                     order by created_at, id for update skip locked limit 1)
-        returning id, org_id, api_key_id, params, started_at, claim_token, attempts`.execute(db);
+        returning id, org_id, api_key_id, params, started_at, claim_token, attempts,
+                  ${suspendedSql(sql.ref('runs.org_id'))} as org_suspended`.execute(db);
       const row = rows[0];
       return row
         ? {
@@ -468,6 +473,7 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
             startedAt: row.started_at,
             claimToken: row.claim_token,
             attempts: row.attempts,
+            orgSuspended: row.org_suspended,
           }
         : null;
     },

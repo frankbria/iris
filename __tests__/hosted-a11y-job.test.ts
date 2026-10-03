@@ -23,6 +23,7 @@ import { hostedEgressProxy } from '../src/egress-proxy';
 import { postgresJobs } from '../src/history-store';
 import { startServer, type Authenticator, type Principal } from '../src/protocol';
 import { processNextA11yJob } from '../src/worker';
+import { orgSuspensions } from '../src/org-suspension';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 
@@ -212,6 +213,24 @@ const PAGE =
     const body = await (await api('GET', `/v1/jobs/${id}`)).json();
     expect(body.status).toBe('failed');
     expect(body.error).toMatch(reason);
+    expect(body).not.toHaveProperty('results');
+    const usage = await sql`select 1 from usage_events where run_id = ${id}`.execute(db);
+    expect(usage.rows).toEqual([]);
+  });
+
+  it("fails a suspended org's queued job without running it: no fetch, no usage (#348)", async () => {
+    const id = await submit([`http://site.test:${sitePort}/page`]);
+    const susp = orgSuspensions(db);
+    await susp.suspend('org-a', { reason: 'abuse report', actor: 'test' });
+    try {
+      const job = await processNextA11yJob(postgresJobs(db));
+      expect(job?.id).toBe(id);
+    } finally {
+      await susp.unsuspend('org-a', { reason: 'resolved', actor: 'test' });
+    }
+    expect(seen).toEqual([]);
+    const body = await (await api('GET', `/v1/jobs/${id}`)).json();
+    expect(body).toMatchObject({ status: 'failed', error: 'Organization suspended' });
     expect(body).not.toHaveProperty('results');
     const usage = await sql`select 1 from usage_events where run_id = ${id}`.execute(db);
     expect(usage.rows).toEqual([]);

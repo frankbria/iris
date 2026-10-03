@@ -2,6 +2,7 @@ import { sql, type Kysely } from 'kysely';
 import type { AICredentials } from './ai-client/credentials';
 import type { PostgresHistory, PostgresJobs } from './history-store';
 import type { Authenticator, Principal } from './protocol';
+import { orgSuspensions } from './org-suspension';
 import { readSecretEnv } from './secret-env';
 
 /** The slice of a BetterAuth instance (`createAuth()`) this module uses. */
@@ -20,6 +21,8 @@ export interface KeyStore {
   isUsable(key: string): Promise<boolean>;
   /** Whether the key with this id still belongs to this org and would verify. */
   isLive(principal: Principal): Promise<boolean>;
+  /** Whether an operator has suspended the org (#348). */
+  isSuspended(orgId: string): Promise<boolean>;
 }
 
 /**
@@ -39,6 +42,9 @@ export interface KeyStore {
  *
  * `recheck` asks the store by key id only (#342): `verifyApiKey` writes `lastRequest`
  * and spends `remaining` on every call, and a connection need not keep the key.
+ *
+ * A valid key of a suspended org (#348) is `'suspended'` on both paths, so the
+ * server answers 403 and closes live connections at the next re-check.
  */
 export function apiKeyAuthenticator(auth: KeyVerifier, store: KeyStore): Authenticator {
   return {
@@ -47,14 +53,22 @@ export function apiKeyAuthenticator(auth: KeyVerifier, store: KeyStore): Authent
       if (!key) return null;
       const result = await auth.api.verifyApiKey({ body: { key } });
       if (result.valid && result.key) {
-        return { orgId: result.key.referenceId, keyId: result.key.id };
+        const orgId = result.key.referenceId;
+        if (await store.isSuspended(orgId)) return 'suspended';
+        return { orgId, keyId: result.key.id };
       }
       if (await store.isUsable(key)) {
         throw new Error('API key verification failed for a usable key');
       }
       return null;
     },
-    recheck: (principal) => store.isLive(principal),
+    async recheck(principal) {
+      const [live, suspended] = await Promise.all([
+        store.isLive(principal),
+        store.isSuspended(principal.orgId),
+      ]);
+      return live && suspended ? 'suspended' : live;
+    },
   };
 }
 
@@ -104,6 +118,7 @@ export function postgresKeyStore(db: Kysely<unknown>): KeyStore {
         where id = ${keyId} and "referenceId" = ${orgId}`.execute(db);
       return usableRow(rows[0]);
     },
+    isSuspended: (orgId) => orgSuspensions(db).isSuspended(orgId),
   };
 }
 

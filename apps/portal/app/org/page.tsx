@@ -1,16 +1,18 @@
 import Link from "next/link"
 
 import { InviteForm } from "@/components/org-forms"
+import { SuspendedBanner } from "@/components/contact-link"
 import { requireOrg } from "@/lib/org"
 
 export default async function OrgPage() {
-  const { org, role } = await requireOrg()
+  const { org, role, suspended } = await requireOrg()
   const now = new Date()
   const pending = org.invitations.filter(
     (i) => i.status === "pending" && new Date(i.expiresAt) > now
   )
   return (
     <main className="flex min-h-svh flex-col gap-6 p-6">
+      {suspended && <SuspendedBanner />}
       <div className="flex flex-col gap-1">
         <h1 className="font-heading text-lg font-medium">{org.name}</h1>
         <Link href="/dashboard" className="text-sm underline">

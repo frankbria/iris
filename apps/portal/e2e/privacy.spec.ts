@@ -45,6 +45,7 @@ test("every footer link resolves, from a legal page and from login", async ({
       "/privacy",
       "/subprocessors",
       "/dpa",
+      "/contact",
     ])
     for (const href of hrefs) {
       const res = await page.request.get(href!)

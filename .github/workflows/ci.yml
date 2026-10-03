@@ -679,6 +679,10 @@ jobs:
           SMTP_FROM: ${{ vars.SMTP_FROM }}
           IRIS_API_PORT: ${{ vars.IRIS_API_PORT }}
           PORTAL_PORT: ${{ vars.PORTAL_PORT }}
+          IRIS_SECURITY_CONTACT: ${{ vars.IRIS_SECURITY_CONTACT }}
+          IRIS_ABUSE_CONTACT: ${{ vars.IRIS_ABUSE_CONTACT }}
+          IRIS_SUPPORT_CONTACT: ${{ vars.IRIS_SUPPORT_CONTACT }}
+          IRIS_SECURITY_TXT_EXPIRES_DAYS: ${{ vars.IRIS_SECURITY_TXT_EXPIRES_DAYS }}
           IRIS_IMAGE: ${{ steps.digests.outputs.iris }}
           PORTAL_IMAGE: ${{ steps.digests.outputs.portal }}
           GHCR_USER: ${{ github.actor }}
@@ -726,6 +730,14 @@ jobs:
             printf "PORTAL_URL='%s'\nSMTP_FROM='%s'\n" "$PORTAL_URL" "$SMTP_FROM"
             [ -z "$IRIS_API_PORT" ] || printf 'IRIS_API_PORT=%d\n' "$IRIS_API_PORT"
             [ -z "$PORTAL_PORT" ] || printf 'PORTAL_PORT=%d\n' "$PORTAL_PORT"
+            # Published contacts (#348), optional: unset shows a placeholder on /contact,
+            # and no security.txt is served without a security contact.
+            for name in IRIS_SECURITY_CONTACT IRIS_ABUSE_CONTACT IRIS_SUPPORT_CONTACT IRIS_SECURITY_TXT_EXPIRES_DAYS; do
+              value=${!name}
+              [ -n "$value" ] || continue
+              case "$value" in *"'"* | *$'\n'*) echo "::error::$name may not hold ' or a newline" >&2; exit 1 ;; esac
+              printf "%s='%s'\n" "$name" "$value"
+            done
           } | box "cat > $release/settings.env"
 
           # This release's secrets, over ssh's STDIN, never a remote command line (the

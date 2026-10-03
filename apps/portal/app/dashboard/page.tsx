@@ -2,12 +2,14 @@ import Link from "next/link"
 
 import { LogOutButton } from "@/components/auth-forms"
 import { OrgSwitcher } from "@/components/org-forms"
+import { SuspendedBanner } from "@/components/contact-link"
 import { requireOrg } from "@/lib/org"
 
 export default async function DashboardPage() {
-  const { session, org, orgs, role } = await requireOrg()
+  const { session, org, orgs, role, suspended } = await requireOrg()
   return (
     <main className="flex min-h-svh flex-col gap-4 p-6">
+      {suspended && <SuspendedBanner />}
       <h1 className="font-heading text-lg font-medium">IRIS portal</h1>
       <p className="text-sm text-muted-foreground">
         Signed in as{" "}

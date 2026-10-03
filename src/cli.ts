@@ -834,6 +834,98 @@ program
     }
   });
 
+/**
+ * Operator commands (#348), run on the box against the hosted database:
+ * `docker compose exec iris node dist/cli.js admin ...`. Hosted only (exit 2), the
+ * database from `DATABASE_URL(_FILE)` (exit 3 when unreachable), exit 1 for an
+ * unknown org. The reason is for operators: tenants are never shown it.
+ */
+const admin = program
+  .command('admin')
+  .description('Operator commands for the hosted service (hosted mode only)');
+
+/** Opens the hosted database for one admin command, runs `fn`, and closes it. */
+async function withAdminDb(
+  fn: (suspensions: ReturnType<typeof import('./org-suspension').orgSuspensions>) => Promise<void>,
+): Promise<void> {
+  const { isHostedMode } = await import('./hosted');
+  if (!isHostedMode()) {
+    console.error('iris admin runs in hosted mode only: set IRIS_HOSTED=1');
+    process.exit(2); // Invalid usage
+    return;
+  }
+  const { createPostgresDb, probeDatabase, resolveDatabaseUrl } = await import('./db/postgres');
+  const { orgSuspensions, UnknownOrgError } = await import('./org-suspension');
+  let db: ReturnType<typeof createPostgresDb> | undefined;
+  try {
+    db = createPostgresDb(resolveDatabaseUrl(), { queryTimeoutMs: 10_000 });
+    await probeDatabase(db);
+  } catch (err) {
+    console.error(`Cannot open the database: ${(err as Error).message}`);
+    await db?.destroy();
+    process.exit(3); // Environment/runtime error
+    return;
+  }
+  let code = 0;
+  try {
+    await fn(orgSuspensions(db));
+  } catch (err) {
+    console.error((err as Error).message);
+    code = err instanceof UnknownOrgError ? 1 : 3;
+  } finally {
+    await db.destroy();
+  }
+  if (code) process.exit(code);
+}
+
+/** Who acts: `--actor`, else the operator's login (through sudo too), else `operator`. */
+const defaultActor = () => process.env.SUDO_USER || process.env.USER || 'operator';
+
+const formatEvent = (e: import('./org-suspension').SuspensionEvent) =>
+  `${e.createdAt.toISOString()}  ${e.action.padEnd(9)}  by ${e.actor}: ${e.reason}`;
+
+for (const action of ['suspend', 'unsuspend'] as const) {
+  admin
+    .command(`${action}-org <orgId>`)
+    .description(
+      action === 'suspend'
+        ? 'Suspend an org: its keys get 403, live connections close, queued jobs fail'
+        : 'Lift an org suspension',
+    )
+    .requiredOption('--reason <text>', 'Why (recorded; never shown to the tenant)')
+    .option('--actor <name>', 'Who is acting (default: $SUDO_USER, $USER, or "operator")')
+    .action(async (orgId: string, options: { reason: string; actor?: string }) => {
+      const by = { reason: options.reason.trim(), actor: (options.actor ?? defaultActor()).trim() };
+      if (!by.reason || !by.actor) {
+        console.error('--reason and --actor must not be blank');
+        process.exit(2); // Invalid usage
+        return;
+      }
+      await withAdminDb(async (suspensions) => {
+        const result = await suspensions[action](orgId, by);
+        const state = result.suspended ? 'suspended' : 'active';
+        console.log(
+          result.changed
+            ? `org ${orgId} is now ${state}`
+            : `org ${orgId} is already ${state}; nothing recorded`,
+        );
+      });
+    });
+}
+
+admin
+  .command('org-status <orgId>')
+  .description("Print an org's suspension state and history")
+  .action(async (orgId: string) => {
+    await withAdminDb(async (suspensions) => {
+      const status = await suspensions.status(orgId);
+      console.log(`org ${orgId}: ${status.suspended ? 'suspended' : 'active'}`);
+      const history = await suspensions.history(orgId);
+      if (!history.length) console.log('no suspension history');
+      for (const event of history) console.log(formatEvent(event));
+    });
+  });
+
 /** Documented default port for a local Ollama daemon. */
 const DEFAULT_OLLAMA_ENDPOINT = 'http://localhost:11434';
 

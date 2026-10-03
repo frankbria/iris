@@ -141,6 +141,7 @@ describe('job claims (#435)', () => {
     startedAt: new Date(),
     claimToken: 't',
     attempts: 1,
+    orgSuspended: false,
     params: { urls: ['https://a.example/'], wcagLevel: 'AA', failOn: [] },
   };
   // resetModules: the registry would otherwise serve an earlier test's cached runner mock.
@@ -175,6 +176,36 @@ describe('job claims (#435)', () => {
     const calls = heartbeat.mock.calls.length;
     await sleep(60);
     expect(heartbeat.mock.calls.length).toBe(calls); // the timer stopped with the job
+  });
+
+  // #348: a suspended org's job is failed unrun, and counted as `refused`, not `error`:
+  // the watchdog's error rate counts only server faults, so suspending an org with
+  // queued jobs must not page the operator.
+  it("fails a suspended org's job without running it, as refused, not error", async () => {
+    const run = jest.fn();
+    jest.resetModules();
+    jest.doMock('../src/a11y/a11y-runner', () => ({
+      AccessibilityRunner: class {
+        run = run;
+      },
+    }));
+    const { processNextA11yJob, ORG_SUSPENDED } = await import('../src/worker');
+    const { metrics } = await import('../src/metrics');
+    const fail = jest.fn().mockResolvedValue(true);
+    const finish = jest.fn();
+    await processNextA11yJob({
+      claim: async () => ({ ...job, orgSuspended: true }) as never,
+      finish,
+      fail,
+      heartbeat: jest.fn(),
+      reapStuck: jest.fn(),
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(finish).not.toHaveBeenCalled();
+    expect(fail).toHaveBeenCalledWith(expect.objectContaining({ id: 'j' }), ORG_SUSPENDED);
+    const text = metrics.render();
+    expect(text).toMatch(/iris_jobs_total\{kind="a11y",outcome="refused"\} 1/);
+    expect(text).not.toMatch(/iris_jobs_total\{kind="a11y",outcome="error"\}/);
   });
 
   it('logs a lost claim instead of throwing', async () => {

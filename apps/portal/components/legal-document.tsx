@@ -147,13 +147,14 @@ export function LegalDocument({ doc }: { doc: LegalContent }) {
   )
 }
 
-/** Every public legal document, linked from the legal pages and the sign-in pages (#277). */
+/** Every public legal document, and the contacts (#348), linked from the legal and sign-in pages (#277). */
 export const LEGAL_LINKS = [
   ["/terms", "Terms"],
   ["/acceptable-use", "Acceptable Use"],
   ["/privacy", "Privacy"],
   ["/subprocessors", "Subprocessors"],
   ["/dpa", "DPA"],
+  ["/contact", "Contact"],
 ] as const
 
 export function LegalFooter() {

@@ -117,16 +117,18 @@ export interface Principal {
 export interface Authenticator {
   /**
    * Checks a connection's `Authorization` header at the upgrade. Resolves to the
-   * tenant on a valid key and to `null` on any other header. Throws only when it
-   * cannot decide (the key store is unreachable), which the server answers with 503.
+   * tenant on a valid key, to `'suspended'` on a valid key of a suspended org (#348:
+   * HTTP 403), and to `null` on any other header. Throws only when it cannot decide
+   * (the key store is unreachable), which the server answers with 503.
    */
-  verify(authorization: string | undefined): Promise<Principal | null>;
+  verify(authorization: string | undefined): Promise<Principal | 'suspended' | null>;
   /**
    * Whether a connected principal's key is still valid, by key id: read-only, and
    * without the key itself, which a connection therefore does not keep (#342).
+   * `'suspended'` when the key is fine but its org is suspended (#348).
    * Throws when it cannot tell, and the connection is kept until the next round.
    */
-  recheck(principal: Principal): Promise<boolean>;
+  recheck(principal: Principal): Promise<boolean | 'suspended'>;
 }
 
 export interface BrowserStatus {
@@ -540,6 +542,8 @@ export function startServer(
           // so the org count below cannot miss a client admitted a moment earlier.
           verifying--;
           if (!principal) return refuse(401, 'Unauthorized', 'invalid_key');
+          // A valid key of a suspended org (#348): 403, never the operator's reason.
+          if (principal === 'suspended') return refuse(403, 'Organization suspended', 'suspended');
           const orgConnections = [...tenants.values()].filter(
             (t) => t.orgId === principal.orgId,
           ).length;
@@ -673,15 +677,19 @@ export function startServer(
     try {
       await Promise.all(
         [...tenants].map(async ([ws, principal]) => {
+          let live: boolean | 'suspended';
           try {
-            if (await authenticate!.recheck(principal)) return;
+            live = await authenticate!.recheck(principal);
           } catch {
             // ponytail: an unreachable key store keeps connections up; the next round decides.
             return;
           }
+          if (live === true) return;
+          const reason =
+            live === 'suspended' ? 'Organization suspended' : 'API key no longer valid';
           tenants.delete(ws);
-          log('info', 'connection closed: API key no longer valid', { ...who(principal) });
-          ws.close(1008, 'API key no longer valid');
+          log('info', `connection closed: ${reason}`, { ...who(principal) });
+          ws.close(1008, reason);
           // Not waiting for the close handshake: the browser goes now.
           cleanupSession(ws, sessions, 'revoked');
         }),

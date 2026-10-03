@@ -106,7 +106,7 @@ export async function handleJobsRequest(
     if (!release) {
       return send(res, 503, { error: 'Server busy' }, { 'retry-after': '1' });
     }
-    let principal: Principal | null;
+    let principal: Principal | 'suspended' | null;
     try {
       principal = await deps.authenticate.verify(req.headers.authorization);
     } catch {
@@ -115,6 +115,8 @@ export async function handleJobsRequest(
       release();
     }
     if (!principal) return send(res, 401, { error: 'Unauthorized' });
+    // Reads and submits alike (#348); the operator's reason is never sent.
+    if (principal === 'suspended') return send(res, 403, { error: 'Organization suspended' });
 
     const wait = deps.charge(principal);
     if (wait > 0) {

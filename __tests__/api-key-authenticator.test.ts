@@ -33,14 +33,23 @@ function scripted(...results: Result[]) {
 }
 
 /** A key store whose rows say every key is `usable` (or that cannot be read). */
-function store(usable: boolean | 'down'): KeyStore & { asked: unknown[] } {
+function store(
+  usable: boolean | 'down',
+  suspended: boolean | 'down' = false,
+): KeyStore & { asked: unknown[]; suspendedAsked: string[] } {
   const asked: unknown[] = [];
+  const suspendedAsked: string[] = [];
   const answer = async (arg: unknown) => {
     asked.push(arg);
     if (usable === 'down') throw new Error('connection refused');
     return usable;
   };
-  return { asked, isUsable: answer, isLive: answer };
+  const isSuspended = async (orgId: string) => {
+    suspendedAsked.push(orgId);
+    if (suspended === 'down') throw new Error('connection refused');
+    return suspended;
+  };
+  return { asked, suspendedAsked, isUsable: answer, isLive: answer, isSuspended };
 }
 /** The key store's own row says the key is gone, disabled, expired or used up. */
 const unusable = store(false);
@@ -86,6 +95,40 @@ describe('apiKeyAuthenticator', () => {
   test('an unreachable key store is an error, never a refusal', async () => {
     const { verifier } = scripted(INVALID);
     await expect(apiKeyAuthenticator(verifier, down).verify('Bearer iris_abc')).rejects.toThrow(
+      'connection refused',
+    );
+  });
+});
+
+describe('apiKeyAuthenticator and suspended orgs (#348)', () => {
+  test("a valid key of a suspended org is 'suspended', asked by the key's org", async () => {
+    const { verifier } = scripted(VALID);
+    const rows = store(true, true);
+    expect(await apiKeyAuthenticator(verifier, rows).verify('Bearer iris_abc')).toBe('suspended');
+    expect(rows.suspendedAsked).toEqual(['org-1']);
+  });
+
+  test('an invalid key stays null: suspension is not consulted', async () => {
+    const { verifier } = scripted(INVALID);
+    const rows = store(false, true);
+    expect(await apiKeyAuthenticator(verifier, rows).verify('Bearer iris_abc')).toBeNull();
+    expect(rows.suspendedAsked).toEqual([]);
+  });
+
+  test('a suspension lookup that fails is an error (503), never a pass', async () => {
+    const { verifier } = scripted(VALID);
+    await expect(
+      apiKeyAuthenticator(verifier, store(true, 'down')).verify('Bearer iris_abc'),
+    ).rejects.toThrow('connection refused');
+  });
+
+  test("recheck: a live key of a suspended org is 'suspended'; a dead key stays false", async () => {
+    const { verifier } = scripted();
+    const p = { orgId: 'org-1', keyId: 'key-1' };
+    expect(await apiKeyAuthenticator(verifier, store(true, true)).recheck(p)).toBe('suspended');
+    expect(await apiKeyAuthenticator(verifier, store(false, true)).recheck(p)).toBe(false);
+    expect(await apiKeyAuthenticator(verifier, store(true, false)).recheck(p)).toBe(true);
+    await expect(apiKeyAuthenticator(verifier, store(true, 'down')).recheck(p)).rejects.toThrow(
       'connection refused',
     );
   });
