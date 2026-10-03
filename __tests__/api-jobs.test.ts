@@ -15,11 +15,14 @@ const keys = new Map<string, Principal>([
   ['key-b', { orgId: 'org-b', keyId: 'id-b' }],
 ]);
 let backendDown = false;
+/** Orgs an operator has suspended (#348). */
+const suspendedOrgs = new Set<string>();
 const authenticate: Authenticator = {
   async verify(header) {
     if (backendDown) throw new Error('database unreachable');
     const key = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
-    return (key && keys.get(key)) || null;
+    const principal = (key && keys.get(key)) || null;
+    return principal && suspendedOrgs.has(principal.orgId) ? 'suspended' : principal;
   },
   async recheck() {
     return true;
@@ -72,6 +75,7 @@ async function serve(limits = {}, auth: Authenticator = authenticate) {
 beforeEach(() => {
   stored = new Map();
   backendDown = false;
+  suspendedOrgs.clear();
 });
 afterEach(async () => {
   await new Promise((r) => server.close(() => r(null)));
@@ -149,6 +153,23 @@ describe('job REST API', () => {
     expect((await call('GET', '/v1/jobs/x', { key: 'nope' })).status).toBe(401);
     backendDown = true;
     expect((await call('GET', '/v1/jobs/x')).status).toBe(503);
+  });
+
+  it('a suspended org gets 403 on submit and read, and nothing is queued (#348)', async () => {
+    await serve();
+    const { id } = await (await submit({ urls: ['https://example.com/'] })).json();
+    suspendedOrgs.add('org-a');
+    const refused = await submit({ urls: ['https://example.com/'] });
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: 'Organization suspended' });
+    expect(stored.size).toBe(1);
+    const read = await call('GET', `/v1/jobs/${id}`);
+    expect(read.status).toBe(403);
+    expect(await read.json()).toEqual({ error: 'Organization suspended' });
+    // Another org is served.
+    expect((await submit({ urls: ['https://example.com/'] }, 'key-b')).status).toBe(202);
+    suspendedOrgs.clear();
+    expect((await call('GET', `/v1/jobs/${id}`)).status).toBe(200);
   });
 
   it.each([

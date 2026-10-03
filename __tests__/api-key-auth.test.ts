@@ -25,6 +25,7 @@ import { createPostgresDb } from '../src/db/postgres';
 import { migrateToLatest } from '../src/db/migrate';
 import { resolveKeyring } from '../src/byok/crypto';
 import { providerKeyStore } from '../src/byok/store';
+import { orgSuspensions } from '../src/org-suspension';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -211,6 +212,18 @@ const PASSWORD = 'correct-horse-battery-staple';
   r.unknown = await authn.verify('Bearer iris_nope');
   r.revokedNow = await authn.verify('Bearer ' + r.revoked.key);
   r.notBearer = await authn.verify('Basic ' + r.a.key);
+  // A suspended org (#348): its valid key is 'suspended' at the upgrade and the re-check.
+  const { orgSuspensions } = require('./src/org-suspension.ts');
+  const susp = orgSuspensions(kdb);
+  await susp.suspend(r.B, { reason: 'test', actor: 'probe' });
+  r.susp = {
+    verify: await authn.verify('Bearer ' + r.b.key),
+    recheck: await authn.recheck({ orgId: r.B, keyId: r.b.id }),
+    otherOrg: await authn.recheck({ orgId: r.A, keyId: r.a.id }),
+    disabledKey: await authn.recheck({ orgId: r.B, keyId: r.disabled.id }),
+  };
+  await susp.unsuspend(r.B, { reason: 'test', actor: 'probe' });
+  r.susp.restored = await authn.verify('Bearer ' + r.b.key);
   const outcome = (p) => p.then((v) => ({ value: v }), (e) => ({ threw: String(e.message) }));
   // BetterAuth's database path fails (its pool is gone) while the key row reads fine:
   // a locked table or a read-only database looks like this to the plugin.
@@ -367,6 +380,14 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect(r.unknown).toBeNull();
     expect(r.revokedNow).toBeNull();
     expect(r.notBearer).toBeNull();
+    expect(r.susp).toEqual({
+      verify: 'suspended',
+      recheck: 'suspended',
+      otherOrg: true,
+      // A dead key stays a plain refusal.
+      disabledKey: false,
+      restored: { orgId: r.B, keyId: r.b.id },
+    });
     // The plugin failed on a key whose row is fine: an error, never "invalid key".
     expect(r.brokenVerify).toEqual({ threw: 'API key verification failed for a usable key' });
     // An unknown key stays refused even then: its row confirms it.
@@ -471,6 +492,36 @@ const PASSWORD = 'correct-horse-battery-staple';
       ]);
     } finally {
       await client.end();
+    }
+  }, 60_000);
+
+  test('a suspended org gets 403 on the upgrade and the REST API; unsuspending restores it (#348)', async () => {
+    const db = createPostgresDb(dbUrl);
+    const rest = (key: string) =>
+      fetch(`http://127.0.0.1:${port}/v1/a11y/jobs`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ urls: ['https://example.com/'] }),
+      });
+    try {
+      await orgSuspensions(db).suspend(r.A, { reason: 'abuse report 42', actor: 'test' });
+      expect(await statusOf(open(`Bearer ${r.a.key}`))).toBe(403);
+      const refused = await rest(r.a.key);
+      expect(refused.status).toBe(403);
+      const body = await refused.text();
+      expect(JSON.parse(body)).toEqual({ error: 'Organization suspended' });
+      // The operator's reason never reaches the tenant.
+      expect(body).not.toMatch(/abuse report/);
+      // Org B is unaffected.
+      const b = await open(`Bearer ${r.b.key}`);
+      expect((await call(b, 'getStatus')).result.status).toBe('ready');
+
+      await orgSuspensions(db).unsuspend(r.A, { reason: 'resolved', actor: 'test' });
+      const a = await open(`Bearer ${r.a.key}`);
+      expect((await call(a, 'getStatus')).result.status).toBe('ready');
+      expect((await rest(r.a.key)).status).toBe(202);
+    } finally {
+      await db.destroy();
     }
   }, 60_000);
 

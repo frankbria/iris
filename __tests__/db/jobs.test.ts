@@ -11,6 +11,7 @@ import { Kysely, sql } from 'kysely';
 import { Client } from 'pg';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
+import { orgSuspensions } from '../../src/org-suspension';
 import { postgresHistory, postgresJobs, type A11yJobParams } from '../../src/history-store';
 import type { AccessibilityTestResult } from '../../src/a11y/a11y-runner';
 
@@ -102,6 +103,19 @@ const result = {
     expect((await jobs().forOrg(B).get(first))!.status).toBe('running');
     expect((await jobs().claim('a11y'))!.id).toBe(second);
     expect(await jobs().claim('a11y')).toBeNull();
+  });
+
+  it("claim says whether the job's org is suspended, in the same statement (#348)", async () => {
+    const susp = orgSuspensions(db);
+    await enqueue(A);
+    await enqueue(B);
+    await susp.suspend('org-b', { reason: 'r', actor: 'test' });
+    try {
+      expect(await jobs().claim('a11y')).toMatchObject({ orgId: 'org-a', orgSuspended: false });
+      expect(await jobs().claim('a11y')).toMatchObject({ orgId: 'org-b', orgSuspended: true });
+    } finally {
+      await susp.unsuspend('org-b', { reason: 'r', actor: 'test' });
+    }
   });
 
   it('queueDepth counts queued jobs of a kind across orgs, not running ones (#275)', async () => {

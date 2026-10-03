@@ -141,6 +141,7 @@ describe('job claims (#435)', () => {
     startedAt: new Date(),
     claimToken: 't',
     attempts: 1,
+    orgSuspended: false,
     params: { urls: ['https://a.example/'], wcagLevel: 'AA', failOn: [] },
   };
   // resetModules: the registry would otherwise serve an earlier test's cached runner mock.

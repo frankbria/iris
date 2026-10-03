@@ -30,6 +30,8 @@ const sockets: WebSocket[] = [];
 /** Key -> principal. Delete a key to revoke it. */
 let keys: Map<string, Principal>;
 let backendDown: boolean;
+/** Orgs an operator has suspended (#348). */
+let suspendedOrgs: Set<string>;
 const seenHeaders: Array<string | undefined> = [];
 const rechecked: Principal[] = [];
 
@@ -38,15 +40,17 @@ const authenticate: Authenticator = {
     seenHeaders.push(header);
     if (backendDown) throw new Error('database unreachable');
     const key = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
-    return (key && keys.get(key)) || null;
+    const principal = (key && keys.get(key)) || null;
+    return principal && suspendedOrgs.has(principal.orgId) ? 'suspended' : principal;
   },
   // Gets the principal, never the key: a connection does not keep the plaintext.
   async recheck(principal) {
     rechecked.push(principal);
     if (backendDown) throw new Error('database unreachable');
-    return [...keys.values()].some(
+    const live = [...keys.values()].some(
       (p) => p.keyId === principal.keyId && p.orgId === principal.orgId,
     );
+    return live && suspendedOrgs.has(principal.orgId) ? 'suspended' : live;
   },
 };
 
@@ -57,6 +61,7 @@ beforeEach(() => {
     ['key-b', { orgId: 'org-b', keyId: 'id-b' }],
   ]);
   backendDown = false;
+  suspendedOrgs = new Set();
   seenHeaders.length = 0;
   rechecked.length = 0;
 });
@@ -232,6 +237,35 @@ describe('a key revoked while connected', () => {
     expect(rechecked[0]).toEqual({ orgId: 'org-a', keyId: 'id-a' });
     // Only the upgrade verified the key; the re-checks did not.
     expect(seenHeaders).toEqual(['Bearer key-a']);
+  });
+});
+
+describe('a suspended org (#348)', () => {
+  test('its upgrade gets HTTP 403, other orgs are served, and unsuspending restores it', async () => {
+    const url = await serve();
+    suspendedOrgs.add('org-a');
+    expect(await statusOf(open(url, as('key-a')))).toBe(403);
+    expect(await statusOf(open(url, as('key-a2')))).toBe(403);
+    expect(servers[0].clients.size).toBe(0);
+    const b = await open(url, as('key-b'));
+    expect((await call(b, 'getStatus')).result.status).toBe('ready');
+    suspendedOrgs.delete('org-a');
+    const a = await open(url, as('key-a'));
+    expect((await call(a, 'getStatus')).result.status).toBe('ready');
+  });
+
+  test('its live connections close (1008) at the next re-check, with no reason given', async () => {
+    const url = await serve({ authRecheckMs: 20 });
+    const a = await open(url, as('key-a'));
+    const b = await open(url, as('key-b'));
+    expect((await call(a, 'launchBrowser')).result.success).toBe(true);
+    let closed: { code: number; reason: string } | undefined;
+    a.on('close', (code, reason) => (closed = { code, reason: reason.toString() }));
+    suspendedOrgs.add('org-a');
+    await eventually(() => closed !== undefined);
+    expect(closed).toEqual({ code: 1008, reason: 'Organization suspended' });
+    // Its session is reclaimed; the other org is untouched.
+    expect((await call(b, 'getStatus')).result).toMatchObject({ status: 'ready' });
   });
 });
 

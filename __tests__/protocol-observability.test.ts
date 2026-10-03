@@ -28,6 +28,7 @@ const keys = new Map<string, Principal>([
 const authenticate: Authenticator = {
   async verify(header) {
     const key = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
+    if (key === 'key-suspended') return 'suspended'; // #348
     return (key && keys.get(key)) || null;
   },
   async recheck() {
@@ -338,6 +339,15 @@ describe('REST request logs', () => {
     expect(rest[3]).toMatchObject({ method: 'GET /v1/jobs/:id', status: 401 });
     expect(rest[3].orgId).toBeUndefined();
     expect(rest[3].outcome).toBe('client_error');
+  });
+
+  it("a suspended org's 403 is client_error, never error (#348)", async () => {
+    await serve();
+    expect((await post({ authorization: 'Bearer key-suspended' })).status).toBe(403);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(requestLines('rest')).toEqual([
+      expect.objectContaining({ status: 403, outcome: 'client_error' }),
+    ]);
   });
 
   it('logs a 429 from the request budget as rate_limited', async () => {
