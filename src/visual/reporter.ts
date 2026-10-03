@@ -11,6 +11,12 @@ import { pathToFileURL } from 'url';
 import { escapeHtml, escapeMarkdown, escapeXml } from '../report-encoding';
 import type { VisualTestResult } from './visual-runner';
 
+/**
+ * The share of pixels that differ, as a percentage. `pixelDifference` is pixelmatch's
+ * count, not a fraction (#280); `similarity` is `(total - count) / total`.
+ */
+const differingShare = (r: { similarity: number }) => `${((1 - r.similarity) * 100).toFixed(2)}%`;
+
 export interface ReportConfig {
   format: 'html' | 'json' | 'junit' | 'markdown';
   outputPath?: string;
@@ -268,7 +274,7 @@ export class VisualReporter {
             </div>
             <div class="metric">
               <span class="metric-label">Pixel Diff</span>
-              <span class="metric-value">${(result.pixelDifference * 100).toFixed(2)}%</span>
+              <span class="metric-value">${differingShare(result)}</span>
             </div>
             <div class="metric">
               <span class="metric-label">Threshold</span>
@@ -452,7 +458,7 @@ ${
   !test.passed
     ? `      <failure message="Visual regression detected" type="VisualDiff">
 Similarity: ${(test.similarity * 100).toFixed(2)}%
-Pixel Difference: ${(test.pixelDifference * 100).toFixed(2)}%
+Pixel Difference: ${differingShare(test)}
 Threshold: ${(test.threshold * 100).toFixed(2)}%
 Severity: ${escapeXml(test.severity || 'unknown')}
 ${
@@ -538,7 +544,7 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
         markdown += `- **Severity:** ${escapeMarkdown(result.severity.toUpperCase())}\n`;
       }
       markdown += `- **Similarity:** ${(result.similarity * 100).toFixed(2)}%\n`;
-      markdown += `- **Pixel Difference:** ${(result.pixelDifference * 100).toFixed(2)}%\n`;
+      markdown += `- **Pixel Difference:** ${differingShare(result)}\n`;
       markdown += `- **Threshold:** ${(result.threshold * 100).toFixed(2)}%\n`;
       if (result.ssim !== undefined) {
         markdown += `- **Structural (SSIM):** ${(result.ssim * 100).toFixed(2)}%\n`;

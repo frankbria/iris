@@ -96,6 +96,7 @@ export interface VisualTestResult {
     device: string;
     passed: boolean;
     similarity: number;
+    /** pixelmatch's count of differing pixels, not a fraction; the share is `1 - similarity` (#280). */
     pixelDifference: number;
     threshold: number;
     /**
@@ -517,8 +518,9 @@ export class VisualTestRunner {
         // Map AI severity to test severity
         severity = this.mapAISeverity(analysis.severity);
       } else if (!diffResult.passed) {
-        // Without AI, estimate severity based on pixel difference
-        severity = this.estimateSeverity(diffResult.pixelDifference, diffResult.similarity);
+        // Without AI, estimate severity from the share of pixels that differ
+        // (`pixelDifference` is a count; `similarity` is 1 minus that share).
+        severity = this.estimateSeverity(1 - diffResult.similarity);
       }
 
       return {
@@ -573,21 +575,9 @@ export class VisualTestRunner {
   /**
    * Estimate severity without AI based on metrics
    */
-  private estimateSeverity(
-    pixelDifference: number,
-    similarity: number,
-  ): 'minor' | 'moderate' | 'breaking' {
-    // If similarity is very low or pixel difference is very high, it's breaking
-    if (similarity < 0.85 || pixelDifference > 0.15) {
-      return 'breaking';
-    }
-
-    // If similarity is somewhat low or pixel difference is moderate, it's moderate
-    if (similarity < 0.95 || pixelDifference > 0.05) {
-      return 'moderate';
-    }
-
-    // Otherwise it's minor
+  private estimateSeverity(differingShare: number): 'minor' | 'moderate' | 'breaking' {
+    if (differingShare > 0.15) return 'breaking';
+    if (differingShare > 0.05) return 'moderate';
     return 'minor';
   }
 
