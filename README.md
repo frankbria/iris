@@ -372,6 +372,26 @@ job is `failed` with `results` when a violation breaches `failOn`, and `failed` 
 policy). Another org's job id is `404`. Jobs are run by `iris worker` (hosted mode only,
 same image and `DATABASE_URL` as `iris connect`; SIGTERM stops it after the current job).
 
+**Results API.** The same server lists an org's finished runs (RPC sessions' actions,
+a11y and visual jobs) and reads one with its results:
+
+```bash
+curl 'http://host:8080/v1/runs?limit=20&kind=a11y&status=failed&from=2026-06-01T00:00:00Z' \
+  -H "Authorization: Bearer $KEY"
+# {"runs":[{"id","kind","status","summary","startedAt","finishedAt","createdAt"}...],"nextCursor":"..."}
+curl 'http://host:8080/v1/runs?cursor=<nextCursor>' -H "Authorization: Bearer $KEY"
+curl http://host:8080/v1/runs/<uuid> -H "Authorization: Bearer $KEY"
+# {...the run, "results":[{"url","passed","result"}...]}
+```
+
+Newest first by finish time, `limit` 1-100 (default 50); `kind` is `rpc`, `a11y` or
+`visual`, `status` `succeeded`, `failed` or `canceled`; `from` (inclusive) and `to`
+(exclusive) are full ISO timestamps with an offset (`2026-06-01T00:00:00Z`) on the finish
+time. Each parameter at most once. Pass `nextCursor` back as `cursor` until it is `null`.
+Secret-looking query values in recorded URLs (`?token=…`) come back as `[redacted]`. Queued and
+running jobs are not runs yet: read them on `/v1/jobs/:id`. Artifact URLs arrive with
+object storage (#460).
+
 Clients may not ask for a visible browser or devtools (`-32602`). Their `timeout`,
 `retryAttempts`, `retryDelay` and `slowMo` are clamped to 120 s, 5, 10 s and 1 s,
 and `launchBrowser` returns the values it will actually use under `options`. A

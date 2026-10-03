@@ -118,12 +118,25 @@ describe('log', () => {
       'sent Basic dXNlcjpwYXNz to the proxy',
       `connect failed with ${KEY}.`,
       'metric iris_request_duration_seconds is fine, so is iris_jobs_total',
+      // A URL parser reads %74oken as token: an encoded name is no disguise.
+      'https://d.example/r?%74oken=enc0ded&p%61ge=3&%E0%A4=x',
     ].join('\n');
     const out = redact(text) as string;
-    for (const secret of ['t0k3n', 'k3y', 's1g', 's3c', '=pw', 'au7h', 'dXNlcjpwYXNz', KEY]) {
+    for (const secret of [
+      't0k3n',
+      'k3y',
+      's1g',
+      's3c',
+      '=pw',
+      'au7h',
+      'dXNlcjpwYXNz',
+      KEY,
+      'enc0ded',
+    ]) {
       expect(out).not.toContain(secret);
     }
     expect(out).toContain('page=2');
+    expect(out).toContain('p%61ge=3');
     expect(out).toContain('#frag');
     expect(out).toContain('iris_request_duration_seconds');
     expect(out).toContain('iris_jobs_total');

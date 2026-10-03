@@ -525,6 +525,26 @@ const PASSWORD = 'correct-horse-battery-staple';
     }
   }, 60_000);
 
+  // #269: the hosted server serves the results API from the same history the RPC wrote.
+  test("serves an org's recorded runs on /v1/runs, and none of them to another org (#269)", async () => {
+    const get = (key: string, p: string) =>
+      fetch(`http://127.0.0.1:${port}${p}`, { headers: { authorization: `Bearer ${key}` } });
+    const list = await get(r.a.key, '/v1/runs');
+    expect(list.status).toBe(200);
+    const { runs } = await list.json();
+    expect(runs.length).toBeGreaterThan(0);
+    expect(runs.every((run: { kind: string }) => run.kind === 'rpc')).toBe(true);
+    const detail = await get(r.a.key, `/v1/runs/${runs[0].id}`);
+    expect(detail.status).toBe(200);
+    expect((await detail.json()).id).toBe(runs[0].id);
+    // Org B reads none of org A's runs, by list or by id.
+    const bList = (await (await get(r.b.key, '/v1/runs')).json()).runs.map(
+      (run: { id: string }) => run.id,
+    );
+    expect(bList).not.toContain(runs[0].id);
+    expect((await get(r.b.key, `/v1/runs/${runs[0].id}`)).status).toBe(404);
+  }, 60_000);
+
   test('no shared token is printed in hosted mode', () => {
     expect(server.out).not.toMatch(/Auth token/);
   });

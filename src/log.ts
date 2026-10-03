@@ -37,22 +37,37 @@ const SECRET_FIELD =
   /authorization|cookie|token|secret|passw(or)?d|api[-_]?key|^key$|credential|(database|smtp)[-_]?url|^(text|value|instruction|params|body)$/i;
 const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi;
 const AUTH_SCHEME = /\b(Bearer|Basic)\s+\S+/gi;
-/** A query or fragment parameter whose name looks secret: its value is cut. */
-const SECRET_PARAM =
-  /([?&;#][^=&;#\s]*?(?:token|key|passw(?:or)?d|secret|sig|auth|session|credential)[^=&;#\s]*=)[^&;#\s]*/gi;
+/** Every query or fragment parameter: `$1` separator and name, `$2` the name, `$3` the value. */
+const QUERY_PARAM = /([?&;#]([^=&;#\s]*)=)([^&;#\s]*)/g;
+/** A parameter name that looks secret: its value is cut. */
+const SECRET_NAME = /token|key|passw(?:or)?d|secret|sig|auth|session|credential/i;
+
+/** The name as a URL parser reads it (`%74oken` is `token`); a malformed escape stays. */
+function decodedName(name: string): string {
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}
 /** An API key's shape: the `iris_` prefix plus random letters and digits (no underscore). */
 const API_KEY = /\biris_[A-Za-z0-9]{16,}\b/g;
 const MAX_DEPTH = 4;
 
+/** `text` with URL userinfo, `Bearer`/`Basic` credentials, secret query values and keys cut. */
+export function redactString(text: string): string {
+  return text
+    .replace(USERINFO, '$1[redacted]@')
+    .replace(AUTH_SCHEME, '$1 [redacted]')
+    .replace(QUERY_PARAM, (all, head: string, name: string) =>
+      SECRET_NAME.test(decodedName(name)) ? `${head}[redacted]` : all,
+    )
+    .replace(API_KEY, 'iris_[redacted]');
+}
+
 /** A copy of `value` with secret-named fields replaced and credentials cut from strings. */
 export function redact(value: unknown, depth = 0): unknown {
-  if (typeof value === 'string') {
-    return value
-      .replace(USERINFO, '$1[redacted]@')
-      .replace(AUTH_SCHEME, '$1 [redacted]')
-      .replace(SECRET_PARAM, '$1[redacted]')
-      .replace(API_KEY, 'iris_[redacted]');
-  }
+  if (typeof value === 'string') return redactString(value);
   if (value instanceof Error) return redact(value.message, depth);
   if (typeof value !== 'object' || value === null) {
     return typeof value === 'bigint' ? String(value) : value;

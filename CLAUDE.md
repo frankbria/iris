@@ -92,7 +92,7 @@ src/
 ├── egress-proxy.ts        # Hosted: resolve-and-pin HTTP/CONNECT proxy under all Chromium traffic (#336)
 ├── report-encoding.ts     # One encoder per report format: HTML, XML (JUnit), Markdown, safe hrefs (#339)
 ├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
-├── jobs-api.ts            # Hosted job REST: POST /v1/a11y/jobs, GET /v1/jobs/:id on the RPC listener (#267)
+├── jobs-api.ts            # Hosted REST on the RPC listener: jobs (#267), runs + run detail (#269)
 ├── worker.ts              # `iris worker`: claims queued a11y jobs, runs the hardened runner, stores the result (#267)
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
 ├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
@@ -118,6 +118,7 @@ __tests__/
 ├── auth-config.test.ts            # Spawned Node loads src/auth/config via require(esm); Jest's sandbox can't (#247)
 ├── auth-org.test.ts               # Real Postgres: personal org on sign-in, invitations, roles, org A cannot read org B (#250)
 ├── auth-apikey.test.ts            # Real Postgres: org-owned keys hashed, roles, org A cannot touch org B's keys, verify, revoke (#340)
+├── api-runs.test.ts               # Results API over real sockets + Postgres: list, filters, cursors, detail, 404 cross-org (#269)
 ├── api-jobs.test.ts               # Job REST over real sockets: 401/503/400/413/404/405/429, org isolation, WS upgrade intact (#267)
 ├── hosted-a11y-job.test.ts        # Real Postgres + Chromium, IRIS_HOSTED=1: HTTP submit -> worker -> HTTP result, usage row, refusals (#267)
 ├── worker-cli.test.ts             # `iris worker` refuses outside hosted mode (exit 2) / without a database (3) (#267)
@@ -1087,6 +1088,29 @@ index; 0005: `attempts`, `claim_token`, `heartbeat_at`, #435), no broker (ADR 00
 - **Tests**: set `process.env.IRIS_HOSTED = '1'` at the top of the file and start
   `hostedEgressProxy({ lookup, connect })` before the first launch; no isolateModules is
   needed, because the worker loads the runner lazily.
+
+### Results API (issue #269)
+
+`GET /v1/runs` and `GET /v1/runs/:id` on the hosted listener, beside the job routes in
+`src/jobs-api.ts`: same key auth, suspension 403, rate buckets, verify cap and request
+logging (route labels `GET /v1/runs`, `GET /v1/runs/:id`). `startServer({ runs })`;
+hosted `iris connect` passes the same `postgresHistory` it records into.
+
+- **`listPage()`** (src/history-store.ts) is keyset-paged on `(finished_at desc, id desc)`
+  (migration 0008's partial index), finished runs only, one row over the page to know
+  there is a next one. **Finish time, not creation**: a job is created when queued, and one
+  finishing after a client's cursor passed its creation time was never listed. Filters:
+  `kind`, `status` (incl. `canceled`), `from` (inclusive), `to` (exclusive) on `finished_at`.
+- **The cursor's time is `to_char(… at time zone 'UTC', …US"Z")`**, base64url with the
+  id: microseconds (a JS `Date` keeps milliseconds and skipped rows inside one millisecond)
+  and independent of the server's DateStyle/TimeZone (`::text` follows them: `SQL, DMY`
+  broke every second page). The decoder round-trips the time through `Date`, so
+  `2026-99-99` is a 400, not a cast error (500). The org filter applies to every page.
+- **Query parameters are a strict zod schema**, each at most once (`Object.fromEntries`
+  keeps the last of a repeat), `limit` plain digits (`Number()` reads `0x10`, `1e1`).
+- Run detail is the stored run (sanitised when recorded, #254: no typed values, no URL
+  userinfo) with `redactString()` (src/log.ts) over every string, so secret-looking query
+  values (`?token=`) do not reach every key of the org. Signed artifact URLs are #460.
 
 ### BYOK Provider Keys (issue #344)
 
