@@ -13,7 +13,7 @@ import { Kysely, sql } from 'kysely';
 import { Client } from 'pg';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
-import { postgresHistory, RunInput } from '../../src/history-store';
+import { InvalidCursorError, postgresHistory, RunInput } from '../../src/history-store';
 import type { VisualTestResult } from '../../src/visual/visual-runner';
 import type { AccessibilityTestResult } from '../../src/a11y/a11y-runner';
 
@@ -105,7 +105,7 @@ const a11yRun = {
     u.pathname = `/${dbName}`;
     db = createPostgresDb(u.toString());
     await migrateToLatest(db);
-    for (const org of ['org-a', 'org-b']) {
+    for (const org of ['org-a', 'org-b', 'org-c']) {
       await sql`insert into organization (id, name, slug, "createdAt")
         values (${org}, ${org}, ${org}, now())`.execute(db);
       await sql`insert into apikey (id, "configId", "referenceId", key, "createdAt", "updatedAt")
@@ -372,5 +372,105 @@ const a11yRun = {
     expect(defs).toMatch(/\(org_id, created_at\)/);
     // Revoking a key looks its runs up by this.
     expect(defs).toMatch(/\(org_id, api_key_id\)/);
+  });
+  // #269: keyset pages over (created_at desc, id desc). Rows are inserted directly so the
+  // test controls created_at, including exact ties, which a cursor on created_at alone
+  // would skip or repeat.
+  describe('listPage (#269)', () => {
+    const C = { orgId: 'org-c' };
+    const at = (iso: string) => new Date(iso);
+    const seed: Array<[string, 'rpc' | 'a11y' | 'visual', 'succeeded' | 'failed', string]> = [
+      ['00000000-0000-4000-8000-000000000001', 'rpc', 'succeeded', '2026-06-01T10:00:00Z'],
+      ['00000000-0000-4000-8000-000000000002', 'a11y', 'failed', '2026-06-02T10:00:00Z'],
+      ['00000000-0000-4000-8000-000000000003', 'a11y', 'succeeded', '2026-06-03T10:00:00Z'],
+      ['00000000-0000-4000-8000-000000000004', 'visual', 'succeeded', '2026-06-03T10:00:00Z'],
+      ['00000000-0000-4000-8000-000000000005', 'rpc', 'failed', '2026-06-03T10:00:00Z'],
+      ['00000000-0000-4000-8000-000000000006', 'rpc', 'succeeded', '2026-06-04T10:00:00Z'],
+      ['00000000-0000-4000-8000-000000000007', 'a11y', 'succeeded', '2026-06-05T10:00:00Z'],
+    ];
+    beforeAll(async () => {
+      for (const [id, kind, status, created] of seed) {
+        await sql`insert into runs (id, org_id, kind, status, summary, started_at, finished_at, created_at)
+          values (${id}, 'org-c', ${kind}, ${status}, ${kind}, ${at(created)}, ${at(created)}, ${at(created)})`.execute(
+          db,
+        );
+      }
+      // In flight: not a finished run, never listed.
+      await sql`insert into runs (org_id, kind, status, summary, started_at, created_at)
+        values ('org-c', 'a11y', 'running', 'job', now(), now())`.execute(db);
+    });
+    const ids = (runs: Array<{ id: string }>) => runs.map((r) => r.id.slice(-1));
+
+    it('pages newest first without gaps or repeats, ties broken by id', async () => {
+      const store = history().forOrg(C);
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      do {
+        const page = await store.listPage({ limit: 2, cursor });
+        seen.push(...ids(page.runs));
+        cursor = page.nextCursor ?? undefined;
+        pages++;
+      } while (cursor);
+      expect(seen).toEqual(['7', '6', '5', '4', '3', '2', '1']);
+      expect(pages).toBe(4);
+    });
+
+    it('filters by kind, status and created date, combined with paging', async () => {
+      const store = history().forOrg(C);
+      expect(ids((await store.listPage({ kind: 'a11y' })).runs)).toEqual(['7', '3', '2']);
+      expect(ids((await store.listPage({ status: 'failed' })).runs)).toEqual(['5', '2']);
+      expect(
+        ids(
+          (
+            await store.listPage({
+              from: at('2026-06-02T00:00:00Z'),
+              to: at('2026-06-04T00:00:00Z'),
+            })
+          ).runs,
+        ),
+      ).toEqual(['5', '4', '3', '2']);
+      const first = await store.listPage({ kind: 'rpc', limit: 1 });
+      expect(ids(first.runs)).toEqual(['6']);
+      const next = await store.listPage({ kind: 'rpc', limit: 1, cursor: first.nextCursor! });
+      expect(ids(next.runs)).toEqual(['5']);
+    });
+
+    it('is scoped to the org, a cursor included, and refuses a malformed cursor', async () => {
+      const page = await history().forOrg(C).listPage({ limit: 3 });
+      // Another org's store with org C's cursor still reads only its own runs.
+      const other = await history().forOrg(A).listPage({ cursor: page.nextCursor! });
+      expect(other.runs.every((r) => !r.id.startsWith('00000000-0000-4000-8000'))).toBe(true);
+      await expect(history().forOrg(C).listPage({ cursor: 'not-a-cursor' })).rejects.toThrow(
+        InvalidCursorError,
+      );
+    });
+
+    // Postgres keeps microseconds; a JS Date only milliseconds. A cursor built from a Date
+    // would skip rows inside the same millisecond as a page boundary.
+    it('pages exactly through rows microseconds apart', async () => {
+      await sql`insert into organization (id, name, slug, "createdAt")
+        values ('org-d', 'org-d', 'org-d', now())`.execute(db);
+      for (const us of ['100', '200', '300', '400', '500']) {
+        const ts = `2026-07-01 10:00:00.123${us}+00`;
+        await sql`insert into runs (org_id, kind, status, summary, started_at, finished_at, created_at)
+          values ('org-d', 'rpc', 'succeeded', ${us}, ${ts}::timestamptz, ${ts}::timestamptz, ${ts}::timestamptz)`.execute(
+          db,
+        );
+      }
+      const store = history().forOrg({ orgId: 'org-d' });
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await store.listPage({ limit: 2, cursor });
+        seen.push(...page.runs.map((r) => r.summary));
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      expect(seen).toEqual(['500', '400', '300', '200', '100']);
+    });
+
+    it('has no next cursor on the last page', async () => {
+      expect((await history().forOrg(C).listPage({ limit: 50 })).nextCursor).toBeNull();
+    });
   });
 });

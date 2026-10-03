@@ -63,9 +63,57 @@ export interface HistoryStore {
   get(id: string): Promise<(StoredRun & { results: StoredRunResult[] }) | null>;
 }
 
+/** Filters and position for one page of an org's runs (#269). */
+export interface RunPageQuery {
+  /** 1-100; default 50. */
+  limit?: number;
+  kind?: RunKind;
+  status?: StoredRun['status'];
+  /** `created_at >= from`. */
+  from?: Date;
+  /** `created_at < to`. */
+  to?: Date;
+  /** The previous page's `nextCursor`. */
+  cursor?: string;
+}
+
+export interface RunPage {
+  runs: StoredRun[];
+  /** Pass back as `cursor` for the next page; `null` on the last one. */
+  nextCursor: string | null;
+}
+
+/** A `cursor` this store did not issue (or garbled): the API answers 400. */
+export class InvalidCursorError extends Error {
+  constructor() {
+    super('Invalid cursor');
+    this.name = 'InvalidCursorError';
+  }
+}
+
 /** The hosted history: reachable only per org. */
 export interface PostgresHistory {
-  forOrg(scope: TenantScope): HistoryStore;
+  forOrg(scope: TenantScope): HistoryStore & {
+    /** Newest first, keyset-paged on (created_at, id); finished runs only. */
+    listPage(query?: RunPageQuery): Promise<RunPage>;
+  };
+}
+
+/**
+ * Opaque to clients: base64url of `<created_at>|<id>`, with created_at as Postgres's own
+ * text (microseconds). A JS Date keeps milliseconds only, and a cursor built from one
+ * would skip rows inside the same millisecond as the page boundary.
+ */
+const encodeCursor = (createdText: string, id: string) =>
+  Buffer.from(`${createdText}|${id}`).toString('base64url');
+
+const PG_TIMESTAMPTZ = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{1,6})?[+-]\d\d(:\d\d){0,2}$/;
+
+function decodeCursor(cursor: string): { createdText: string; id: string } {
+  const [createdText, id, extra] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+  if (extra !== undefined || !id || !UUID.test(id) || !PG_TIMESTAMPTZ.test(createdText ?? ''))
+    throw new InvalidCursorError();
+  return { createdText, id };
 }
 
 /** Who a hosted run belongs to: the org, and the API key that started it, if any. */
@@ -274,6 +322,27 @@ export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
           where org_id = ${orgId} and finished_at is not null
           order by created_at desc, id limit ${limit}`.execute(db);
         return rows.map(toStoredRun);
+      },
+
+      async listPage({ limit = 50, kind, status, from, to, cursor } = {}) {
+        const after = cursor === undefined ? null : decodeCursor(cursor);
+        const n = Math.min(Math.max(Math.trunc(limit), 1), 100);
+        // One row more than the page: its presence is what says there is a next page.
+        const { rows } = await sql<RunRow & { created_text: string }>`
+          select id, kind, status, summary, started_at, finished_at, created_at,
+                 created_at::text as created_text from runs
+          where org_id = ${orgId} and finished_at is not null
+            ${kind ? sql`and kind = ${kind}` : sql``}
+            ${status ? sql`and status = ${status}` : sql``}
+            ${from ? sql`and created_at >= ${from}` : sql``}
+            ${to ? sql`and created_at < ${to}` : sql``}
+            ${after ? sql`and (created_at, id) < (${after.createdText}::timestamptz, ${after.id}::uuid)` : sql``}
+          order by created_at desc, id desc limit ${n + 1}`.execute(db);
+        const last = rows.length > n ? rows[n - 1] : null;
+        return {
+          runs: rows.slice(0, n).map(toStoredRun),
+          nextCursor: last ? encodeCursor(last.created_text, last.id) : null,
+        };
       },
 
       async get(id) {
