@@ -95,6 +95,7 @@ src/
 ├── jobs-api.ts            # Hosted REST on the RPC listener: jobs (#267), runs + run detail (#269)
 ├── worker.ts              # `iris worker`: claims queued a11y jobs, runs the hardened runner, stores the result (#267)
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
+├── run-reads.ts           # Read-only run queries (types, keyset cursor, listPage, get): no runner imports, so the portal can use it (#270)
 ├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
 └── config.ts              # Configuration types and validation
 
@@ -1111,6 +1112,24 @@ hosted `iris connect` passes the same `postgresHistory` it records into.
 - Run detail is the stored run (sanitised when recorded, #254: no typed values, no URL
   userinfo) with `redactString()` (src/log.ts) over every string, so secret-looking query
   values (`?token=`) do not reach every key of the org. Signed artifact URLs are #460.
+
+### Portal Runs Pages (issue #270)
+
+`/runs` and `/runs/[id]` in `apps/portal`, reading the org's runs straight from Postgres
+(ADR 0001: the portal never calls the public API). Visual diff images and approval are #463.
+
+- **The portal imports `src/run-reads.ts`, not `src/history-store.ts`.** The read path
+  (types, keyset cursor, `listPage`, `get`) lives in `run-reads` with no dependency beyond
+  Kysely; `history-store` uses and re-exports it. Importing `history-store` pulled the
+  a11y runner (Playwright) into the portal bundle and broke `next build` on
+  `src/ai-client.ts`'s type re-exports.
+- **The org comes from `requireOrg()` only**, so another org's run id is `notFound()`.
+- **The list's `loading.tsx` lives in a `(list)` route group.** A `loading.tsx` at `/runs`
+  also wraps `/runs/[id]`: the page streams, and `notFound()` then arrives after a 200.
+- **Filters and paging are links** (no client script); a bad or stale cursor shows a
+  message with a link back to the newest page, not an error page.
+- Run detail goes through `redactStrings()` (src/log.ts), the same pass as the API (#269).
+- `lib/run-format.ts` turns a stored result into words per run kind; unit-tested.
 
 ### BYOK Provider Keys (issue #344)
 
