@@ -44,15 +44,18 @@ const SECRET_PARAM =
 const API_KEY = /\biris_[A-Za-z0-9]{16,}\b/g;
 const MAX_DEPTH = 4;
 
+/** `text` with URL userinfo, `Bearer`/`Basic` credentials, secret query values and keys cut. */
+export function redactString(text: string): string {
+  return text
+    .replace(USERINFO, '$1[redacted]@')
+    .replace(AUTH_SCHEME, '$1 [redacted]')
+    .replace(SECRET_PARAM, '$1[redacted]')
+    .replace(API_KEY, 'iris_[redacted]');
+}
+
 /** A copy of `value` with secret-named fields replaced and credentials cut from strings. */
 export function redact(value: unknown, depth = 0): unknown {
-  if (typeof value === 'string') {
-    return value
-      .replace(USERINFO, '$1[redacted]@')
-      .replace(AUTH_SCHEME, '$1 [redacted]')
-      .replace(SECRET_PARAM, '$1[redacted]')
-      .replace(API_KEY, 'iris_[redacted]');
-  }
+  if (typeof value === 'string') return redactString(value);
   if (value instanceof Error) return redact(value.message, depth);
   if (typeof value !== 'object' || value === null) {
     return typeof value === 'bigint' ? String(value) : value;

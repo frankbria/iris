@@ -152,12 +152,10 @@ const rpcRun = (success: boolean, startedAt: Date): RunInput => ({
     expect((await (await get('/v1/runs?kind=a11y')).json()).runs).toEqual([]);
   });
 
-  it('filters by created date (from inclusive, to exclusive)', async () => {
-    const all = await (await get('/v1/runs')).json();
-    const middle = all.runs[1].createdAt;
-    const from = await (await get(`/v1/runs?from=${encodeURIComponent(middle)}`)).json();
+  it('filters by finish time (from inclusive, to exclusive)', async () => {
+    const from = await (await get('/v1/runs?from=2026-06-02T10:00:00Z')).json();
     expect(from.runs.map((r: { id: string }) => r.id)).toEqual(aRuns.slice(0, 2));
-    const to = await (await get(`/v1/runs?to=${encodeURIComponent(middle)}`)).json();
+    const to = await (await get('/v1/runs?to=2026-06-02T10:00:00Z')).json();
     expect(to.runs.map((r: { id: string }) => r.id)).toEqual(aRuns.slice(2));
   });
 
@@ -169,6 +167,32 @@ const rpcRun = (success: boolean, startedAt: Date): RunInput => ({
     expect(body.results).toHaveLength(2);
     expect(body.results[0]).toMatchObject({ url: 'https://shop.example/login', passed: true });
     expect(JSON.stringify(body)).not.toContain('hunter2-secret');
+  });
+
+  it('accepts canceled as a status filter', async () => {
+    const res = await get('/v1/runs?status=canceled');
+    expect(res.status).toBe(200);
+    expect((await res.json()).runs).toEqual([]);
+  });
+
+  // #254 strips URL userinfo when it stores a run; run detail is readable by every key
+  // of the org, so secret-looking query values go too (the logger's rules, #275).
+  it('cuts secret-looking query values from run detail', async () => {
+    const run = rpcRun(true, at('2026-06-04T10:00:00Z')) as Extract<RunInput, { kind: 'rpc' }>;
+    run.results[0] = {
+      success: true,
+      action: { type: 'navigate', url: 'https://shop.example/reset?token=s3cr3t-tok&page=2' },
+      context: { url: 'https://shop.example/reset?token=s3cr3t-tok&page=2', timestamp: 1 },
+    };
+    const id = await postgresHistory(db).forOrg({ orgId: 'org-a' }).record(run);
+    try {
+      const text = await (await get(`/v1/runs/${id}`)).text();
+      expect(text).not.toContain('s3cr3t-tok');
+      expect(text).toContain('page=2');
+    } finally {
+      await sql`delete from run_results where run_id = ${id}`.execute(db);
+      await sql`delete from runs where id = ${id}`.execute(db);
+    }
   });
 
   it("answers 404 for another org's run, an unknown id and a non-uuid", async () => {
@@ -187,6 +211,12 @@ const rpcRun = (success: boolean, startedAt: Date): RunInput => ({
     ['from=yesterday'],
     ['cursor=garbage'],
     ['unknown=1'],
+    // Repeated parameters would silently keep the last value.
+    ['kind=rpc&kind=a11y'],
+    // Number() reads these as 16 and 10; only plain digits are a limit.
+    ['limit=0x10'],
+    ['limit=1e1'],
+    ['from=2026-06-01'],
   ])('400 for %s', async (query) => {
     const res = await get(`/v1/runs?${query}`);
     expect(res.status).toBe(400);

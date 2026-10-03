@@ -8,7 +8,7 @@ import {
   type TenantScope,
 } from './history-store';
 import type { Authenticator, Principal } from './protocol';
-import { errMessage, log } from './log';
+import { errMessage, log, redactString } from './log';
 
 /**
  * The hosted job REST API (#267, ADR 0001 §1): `POST /v1/a11y/jobs` queues a scan,
@@ -45,9 +45,15 @@ const A11yJobBody = z
 /** `GET /v1/runs` query (#269): every field optional, unknown ones refused. */
 const RunListQuery = z
   .object({
-    limit: z.coerce.number().int().min(1).max(100).optional(),
+    // Plain digits only: Number() would read `0x10` and `1e1`.
+    limit: z
+      .string()
+      .regex(/^\d{1,3}$/, 'must be a whole number')
+      .transform(Number)
+      .pipe(z.number().min(1).max(100))
+      .optional(),
     kind: z.enum(['rpc', 'a11y', 'visual']).optional(),
-    status: z.enum(['succeeded', 'failed']).optional(),
+    status: z.enum(['succeeded', 'failed', 'canceled']).optional(),
     from: z.iso.datetime({ offset: true }).optional(),
     to: z.iso.datetime({ offset: true }).optional(),
     cursor: z.string().max(512).optional(),
@@ -109,6 +115,16 @@ function readBody(req: IncomingMessage): Promise<string | null> {
   });
 }
 
+/** A copy with `redactString` applied to every string inside (dates kept as dates). */
+function cutSecrets(value: unknown): unknown {
+  if (typeof value === 'string') return redactString(value);
+  if (Array.isArray(value)) return value.map(cutSecrets);
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, cutSecrets(v)]));
+  }
+  return value;
+}
+
 const JOB_PATH = /^\/v1\/jobs\/([^/]+)$/;
 const RUN_PATH = /^\/v1\/runs\/([^/]+)$/;
 
@@ -159,7 +175,11 @@ export async function handleJobsRequest(
     const scope = { orgId: principal.orgId, apiKeyId: principal.keyId };
 
     if (listRuns) {
-      const query = RunListQuery.safeParse(Object.fromEntries(new URLSearchParams(search)));
+      const params = new URLSearchParams(search);
+      // Object.fromEntries keeps the last of a repeated parameter: refuse instead.
+      const repeated = [...new Set(params.keys())].find((k) => params.getAll(k).length > 1);
+      if (repeated) return send(res, 400, { error: `Invalid query: ${repeated}: repeated` });
+      const query = RunListQuery.safeParse(Object.fromEntries(params));
       if (!query.success) {
         const issue = query.error.issues[0];
         return send(res, 400, {
@@ -188,7 +208,9 @@ export async function handleJobsRequest(
       }
       const run = await deps.runs!.forOrg(scope).get(id);
       if (!run) return send(res, 404, { error: 'Not found' });
-      return send(res, 200, run);
+      // Every key of the org reads this. #254 stored the run without typed values or URL
+      // userinfo; secret-looking query values (a reset link's token) are cut here too.
+      return send(res, 200, cutSecrets(run));
     }
 
     const store = deps.jobs.forOrg(scope);

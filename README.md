@@ -384,9 +384,11 @@ curl http://host:8080/v1/runs/<uuid> -H "Authorization: Bearer $KEY"
 # {...the run, "results":[{"url","passed","result"}...]}
 ```
 
-Newest first, `limit` 1-100 (default 50); `kind` is `rpc`, `a11y` or `visual`, `status`
-`succeeded` or `failed`; `from` (inclusive) and `to` (exclusive) are ISO timestamps on
-the creation time. Pass `nextCursor` back as `cursor` until it is `null`. Queued and
+Newest first by finish time, `limit` 1-100 (default 50); `kind` is `rpc`, `a11y` or
+`visual`, `status` `succeeded`, `failed` or `canceled`; `from` (inclusive) and `to`
+(exclusive) are full ISO timestamps with an offset (`2026-06-01T00:00:00Z`) on the finish
+time. Each parameter at most once. Pass `nextCursor` back as `cursor` until it is `null`.
+Secret-looking query values in recorded URLs (`?token=…`) come back as `[redacted]`. Queued and
 running jobs are not runs yet: read them on `/v1/jobs/:id`. Artifact URLs arrive with
 object storage (#460).
 

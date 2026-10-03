@@ -1096,17 +1096,21 @@ index; 0005: `attempts`, `claim_token`, `heartbeat_at`, #435), no broker (ADR 00
 logging (route labels `GET /v1/runs`, `GET /v1/runs/:id`). `startServer({ runs })`;
 hosted `iris connect` passes the same `postgresHistory` it records into.
 
-- **`listPage()`** (src/history-store.ts) is keyset-paged on `(created_at desc, id desc)`,
-  finished runs only, one row over the page to know there is a next one. Filters:
-  `kind`, `status`, `from` (inclusive), `to` (exclusive) on `created_at`.
-- **The cursor carries Postgres's own text for `created_at`** (microseconds), base64url
-  with the id. A JS `Date` keeps milliseconds: a cursor built from one skipped rows inside
-  the same millisecond as the page boundary (a test seeds rows microseconds apart). A
-  malformed cursor is `InvalidCursorError` -> 400. The org filter applies to every page,
-  so another org's cursor reads only the caller's own runs.
-- **Query parameters are a strict zod schema**: unknown ones are a 400, not ignored.
-- Run detail returns the stored results as-is: they were sanitised when recorded (#254:
-  no typed values, no URL credentials). Signed artifact URLs are #460 (object storage).
+- **`listPage()`** (src/history-store.ts) is keyset-paged on `(finished_at desc, id desc)`
+  (migration 0008's partial index), finished runs only, one row over the page to know
+  there is a next one. **Finish time, not creation**: a job is created when queued, and one
+  finishing after a client's cursor passed its creation time was never listed. Filters:
+  `kind`, `status` (incl. `canceled`), `from` (inclusive), `to` (exclusive) on `finished_at`.
+- **The cursor's time is `to_char(… at time zone 'UTC', …US"Z")`**, base64url with the
+  id: microseconds (a JS `Date` keeps milliseconds and skipped rows inside one millisecond)
+  and independent of the server's DateStyle/TimeZone (`::text` follows them: `SQL, DMY`
+  broke every second page). The decoder round-trips the time through `Date`, so
+  `2026-99-99` is a 400, not a cast error (500). The org filter applies to every page.
+- **Query parameters are a strict zod schema**, each at most once (`Object.fromEntries`
+  keeps the last of a repeat), `limit` plain digits (`Number()` reads `0x10`, `1e1`).
+- Run detail is the stored run (sanitised when recorded, #254: no typed values, no URL
+  userinfo) with `redactString()` (src/log.ts) over every string, so secret-looking query
+  values (`?token=`) do not reach every key of the org. Signed artifact URLs are #460.
 
 ### BYOK Provider Keys (issue #344)
 
