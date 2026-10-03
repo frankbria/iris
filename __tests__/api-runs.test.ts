@@ -217,6 +217,10 @@ const rpcRun = (success: boolean, startedAt: Date): RunInput => ({
     ['limit=0x10'],
     ['limit=1e1'],
     ['from=2026-06-01'],
+    // Well-formed but impossible: zod checks the shape only, and Postgres would 500.
+    ['from=2026-13-01T00:00:00Z'],
+    ['to=2026-02-30T00:00:00Z'],
+    ['from=2026-06-01T25:00:00Z'],
   ])('400 for %s', async (query) => {
     const res = await get(`/v1/runs?${query}`);
     expect(res.status).toBe(400);
