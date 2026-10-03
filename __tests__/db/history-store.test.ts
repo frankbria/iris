@@ -469,6 +469,57 @@ const a11yRun = {
       expect(seen).toEqual(['500', '400', '300', '200', '100']);
     });
 
+    // A job is created when queued and finished later. Ordered by creation, a job that
+    // finishes after the client's cursor passed its creation time would never appear.
+    it('orders by finish time, so a long job that finishes late is on top', async () => {
+      await sql`insert into organization (id, name, slug, "createdAt")
+        values ('org-e', 'org-e', 'org-e', now())`.execute(db);
+      const run = (summary: string, created: string, finished: string) =>
+        sql`insert into runs (org_id, kind, status, summary, started_at, finished_at, created_at)
+          values ('org-e', 'a11y', 'succeeded', ${summary}, ${at(created)}, ${at(finished)}, ${at(created)})`.execute(
+          db,
+        );
+      await run('quick', '2026-06-05T00:00:00Z', '2026-06-05T00:01:00Z');
+      await run('long', '2026-06-01T00:00:00Z', '2026-06-09T00:00:00Z');
+      const page = await history().forOrg({ orgId: 'org-e' }).listPage({});
+      expect(page.runs.map((r) => r.summary)).toEqual(['long', 'quick']);
+      // from/to filter on finish time too.
+      const since = await history()
+        .forOrg({ orgId: 'org-e' })
+        .listPage({ from: at('2026-06-06T00:00:00Z') });
+      expect(since.runs.map((r) => r.summary)).toEqual(['long']);
+    });
+
+    // The cursor's timestamp must not depend on the server's DateStyle or TimeZone.
+    it('pages under a non-ISO DateStyle and another TimeZone', async () => {
+      const u = new URL(ADMIN_URL!);
+      u.pathname = `/${dbName}`;
+      u.searchParams.set('options', '-c datestyle=SQL,DMY -c timezone=Asia/Kolkata');
+      const odd = createPostgresDb(u.toString());
+      try {
+        const store = postgresHistory(odd).forOrg(C);
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = await store.listPage({ limit: 2, cursor });
+          seen.push(...ids(page.runs));
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor);
+        expect(seen).toEqual(['7', '6', '5', '4', '3', '2', '1']);
+      } finally {
+        await odd.destroy();
+      }
+    });
+
+    it('refuses a cursor naming an impossible time, as a bad cursor, not a database error', async () => {
+      const forged = Buffer.from(
+        '2026-99-99T99:99:99.000000Z|00000000-0000-4000-8000-000000000001',
+      ).toString('base64url');
+      await expect(history().forOrg(C).listPage({ cursor: forged })).rejects.toThrow(
+        InvalidCursorError,
+      );
+    });
+
     it('has no next cursor on the last page', async () => {
       expect((await history().forOrg(C).listPage({ limit: 50 })).nextCursor).toBeNull();
     });

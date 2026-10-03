@@ -68,10 +68,10 @@ export interface RunPageQuery {
   /** 1-100; default 50. */
   limit?: number;
   kind?: RunKind;
-  status?: StoredRun['status'];
-  /** `created_at >= from`. */
+  status?: StoredRun['status'] | 'canceled';
+  /** `finished_at >= from`. */
   from?: Date;
-  /** `created_at < to`. */
+  /** `finished_at < to`. */
   to?: Date;
   /** The previous page's `nextCursor`. */
   cursor?: string;
@@ -94,26 +94,35 @@ export class InvalidCursorError extends Error {
 /** The hosted history: reachable only per org. */
 export interface PostgresHistory {
   forOrg(scope: TenantScope): HistoryStore & {
-    /** Newest first, keyset-paged on (created_at, id); finished runs only. */
+    /**
+     * Newest first by finish time, keyset-paged on (finished_at, id); finished runs only.
+     * Finish time, not creation: a job is created when queued, and one that finished after
+     * a client's cursor passed its creation time would never appear on any page.
+     */
     listPage(query?: RunPageQuery): Promise<RunPage>;
   };
 }
 
 /**
- * Opaque to clients: base64url of `<created_at>|<id>`, with created_at as Postgres's own
- * text (microseconds). A JS Date keeps milliseconds only, and a cursor built from one
- * would skip rows inside the same millisecond as the page boundary.
+ * Opaque to clients: base64url of `<finished_at>|<id>`, the time as microsecond UTC ISO
+ * text from Postgres's `to_char` (a JS Date keeps milliseconds, and `::text` follows the
+ * server's DateStyle and TimeZone). Rows inside one millisecond still page exactly.
  */
-const encodeCursor = (createdText: string, id: string) =>
-  Buffer.from(`${createdText}|${id}`).toString('base64url');
+const encodeCursor = (finishedIso: string, id: string) =>
+  Buffer.from(`${finishedIso}|${id}`).toString('base64url');
 
-const PG_TIMESTAMPTZ = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{1,6})?[+-]\d\d(:\d\d){0,2}$/;
+const UTC_MICROS = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)\.\d{6}Z$/;
 
-function decodeCursor(cursor: string): { createdText: string; id: string } {
-  const [createdText, id, extra] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
-  if (extra !== undefined || !id || !UUID.test(id) || !PG_TIMESTAMPTZ.test(createdText ?? ''))
-    throw new InvalidCursorError();
-  return { createdText, id };
+function decodeCursor(cursor: string): { finishedIso: string; id: string } {
+  const [finishedIso, id, extra] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+  const m = UTC_MICROS.exec(finishedIso ?? '');
+  // The shape alone lets `2026-99-99` through to Postgres, which then fails the cast (500):
+  // a real time survives a round trip through Date unchanged.
+  const parsed = m ? new Date(`${m[1]}Z`) : null;
+  const real =
+    m && parsed && !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 19) === m[1];
+  if (extra !== undefined || !id || !UUID.test(id) || !real) throw new InvalidCursorError();
+  return { finishedIso, id };
 }
 
 /** Who a hosted run belongs to: the org, and the API key that started it, if any. */
@@ -328,20 +337,22 @@ export function postgresHistory(db: Kysely<unknown>): PostgresHistory {
         const after = cursor === undefined ? null : decodeCursor(cursor);
         const n = Math.min(Math.max(Math.trunc(limit), 1), 100);
         // One row more than the page: its presence is what says there is a next page.
-        const { rows } = await sql<RunRow & { created_text: string }>`
+        const { rows } = await sql<RunRow & { finished_iso: string }>`
           select id, kind, status, summary, started_at, finished_at, created_at,
-                 created_at::text as created_text from runs
+                 to_char(finished_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+                   as finished_iso
+          from runs
           where org_id = ${orgId} and finished_at is not null
             ${kind ? sql`and kind = ${kind}` : sql``}
             ${status ? sql`and status = ${status}` : sql``}
-            ${from ? sql`and created_at >= ${from}` : sql``}
-            ${to ? sql`and created_at < ${to}` : sql``}
-            ${after ? sql`and (created_at, id) < (${after.createdText}::timestamptz, ${after.id}::uuid)` : sql``}
-          order by created_at desc, id desc limit ${n + 1}`.execute(db);
+            ${from ? sql`and finished_at >= ${from}` : sql``}
+            ${to ? sql`and finished_at < ${to}` : sql``}
+            ${after ? sql`and (finished_at, id) < (${after.finishedIso}::timestamptz, ${after.id}::uuid)` : sql``}
+          order by finished_at desc, id desc limit ${n + 1}`.execute(db);
         const last = rows.length > n ? rows[n - 1] : null;
         return {
           runs: rows.slice(0, n).map(toStoredRun),
-          nextCursor: last ? encodeCursor(last.created_text, last.id) : null,
+          nextCursor: last ? encodeCursor(last.finished_iso, last.id) : null,
         };
       },
 
