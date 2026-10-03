@@ -398,3 +398,11 @@ Write/Edit, not as a pre-push afterthought.
 - A link check of "starts with / but not //" lets `/\evil.com` and `/<tab>/evil.com` through: browsers treat `\` as `/` and drop tabs. Refuse backslash and whitespace, then resolve with `new URL()` and check the origin.
 - Writing a data-flows inventory from the code turns up gaps nobody filed: unpurged sessions, unbacked-up volumes, off-box copies never deleted. Route each one to the owning issue (#349) rather than guessing a retention period.
 - Keep "published" document versions apart from "must accept" versions: putting the privacy version in the acceptance set would have forced every user to re-accept for a document that needs no consent.
+
+## #348 / PR #455 (2026-10-03)
+- Background agents die with the session. When restarts keep cutting them off, finish the remaining work in the foreground in small committed steps; a resumed agent re-reads everything and loses its place again.
+- A hook that guards a plugin endpoint must resolve the resource the way the plugin does. The api-key plugin acts on the key's own org for update and delete whatever the body names, so trusting the body's `organizationId` let a spoofed org skip the suspension check.
+- Per-tenant suspension is bypassed by making a new tenant. Gate tenant creation for members of a suspended tenant, and file account-level bans separately.
+- `now()` is when a transaction began, not when it took the lock. History that must follow lock order needs a timestamp set under the lock (strictly after the latest row).
+- Validate operator configuration the way it will be used: a mailto contact that passed URL parsing still threw at `decodeURIComponent` when displayed.
+- A dependency audit gate can turn red on any branch overnight (new advisories). Fix it in its own PR off main and merge main back, instead of mixing it into a feature PR.
