@@ -146,7 +146,7 @@ code is the ordering key.
 | `P0.48` | [#276](https://github.com/frankbria/iris/issues/276) | Terms of Service and Acceptable Use Policy with recorded acceptance | P0.21 (#249) | DONE (PR #451; wording approval in #450) |
 | `P0.49` | [#277](https://github.com/frankbria/iris/issues/277) | Privacy policy, subprocessor list and DPA | P0.19 (#247) | DONE (PR #453; wording approval in #450) |
 | `P0.50` | [#348](https://github.com/frankbria/iris/issues/348) | Abuse handling and security contact | P0.24 (#341) | DONE (PR #455) |
-| `P0.51` | [#349](https://github.com/frankbria/iris/issues/349) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | TODO |
+| `P0.51` | [#349](https://github.com/frankbria/iris/issues/349) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | BLOCKED (needs-owner: retention decisions, see #349) |
 | `P0.52` | [#435](https://github.com/frankbria/iris/issues/435) | Reap jobs stuck in running after a worker crash | P0.39 (#267) | DONE (PR #443) |
 | `P0.53` | [#445](https://github.com/frankbria/iris/issues/445) | Object storage backups: bucket versioning/replication and a restore drill | P0.29 (#257) | BLOCKED (on #257) |
 | `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | BLOCKED (needs-owner) |
