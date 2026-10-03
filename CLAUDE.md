@@ -1126,6 +1126,13 @@ hosted `iris connect` passes the same `postgresHistory` it records into.
 - **The org comes from `requireOrg()` only**, so another org's run id is `notFound()`.
 - **The list's `loading.tsx` lives in a `(list)` route group.** A `loading.tsx` at `/runs`
   also wraps `/runs/[id]`: the page streams, and `notFound()` then arrives after a 200.
+  The group's `layout.tsx` runs `requireOrg()` above that boundary, so a signed-out or
+  terms-pending visitor gets a real 307, not a 200 with a meta refresh. `requireOrg` is
+  wrapped in React `cache()`, so the page reuses the layout's answer.
+- **A failed job's detail shows its `error`** (`run-reads` `get()` selects it, the API too):
+  a job that could not run has no summary and no results, only that reason.
+- **The error page calls `retry()`** (Next 16: refresh, then reset). `reset()` alone re-renders
+  the same failed result.
 - **Filters and paging are links** (no client script); a bad or stale cursor shows a
   message with a link back to the newest page, not an error page.
 - Run detail goes through `redactStrings()` (src/log.ts), the same pass as the API (#269).

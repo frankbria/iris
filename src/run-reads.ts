@@ -137,17 +137,23 @@ export function orgRunReads(db: Kysely<unknown>, orgId: string) {
     },
 
     /** `null` for another org's run, an unknown id or a non-uuid. */
-    async get(id: string): Promise<(StoredRun & { results: StoredRunResult[] }) | null> {
+    /**
+     * `error` says why a job could not run (it then has no summary and no results): without
+     * it, a failed job's detail would be a dead end.
+     */
+    async get(
+      id: string,
+    ): Promise<(StoredRun & { error: string | null; results: StoredRunResult[] }) | null> {
       // Not a uuid is not a run here; Postgres would reject the cast instead.
       if (!UUID.test(id)) return null;
-      const { rows } = await sql<RunRow>`
-        select id, kind, status, summary, started_at, finished_at, created_at from runs
+      const { rows } = await sql<RunRow & { error: string | null }>`
+        select id, kind, status, summary, started_at, finished_at, created_at, error from runs
         where org_id = ${orgId} and id = ${id} and finished_at is not null`.execute(db);
       if (!rows[0]) return null;
       const results = await sql<StoredRunResult>`
         select url, passed, result from run_results
         where org_id = ${orgId} and run_id = ${id} order by position`.execute(db);
-      return { ...toStoredRun(rows[0]), results: results.rows };
+      return { ...toStoredRun(rows[0]), error: rows[0].error, results: results.rows };
     },
   };
 }

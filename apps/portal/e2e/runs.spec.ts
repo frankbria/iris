@@ -72,6 +72,22 @@ async function seedRun(
   return id as string
 }
 
+// The list streams (loading.tsx); the auth gate must still answer with a real redirect,
+// not a 200 carrying a meta refresh.
+test("signed out, /runs is a redirect to log in, not a 200", async ({
+  playwright,
+  baseURL,
+}) => {
+  const anon = await playwright.request.newContext({ baseURL })
+  try {
+    const res = await anon.get("/runs", { maxRedirects: 0 })
+    expect([307, 308, 303]).toContain(res.status())
+    expect(res.headers()["location"]).toMatch(/\/login/)
+  } finally {
+    await anon.dispose()
+  }
+})
+
 test("a new org sees the empty state", async ({ page, context }) => {
   await signedIn(page, context)
   await page.getByRole("link", { name: "Runs" }).click()
@@ -182,6 +198,17 @@ test("shows each kind's detail, redacts recorded secrets, and 404s another org's
   await expect(page.getByText("Timeout waiting for #pw")).toBeVisible()
   expect(await page.content()).not.toContain("s3cr3t")
   await expect(page.getByText(/page=2/)).toBeVisible()
+
+  // A job that could not run: its reason, not a blank page.
+  const [{ id: failedJob }] = await sql(
+    `insert into runs (org_id, kind, status, error, started_at, finished_at)
+     values ($1, 'a11y', 'failed', 'Navigation refused by the hosted URL policy', now(), now()) returning id`,
+    [orgId]
+  )
+  await page.goto(`/runs/${failedJob}`)
+  await expect(
+    page.getByText("Navigation refused by the hosted URL policy")
+  ).toBeVisible()
 
   // Another org's run: the same id is a 404 from this user's org.
   const otherOrg = `other-${unique()}`.replace(/[^a-z0-9-]/gi, "-")

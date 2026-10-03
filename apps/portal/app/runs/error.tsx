@@ -10,9 +10,12 @@ import { Button } from "@/components/ui/button"
  */
 export default function RunsError({
   reset,
+  retry,
 }: {
   error: Error
   reset: () => void
+  /** Next 16: fetches the page from the server again, then resets. */
+  retry?: () => void
 }) {
   return (
     <main className="flex min-h-svh flex-col items-start gap-4 p-6">
@@ -20,7 +23,8 @@ export default function RunsError({
         Runs could not be loaded. Try again in a moment.
       </p>
       <div className="flex items-center gap-4">
-        <Button type="button" onClick={() => reset()}>
+        {/* reset() alone re-renders the same failed result: ask the server again. */}
+        <Button type="button" onClick={() => (retry ?? reset)()}>
           Try again
         </Button>
         <Link href="/dashboard" className="text-sm underline">

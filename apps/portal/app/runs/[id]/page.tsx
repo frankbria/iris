@@ -27,7 +27,10 @@ export default async function RunPage({
   const { id } = await params
   const found = await runsFor(org.id).get(id)
   if (!found) notFound()
-  const run = redactStrings(found) as StoredRun & { results: StoredRunResult[] }
+  const run = redactStrings(found) as StoredRun & {
+    error: string | null
+    results: StoredRunResult[]
+  }
 
   return (
     <main className="flex min-h-svh flex-col gap-4 p-6">
@@ -45,6 +48,12 @@ export default async function RunPage({
         </dd>
         <dt className="text-muted-foreground">Summary</dt>
         <dd>{run.summary ?? "—"}</dd>
+        {run.error && (
+          <>
+            <dt className="text-muted-foreground">Error</dt>
+            <dd className="break-words text-destructive">{run.error}</dd>
+          </>
+        )}
         <dt className="text-muted-foreground">Started</dt>
         <dd>{formatTime(run.startedAt)}</dd>
         <dt className="text-muted-foreground">Finished</dt>
