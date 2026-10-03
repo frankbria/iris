@@ -1,12 +1,19 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { z } from 'zod';
-import type { A11yJobParams, OrgJobs, TenantScope } from './history-store';
+import {
+  InvalidCursorError,
+  type A11yJobParams,
+  type OrgJobs,
+  type PostgresHistory,
+  type TenantScope,
+} from './history-store';
 import type { Authenticator, Principal } from './protocol';
 import { errMessage, log } from './log';
 
 /**
  * The hosted job REST API (#267, ADR 0001 §1): `POST /v1/a11y/jobs` queues a scan,
- * `GET /v1/jobs/:id` reads it back. It shares the RPC server's HTTP listener, API-key
+ * `GET /v1/jobs/:id` reads it back. The results API (#269): `GET /v1/runs` lists the
+ * org's finished runs, `GET /v1/runs/:id` reads one with its results. It shares the RPC server's HTTP listener, API-key
  * authentication and per-key / per-org request budgets. No CORS: API clients only.
  */
 
@@ -35,9 +42,28 @@ const A11yJobBody = z
   })
   .strict();
 
+/** `GET /v1/runs` query (#269): every field optional, unknown ones refused. */
+const RunListQuery = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+    kind: z.enum(['rpc', 'a11y', 'visual']).optional(),
+    status: z.enum(['succeeded', 'failed']).optional(),
+    from: z.iso.datetime({ offset: true }).optional(),
+    to: z.iso.datetime({ offset: true }).optional(),
+    cursor: z.string().max(512).optional(),
+  })
+  .strict();
+
+/** The run reads the results API needs: the hosted history, per org. */
+export type RunReader = {
+  forOrg(scope: TenantScope): Pick<ReturnType<PostgresHistory['forOrg']>, 'listPage' | 'get'>;
+};
+
 export interface JobsApiDeps {
   authenticate: Authenticator;
   jobs: { forOrg(scope: TenantScope): OrgJobs };
+  /** The results API (#269); without it `/v1/runs` is not served. */
+  runs?: RunReader;
   /** Spends a request from the principal's key and org budgets; milliseconds to wait if refused, else 0. */
   charge(principal: Principal): number;
   /**
@@ -84,6 +110,7 @@ function readBody(req: IncomingMessage): Promise<string | null> {
 }
 
 const JOB_PATH = /^\/v1\/jobs\/([^/]+)$/;
+const RUN_PATH = /^\/v1\/runs\/([^/]+)$/;
 
 /** Answers one non-upgrade HTTP request. Never throws: a failure is a 500 with no detail. */
 export async function handleJobsRequest(
@@ -92,10 +119,12 @@ export async function handleJobsRequest(
   deps: JobsApiDeps,
 ): Promise<void> {
   try {
-    const path = (req.url ?? '').split('?')[0];
+    const [path, search = ''] = (req.url ?? '').split('?');
     const isSubmit = path === '/v1/a11y/jobs';
     const read = JOB_PATH.exec(path);
-    if (!isSubmit && !read) return send(res, 404, { error: 'Not found' });
+    const listRuns = deps.runs !== undefined && path === '/v1/runs';
+    const readRun = deps.runs === undefined ? null : RUN_PATH.exec(path);
+    if (!isSubmit && !read && !listRuns && !readRun) return send(res, 404, { error: 'Not found' });
     const method = isSubmit ? 'POST' : 'GET';
     if (req.method !== method) {
       return send(res, 405, { error: 'Method not allowed' }, { allow: method });
@@ -127,7 +156,42 @@ export async function handleJobsRequest(
         { 'retry-after': String(Math.ceil(wait / 1000)) },
       );
     }
-    const store = deps.jobs.forOrg({ orgId: principal.orgId, apiKeyId: principal.keyId });
+    const scope = { orgId: principal.orgId, apiKeyId: principal.keyId };
+
+    if (listRuns) {
+      const query = RunListQuery.safeParse(Object.fromEntries(new URLSearchParams(search)));
+      if (!query.success) {
+        const issue = query.error.issues[0];
+        return send(res, 400, {
+          error: `Invalid query: ${[...issue.path, issue.message].join(': ')}`,
+        });
+      }
+      const { from, to, ...rest } = query.data;
+      try {
+        const page = await deps.runs!.forOrg(scope).listPage({
+          ...rest,
+          ...(from && { from: new Date(from) }),
+          ...(to && { to: new Date(to) }),
+        });
+        return send(res, 200, page);
+      } catch (err) {
+        if (err instanceof InvalidCursorError) return send(res, 400, { error: 'Invalid cursor' });
+        throw err;
+      }
+    }
+    if (readRun) {
+      let id: string;
+      try {
+        id = decodeURIComponent(readRun[1]);
+      } catch {
+        return send(res, 404, { error: 'Not found' });
+      }
+      const run = await deps.runs!.forOrg(scope).get(id);
+      if (!run) return send(res, 404, { error: 'Not found' });
+      return send(res, 200, run);
+    }
+
+    const store = deps.jobs.forOrg(scope);
 
     if (read) {
       let id: string;

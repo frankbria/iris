@@ -1,6 +1,6 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import { createServer, IncomingMessage, STATUS_CODES } from 'http';
-import { handleJobsRequest } from './jobs-api';
+import { handleJobsRequest, type RunReader } from './jobs-api';
 import { randomUUID, timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { translateSync, translate, Action, ActionSchema } from './translator';
@@ -297,7 +297,13 @@ const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 function restRoute(req: IncomingMessage): string {
   const path = (req.url ?? '').split('?')[0];
   const route =
-    path === '/v1/a11y/jobs' ? path : /^\/v1\/jobs\/[^/]+$/.test(path) ? '/v1/jobs/:id' : 'other';
+    path === '/v1/a11y/jobs' || path === '/v1/runs'
+      ? path
+      : /^\/v1\/jobs\/[^/]+$/.test(path)
+        ? '/v1/jobs/:id'
+        : /^\/v1\/runs\/[^/]+$/.test(path)
+          ? '/v1/runs/:id'
+          : 'other';
   const method = ['GET', 'POST', 'HEAD', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(
     req.method ?? '',
   )
@@ -408,6 +414,8 @@ export function startServer(
      * org request budgets with the RPC messages. Unset, plain HTTP gets 426 as before.
      */
     jobs?: { forOrg(scope: TenantScope): OrgJobs };
+    /** The results API (#269), `GET /v1/runs[/:id]`, served beside the job API. */
+    runs?: RunReader;
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
     limits?: Partial<ServerLimits>;
   },
@@ -468,6 +476,7 @@ export function startServer(
       void handleJobsRequest(req, res, {
         authenticate: authenticate!,
         jobs: options.jobs,
+        runs: options.runs,
         maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
         // REST verifications share the upgrades' `verifying` count, so a bad-key flood
         // cannot pile onto the auth pool. Only pending ones count here: idle sockets

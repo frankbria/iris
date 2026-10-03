@@ -719,7 +719,7 @@ program
     const wss = startServer(
       port,
       authenticate
-        ? { host, authenticate, history, aiCredentials, usage, jobs, limits }
+        ? { host, authenticate, history, runs: history, aiCredentials, usage, jobs, limits }
         : { host, authToken, limits },
     );
     // Wait for the bind before claiming it. `listen` fails asynchronously, so
