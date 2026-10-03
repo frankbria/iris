@@ -387,3 +387,9 @@ Write/Edit, not as a pre-push afterthought.
 - Log volume per tenant needs a bound: throttle repeated refusal lines per connection, with a suppressed count, and keep counting them in metrics.
 - A loopback-only metrics listener inside a container can't be published (Docker forwards to the container's interface): scrape it with `docker exec` rather than weakening the bind.
 - Before reporting full-suite failures, check the load average: these 8 failed at load 7 and passed alone, 82/82.
+
+## #276 / PR #451 (2026-10-02)
+- With email verification required, BetterAuth answers a duplicate-email sign-up with 200 and a fake user id. An after-hook that writes rows for "the new user" then hits the foreign key. Write only `where exists` the user, and quietly.
+- Clickwrap enforcement must check the agreement on the server: a hidden token alone is the same for every client, so the server action also requires the box (`agree === 'on'`).
+- Close latent bypasses at the type level: omit `socialProviders` from the shared auth factory's options, so a future caller can't add a sign-up path the terms hook doesn't cover.
+- Legal wording isn't the agent's to decide. Ship the mechanism with plainly marked drafts and `[placeholder]` tokens, and file a needs-owner issue for the text.
