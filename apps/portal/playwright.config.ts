@@ -29,6 +29,9 @@ export default defineConfig({
       SMTP_FROM: "IRIS <no-reply@iris.test>",
       // BYOK master key (#344): seals provider keys; a fresh one per run.
       IRIS_KEY_ENCRYPTION_KEY: `e2e:${randomBytes(32).toString("base64")}`,
+      // Published contacts (#348): abuse left unset to show its placeholder.
+      IRIS_SECURITY_CONTACT: "mailto:security@iris.test",
+      IRIS_SUPPORT_CONTACT: "mailto:support@iris.test",
     },
   },
 })
