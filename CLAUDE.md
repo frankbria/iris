@@ -433,7 +433,8 @@ Operator suspension of an org, and the published contacts. Ops side: runbook "Ab
   connection keeps working until its next re-check (up to `authRecheckMs`, 60 s), and a
   job already running finishes and is billed. Invitations, accepting one and switching
   orgs stay open (membership is not abuse; keys and jobs are what act on the world).
-  The api-key hook takes the org from the key for update/delete (the plugin acts on the
+  A member of a suspended org cannot create a new org (`/organization/create` hook): a
+  fresh org would carry new keys past the suspension. The api-key hook takes the org from the key for update/delete (the plugin acts on the
   key's own org whatever the body names) and from the body for create only.
 - **Rows are stamped in lock order**, not by `now()`: a transaction that began first can
   take the per-org lock second, so each row is dated strictly after the org's latest

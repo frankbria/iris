@@ -582,7 +582,8 @@ Not instant, and not everything:
 - An open connection keeps working until its next re-check, up to 60 s after the
   suspension. A job already running when you suspend finishes and is billed.
 - Members can still invite people, accept invitations and switch orgs. Membership is
-  not what does harm; keys and jobs are.
+  not what does harm; keys and jobs are. They cannot create a new org, which would carry
+  fresh keys past the suspension. Account-level bans are not built yet.
 
 Unsuspending restores all of it at once. The org's data is untouched either way.
 

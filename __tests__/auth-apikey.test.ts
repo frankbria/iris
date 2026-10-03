@@ -155,6 +155,11 @@ const PASSWORD = 'correct-horse-battery-staple';
     nonMemberRevoke: await attempt(() => revoke(bob, kk.id)),
     list: await attempt(() => list(alice, A)),
     otherOrg: await attempt(() => create(bob, B, 'fine')),
+    // A suspended org's member must not route around it with a fresh org and new keys.
+    newOrg: await attempt(() =>
+      auth.api.createOrganization({ headers: alice, body: { name: 'evade', slug: 'evade-' + Date.now() } })),
+    newOrgUnaffected: await attempt(() =>
+      auth.api.createOrganization({ headers: bob, body: { name: 'fine', slug: 'fine-' + Date.now() } })),
   };
   await new Promise((res) => setTimeout(res, 5));
   await susp(A, 'unsuspend');
@@ -277,6 +282,8 @@ const PASSWORD = 'correct-horse-battery-staple';
       nonMemberRevoke: 'USER_NOT_MEMBER_OF_ORGANIZATION',
       list: 'ok',
       otherOrg: 'ok',
+      newOrg: 'ORGANIZATION_SUSPENDED',
+      newOrgUnaffected: 'ok',
       afterUnsuspend: 'ok',
     });
   });

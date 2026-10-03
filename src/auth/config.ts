@@ -192,6 +192,8 @@ export function createAuth(
       // the checkbox, or names an old version, is refused here, not in the form.
       before: createAuthMiddleware(async (ctx) => {
         if (API_KEY_WRITES.has(ctx.path)) return refuseSuspendedKeyWrite(ctx, rest.database);
+        if (ctx.path === '/organization/create')
+          return refuseOrgCreateForSuspendedMember(ctx, rest.database);
         if (ctx.path !== '/sign-up/email') return;
         if ((ctx.body as { acceptedTerms?: unknown } | undefined)?.acceptedTerms !== ACCEPTED_TERMS)
           throw new APIError('BAD_REQUEST', {
@@ -317,6 +319,30 @@ async function refuseSuspendedKeyWrite(
     select ${suspendedSql(sql.ref('k.org'))} and exists (
       select 1 from member m where m."organizationId" = k.org and m."userId" = ${session.user.id}
     ) as refused from k`.execute(termsDb(database));
+  if (rows[0]?.refused)
+    throw new APIError('FORBIDDEN', {
+      code: 'ORGANIZATION_SUSPENDED',
+      message: 'This organization is suspended.',
+    });
+}
+
+/**
+ * A member of a suspended org cannot create another (#348): suspension is per org, and a
+ * fresh org would carry new API keys straight past it. Joining an org someone else
+ * invites them to stays open; that org's owner chose it. Account-level bans are a
+ * separate matter.
+ */
+async function refuseOrgCreateForSuspendedMember(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  const session = await getSessionFromCtx(ctx);
+  if (!session) return; // the endpoint refuses it
+  const { rows } = await sql<{ refused: boolean }>`
+    select exists (
+      select 1 from member m where m."userId" = ${session.user.id}
+        and ${suspendedSql(sql.ref('m.organizationId'))}
+    ) as refused`.execute(termsDb(database));
   if (rows[0]?.refused)
     throw new APIError('FORBIDDEN', {
       code: 'ORGANIZATION_SUSPENDED',
