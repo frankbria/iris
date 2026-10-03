@@ -154,6 +154,7 @@ services:
       IRIS_SECURITY_CONTACT: ${IRIS_SECURITY_CONTACT:-}
       IRIS_ABUSE_CONTACT: ${IRIS_ABUSE_CONTACT:-}
       IRIS_SUPPORT_CONTACT: ${IRIS_SUPPORT_CONTACT:-}
+      IRIS_SECURITY_TXT_EXPIRES_DAYS: ${IRIS_SECURITY_TXT_EXPIRES_DAYS:-}
     secrets:
       - database_url
       - better_auth_secret

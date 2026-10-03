@@ -596,6 +596,7 @@ the portal:
 | `IRIS_SECURITY_CONTACT` | `/contact`, `/.well-known/security.txt` | `mailto:…` or `https://…` |
 | `IRIS_ABUSE_CONTACT` | `/contact` | same |
 | `IRIS_SUPPORT_CONTACT` | `/contact`, the suspension banner | same |
+| `IRIS_SECURITY_TXT_EXPIRES_DAYS` | `/.well-known/security.txt` `Expires` | whole days, 1-365 (default 365) |
 
 Unset contacts show a `[placeholder]` on `/contact`. Without `IRIS_SECURITY_CONTACT`,
 `/.well-known/security.txt` answers 404 (RFC 9116 requires a `Contact` line). Its
