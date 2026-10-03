@@ -1,4 +1,5 @@
 import { readContacts, securityTxt } from "@/lib/contacts"
+import { readSecretEnv } from "../../../../../src/secret-env"
 
 // Read at request time: the contact is runtime configuration, not build input.
 export const dynamic = "force-dynamic"
@@ -10,7 +11,8 @@ const servedFrom = new Date()
 export function GET() {
   const body = securityTxt(
     readContacts(),
-    process.env.BETTER_AUTH_URL ?? "",
+    // The same reader auth uses: the URL may come as BETTER_AUTH_URL_FILE.
+    readSecretEnv("BETTER_AUTH_URL") ?? "",
     servedFrom
   )
   if (!body) return new Response("Not found", { status: 404 })

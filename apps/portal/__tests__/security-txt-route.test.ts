@@ -25,6 +25,27 @@ describe("GET /.well-known/security.txt", () => {
     expect(text).toMatch(/^Policy: https:\/\/portal\.example\.com\/contact$/m)
   })
 
+  it("reads the portal URL like auth does, from BETTER_AUTH_URL_FILE too", async () => {
+    const fs = await import("node:fs")
+    const os = await import("node:os")
+    const path = await import("node:path")
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "iris-url-"))
+    const file = path.join(dir, "url")
+    fs.writeFileSync(file, "https://portal.example.com\n")
+    process.env.IRIS_SECURITY_CONTACT = "mailto:security@example.com"
+    delete process.env.BETTER_AUTH_URL
+    process.env.BETTER_AUTH_URL_FILE = file
+    try {
+      const res = GET()
+      expect(res.status).toBe(200)
+      expect(await res.text()).toMatch(
+        /^Policy: https:\/\/portal\.example\.com\/contact$/m
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it("is a 404 without one, rather than a file with no Contact", async () => {
     delete process.env.IRIS_SECURITY_CONTACT
     const res = GET()
