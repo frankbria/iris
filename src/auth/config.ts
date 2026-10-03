@@ -293,7 +293,12 @@ const API_KEY_WRITES = new Set(['/api-key/create', '/api-key/update', '/api-key/
  * A suspended org's keys cannot be created, changed or revoked (#348). Refused only
  * for a member of that org, so a request naming another tenant's org still gets the
  * plugin's own "not a member" and learns nothing about its state. One query: the
- * org (named, or the key's), its suspension and the caller's membership.
+ * org, its suspension and the caller's membership.
+ *
+ * The org is the body's `organizationId` for create only. Update and delete act on
+ * the key's own org whatever the body names (the plugin drops an unknown field and
+ * checks `apikey.referenceId`), so for them the org comes from the key alone: naming
+ * another org must not skip the check.
  */
 async function refuseSuspendedKeyWrite(
   ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
@@ -302,8 +307,9 @@ async function refuseSuspendedKeyWrite(
   const session = await getSessionFromCtx(ctx);
   if (!session) return; // the endpoint refuses it
   const body = (ctx.body ?? {}) as { organizationId?: unknown; keyId?: unknown };
-  const orgId = typeof body.organizationId === 'string' ? body.organizationId : null;
-  const keyId = typeof body.keyId === 'string' ? body.keyId : null;
+  const creating = ctx.path === '/api-key/create';
+  const orgId = creating && typeof body.organizationId === 'string' ? body.organizationId : null;
+  const keyId = !creating && typeof body.keyId === 'string' ? body.keyId : null;
   if (!orgId && !keyId) return;
   const { rows } = await sql<{ refused: boolean }>`
     with k as (

@@ -145,6 +145,12 @@ const PASSWORD = 'correct-horse-battery-staple';
     update: await attempt(() =>
       auth.api.updateApiKey({ headers: alice, body: { keyId: kk.id, enabled: false } })),
     revoke: await attempt(() => revoke(dave, kk.id)),
+    // The plugin acts on the key's own org whatever the body names, so a spoofed
+    // organizationId (another org) must not get past the suspension check.
+    spoofRevoke: await attempt(() =>
+      auth.api.deleteApiKey({ headers: alice, body: { keyId: kk.id, organizationId: B } })),
+    spoofUpdate: await attempt(() =>
+      auth.api.updateApiKey({ headers: alice, body: { keyId: kk.id, organizationId: B, enabled: false } })),
     nonMember: await attempt(() => create(bob, A, 'x')),
     nonMemberRevoke: await attempt(() => revoke(bob, kk.id)),
     list: await attempt(() => list(alice, A)),
@@ -265,6 +271,8 @@ const PASSWORD = 'correct-horse-battery-staple';
       create: 'ORGANIZATION_SUSPENDED',
       update: 'ORGANIZATION_SUSPENDED',
       revoke: 'ORGANIZATION_SUSPENDED',
+      spoofRevoke: 'ORGANIZATION_SUSPENDED',
+      spoofUpdate: 'ORGANIZATION_SUSPENDED',
       nonMember: 'USER_NOT_MEMBER_OF_ORGANIZATION',
       nonMemberRevoke: 'USER_NOT_MEMBER_OF_ORGANIZATION',
       list: 'ok',
