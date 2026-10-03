@@ -5,9 +5,13 @@ import { headers } from "next/headers"
 
 import { ProviderKeyError } from "../../../../src/byok/store"
 import { getAuth } from "@/lib/auth"
+import { orgIsSuspended } from "@/lib/org"
 import { getProviderKeys } from "@/lib/provider-keys"
 
 export type ProviderKeyState = { error?: string; done?: string }
+
+/** After the permission check, so a non-member learns nothing about the org (#348). */
+const SUSPENDED = "This organization is suspended."
 
 const PROVIDERS = ["openai", "anthropic"] as const
 type Provider = (typeof PROVIDERS)[number]
@@ -56,6 +60,7 @@ export async function saveProviderKey(
   if (!vendor) return { error: "Choose OpenAI or Anthropic." }
   if (!(await allowed(organizationId, "create")))
     return { error: "Only owners and admins can change provider keys." }
+  if (await orgIsSuspended(organizationId)) return { error: SUSPENDED }
   try {
     await getProviderKeys().set(
       organizationId,
@@ -79,6 +84,7 @@ export async function removeProviderKey(
   if (!vendor) return { error: "Choose OpenAI or Anthropic." }
   if (!(await allowed(organizationId, "delete")))
     return { error: "Only owners and admins can change provider keys." }
+  if (await orgIsSuspended(organizationId)) return { error: SUSPENDED }
   await getProviderKeys().remove(organizationId, vendor)
   revalidatePath("/provider-keys")
   return { done: "Removed." }

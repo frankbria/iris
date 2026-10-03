@@ -1,4 +1,5 @@
 import { checkAuthReady } from "@/lib/auth"
+import { readContacts } from "@/lib/contacts"
 import { getProviderKeys } from "@/lib/provider-keys"
 
 // Every request checks again: never prerendered, never cached.
@@ -6,12 +7,14 @@ export const dynamic = "force-dynamic"
 
 /**
  * Readiness for the image's HEALTHCHECK and the deploy's wait (#273): 200 when the
- * auth settings, the BYOK master key and the database all work, else 503. The body
+ * auth settings, the BYOK master key, the contacts and the database all work, else 503. The body
  * never says which: the reason goes to the server log only.
  */
 export async function GET() {
   try {
     getProviderKeys()
+    // A malformed contact must fail the deploy, not publish a broken address (#348).
+    readContacts()
     await checkAuthReady()
     return new Response("ok", { headers: { "cache-control": "no-store" } })
   } catch (err) {

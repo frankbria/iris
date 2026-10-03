@@ -4,6 +4,7 @@ import {
   ProviderKeyForm,
   RemoveProviderKeyButton,
 } from "@/components/provider-key-forms"
+import { SuspendedBanner } from "@/components/contact-link"
 import { requireOrg } from "@/lib/org"
 import { getProviderKeys } from "@/lib/provider-keys"
 
@@ -22,12 +23,13 @@ const when = (date: Date) =>
  * this org's AI calls. With keys for both vendors, the one saved last is used.
  */
 export default async function ProviderKeysPage() {
-  const { org, role } = await requireOrg()
+  const { org, role, suspended } = await requireOrg()
   const stored = await getProviderKeys().list(org.id)
   // A member may hold several roles, stored comma-separated.
   const manager = role.split(",").some((r) => r === "owner" || r === "admin")
   return (
     <main className="flex min-h-svh flex-col gap-6 p-6">
+      {suspended && <SuspendedBanner />}
       <div className="flex flex-col gap-1">
         <h1 className="font-heading text-lg font-medium">
           AI provider keys for {org.name}

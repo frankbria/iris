@@ -3,6 +3,7 @@ import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 
 import { hasAcceptedCurrent } from "../../../src/legal/acceptance"
+import { orgSuspensions } from "../../../src/org-suspension"
 import { getAuth, getDb } from "@/lib/auth"
 
 /**
@@ -61,5 +62,11 @@ export async function requireOrg() {
     headers: requestHeaders,
     query: { organizationId: org.id },
   })
-  return { session, org, orgs, role }
+  // An operator suspension (#348): pages show a banner, key writes are refused.
+  const suspended = await orgIsSuspended(org.id)
+  return { session, org, orgs, role, suspended }
 }
+
+/** Whether an operator has suspended the org (#348). One indexed query. */
+export const orgIsSuspended = (orgId: string) =>
+  orgSuspensions(getDb()).isSuspended(orgId)
