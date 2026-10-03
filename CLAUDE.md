@@ -429,7 +429,15 @@ Operator suspension of an org, and the published contacts. Ops side: runbook "Ab
   exposes `suspended` (banner with the support contact); a BetterAuth `hooks.before`
   refuses `/api-key/create|update|delete` for a member of a suspended org (a non-member
   still gets the plugin's own refusal, so another tenant's state does not leak); the
-  provider-key server actions refuse too.
+  provider-key server actions refuse too. **Not instant, and not everything**: an open
+  connection keeps working until its next re-check (up to `authRecheckMs`, 60 s), and a
+  job already running finishes and is billed. Invitations, accepting one and switching
+  orgs stay open (membership is not abuse; keys and jobs are what act on the world).
+  The api-key hook takes the org from the key for update/delete (the plugin acts on the
+  key's own org whatever the body names) and from the body for create only.
+- **Rows are stamped in lock order**, not by `now()`: a transaction that began first can
+  take the per-org lock second, so each row is dated strictly after the org's latest
+  row. Otherwise two operators acting at once can leave the earlier action current.
 - **`iris admin suspend-org|unsuspend-org <orgId> --reason … [--actor …]`** and
   `org-status`: hosted only (exit 2), exit 3 when the database is unreachable, 1 for an
   unknown org. Actor defaults to `$SUDO_USER`/`$USER`.

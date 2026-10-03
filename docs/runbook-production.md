@@ -577,6 +577,13 @@ What a suspension does:
 - The portal shows a banner with the support contact; creating, changing or revoking API
   keys and saving or removing provider keys is refused.
 
+Not instant, and not everything:
+
+- An open connection keeps working until its next re-check, up to 60 s after the
+  suspension. A job already running when you suspend finishes and is billed.
+- Members can still invite people, accept invitations and switch orgs. Membership is
+  not what does harm; keys and jobs are.
+
 Unsuspending restores all of it at once. The org's data is untouched either way.
 
 ### Published contacts
