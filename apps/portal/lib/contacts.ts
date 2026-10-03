@@ -21,6 +21,16 @@ export interface Contacts {
   expiresDays: number
 }
 
+/** contactLabel() shows a mailto address decoded; a bad escape must fail at configuration. */
+function decodes(text: string): boolean {
+  try {
+    decodeURIComponent(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function contactUrl(name: string, raw: string | undefined): string | null {
   const value = raw?.trim()
   if (!value) return null
@@ -37,7 +47,8 @@ function contactUrl(name: string, raw: string | undefined): string | null {
   }
   const ok =
     url.protocol === "mailto:"
-      ? /^[^\s@/?#]+@[^\s@/?#]+\.[^\s@/?#]+$/.test(url.pathname)
+      ? /^[^\s@/?#]+@[^\s@/?#]+\.[^\s@/?#]+$/.test(url.pathname) &&
+        decodes(value.slice(7))
       : url.protocol === "https:" && url.hostname !== "" && !/\s/.test(value)
   if (!ok) throw new Error(`${name} must be a mailto: or https: URL`)
   return value

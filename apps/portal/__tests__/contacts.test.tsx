@@ -49,6 +49,9 @@ describe("readContacts", () => {
     ["IRIS_SECURITY_CONTACT", "mailto:a@b.co?\nPolicy: https://evil.example"],
     ["IRIS_SECURITY_CONTACT", "mailto:a@b.co?subject=x\r\nExpires: 2099"],
     ["IRIS_SECURITY_CONTACT", "mailto:a@b.co?\tx"],
+    // Shown decoded on /contact and in the banner: a bad escape must fail here, at
+    // configuration, not later as a page that cannot render.
+    ["IRIS_SUPPORT_CONTACT", "mailto:help%desk@example.com"],
   ])("refuses %s=%j, naming the variable", (name, value) => {
     expect(() => readContacts({ [name]: value })).toThrow(name)
   })
