@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 
-import type { LegalDocument } from "../../../src/legal/versions"
+import type {
+  LegalDocument,
+  PublishedDocument,
+} from "../../../src/legal/versions"
 
 /** A legal document from `content/legal/` (#276). Trusted repo files, never user input. */
 export type LegalContent = {
@@ -14,7 +17,10 @@ export type LegalContent = {
 
 /** Front matter is flat `key: value` lines between two `---` lines. */
 export function parseLegal(source: string): LegalContent {
-  const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(source)
+  // A file saved on Windows has CRLF endings; every rule below splits on "\n".
+  const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(
+    source.replace(/\r\n/g, "\n")
+  )
   if (!match) throw new Error("legal document has no front matter")
   const meta = Object.fromEntries(
     match[1].split("\n").map((line) => {
@@ -32,7 +38,9 @@ export function parseLegal(source: string): LegalContent {
   }
 }
 
-export function readLegal(name: LegalDocument): LegalContent {
+export function readLegal(
+  name: LegalDocument | PublishedDocument
+): LegalContent {
   return parseLegal(
     readFileSync(
       path.join(process.cwd(), "content", "legal", `${name}.md`),

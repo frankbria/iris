@@ -157,6 +157,8 @@ docs/                               # Detailed project documentation
 ├── phase2_technical_architecture.md # Phase 2 technical details
 ├── phase2c_roadmap.md             # Phase 2C roadmap (ROADMAP — not started)
 ├── integration-surfaces.md        # Which integration surfaces exist and why (decision record)
+├── data-flows.md                  # What is stored where, retention, third-party transmissions (#277)
+├── legal/dpa-template.md          # DPA template; copy of the portal's /dpa page (#277)
 ├── adr/0001-hosted-architecture.md # Hosted SaaS architecture — anchors every Cycle 4 platform issue
 ├── runbook-production.md          # Production setup, promote, rollback (#273); backups, restore, drill log (#274)
 └── archive/                       # Superseded planning docs (historical)
@@ -388,6 +390,24 @@ paths and https).
   `/provider-keys`, BetterAuth's endpoints and invitation acceptance stay usable for a user
   who has not re-accepted. API keys and the RPC are unaffected.
 - E2E uses a version bump simulated by aging the user's rows (`terms.spec.ts`).
+
+### Privacy, subprocessors and DPA (issue #277)
+
+Drafts at `/privacy`, `/subprocessors` and `/dpa` (`apps/portal/content/legal/{privacy,
+subprocessors,dpa}.md`), same renderer and draft banner as #276; owner/counsel approval is
+#450. `docs/legal/dpa-template.md` is a copy of `dpa.md` (a portal test keeps them equal).
+
+- **`docs/data-flows.md` is the source of truth** for what is stored, where, for how long
+  and what goes to which third party, each entry citing its code. A change that adds or
+  alters a store, a personal-data field, a retention period or a transmission updates it in
+  the same PR, and the privacy page / subprocessor table if customers can see the change.
+  Undecided retention says "undecided (#349)"; never invent a period.
+- **Their versions are `PUBLISHED_VERSIONS`** in `src/legal/versions.ts`, not
+  `LEGAL_VERSIONS`: every key of the latter is one a user must accept (`acceptance.ts`
+  iterates it), and these need no acceptance. `ACCEPTED_TERMS` is unchanged.
+- The renderer also takes simple pipe tables (header, `|---|` row, cells through the same
+  escaping `inline()`). `LegalFooter` (on legal pages and the `(auth)` layout) links all five
+  documents; it is a `nav`, not a list, so the renderer's list tests are unaffected.
 
 ### Portal Organizations (issue #250)
 

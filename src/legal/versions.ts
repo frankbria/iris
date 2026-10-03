@@ -12,5 +12,19 @@ export const LEGAL_VERSIONS = {
 
 export type LegalDocument = keyof typeof LEGAL_VERSIONS;
 
+/**
+ * Published documents nobody has to accept (#277): the privacy policy, the subprocessor
+ * list and the DPA template. Kept apart from `LEGAL_VERSIONS` on purpose: every key there
+ * is one a user must accept before using the portal. A test keeps each equal to its
+ * file's front-matter `version`.
+ */
+export const PUBLISHED_VERSIONS = {
+  privacy: '2026-10-02',
+  subprocessors: '2026-10-02',
+  dpa: '2026-10-02',
+} as const;
+
+export type PublishedDocument = keyof typeof PUBLISHED_VERSIONS;
+
 /** What a sign-up sends as `acceptedTerms`: the exact versions the person agreed to. */
 export const ACCEPTED_TERMS = `${LEGAL_VERSIONS.terms}:${LEGAL_VERSIONS['acceptable-use']}`;
