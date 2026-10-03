@@ -44,6 +44,11 @@ describe("readContacts", () => {
     ["IRIS_ABUSE_CONTACT", "mailto:not-an-address"],
     ["IRIS_SUPPORT_CONTACT", "mailto:a@b.com\nInjected: x"],
     ["IRIS_SUPPORT_CONTACT", "https://exa mple.com"],
+    // The URL parser drops a newline in a query, but the raw value is what is served:
+    // it would add a line to security.txt.
+    ["IRIS_SECURITY_CONTACT", "mailto:a@b.co?\nPolicy: https://evil.example"],
+    ["IRIS_SECURITY_CONTACT", "mailto:a@b.co?subject=x\r\nExpires: 2099"],
+    ["IRIS_SECURITY_CONTACT", "mailto:a@b.co?\tx"],
   ])("refuses %s=%j, naming the variable", (name, value) => {
     expect(() => readContacts({ [name]: value })).toThrow(name)
   })

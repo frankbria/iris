@@ -24,6 +24,11 @@ export interface Contacts {
 function contactUrl(name: string, raw: string | undefined): string | null {
   const value = raw?.trim()
   if (!value) return null
+  // The raw value is what security.txt serves, and the URL parser silently drops
+  // whitespace and control characters (e.g. a newline in a mailto query) that would add
+  // a line to it. None belongs in a contact URL.
+  if (/[\s\x00-\x1f\x7f]/.test(value))
+    throw new Error(`${name} must be a mailto: or https: URL`)
   let url: URL
   try {
     url = new URL(value)
