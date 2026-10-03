@@ -1,6 +1,6 @@
 import Link from "next/link"
 
-import { InvalidCursorError } from "../../../../src/run-reads"
+import { InvalidCursorError } from "../../../../../src/run-reads"
 import { SuspendedBanner } from "@/components/contact-link"
 import { requireOrg } from "@/lib/org"
 import { listFilters, PAGE_SIZE, runsFor } from "@/lib/runs"
