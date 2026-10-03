@@ -550,6 +550,52 @@ and `acceptable-use.md`. To publish a change:
 A changed file with an unchanged version is not re-accepted: bump it for any change that
 needs consent. Removing the draft banner is deleting `draft: true` from the front matter.
 
+## Abuse handling (issue #348)
+
+### Suspend or unsuspend an org
+
+Run from the serving release, so the command uses the release's image and database
+secret:
+
+```bash
+cd "$(readlink -f /opt/iris-production/current)"
+docker compose exec iris node dist/cli.js admin suspend-org <orgId> --reason "AUP 3.2: scanning targets without authorisation (ticket 123)"
+docker compose exec iris node dist/cli.js admin org-status <orgId>
+docker compose exec iris node dist/cli.js admin unsuspend-org <orgId> --reason "Resolved with the customer (ticket 123)"
+```
+
+`--actor <name>` records who did it (default: `$SUDO_USER` / `$USER`). Every action is
+kept in `org_suspensions`; `org-status` prints the state and the history. The reason is
+for operators and is never shown to the tenant.
+
+What a suspension does:
+
+- API keys of the org get **403** on new WebSocket upgrades and REST requests.
+- Live RPC connections close (1008) at the next re-check, within `authRecheckMs`
+  (60 s by default), and their browsers are reclaimed.
+- Queued jobs are failed unrun ("Organization suspended", no usage); new jobs are refused.
+- The portal shows a banner with the support contact; creating, changing or revoking API
+  keys and saving or removing provider keys is refused.
+
+Unsuspending restores all of it at once. The org's data is untouched either way.
+
+### Published contacts
+
+Set as environment variables of the `production` environment (all optional), passed to
+the portal:
+
+| Variable | Shown at | Format |
+| --- | --- | --- |
+| `IRIS_SECURITY_CONTACT` | `/contact`, `/.well-known/security.txt` | `mailto:…` or `https://…` |
+| `IRIS_ABUSE_CONTACT` | `/contact` | same |
+| `IRIS_SUPPORT_CONTACT` | `/contact`, the suspension banner | same |
+
+Unset contacts show a `[placeholder]` on `/contact`. Without `IRIS_SECURITY_CONTACT`,
+`/.well-known/security.txt` answers 404 (RFC 9116 requires a `Contact` line). Its
+`Expires` is one year (`IRIS_SECURITY_TXT_EXPIRES_DAYS`, at most 365) after the portal
+process starts, so each deploy renews it; a portal left running for a year without a
+deploy serves an expired file.
+
 ## Troubleshooting
 
 Run these from the serving release: `cd "$(readlink -f /opt/iris-production/current)"`.

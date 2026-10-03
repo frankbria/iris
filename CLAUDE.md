@@ -81,7 +81,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
@@ -94,6 +94,7 @@ src/
 ├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
 ├── jobs-api.ts            # Hosted job REST: POST /v1/a11y/jobs, GET /v1/jobs/:id on the RPC listener (#267)
 ├── worker.ts              # `iris worker`: claims queued a11y jobs, runs the hardened runner, stores the result (#267)
+├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
 ├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
 └── config.ts              # Configuration types and validation
 
@@ -408,6 +409,38 @@ subprocessors,dpa}.md`), same renderer and draft banner as #276; owner/counsel a
 - The renderer also takes simple pipe tables (header, `|---|` row, cells through the same
   escaping `inline()`). `LegalFooter` (on legal pages and the `(auth)` layout) links all five
   documents; it is a `nav`, not a list, so the renderer's list tests are unaffected.
+
+### Abuse Handling and Contacts (issue #348)
+
+Operator suspension of an org, and the published contacts. Ops side: runbook "Abuse handling".
+
+- **`org_suspensions`** (migration 0007) is an append-only history (`action` suspend /
+  unsuspend, `reason`, `actor`); an org's state is its latest row, none means active.
+  `orgSuspensions(db)` (src/org-suspension.ts) is idempotent and refuses an unknown org;
+  `suspendedSql(orgId)` is the one predicate, usable inside other statements.
+- **The reason is for operators only.** Tenants see "Organization suspended" (403 on the
+  WS upgrade and on REST, `ORGANIZATION_SUSPENDED` from BetterAuth, the job's error),
+  never the reason.
+- **Enforcement points**: `apiKeyAuthenticator.verify` returns `'suspended'` for a valid key
+  of a suspended org (403, not 401: the key is fine); `recheck` does too, so live
+  connections close with 1008 within `authRecheckMs`. `claim` reads the org's state in the
+  same statement, and the worker fails such a job unrun, no usage, counted `refused`
+  (not `error`: the watchdog's rate is server faults only). The portal: `requireOrg()`
+  exposes `suspended` (banner with the support contact); a BetterAuth `hooks.before`
+  refuses `/api-key/create|update|delete` for a member of a suspended org (a non-member
+  still gets the plugin's own refusal, so another tenant's state does not leak); the
+  provider-key server actions refuse too.
+- **`iris admin suspend-org|unsuspend-org <orgId> --reason … [--actor …]`** and
+  `org-status`: hosted only (exit 2), exit 3 when the database is unreachable, 1 for an
+  unknown org. Actor defaults to `$SUDO_USER`/`$USER`.
+- **Contacts are operator configuration**, never invented: `IRIS_SECURITY_CONTACT`,
+  `IRIS_ABUSE_CONTACT`, `IRIS_SUPPORT_CONTACT` (`mailto:` or `https:`, validated;
+  malformed throws). Unset shows a `[placeholder]` on `/contact`, and
+  `/.well-known/security.txt` answers 404 without a security contact (RFC 9116 requires
+  `Contact`). `Expires` counts from when the portal process first serves it
+  (`IRIS_SECURITY_TXT_EXPIRES_DAYS`, 1-365, default 365): a deploy renews it, a portal
+  left running a year lets it lapse. The production job passes the contacts from
+  environment variables (optional).
 
 ### Portal Organizations (issue #250)
 
