@@ -406,3 +406,10 @@ Write/Edit, not as a pre-push afterthought.
 - `now()` is when a transaction began, not when it took the lock. History that must follow lock order needs a timestamp set under the lock (strictly after the latest row).
 - Validate operator configuration the way it will be used: a mailto contact that passed URL parsing still threw at `decodeURIComponent` when displayed.
 - A dependency audit gate can turn red on any branch overnight (new advisories). Fix it in its own PR off main and merge main back, instead of mixing it into a feature PR.
+
+## #269 / PR #461 (2026-10-03)
+- A keyset cursor must carry the database's full precision and a format independent of session settings. A JS `Date` dropped microseconds and skipped rows within one millisecond; Postgres `::text` follows DateStyle/TimeZone and broke every second page under `SQL, DMY`. Use `to_char(... at time zone 'UTC', ...US"Z")`, and round-trip the decoded time so an impossible date is a 400.
+- Page a list of finished work by finish time, not creation time: a job created early and finished late never appeared on any page once the cursor had passed its creation time.
+- Changing a shared type (`summary: string | null`) can break test files the root `tsc` never compiles: run the suites that read it before pushing.
+- Redaction keyed on parameter names must decode them first (`%74oken` is `token` to a URL parser).
+- Check a reviewer's claim about a library against the installed version before "fixing": zod 4.6.5's `iso.datetime` does reject Feb 30. Keep the examples as regression tests and reply with the evidence.
