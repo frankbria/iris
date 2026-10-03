@@ -39,7 +39,7 @@ if (!ADMIN_URL) {
     u.pathname = `/${dbName}`;
     db = createPostgresDb(u.toString());
     await migrateToLatest(db);
-    for (const org of ['org-a', 'org-b', 'org-c']) {
+    for (const org of ['org-a', 'org-b', 'org-c', 'org-d']) {
       await sql`insert into organization (id, name, slug, "createdAt")
         values (${org}, ${org}, ${org}, now())`.execute(db);
     }
@@ -109,6 +109,21 @@ if (!ADMIN_URL) {
     expect(rows[0].n).toBe('2');
   });
 
+  // Two operators at once: the second to take the lock may have started its transaction
+  // first, so `now()` (transaction start) would date its row *before* the other one and
+  // the earlier action would read as the latest. A row stamped in the future stands in
+  // for the other transaction's later timestamp: the next action must still win.
+  it('the action that takes the lock last is the current state, whatever its clock', async () => {
+    await sql`insert into org_suspensions (org_id, action, reason, actor, created_at)
+      values ('org-d', 'unsuspend', 'other operator', 'ops', now() + interval '1 hour')`.execute(
+      db,
+    );
+    const s = await store().suspend('org-d', by('took the lock last'));
+    expect(s).toMatchObject({ suspended: true, changed: true });
+    expect(await store().isSuspended('org-d')).toBe(true);
+    expect((await store().status('org-d')).last).toMatchObject({ reason: 'took the lock last' });
+  });
+
   it('refuses an unknown org id, and a blank reason or actor', async () => {
     await expect(store().suspend('org-nope', by('x'))).rejects.toThrow(UnknownOrgError);
     await expect(store().unsuspend('org-nope', by('x'))).rejects.toThrow(UnknownOrgError);
@@ -139,6 +154,7 @@ if (!ADMIN_URL) {
       { id: 'org-a', s: true },
       { id: 'org-b', s: true },
       { id: 'org-c', s: false },
+      { id: 'org-d', s: true },
     ]);
   });
 });

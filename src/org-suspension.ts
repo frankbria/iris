@@ -86,9 +86,15 @@ export function orgSuspensions(db: Kysely<unknown>) {
       if ((last?.action ?? 'unsuspend') === action) {
         return { suspended: action === 'suspend', last, changed: false };
       }
+      // Dated strictly after the org's latest row, under the lock: `now()` is when the
+      // transaction began, and a transaction that began first can take the lock second,
+      // which would date the later action earlier and let the earlier one read as current.
       const { rows } = await sql<EventRow>`
-        insert into org_suspensions (org_id, action, reason, actor)
-        values (${orgId}, ${action}, ${reason.trim()}, ${actor.trim()})
+        insert into org_suspensions (org_id, action, reason, actor, created_at)
+        values (${orgId}, ${action}, ${reason.trim()}, ${actor.trim()}, greatest(
+          clock_timestamp(),
+          (select max(created_at) from org_suspensions where org_id = ${orgId})
+            + interval '1 microsecond'))
         returning action, reason, actor, created_at`.execute(tx);
       return { suspended: action === 'suspend', last: toEvent(rows[0]), changed: true };
     });
