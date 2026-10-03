@@ -463,7 +463,7 @@ const a11yRun = {
       let cursor: string | undefined;
       do {
         const page = await store.listPage({ limit: 2, cursor });
-        seen.push(...page.runs.map((r) => r.summary));
+        seen.push(...page.runs.map((r) => r.summary ?? ''));
         cursor = page.nextCursor ?? undefined;
       } while (cursor);
       expect(seen).toEqual(['500', '400', '300', '200', '100']);
