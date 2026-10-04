@@ -10,7 +10,7 @@ import { Kysely, sql } from 'kysely';
 import { Client } from 'pg';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
-import { orgEntitlements, PLANS } from '../../src/billing/plans';
+import { freeOrgLimitReached, orgEntitlements, PLANS } from '../../src/billing/plans';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 if (!ADMIN_URL) {
@@ -73,5 +73,22 @@ if (!ADMIN_URL) {
   it('reads a row someone wrote with an unknown plan as free', async () => {
     await sql`update org_plans set plan = 'legacy-gold' where org_id = 'org-a'`.execute(db);
     expect(await orgEntitlements(db).get('org-a')).toEqual({ plan: 'free', ...PLANS.free });
+  });
+
+  it('counts the free orgs a user owns, by owner token, unknown plans as free', async () => {
+    await sql`insert into "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+      values ('u1', 'U', 'u1@iris.test', true, now(), now())`.execute(db);
+    const own = (org: string, role: string) =>
+      sql`insert into member (id, "organizationId", "userId", role, "createdAt")
+        values (${'m-' + org}, ${org}, 'u1', ${role}, now())`.execute(db);
+    expect(await freeOrgLimitReached(db, 'u1')).toBe(false);
+    await own('org-b', 'admin,owner'); // org-b has no plan row: free
+    expect(await freeOrgLimitReached(db, 'u1')).toBe(true);
+    expect(await freeOrgLimitReached(db, 'u1', 2)).toBe(false);
+    await orgEntitlements(db).setPlan('org-b', 'pro');
+    expect(await freeOrgLimitReached(db, 'u1')).toBe(false);
+    // org-a holds the unknown 'legacy-gold' from the test above: free for the cap too.
+    await own('org-a', 'owner');
+    expect(await freeOrgLimitReached(db, 'u1')).toBe(true);
   });
 });
