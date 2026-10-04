@@ -140,8 +140,10 @@ is processed in Chromium's memory for the duration of the job.
 
 The local CLI writes screenshots, diffs and baselines under `<artifactsDir>/runs/<runId>/`
 and `.iris/baselines` on the user's own machine (`src/visual/artifacts.ts`, #343). The hosted
-service stores none today: hosted visual jobs (#268) and object storage with tenant
-prefixes (#257) are pending, and their retention is **undecided (#349)**.
+service stores none today. The store exists (`src/artifact-store.ts`, #257: a private
+S3-compatible bucket, keys `org/<org>/project/<project>/run/<runId>/…` and
+`…/baselines/…`, reads only through signed URLs of at most 15 minutes), but nothing writes
+to it until hosted visual jobs (#268). Retention follows #349.
 
 ### Browser sessions
 
