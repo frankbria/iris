@@ -95,6 +95,7 @@ src/
 ├── jobs-api.ts            # Hosted REST on the RPC listener: jobs (#267), runs + run detail (#269)
 ├── worker.ts              # `iris worker`: claims queued a11y jobs, runs the hardened runner, stores the result (#267)
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
+├── artifact-store.ts      # ArtifactStore: filesystem (local) + S3 (hosted, SeaweedFS in dev/CI/staging); tenant-first keys, signed URLs (#257)
 ├── run-reads.ts           # Read-only run queries (types, keyset cursor, listPage, get): no runner imports, so the portal can use it (#270)
 ├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
 └── config.ts              # Configuration types and validation
@@ -119,6 +120,7 @@ __tests__/
 ├── auth-config.test.ts            # Spawned Node loads src/auth/config via require(esm); Jest's sandbox can't (#247)
 ├── auth-org.test.ts               # Real Postgres: personal org on sign-in, invitations, roles, org A cannot read org B (#250)
 ├── auth-apikey.test.ts            # Real Postgres: org-owned keys hashed, roles, org A cannot touch org B's keys, verify, revoke (#340)
+├── artifact-store.test.ts         # Keys, filesystem store, S3 store on real SeaweedFS: unsigned/tampered/expired 403, 15 min cap (#257)
 ├── api-runs.test.ts               # Results API over real sockets + Postgres: list, filters, cursors, detail, 404 cross-org (#269)
 ├── api-jobs.test.ts               # Job REST over real sockets: 401/503/400/413/404/405/429, org isolation, WS upgrade intact (#267)
 ├── hosted-a11y-job.test.ts        # Real Postgres + Chromium, IRIS_HOSTED=1: HTTP submit -> worker -> HTTP result, usage row, refusals (#267)
@@ -1137,6 +1139,34 @@ hosted `iris connect` passes the same `postgresHistory` it records into.
   message with a link back to the newest page, not an error page.
 - Run detail goes through `redactStrings()` (src/log.ts), the same pass as the API (#269).
 - `lib/run-format.ts` turns a stored result into words per run kind; unit-tested.
+
+### Artifact Store (issue #257)
+
+`src/artifact-store.ts`: `ArtifactStore { put, get, signedUrl }` with
+`FilesystemArtifactStore` (local) and `S3ArtifactStore` (hosted). Nothing hosted writes to
+it yet; #268 (visual jobs), #460 (URLs in run detail) and #349 (purge) build on it.
+
+- **SeaweedFS, not MinIO** (owner decision, 2026-10-03): MinIO's community images and
+  binaries are gone (pull denied, download 410). The code speaks only the S3 API
+  (`@aws-sdk/client-s3` + presigner, path-style), so the production vendor stays open.
+- **Keys are tenant-first and built from validated segments**: `runArtifactKey()` →
+  `org/<org>/project/<project>/run/<runId>/<kind>/<name>.png` (#343's run id and
+  `artifactName`), `baselineKey()` → `org/<org>/project/<project>/baselines/<name>.png`.
+  Segments are `[A-Za-z0-9_-]{1,128}`; both stores also refuse any key that is not safe
+  segments (no `..`, no leading `/`), so the filesystem store cannot leave its root.
+- **The bucket is private because the server has identities.** SeaweedFS with no
+  `-s3.config` serves anonymous requests; `docker/seaweedfs-s3.dev.json` defines one
+  identity, and the test proves an unsigned GET is a 403 next to a signed one that works.
+- **Hosted callers take `orgArtifacts(store, orgId)`, not the store.** The store accepts
+  any well-formed key; the org view refuses every key outside `org/<orgId>/` (and
+  `org/<orgId>X/`), so a stored or client-influenced key cannot reach another tenant.
+- **Signed URLs default to 5 minutes and are capped at 15** (a non-finite TTL is the default). A URL edited to another key
+  is refused (the signature covers the path).
+- **CI starts SeaweedFS as a step** (`docker run`), not a service container: services
+  cannot pass a command line. Image pinned by version and digest in both places.
+- **Tests need `IRIS_TEST_S3_ENDPOINT` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY`**:
+  required under `CI`, skipped locally when unset (the Postgres pattern). Each run makes and
+  removes its own bucket.
 
 ### BYOK Provider Keys (issue #344)
 

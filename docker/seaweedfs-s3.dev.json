@@ -1,0 +1,1 @@
+{"identities":[{"name":"iris","credentials":[{"accessKey":"iris-dev-access","secretKey":"iris-dev-secret-key"}],"actions":["Admin","Read","Write","List","Tagging"]}]}

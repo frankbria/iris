@@ -75,12 +75,29 @@ jobs:
           tags: iris-portal:ci
           cache-from: type=gha,scope=portal
           cache-to: type=gha,mode=max,scope=portal
+      # The S3-compatible artifact store (#257), as in docker-compose.dev.yml. A step,
+      # not a service container: services cannot pass the server its command line.
+      - name: Start SeaweedFS
+        run: |
+          docker run -d --name seaweedfs -p 127.0.0.1:58333:8333 \
+            -v "$PWD/docker/seaweedfs-s3.dev.json:/etc/seaweedfs/s3.json:ro" \
+            chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d \
+            server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data
+          # Ready when the S3 port answers (anonymous requests get 403).
+          for i in $(seq 1 60); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:58333/)" = 403 ] && exit 0
+            sleep 1
+          done
+          docker logs seaweedfs; exit 1
       # IRIS_TEST_DATABASE_URL is an admin URL; the suite creates a database per
       # file. Required under CI, so a missing service fails rather than skips.
       - run: npm test
         env:
           IRIS_TEST_DATABASE_URL: postgres://iris:iris@localhost:5432/postgres
           IRIS_TEST_PORTAL_IMAGE: iris-portal:ci
+          IRIS_TEST_S3_ENDPOINT: http://127.0.0.1:58333
+          IRIS_TEST_S3_ACCESS_KEY_ID: iris-dev-access
+          IRIS_TEST_S3_SECRET_ACCESS_KEY: iris-dev-secret-key
       # apps/portal (#247). `next build` type-checks, so there is no separate step.
       - run: npm run lint -w @iris/portal
       - run: npm test -w @iris/portal

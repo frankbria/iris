@@ -51,6 +51,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.127.0",
+    "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/s3-request-presigner": "^3.1146.0",
     "@axe-core/playwright": "^4.8.1",
     "@better-auth/api-key": "^1.7.6",
     "@modelcontextprotocol/sdk": "^1.30.0",

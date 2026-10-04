@@ -102,8 +102,10 @@ The product owner made two decisions on 2026-09-25, and this record builds on th
 ### 3. Artifacts: private S3-compatible object storage
 
 - Screenshots, diff images, baselines and reports go to **S3-compatible object
-  storage**: MinIO in development and staging, any S3-compatible service in
-  production (the vendor is left to #273). The bucket is private.
+  storage**: SeaweedFS in development, CI and staging (MinIO's community
+  distribution was withdrawn; owner decision on #257, 2026-10-03), any
+  S3-compatible service in production (the vendor is left to #273). The code
+  targets the S3 API only (`src/artifact-store.ts`). The bucket is private.
 - Keys: `org/<org_id>/project/<project_id>/run/<run_id>/…` for run artifacts and
   `org/<org_id>/project/<project_id>/baselines/…` for baselines (#257). The first
   path segment is the tenant boundary.
