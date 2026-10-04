@@ -15,7 +15,7 @@ import { recordCurrentAcceptance } from '../legal/acceptance';
 import { ACCEPTED_TERMS } from '../legal/versions';
 import { log, type LogLevel } from '../log';
 import { suspendedSql } from '../org-suspension';
-import { freeOrgLimitReached } from '../billing/plans';
+import { FREE_ORGS_PER_USER, freeOrgLimitReached } from '../billing/plans';
 
 /** One outgoing account email: verification or password reset. */
 export interface AuthEmail {
@@ -205,6 +205,8 @@ export function createAuth(
           });
       }),
       after: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === '/organization/create')
+          return undoOrgCreateOverFreeLimit(ctx, rest.database);
         if (ctx.path !== '/sign-up/email') return;
         const userId = (ctx.context.returned as { user?: { id?: string } } | undefined)?.user?.id;
         if (!userId) return;
@@ -267,9 +269,9 @@ export function createAuth(
    * retried at the next sign-in rather than leaving a user with no tenant.
    *
    * ponytail: any membership will do. Remember the last active org per user once people
-   * belong to several. Two first sign-ins at the same moment can each create an org;
-   * that grants nothing BetterAuth's own `create` endpoint does not, and a cap on orgs
-   * per user belongs to entitlements (#260).
+   * belong to several. Two first sign-ins at the same moment can each create an org: these
+   * server calls carry no session, so the one-free-org cap (#260) does not see them. That
+   * needs two simultaneous first sign-ins and yields at most one extra free org.
    */
   const activeOrgFor = async (userId: string): Promise<string> => {
     const ctx = await auth.$context;
@@ -372,6 +374,42 @@ async function refuseOrgCreateOverFreeLimit(
         'Your free organization limit is reached. Upgrade an organization to create another.',
     });
 }
+
+/**
+ * The before hook's count and the plugin's insert are not atomic: parallel creates by a
+ * user with no free org can all pass it. So once the org exists, count again under a
+ * per-user lock; over the cap, remove the new org (its member and invitation rows
+ * cascade) and refuse. The lock serialises the recounts, so exactly `FREE_ORGS_PER_USER`
+ * of the racing orgs survive whatever the commit order. The session the plugin pointed
+ * at a removed org gets no active org, and `requireOrg()` moves it back to one the user
+ * belongs to.
+ */
+async function undoOrgCreateOverFreeLimit(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  const session = await getSessionFromCtx(ctx);
+  const orgId = (ctx.context.returned as { id?: string } | undefined)?.id;
+  if (!session || !orgId) return;
+  const undone = await termsDb(database)
+    .transaction()
+    .execute(async (tx) => {
+      await sql`select pg_advisory_xact_lock(hashtext(${'org-create:' + session.user.id}))`.execute(
+        tx,
+      );
+      if (!(await freeOrgLimitReached(tx, session.user.id, FREE_ORGS_PER_USER + 1))) return false;
+      await sql`update "session" set "activeOrganizationId" = null
+        where "activeOrganizationId" = ${orgId}`.execute(tx);
+      await sql`delete from organization where id = ${orgId}`.execute(tx);
+      return true;
+    });
+  if (undone) throw new APIError('FORBIDDEN', ORG_LIMIT_ERROR);
+}
+
+const ORG_LIMIT_ERROR = {
+  code: 'ORGANIZATION_LIMIT_REACHED',
+  message: 'Your free organization limit is reached. Upgrade an organization to create another.',
+};
 
 /** Kysely over whichever database the caller gave BetterAuth: its own `{ db }` or a `pg` pool. */
 function termsDb(database: BetterAuthOptions['database']): Kysely<unknown> {

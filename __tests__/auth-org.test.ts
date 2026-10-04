@@ -126,6 +126,19 @@ const PASSWORD = 'correct-horse-battery-staple';
   r.thirdOrg = await attempt(() => newOrg(bob, 'third'));
   // Carol is a member of A, not its owner: only her own free org counts, and she has one.
   r.memberOfAnother = await attempt(() => newOrg(carol, 'carols'));
+  // BetterAuth keeps several roles as one string: an owner who is also admin is an owner.
+  const frank = await user('frank');
+  await pool.query('update member set role = $2 where "organizationId" = $1', [await active(frank), 'admin,owner']);
+  r.commaRole = await attempt(() => newOrg(frank, 'franks'));
+  // A user with no free org (hers is paid) may make one. Parallel creates all pass the
+  // before-check; the locked after-check keeps exactly one of them.
+  const grace = await user('grace');
+  const G = await active(grace);
+  await pool.query("insert into org_plans (org_id, plan) values ($1, 'pro')", [G]);
+  r.race = await Promise.all([1, 2, 3, 4].map((i) => attempt(() => newOrg(grace, 'race' + i))));
+  r.raceOrgs = await orgs(grace);
+  r.raceRows = (await pool.query("select count(*)::int as n from organization where name like 'race%'")).rows[0].n;
+  r.G = G;
 
   r.A = A;
   r.B = B;
@@ -209,7 +222,20 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect(r.secondOrgWhenPaid).toBe('ok');
     expect(r.thirdOrg).toBe('ORGANIZATION_LIMIT_REACHED');
     expect(r.memberOfAnother).toBe('ORGANIZATION_LIMIT_REACHED');
+    expect(r.commaRole).toBe('ORGANIZATION_LIMIT_REACHED');
     // The personal org at first sign-in is not refused (see the first test).
+  });
+
+  it('keeps exactly one free org out of several parallel creates', () => {
+    expect([...r.race].sort()).toEqual([
+      'ORGANIZATION_LIMIT_REACHED',
+      'ORGANIZATION_LIMIT_REACHED',
+      'ORGANIZATION_LIMIT_REACHED',
+      'ok',
+    ]);
+    expect(r.raceOrgs).toHaveLength(2); // her paid org and the one that survived
+    expect(r.raceOrgs).toContain(r.G);
+    expect(r.raceRows).toBe(1);
   });
 
   it('lets owners and admins invite, and not members', () => {

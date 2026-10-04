@@ -64,6 +64,13 @@ describe('resolveEntitlements', () => {
     expect(resolved).toEqual({ plan: 'free', ...PLANS.free });
   });
 
+  it('ignores prototype keys in overrides', () => {
+    const hostile = JSON.parse('{"__proto__":{"runsPerMonth":9},"constructor":1,"toString":2}');
+    const resolved = resolveEntitlements('free', hostile);
+    expect(resolved).toEqual({ plan: 'free', ...PLANS.free });
+    expect(({} as Record<string, unknown>).runsPerMonth).toBeUndefined();
+  });
+
   it('treats an unknown plan id as free (fails closed)', () => {
     expect(resolveEntitlements('enterprise', {})).toEqual({ plan: 'free', ...PLANS.free });
   });

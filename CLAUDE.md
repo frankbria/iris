@@ -1048,8 +1048,13 @@ are on the Stripe products (#261); enforcing them at the API is #346.
   upgrade drops a stale grant.
 - **One free org per user** (`FREE_ORGS_PER_USER`): a `createAuth()` `hooks.before` on
   `/organization/create` refuses `403 ORGANIZATION_LIMIT_REACHED` when the user already
-  owns that many orgs on free (owner role; joining someone else's org costs nothing). It
-  runs after the suspension check. Server calls with no session (the personal org at first
+  owns that many orgs on free (owner role; joining someone else's org costs nothing, but an
+  invited co-owner of a free org uses their allowance). BetterAuth keeps several roles as
+  one comma string (`admin,owner`), so `owner` is matched as a token. It runs after the
+  suspension check (`auth-apikey.test.ts` pins that order). The check and the plugin's
+  insert are not atomic, so a `hooks.after` recounts under
+  `pg_advisory_xact_lock(hashtext('org-create:' || userId))` and deletes the new org when
+  the user is over the cap: of N parallel creates exactly one free org survives. Server calls with no session (the personal org at first
   sign-in) pass: that user owns nothing yet. A test that needs a second org pays for the
   first (`insert into org_plans ... 'pro'`), as `auth-apikey.test.ts` and portal
   `org.spec.ts` do.

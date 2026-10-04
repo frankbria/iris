@@ -110,15 +110,23 @@ export function orgEntitlements(db: Kysely<unknown>) {
 }
 
 /**
- * True when the user already owns `FREE_ORGS_PER_USER` orgs on the free plan (an org
- * with no `org_plans` row is free). Owner role, not membership: joining someone else's
- * org costs nothing.
+ * True when the user owns at least `limit` (default `FREE_ORGS_PER_USER`) orgs on the free
+ * plan; an org with no `org_plans` row is free. At least, not exactly: a downgrade can
+ * leave someone above the cap. Owner role, not membership: joining someone else's org
+ * costs nothing, but an invited co-owner of a free org does use their allowance.
+ * BetterAuth stores several roles as one comma-separated string (`admin,owner`), so
+ * `owner` is matched as a token.
  */
-export async function freeOrgLimitReached(db: Kysely<unknown>, userId: string): Promise<boolean> {
+export async function freeOrgLimitReached(
+  db: Kysely<unknown>,
+  userId: string,
+  limit = FREE_ORGS_PER_USER,
+): Promise<boolean> {
   const { rows } = await sql<{ n: number }>`
     select count(*)::int as n from member m
     left join org_plans p on p.org_id = m."organizationId"
-    where m."userId" = ${userId} and m.role = 'owner'
+    where m."userId" = ${userId}
+      and 'owner' = any (string_to_array(replace(m.role, ' ', ''), ','))
       and coalesce(p.plan, ${DEFAULT_PLAN}) = ${DEFAULT_PLAN}`.execute(db);
-  return (rows[0]?.n ?? 0) >= FREE_ORGS_PER_USER;
+  return (rows[0]?.n ?? 0) >= limit;
 }
