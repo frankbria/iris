@@ -81,7 +81,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
@@ -94,6 +94,7 @@ src/
 ├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
 ├── jobs-api.ts            # Hosted REST on the RPC listener: jobs (#267), runs + run detail (#269)
 ├── worker.ts              # `iris worker`: claims queued a11y jobs, runs the hardened runner, stores the result (#267)
+├── billing/plans.ts       # Plan catalog (free/pro/team), resolveEntitlements, orgEntitlements(db), one-free-org cap (#260)
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
 ├── artifact-store.ts      # ArtifactStore: filesystem (local) + S3 (hosted, SeaweedFS in dev/CI/staging); tenant-first keys, signed URLs (#257)
 ├── run-reads.ts           # Read-only run queries (types, keyset cursor, listPage, get): no runner imports, so the portal can use it (#270)
@@ -129,6 +130,8 @@ __tests__/
 ├── protocol-auth.test.ts          # RPC upgrade auth seam: 401/503, pending upgrades vs cap, org-scoped status, revocation re-check (#341)
 ├── api-key-auth.test.ts           # Real Postgres + spawned hosted `iris connect`: real keys, revoked/disabled 401, startup refusals (#341)
 ├── db/postgres.test.ts            # Real Postgres: migrate, idempotency, org_id catalog check, BetterAuth round trip (#248)
+├── db/entitlements.test.ts        # Real Postgres: no row is free, setPlan + overrides, per org, unknown plan reads as free (#260)
+├── billing/plans.test.ts          # Catalog values and override resolution: only known keys and valid values (#260)
 ├── db/history-store.test.ts       # Real Postgres: runs per org, cross-org list/get empty, same-org key FK, no typed values (#254)
 ├── ingress.test.ts                # Real nginx (Docker) over deploy/nginx/iris.conf: routing, header overwrite, WSS, 429, headers, TLS (#347)
 ├── auth-client-ip.test.ts         # Real Postgres: BetterAuth rate limits key on X-Real-IP, not a rotated X-Forwarded-For (#347)
@@ -1029,6 +1032,30 @@ They apply only to connections with a principal; local mode is untouched.
   logged (`returning`), so a reused key cannot hide an event silently.
 - **Writers not yet wired**: vision calls and jobs come with #268/#267 (the hooks
   exist); agent turns come with #428 (the agent loop is CLI-only).
+
+### Plans and Entitlements (issue #260)
+
+`src/billing/plans.ts`. Limits are the owner-approved launch values (2026-10-03); prices
+are on the Stripe products (#261); enforcing them at the API is #346.
+
+- **Plans are code (`PLANS`); an org's plan is a row** in `org_plans` (migration 0009:
+  `org_id` pk, `plan`, `overrides jsonb`). No row means free (self-serve free tier). No
+  check constraint on `plan`: an id the code does not know resolves to free, so a new plan
+  needs no migration and a bad row grants nothing.
+- **`resolveEntitlements(plan, overrides)`** applies only known limit keys with valid values
+  (non-negative safe integers; a boolean for `byokAllowed`). `orgEntitlements(db).get(orgId)`
+  is the `getEntitlements`; `setPlan(orgId, plan, overrides?)` replaces both, so an
+  upgrade drops a stale grant.
+- **One free org per user** (`FREE_ORGS_PER_USER`): a `createAuth()` `hooks.before` on
+  `/organization/create` refuses `403 ORGANIZATION_LIMIT_REACHED` when the user already
+  owns that many orgs on free (owner role; joining someone else's org costs nothing). It
+  runs after the suspension check. Server calls with no session (the personal org at first
+  sign-in) pass: that user owns nothing yet. A test that needs a second org pays for the
+  first (`insert into org_plans ... 'pro'`), as `auth-apikey.test.ts` and portal
+  `org.spec.ts` do.
+- **No browser-minute allowance** at launch: minutes are recorded (#263), and
+  `maxConcurrentSessions` caps them. The RPC server's `maxSessionsPerOrg` is still the
+  operator default until #346 sources it from the plan.
 
 ### Hosted Job API (issue #267)
 

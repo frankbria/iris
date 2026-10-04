@@ -15,6 +15,7 @@ import { recordCurrentAcceptance } from '../legal/acceptance';
 import { ACCEPTED_TERMS } from '../legal/versions';
 import { log, type LogLevel } from '../log';
 import { suspendedSql } from '../org-suspension';
+import { freeOrgLimitReached } from '../billing/plans';
 
 /** One outgoing account email: verification or password reset. */
 export interface AuthEmail {
@@ -192,8 +193,10 @@ export function createAuth(
       // the checkbox, or names an old version, is refused here, not in the form.
       before: createAuthMiddleware(async (ctx) => {
         if (API_KEY_WRITES.has(ctx.path)) return refuseSuspendedKeyWrite(ctx, rest.database);
-        if (ctx.path === '/organization/create')
-          return refuseOrgCreateForSuspendedMember(ctx, rest.database);
+        if (ctx.path === '/organization/create') {
+          await refuseOrgCreateForSuspendedMember(ctx, rest.database);
+          return refuseOrgCreateOverFreeLimit(ctx, rest.database);
+        }
         if (ctx.path !== '/sign-up/email') return;
         if ((ctx.body as { acceptedTerms?: unknown } | undefined)?.acceptedTerms !== ACCEPTED_TERMS)
           throw new APIError('BAD_REQUEST', {
@@ -347,6 +350,26 @@ async function refuseOrgCreateForSuspendedMember(
     throw new APIError('FORBIDDEN', {
       code: 'ORGANIZATION_SUSPENDED',
       message: 'This organization is suspended.',
+    });
+}
+
+/**
+ * One free org per user (#260): a user who already owns `FREE_ORGS_PER_USER` free orgs
+ * cannot create another, since each carries its own allowance. Paid orgs do not count.
+ * Server calls with no session (the personal org at first sign-in, `activeOrgFor`) pass:
+ * that user owns no org yet.
+ */
+async function refuseOrgCreateOverFreeLimit(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  const session = await getSessionFromCtx(ctx);
+  if (!session) return;
+  if (await freeOrgLimitReached(termsDb(database), session.user.id))
+    throw new APIError('FORBIDDEN', {
+      code: 'ORGANIZATION_LIMIT_REACHED',
+      message:
+        'Your free organization limit is reached. Upgrade an organization to create another.',
     });
 }
 

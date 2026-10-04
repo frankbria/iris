@@ -158,8 +158,9 @@ const PASSWORD = 'correct-horse-battery-staple';
     // A suspended org's member must not route around it with a fresh org and new keys.
     newOrg: await attempt(() =>
       auth.api.createOrganization({ headers: alice, body: { name: 'evade', slug: 'evade-' + Date.now() } })),
-    newOrgUnaffected: await attempt(() =>
-      auth.api.createOrganization({ headers: bob, body: { name: 'fine', slug: 'fine-' + Date.now() } })),
+    // Bob's own org is paid, so the one-free-org cap (#260) is not what this tests.
+    newOrgUnaffected: await pool.query("insert into org_plans (org_id, plan) values ($1, 'pro')", [B]).then(() => attempt(() =>
+      auth.api.createOrganization({ headers: bob, body: { name: 'fine', slug: 'fine-' + Date.now() } }))),
   };
   await new Promise((res) => setTimeout(res, 5));
   await susp(A, 'unsuspend');

@@ -115,6 +115,18 @@ const PASSWORD = 'correct-horse-battery-staple';
   r.deleteA = await attempt(() =>
     auth.api.deleteOrganization({ headers: alice, body: { organizationId: A } }));
 
+  // One free org per user (#260). Bob owns his free personal org, so a second is refused.
+  const newOrg = (headers, name) =>
+    auth.api.createOrganization({ headers, body: { name, slug: name + '-' + Date.now() } });
+  r.secondFreeOrg = await attempt(() => newOrg(bob, 'side'));
+  // Paid orgs are uncapped: once B is on pro, he may make another...
+  await pool.query("insert into org_plans (org_id, plan) values ($1, 'pro')", [B]);
+  r.secondOrgWhenPaid = await attempt(() => newOrg(bob, 'second'));
+  // ...which starts on free, so a third is refused again.
+  r.thirdOrg = await attempt(() => newOrg(bob, 'third'));
+  // Carol is a member of A, not its owner: only her own free org counts, and she has one.
+  r.memberOfAnother = await attempt(() => newOrg(carol, 'carols'));
+
   r.A = A;
   r.B = B;
   await pool.end();
@@ -190,6 +202,14 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect(r.carol.role).toBe('member');
     // Accepting switches the session to the org just joined.
     expect(r.carol.active).toBe(r.A);
+  });
+
+  it('allows one free org per user; a paid org lifts the cap for another (#260)', () => {
+    expect(r.secondFreeOrg).toBe('ORGANIZATION_LIMIT_REACHED');
+    expect(r.secondOrgWhenPaid).toBe('ok');
+    expect(r.thirdOrg).toBe('ORGANIZATION_LIMIT_REACHED');
+    expect(r.memberOfAnother).toBe('ORGANIZATION_LIMIT_REACHED');
+    // The personal org at first sign-in is not refused (see the first test).
   });
 
   it('lets owners and admins invite, and not members', () => {

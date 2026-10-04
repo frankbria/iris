@@ -20,8 +20,22 @@ import { linkFromMail } from "./mailpit"
  * BetterAuth refuses them for CSRF, and a test for "refused" would pass for that reason.
  * The assertions check the error code for the same reason.
  */
-const { baseURL } = e2eEnv()
+const { baseURL, databaseUrl } = e2eEnv()
 const sameOrigin = { origin: baseURL }
+
+/** Puts an org on a paid plan, as Stripe will (#261). */
+async function payFor(orgId: string) {
+  const db = new Client({ connectionString: databaseUrl })
+  await db.connect()
+  try {
+    await db.query(
+      "insert into org_plans (org_id, plan) values ($1, 'pro') on conflict (org_id) do update set plan = 'pro'",
+      [orgId]
+    )
+  } finally {
+    await db.end()
+  }
+}
 
 test.beforeEach(({ context }) => ownRateLimitBucket(context))
 
@@ -231,7 +245,9 @@ test("an invitation goes to the org the form showed, even after a switch in anot
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Tess's organization"
   )
-  // Another tab creates and switches to a second org Tess also owns.
+  // Another tab creates and switches to a second org Tess also owns. Her first org is
+  // paid, or the one-free-org cap (#260) would refuse the second.
+  await payFor(shown.id)
   const other = await context.request.post("/api/auth/organization/create", {
     headers: sameOrigin,
     data: { name: "Other org", slug: `other-${Date.now()}` },
