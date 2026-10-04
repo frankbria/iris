@@ -133,3 +133,33 @@ export async function freeOrgLimitReached(
       and coalesce(p.plan, ${DEFAULT_PLAN}) not in (${sql.join(PAID_PLANS)})`.execute(db);
   return (rows[0]?.n ?? 0) >= limit;
 }
+
+/**
+ * Takes back an org created over the free-org cap, inside the caller's transaction (which
+ * holds the per-user lock). Normally the org is deleted: its member and invitation rows
+ * cascade, and a session pointing at it gets no active org. But the org was committed
+ * before the recount, so a concurrent request may already have attached a row with no
+ * cascade (a provider key, an API key's run). Then the delete is refused (23503), and the
+ * org is suspended instead (#348): it can no longer use keys or run jobs.
+ */
+export async function retractOrg(
+  tx: Kysely<unknown>,
+  orgId: string,
+): Promise<'deleted' | 'suspended'> {
+  await sql`savepoint retract_org`.execute(tx);
+  try {
+    await sql`update "session" set "activeOrganizationId" = null
+      where "activeOrganizationId" = ${orgId}`.execute(tx);
+    await sql`delete from organization where id = ${orgId}`.execute(tx);
+    await sql`release savepoint retract_org`.execute(tx);
+    return 'deleted';
+  } catch (error) {
+    if ((error as { code?: string }).code !== '23503') throw error;
+    await sql`rollback to savepoint retract_org`.execute(tx);
+    await sql`insert into org_suspensions (org_id, action, reason, actor)
+      values (${orgId}, 'suspend', 'Created over the free-organization limit', 'system')`.execute(
+      tx,
+    );
+    return 'suspended';
+  }
+}

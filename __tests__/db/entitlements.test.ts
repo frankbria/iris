@@ -10,7 +10,7 @@ import { Kysely, sql } from 'kysely';
 import { Client } from 'pg';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
-import { freeOrgLimitReached, orgEntitlements, PLANS } from '../../src/billing/plans';
+import { freeOrgLimitReached, orgEntitlements, PLANS, retractOrg } from '../../src/billing/plans';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 if (!ADMIN_URL) {
@@ -90,5 +90,26 @@ if (!ADMIN_URL) {
     // org-a holds the unknown 'legacy-gold' from the test above: free for the cap too.
     await own('org-a', 'owner');
     expect(await freeOrgLimitReached(db, 'u1')).toBe(true);
+  });
+
+  it('takes back an over-cap org: deleted, or suspended once data hangs off it', async () => {
+    for (const org of ['org-x', 'org-y']) {
+      await sql`insert into organization (id, name, slug, "createdAt")
+        values (${org}, ${org}, ${org}, now())`.execute(db);
+    }
+    await sql`insert into provider_keys (org_id, provider, ciphertext)
+      values ('org-y', 'openai', '\\x00')`.execute(db);
+
+    expect(await db.transaction().execute((tx) => retractOrg(tx, 'org-x'))).toBe('deleted');
+    const gone = await sql`select 1 from organization where id = 'org-x'`.execute(db);
+    expect(gone.rows).toHaveLength(0);
+
+    // The provider key has no cascade: the delete is refused, so the org is suspended.
+    expect(await db.transaction().execute((tx) => retractOrg(tx, 'org-y'))).toBe('suspended');
+    const kept = await sql`select 1 from organization where id = 'org-y'`.execute(db);
+    expect(kept.rows).toHaveLength(1);
+    const { rows } = await sql<{ action: string; actor: string }>`
+      select action, actor from org_suspensions where org_id = 'org-y'`.execute(db);
+    expect(rows).toEqual([{ action: 'suspend', actor: 'system' }]);
   });
 });

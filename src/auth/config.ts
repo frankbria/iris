@@ -15,7 +15,7 @@ import { recordCurrentAcceptance } from '../legal/acceptance';
 import { ACCEPTED_TERMS } from '../legal/versions';
 import { log, type LogLevel } from '../log';
 import { suspendedSql } from '../org-suspension';
-import { FREE_ORGS_PER_USER, freeOrgLimitReached } from '../billing/plans';
+import { FREE_ORGS_PER_USER, freeOrgLimitReached, retractOrg } from '../billing/plans';
 
 /** One outgoing account email: verification or password reset. */
 export interface AuthEmail {
@@ -378,8 +378,8 @@ async function refuseOrgCreateOverFreeLimit(
 /**
  * The before hook's count and the plugin's insert are not atomic: parallel creates by a
  * user with no free org can all pass it. So once the org exists, count again under a
- * per-user lock; over the cap, remove the new org (its member and invitation rows
- * cascade) and refuse. The lock serialises the recounts, so exactly `FREE_ORGS_PER_USER`
+ * per-user lock; over the cap, take the new org back (`retractOrg`: deleted, or suspended
+ * if a concurrent request already attached data to it) and refuse. The lock serialises the recounts, so exactly `FREE_ORGS_PER_USER`
  * of the racing orgs survive whatever the commit order. The session the plugin pointed
  * at a removed org gets no active org, and `requireOrg()` moves it back to one the user
  * belongs to.
@@ -398,9 +398,7 @@ async function undoOrgCreateOverFreeLimit(
         tx,
       );
       if (!(await freeOrgLimitReached(tx, session.user.id, FREE_ORGS_PER_USER + 1))) return false;
-      await sql`update "session" set "activeOrganizationId" = null
-        where "activeOrganizationId" = ${orgId}`.execute(tx);
-      await sql`delete from organization where id = ${orgId}`.execute(tx);
+      await retractOrg(tx, orgId);
       return true;
     });
   if (undone) throw new APIError('FORBIDDEN', ORG_LIMIT_ERROR);

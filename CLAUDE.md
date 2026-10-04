@@ -1054,7 +1054,10 @@ are on the Stripe products (#261); enforcing them at the API is #346.
   suspension check (`auth-apikey.test.ts` pins that order). The check and the plugin's
   insert are not atomic, so a `hooks.after` recounts under
   `pg_advisory_xact_lock(hashtext('org-create:' || userId))` and deletes the new org when
-  the user is over the cap: of N parallel creates exactly one free org survives. Server calls with no session (the personal org at first
+  the user is over the cap: of N parallel creates exactly one free org survives. The org
+  was committed before that recount, so a concurrent request may already have attached a
+  row with no cascade (a provider key); then the delete is refused and `retractOrg()`
+  suspends the org instead (#348 enforcement: no keys, no jobs). Server calls with no session (the personal org at first
   sign-in) pass: that user owns nothing yet. A test that needs a second org pays for the
   first (`insert into org_plans ... 'pro'`), as `auth-apikey.test.ts` and portal
   `org.spec.ts` do.
