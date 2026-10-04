@@ -109,6 +109,9 @@ export function orgEntitlements(db: Kysely<unknown>) {
   };
 }
 
+/** Plans that do not count against the free-org cap. An unknown id resolves to free, so it counts. */
+const PAID_PLANS = (Object.keys(PLANS) as PlanId[]).filter((id) => id !== DEFAULT_PLAN);
+
 /**
  * True when the user owns at least `limit` (default `FREE_ORGS_PER_USER`) orgs on the free
  * plan; an org with no `org_plans` row is free. At least, not exactly: a downgrade can
@@ -127,6 +130,6 @@ export async function freeOrgLimitReached(
     left join org_plans p on p.org_id = m."organizationId"
     where m."userId" = ${userId}
       and 'owner' = any (string_to_array(replace(m.role, ' ', ''), ','))
-      and coalesce(p.plan, ${DEFAULT_PLAN}) = ${DEFAULT_PLAN}`.execute(db);
+      and coalesce(p.plan, ${DEFAULT_PLAN}) not in (${sql.join(PAID_PLANS)})`.execute(db);
   return (rows[0]?.n ?? 0) >= limit;
 }

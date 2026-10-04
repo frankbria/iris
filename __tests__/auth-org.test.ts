@@ -130,6 +130,10 @@ const PASSWORD = 'correct-horse-battery-staple';
   const frank = await user('frank');
   await pool.query('update member set role = $2 where "organizationId" = $1', [await active(frank), 'admin,owner']);
   r.commaRole = await attempt(() => newOrg(frank, 'franks'));
+  // A plan id the code does not know is free for entitlements, so it is free for the cap.
+  const hana = await user('hana');
+  await pool.query("insert into org_plans (org_id, plan) values ($1, 'legacy-gold')", [await active(hana)]);
+  r.unknownPlan = await attempt(() => newOrg(hana, 'hanas'));
   // A user with no free org (hers is paid) may make one. Parallel creates all pass the
   // before-check; the locked after-check keeps exactly one of them.
   const grace = await user('grace');
@@ -223,6 +227,7 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect(r.thirdOrg).toBe('ORGANIZATION_LIMIT_REACHED');
     expect(r.memberOfAnother).toBe('ORGANIZATION_LIMIT_REACHED');
     expect(r.commaRole).toBe('ORGANIZATION_LIMIT_REACHED');
+    expect(r.unknownPlan).toBe('ORGANIZATION_LIMIT_REACHED');
     // The personal org at first sign-in is not refused (see the first test).
   });
 
