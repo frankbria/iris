@@ -413,3 +413,8 @@ Write/Edit, not as a pre-push afterthought.
 - Changing a shared type (`summary: string | null`) can break test files the root `tsc` never compiles: run the suites that read it before pushing.
 - Redaction keyed on parameter names must decode them first (`%74oken` is `token` to a URL parser).
 - Check a reviewer's claim about a library against the installed version before "fixing": zod 4.6.5's `iso.datetime` does reject Feb 30. Keep the examples as regression tests and reply with the evidence.
+
+## #270 Portal runs pages
+- A streaming `loading.tsx` turns `notFound()` and `redirect()` into a 200 (the status line is sent before the page throws). Put the streamed page and its `loading.tsx` in a route group, and run auth in that group's `layout.tsx`, above the boundary; wrap `requireOrg` in React `cache()` so the page reuses it.
+- The portal must import read modules with no runner dependencies (`src/run-reads.ts`), never `history-store`: one import pulled Playwright into `next build`.
+- Next 16's `error.tsx` gets `retry()` (refresh then reset); `reset()` alone re-renders the same failed result.
