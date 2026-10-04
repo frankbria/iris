@@ -346,7 +346,7 @@ describe('VisualTestRunner', () => {
         success: true,
         passed: false,
         similarity: 0.8,
-        pixelDifference: 0.2,
+        pixelDifference: 414720, // count: 20% of 1920x1080
         threshold: 0.95,
         diffBuffer: Buffer.from('test-diff'),
       });
@@ -363,14 +363,14 @@ describe('VisualTestRunner', () => {
           success: true,
           passed: true,
           similarity: 0.96,
-          pixelDifference: 0.04,
+          pixelDifference: 82944, // count: 4% of 1920x1080
           threshold: 0.95,
         })
         .mockResolvedValueOnce({
           success: true,
           passed: false,
           similarity: 0.8,
-          pixelDifference: 0.2,
+          pixelDifference: 414720, // count: 20% of 1920x1080
           threshold: 0.95,
           diffBuffer: Buffer.from('test-diff'),
         });
@@ -595,7 +595,7 @@ describe('VisualTestRunner', () => {
         success: true,
         passed: false,
         similarity: 0.8,
-        pixelDifference: 0.2,
+        pixelDifference: 414720, // count: 20% of 1920x1080
         threshold: 0.95,
         diffBuffer: Buffer.from('test-diff'),
       });
@@ -622,7 +622,7 @@ describe('VisualTestRunner', () => {
         success: true,
         passed: false,
         similarity: 0.8,
-        pixelDifference: 0.2,
+        pixelDifference: 414720, // count: 20% of 1920x1080
         threshold: 0.95,
         diffBuffer: Buffer.from('test-diff'),
       });
@@ -661,7 +661,7 @@ describe('VisualTestRunner', () => {
         success: true,
         passed: false,
         similarity: 0.8,
-        pixelDifference: 0.2,
+        pixelDifference: 414720, // count: 20% of 1920x1080
         threshold: 0.95,
         diffBuffer: Buffer.from('test-diff'),
       });
@@ -696,7 +696,7 @@ describe('VisualTestRunner', () => {
         success: true,
         passed: false,
         similarity: 0.8,
-        pixelDifference: 0.2,
+        pixelDifference: 414720, // count: 20% of 1920x1080
         threshold: 0.95,
         diffBuffer: Buffer.from('test-diff'),
       });
@@ -720,7 +720,7 @@ describe('VisualTestRunner', () => {
         success: true,
         passed: true,
         similarity: 0.96,
-        pixelDifference: 0.04,
+        pixelDifference: 82944, // count: 4% of 1920x1080
         threshold: 0.95,
       });
 
@@ -744,7 +744,7 @@ describe('VisualTestRunner', () => {
         success: true,
         passed: false,
         similarity: 0.8,
-        pixelDifference: 0.2,
+        pixelDifference: 414720, // count: 20% of 1920x1080
         threshold: 0.95,
         diffBuffer: Buffer.from('test-diff'),
       });
@@ -791,51 +791,43 @@ describe('VisualTestRunner', () => {
     expect(result.costSummary).toBeUndefined();
   });
 
-  describe('severity estimation without AI', () => {
-    it('should estimate severity as breaking for low similarity', async () => {
-      mockDiffEngine.compare.mockResolvedValue({
-        success: true,
-        passed: false,
-        similarity: 0.8,
-        pixelDifference: 0.2,
-        threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff'),
+  // The diff module is mocked in this file; these feed the runner what the REAL engine
+  // returns (#280). `pixelDifference` is a pixel count, and fractional mocks hid that
+  // severity treated it as a fraction: every failure was "breaking".
+  describe('severity estimation without AI (real diff engine output)', () => {
+    const { VisualDiffEngine: RealDiffEngine } = jest.requireActual('../../src/visual/diff');
+
+    /** 100x100 white PNG with the top `rows` rows black: `rows`% of pixels differ. */
+    async function png(rows: number): Promise<Buffer> {
+      const sharp = jest.requireActual('sharp');
+      const buf = Buffer.alloc(100 * 100 * 4, 255);
+      buf.fill(0, 0, rows * 100 * 4);
+      for (let i = 3; i < buf.length; i += 4) buf[i] = 255;
+      return sharp(buf, { raw: { width: 100, height: 100, channels: 4 } })
+        .png()
+        .toBuffer();
+    }
+
+    it.each([
+      [20, 'breaking'],
+      [15, 'moderate'], // boundary: exactly 15% is not breaking
+      [10, 'moderate'],
+      [5, 'minor'], // boundary: exactly 5% is not moderate
+      [3, 'minor'],
+    ])('%i%% of pixels changed is %s', async (rows, severity) => {
+      const real = await new RealDiffEngine().compare(await png(0), await png(rows as number), {
+        threshold: 0.01,
+        includeAA: false,
+        alpha: 0.1,
+        diffMask: false,
+        diffColor: [255, 0, 0],
       });
+      expect(real.pixelDifference).toBe((rows as number) * 100); // a count, not a fraction
+      mockDiffEngine.compare.mockResolvedValue(real);
 
       const result = await visualRunner.run();
 
-      expect(result.results[0].severity).toBe('breaking');
-    });
-
-    it('should estimate severity as moderate for medium similarity', async () => {
-      mockDiffEngine.compare.mockResolvedValue({
-        success: true,
-        passed: false,
-        similarity: 0.9,
-        pixelDifference: 0.1,
-        threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff'),
-      });
-
-      const result = await visualRunner.run();
-
-      expect(result.results[0].severity).toBe('moderate');
-    });
-
-    it('should estimate severity as minor for high similarity', async () => {
-      mockDiffEngine.compare.mockResolvedValue({
-        success: true,
-        passed: false,
-        similarity: 0.96,
-        pixelDifference: 0.04,
-        threshold: 0.95,
-        diffBuffer: Buffer.from('test-diff'),
-      });
-
-      const result = await visualRunner.run();
-
-      // similarity >= 0.95 AND pixelDifference <= 0.05 = minor
-      expect(result.results[0].severity).toBe('minor');
+      expect(result.results[0].severity).toBe(severity);
     });
   });
 
@@ -952,7 +944,7 @@ describe('VisualTestRunner', () => {
         success: true,
         passed: false,
         similarity: 0.8,
-        pixelDifference: 0.2,
+        pixelDifference: 414720, // count: 20% of 1920x1080
         threshold: 0.95,
         diffBuffer: Buffer.from('test-diff'),
       });
@@ -973,7 +965,7 @@ describe('VisualTestRunner', () => {
         success: true,
         passed: true,
         similarity: 0.96,
-        pixelDifference: 0.04,
+        pixelDifference: 82944, // count: 4% of 1920x1080
         threshold: 0.95,
       });
 

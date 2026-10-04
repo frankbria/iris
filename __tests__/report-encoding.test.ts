@@ -213,7 +213,7 @@ describe('visual reports', () => {
         device: s,
         passed: false,
         similarity: 0.8,
-        pixelDifference: 0.2,
+        pixelDifference: 414720, // count: 20% of 1920x1080
         threshold: 0.1,
         // Typed as a union, but a report is also rendered from stored JSON.
         severity: s as 'breaking',

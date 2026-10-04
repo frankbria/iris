@@ -38,7 +38,7 @@ describe('VisualReporter', () => {
         device: 'mobile',
         passed: false,
         similarity: 0.85,
-        pixelDifference: 0.15,
+        pixelDifference: 311040, // pixelmatch's count: 15% of 1920x1080
         threshold: 0.1,
         ssim: 0.78,
         severity: 'breaking',
@@ -61,7 +61,7 @@ describe('VisualReporter', () => {
         device: 'tablet',
         passed: false,
         similarity: 0.92,
-        pixelDifference: 0.08,
+        pixelDifference: 62915, // ~8% of 768x1024
         threshold: 0.1,
         severity: 'moderate',
         screenshotPath: '/tmp/contact-tablet.png',
@@ -377,6 +377,27 @@ describe('VisualReporter', () => {
     });
   });
 
+  // #280: `pixelDifference` is a pixel count. Every format shows the share of pixels
+  // that differ (from `similarity`), never the count multiplied by 100.
+  it.each([
+    ['html', 'report-share.html'],
+    ['junit', 'report-share.xml'],
+    ['markdown', 'report-share.md'],
+  ] as const)(
+    '%s shows the share of differing pixels, not the count as a percent',
+    async (format, file) => {
+      const reporter = new VisualReporter({ format, outputPath: path.join(tempDir, file) });
+
+      const artifacts = await reporter.generateReport(mockResults);
+      const content = fs.readFileSync(artifacts.reportPath, 'utf-8');
+
+      expect(content).toMatch(/(^|[^\d.])15\.00%/); // /about: 311040 of 1920x1080
+      expect(content).toMatch(/(^|[^\d.])8\.00%/); // /contact (not ssim's 78.00%)
+      expect(content).not.toContain('31104000.00%');
+      expect(content).not.toContain('6291500.00%');
+    },
+  );
+
   describe('Markdown Report Generation', () => {
     it('should generate valid Markdown report', async () => {
       const reporter = new VisualReporter({
@@ -567,7 +588,7 @@ describe('VisualReporter renders the full AI analysis', () => {
         device: 'desktop',
         passed: false,
         similarity: 0.8,
-        pixelDifference: 0.2,
+        pixelDifference: 414720,
         threshold: 0.1,
         severity: 'breaking',
         screenshotPath: '/tmp/a.png',
