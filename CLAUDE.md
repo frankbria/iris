@@ -1157,7 +1157,10 @@ it yet; #268 (visual jobs), #460 (URLs in run detail) and #349 (purge) build on 
 - **The bucket is private because the server has identities.** SeaweedFS with no
   `-s3.config` serves anonymous requests; `docker/seaweedfs-s3.dev.json` defines one
   identity, and the test proves an unsigned GET is a 403 next to a signed one that works.
-- **Signed URLs default to 5 minutes and are capped at 15.** A URL edited to another key
+- **Hosted callers take `orgArtifacts(store, orgId)`, not the store.** The store accepts
+  any well-formed key; the org view refuses every key outside `org/<orgId>/` (and
+  `org/<orgId>X/`), so a stored or client-influenced key cannot reach another tenant.
+- **Signed URLs default to 5 minutes and are capped at 15** (a non-finite TTL is the default). A URL edited to another key
   is refused (the signature covers the path).
 - **CI starts SeaweedFS as a step** (`docker run`), not a service container: services
   cannot pass a command line. Image pinned by version and digest in both places.

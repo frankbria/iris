@@ -13,6 +13,7 @@ import {
 import {
   baselineKey,
   FilesystemArtifactStore,
+  orgArtifacts,
   runArtifactKey,
   S3ArtifactStore,
 } from '../src/artifact-store';
@@ -87,6 +88,22 @@ describe('FilesystemArtifactStore', () => {
     await expect(store.get('/etc/passwd')).rejects.toThrow(/Invalid/);
   });
 
+  it("an org's view refuses another org's keys for every operation", async () => {
+    const theirs = baselineKey({ orgId: 'orgB', projectId: 'p1', name: 'n1' });
+    await store.put(theirs, Buffer.from('org B'), 'image/png');
+    const mine = orgArtifacts(store, 'orgA');
+    await expect(mine.get(theirs)).rejects.toThrow(/Invalid artifact key for org/);
+    await expect(mine.signedUrl(theirs)).rejects.toThrow(/Invalid artifact key for org/);
+    await expect(mine.put(theirs, Buffer.from('x'), 'image/png')).rejects.toThrow(/Invalid/);
+    // A prefix that only starts like the org id is another org too.
+    await expect(mine.get('org/orgAB/project/p1/baselines/n1.png')).rejects.toThrow(/Invalid/);
+    // Positive control: its own keys work.
+    const own = baselineKey({ orgId: 'orgA', projectId: 'p1', name: 'n1' });
+    await mine.put(own, Buffer.from('org A'), 'image/png');
+    expect((await mine.get(own))?.toString()).toBe('org A');
+    expect(fs.readFileSync(path.join(root, theirs), 'utf8')).toBe('org B');
+  });
+
   it('gives the local file as the retrieval URL', async () => {
     const key = baselineKey({ orgId: 'o1', projectId: 'p1', name: 'n1' });
     await store.put(key, Buffer.from('x'), 'image/png');
@@ -129,7 +146,17 @@ if (!s3Configured) {
   });
 
   beforeAll(async () => {
-    await admin.send(new CreateBucketCommand({ Bucket: bucket }));
+    // The S3 port answers (403 to anonymous) before the storage layers behind it are
+    // ready, so the first bucket creation may fail on a slow runner: retry it briefly.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await admin.send(new CreateBucketCommand({ Bucket: bucket }));
+        break;
+      } catch (error) {
+        if (attempt >= 30) throw error;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
     await store.put(key, Buffer.from('org A screenshot'), 'image/png');
     await store.put(other, Buffer.from('org B screenshot'), 'image/png');
   });
@@ -185,5 +212,15 @@ if (!s3Configured) {
   it('caps a signed URL at 15 minutes', async () => {
     expect(new URL(await store.signedUrl(key, 3600)).searchParams.get('X-Amz-Expires')).toBe('900');
     expect(new URL(await store.signedUrl(key)).searchParams.get('X-Amz-Expires')).toBe('300');
+    // Not a number is the default, not `X-Amz-Expires=NaN`.
+    expect(new URL(await store.signedUrl(key, NaN)).searchParams.get('X-Amz-Expires')).toBe('300');
+  });
+
+  it('refuses an unsafe key for every operation', async () => {
+    for (const bad of ['../escape.png', '/org/a.png', 'org/a/../b.png', 'org/a b.png']) {
+      await expect(store.put(bad, Buffer.from('x'), 'image/png')).rejects.toThrow(/Invalid/);
+      await expect(store.get(bad)).rejects.toThrow(/Invalid/);
+      await expect(store.signedUrl(bad)).rejects.toThrow(/Invalid/);
+    }
   });
 });

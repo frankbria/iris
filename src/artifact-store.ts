@@ -134,15 +134,18 @@ export class S3ArtifactStore implements ArtifactStore {
       const res = await this.client.send(
         new GetObjectCommand({ Bucket: this.bucket, Key: assertKey(key) }),
       );
-      return Buffer.from(await res.Body!.transformToByteArray());
+      if (!res.Body) throw new Error(`Artifact ${key} came back with no body`);
+      return Buffer.from(await res.Body.transformToByteArray());
     } catch (error) {
-      if (error instanceof NoSuchKey) return null;
+      // By name too: a second copy of the SDK in node_modules breaks `instanceof`.
+      if (error instanceof NoSuchKey || (error as Error).name === 'NoSuchKey') return null;
       throw error;
     }
   }
 
   async signedUrl(key: string, ttlSeconds = DEFAULT_TTL_SECONDS): Promise<string> {
-    const expiresIn = Math.min(Math.max(Math.trunc(ttlSeconds), 1), MAX_TTL_SECONDS);
+    const ttl = Number.isFinite(ttlSeconds) ? Math.trunc(ttlSeconds) : DEFAULT_TTL_SECONDS;
+    const expiresIn = Math.min(Math.max(ttl, 1), MAX_TTL_SECONDS);
     return getSignedUrl(
       this.client,
       new GetObjectCommand({ Bucket: this.bucket, Key: assertKey(key) }),
@@ -156,4 +159,24 @@ export class S3ArtifactStore implements ArtifactStore {
   close(): void {
     this.client.destroy();
   }
+}
+
+/**
+ * One org's view of a store: every key must lie under `org/<orgId>/`. Hosted callers take
+ * this, not the store, so a stored or client-influenced key can never reach another
+ * tenant's objects (the `postgresHistory().forOrg()` pattern).
+ */
+export function orgArtifacts(store: ArtifactStore, orgId: string): ArtifactStore {
+  const prefix = `org/${segment('org id', orgId)}/`;
+  const own = (key: string) => {
+    if (typeof key !== 'string' || !key.startsWith(prefix)) {
+      throw new Error(`Invalid artifact key for org ${orgId}: ${JSON.stringify(key)}`);
+    }
+    return key;
+  };
+  return {
+    put: async (key, body, contentType) => store.put(own(key), body, contentType),
+    get: async (key) => store.get(own(key)),
+    signedUrl: async (key, ttlSeconds) => store.signedUrl(own(key), ttlSeconds),
+  };
 }
