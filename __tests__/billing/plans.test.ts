@@ -59,6 +59,7 @@ describe('resolveEntitlements', () => {
       byokAllowed: 'yes',
       plan: 'team',
       isAdmin: true,
+      extraSeats: 5, // a number, but not a limit the plans define
     });
     expect(resolved).toEqual({ plan: 'free', ...PLANS.free });
   });
