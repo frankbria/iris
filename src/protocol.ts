@@ -109,6 +109,13 @@ export interface BrowserSession {
 }
 
 /** Who a connection acts for: the org that owns its API key, and the key (#341). */
+/**
+ * A tenant's AI credential for one request (#258) with whose account pays for it (#479).
+ * The mode is required: a managed key recorded as `byok` would never count against the
+ * org's credit.
+ */
+export type TenantCredentials = AICredentials & { billingMode: 'byok' | 'managed' };
+
 export interface Principal {
   orgId: string;
   keyId: string;
@@ -399,7 +406,7 @@ export function startServer(
      * translation only, and the process-wide `*_API_KEY` is never used for it
      * (ADR 0001 §5). Local (token) connections keep the process configuration.
      */
-    aiCredentials?: (principal: Principal) => Promise<AICredentials | null>;
+    aiCredentials?: (principal: Principal) => Promise<TenantCredentials | null>;
     /**
      * The usage ledger (#263): a tenant session's browser minutes when it ends, and
      * each AI call its translations make. Local connections record nothing.
@@ -1242,7 +1249,7 @@ async function executeBrowserActions(
   url: string | undefined,
   maxActions: number,
   tenant: {
-    aiCredentials?: (principal: Principal) => Promise<AICredentials | null>;
+    aiCredentials?: (principal: Principal) => Promise<TenantCredentials | null>;
     usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
   } = {},
 ): Promise<{
@@ -1266,7 +1273,7 @@ async function executeBrowserActions(
       // (#255), and runs on its own credentials, never the operator's (#258).
       const principal = session.principal;
       // Whose account a billed call is on, from the credential the resolver gave (#479).
-      let billingMode: 'byok' | 'managed' = 'byok';
+      let billingMode = 'byok' as 'byok' | 'managed';
       const translation = await translate(
         instruction,
         url ? { url } : undefined,
@@ -1298,7 +1305,7 @@ async function executeBrowserActions(
                 if (!tenant.aiCredentials) return null;
                 try {
                   const resolved = await tenant.aiCredentials(principal);
-                  billingMode = resolved?.billingMode ?? 'byok';
+                  if (resolved) billingMode = resolved.billingMode;
                   return resolved;
                 } catch (err) {
                   log('error', 'AI credentials lookup failed; translating without AI', {
@@ -1311,6 +1318,18 @@ async function executeBrowserActions(
             }
           : {},
       );
+      // A provider error on IRIS's managed key would tell the tenant about IRIS's vendor
+      // account (a revoked key's last characters, quota) (#479): logged, not returned.
+      if (
+        billingMode === 'managed' &&
+        /^AI translation (error|failed)/.test(translation.reasoning ?? '')
+      ) {
+        log('error', 'managed AI translation failed', {
+          ...(principal && who(principal)),
+          err: translation.reasoning,
+        });
+        translation.reasoning = 'AI translation is unavailable right now';
+      }
       translationResult = translation;
       actionsToExecute = translation.actions;
     } else if (actions) {

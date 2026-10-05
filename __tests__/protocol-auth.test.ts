@@ -625,6 +625,41 @@ describe('hosted RPC history (#254)', () => {
     }
   });
 
+  // #479: a provider error on IRIS's own key describes IRIS's vendor account, not the tenant's.
+  test.each([
+    ['managed', 'AI translation is unavailable right now'],
+    ['byok', 'AI translation error: 401 Incorrect API key provided: sk-...wxyz'],
+  ] as const)('a %s provider error reaches the client as %p', async (billingMode, expected) => {
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    // As the real translator: credentials are asked for before the provider call fails.
+    const translate = jest
+      .spyOn(translatorModule, 'translate')
+      .mockImplementation(async (_i, _c, opts: any) => {
+        await opts.credentials();
+        return {
+          actions: [],
+          method: 'ai',
+          confidence: 0,
+          reasoning: 'AI translation error: 401 Incorrect API key provided: sk-...wxyz',
+        };
+      });
+    try {
+      const url = await serve({
+        aiCredentials: async () => ({ provider: 'openai', apiKey: 'sk-x', billingMode }),
+      });
+      const b = await open(url, as('key-b'));
+      await call(b, 'launchBrowser');
+      const reply = await call(b, 'executeBrowserAction', { instruction: 'check the order total' });
+      expect(reply.result.translationResult.reasoning).toBe(expected);
+      if (billingMode === 'managed') {
+        expect(errors.mock.calls.flat().join(' ')).toMatch(/managed AI translation failed/);
+      }
+    } finally {
+      translate.mockRestore();
+      errors.mockRestore();
+    }
+  });
+
   test('local mode, with no principal, records nothing', async () => {
     const recorded: unknown[] = [];
     const history = {
@@ -699,7 +734,9 @@ describe('AI spend is charged to the org (#255)', () => {
       const url = await serve({
         aiCredentials: async (principal) => {
           asked.push(principal);
-          return principal.orgId === 'org-a' ? { provider: 'openai', apiKey: 'sk-org-a' } : null;
+          return principal.orgId === 'org-a'
+            ? { provider: 'openai', apiKey: 'sk-org-a', billingMode: 'byok' }
+            : null;
         },
       });
       const a = await open(url, as('key-a'));
@@ -712,7 +749,11 @@ describe('AI spend is charged to the org (#255)', () => {
       expect(asked).toEqual([]);
       const [first, second] = translate.mock.calls.map((c) => c[2] as any);
       expect(first.orgId).toBe('org-a');
-      expect(await first.credentials()).toEqual({ provider: 'openai', apiKey: 'sk-org-a' });
+      expect(await first.credentials()).toEqual({
+        provider: 'openai',
+        apiKey: 'sk-org-a',
+        billingMode: 'byok',
+      });
       expect(second.orgId).toBe('org-b');
       expect(await second.credentials()).toBeNull();
       expect(asked.map((p) => p.orgId)).toEqual(['org-a', 'org-b']);

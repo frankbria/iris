@@ -72,9 +72,10 @@ export type ResolvedAI = AICredentials & { billingMode: BillingMode };
 /**
  * The per-call credential resolver for hosted requests (`startServer({ aiCredentials })`).
  *
- * ponytail: a managed call is admitted while any credit is left, so concurrent calls can
- * each overshoot by one call's cost (the operator's CostTracker budget still reserves
- * per call, #244). Reserve in Postgres if that overshoot ever matters.
+ * ponytail: a managed call is admitted while any credit is left, and its usage is written
+ * when it settles, so the overshoot is the cost of the calls in flight for the org (bounded
+ * by its rate buckets and sessions; the operator's CostTracker budget still reserves per
+ * call, #244). Reserve in Postgres if that overshoot ever matters.
  */
 export function managedAiResolver(deps: {
   db: Kysely<unknown>;

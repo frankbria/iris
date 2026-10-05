@@ -1,7 +1,6 @@
 import { sql, type Kysely } from 'kysely';
-import type { AICredentials } from './ai-client/credentials';
 import type { PostgresHistory, PostgresJobs } from './history-store';
-import type { Authenticator, Principal } from './protocol';
+import type { Authenticator, Principal, TenantCredentials } from './protocol';
 import { orgSuspensions } from './org-suspension';
 import { readSecretEnv } from './secret-env';
 
@@ -132,20 +131,6 @@ export function postgresKeyStore(db: Kysely<unknown>): KeyStore {
 }
 
 /**
- * A tenant's AI credentials (#344, #346): the key its org stored, but only when its plan
- * allows bring-your-own-key; otherwise none (pattern translation only, #258).
- */
-export function planAwareCredentials(
-  entitlements: (orgId: string) => Promise<{ byokAllowed: boolean }>,
-  providerKeys: { credentialsFor(orgId: string): Promise<AICredentials | null> },
-): (principal: Principal) => Promise<AICredentials | null> {
-  return async (principal) =>
-    (await entitlements(principal.orgId)).byokAllowed
-      ? providerKeys.credentialsFor(principal.orgId)
-      : null;
-}
-
-/**
  * The hosted server's authenticator and run history, from the process environment (ADR 0001 §5: no
  * ambient config files). Needs the portal's `BETTER_AUTH_SECRET` (or `_FILE`) and
  * `BETTER_AUTH_URL`, and `DATABASE_URL` or `DATABASE_URL_FILE`.
@@ -156,7 +141,7 @@ export function planAwareCredentials(
 export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Promise<{
   authenticate: Authenticator;
   history: PostgresHistory;
-  aiCredentials: (principal: Principal) => Promise<AICredentials | null>;
+  aiCredentials: (principal: Principal) => Promise<TenantCredentials | null>;
   usage: ReturnType<typeof import('./billing/usage').usageLedger>;
   jobs: PostgresJobs;
   entitlements: (orgId: string) => Promise<import('./billing/plans').Entitlements>;
