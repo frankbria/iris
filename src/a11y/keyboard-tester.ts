@@ -15,6 +15,7 @@
  * e2e suite, not Istanbul.
  */
 
+import { randomBytes } from 'crypto';
 import { Page } from 'playwright';
 import type { KeyboardTestResult } from './types';
 
@@ -57,6 +58,28 @@ export interface KeyboardInteraction {
   success: boolean;
   timestamp: Date;
 }
+
+/**
+ * In-page: is the marked element visible (null when it is gone), and how many
+ * dismissible elements are visible. A string-free function is fine here: the a11y
+ * modules are excluded from coverage instrumentation (see jest.config.ts).
+ */
+const DISMISSIBLE_STATE = (selector: string): { marked: boolean | null; visibleCount: number } => {
+  const isVisible = (el: Element) => {
+    const style = getComputedStyle(el);
+    return (
+      style.display !== 'none' && style.visibility !== 'hidden' && el.getClientRects().length > 0
+    );
+  };
+  const marked = document.querySelector(selector);
+  const all = document.querySelectorAll(
+    '[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]',
+  );
+  return {
+    marked: marked ? isVisible(marked) : null,
+    visibleCount: Array.from(all).filter(isVisible).length,
+  };
+};
 
 /**
  * KeyboardTester handles keyboard navigation and accessibility testing
@@ -181,9 +204,13 @@ export class KeyboardTester {
 
         // A label, never a selector. `getAttribute('class')`, not `className`: on an SVG
         // <a> that is an SVGAnimatedString, and `.split` threw and ended the run (#285).
-        const firstClass = (el.getAttribute('class') ?? '').trim().split(/\s+/)[0];
+        // Through Element.prototype: a <form>'s named controls shadow its methods and
+        // properties (`<input name="setAttribute">`), which threw and ended the run.
+        const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
+        const id = attr('id');
+        const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
         return {
-          element: el.tagName + (el.id ? `#${el.id}` : '') + (firstClass ? `.${firstClass}` : ''),
+          element: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
           tabIndex: htmlEl.tabIndex,
           focusable: true,
           visible: isVisible,
@@ -326,11 +353,15 @@ export class KeyboardTester {
       }
     } finally {
       // Leave the page as we found it — the markers are ours, not the app's.
-      await page.evaluate(() =>
-        document
-          .querySelectorAll('[data-iris-trap]')
-          .forEach((el) => el.removeAttribute('data-iris-trap')),
-      );
+      try {
+        await page.evaluate(() =>
+          document
+            .querySelectorAll('[data-iris-trap]')
+            .forEach((el) => el.removeAttribute('data-iris-trap')),
+        );
+      } catch {
+        // Cleanup only: a page that navigated away took the markers with it.
+      }
     }
 
     return traps;
@@ -346,20 +377,26 @@ export class KeyboardTester {
     // Each widget is addressed by a marker of ours, not a selector built from its id and
     // class: Radix ids (`radix-:r1:`), Tailwind classes (`md:w-[400px]`) and id-less,
     // class-less elements made invalid or ambiguous selectors (#285). Removed afterwards.
-    const arrowNavigableElements = await page.evaluate(() => {
+    // Per run, so a page's own `data-iris-kbd` attribute is never mistaken for ours.
+    const nonce = randomBytes(4).toString('hex');
+    const arrowNavigableElements = await page.evaluate((nonce) => {
       const elements = document.querySelectorAll(
         '[role="menu"], [role="listbox"], [role="tree"], [role="grid"], [role="tablist"]',
       );
       return Array.from(elements).map((el, i) => {
-        el.setAttribute('data-iris-kbd', `arrow-${i}`);
-        const firstClass = (el.getAttribute('class') ?? '').trim().split(/\s+/)[0];
+        Element.prototype.setAttribute.call(el, 'data-iris-kbd', `${nonce}-arrow-${i}`);
+        // Through Element.prototype: a <form>'s named controls shadow its methods and
+        // properties (`<input name="setAttribute">`), which threw and ended the run.
+        const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
+        const id = attr('id');
+        const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
         return {
-          selector: `[data-iris-kbd="arrow-${i}"]`,
-          label: el.tagName + (el.id ? `#${el.id}` : '') + (firstClass ? `.${firstClass}` : ''),
+          selector: `[data-iris-kbd="${nonce}-arrow-${i}"]`,
+          label: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
           role: el.getAttribute('role'),
         };
       });
-    });
+    }, nonce);
 
     try {
       for (const element of arrowNavigableElements) {
@@ -422,11 +459,19 @@ export class KeyboardTester {
         }
       }
     } finally {
-      await page.evaluate(() =>
-        document
-          .querySelectorAll('[data-iris-kbd^="arrow-"]')
-          .forEach((el) => el.removeAttribute('data-iris-kbd')),
-      );
+      // A page that navigated mid-test has no markers left; a failed cleanup must not
+      // replace the results collected so far.
+      try {
+        await page.evaluate(
+          (nonce) =>
+            document
+              .querySelectorAll(`[data-iris-kbd^="${nonce}-"]`)
+              .forEach((el) => Element.prototype.removeAttribute.call(el, 'data-iris-kbd')),
+          nonce,
+        );
+      } catch {
+        // Cleanup only.
+      }
     }
 
     return interactions;
@@ -441,7 +486,8 @@ export class KeyboardTester {
     // Find dismissible components. Visibility deliberately avoids offsetParent:
     // it is null for position:fixed elements, which describes most real modals,
     // so those were skipped here and silently recorded as passing Escape handling.
-    const dismissibleElements = await page.evaluate(() => {
+    const nonce = randomBytes(4).toString('hex');
+    const dismissibleElements = await page.evaluate((nonce) => {
       const isVisible = (el: Element) => {
         const style = getComputedStyle(el);
         return (
@@ -456,35 +502,35 @@ export class KeyboardTester {
       );
       // Addressed by a marker of ours, as in arrow navigation (#285).
       return Array.from(elements).map((el, i) => {
-        el.setAttribute('data-iris-kbd', `escape-${i}`);
-        const firstClass = (el.getAttribute('class') ?? '').trim().split(/\s+/)[0];
+        Element.prototype.setAttribute.call(el, 'data-iris-kbd', `${nonce}-escape-${i}`);
+        // Through Element.prototype: a <form>'s named controls shadow its methods and
+        // properties (`<input name="setAttribute">`), which threw and ended the run.
+        const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
+        const id = attr('id');
+        const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
         return {
-          selector: `[data-iris-kbd="escape-${i}"]`,
-          label: el.tagName + (el.id ? `#${el.id}` : '') + (firstClass ? `.${firstClass}` : ''),
+          selector: `[data-iris-kbd="${nonce}-escape-${i}"]`,
+          label: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
           visible: isVisible(el),
         };
       });
-    });
+    }, nonce);
 
     try {
       for (const element of dismissibleElements) {
         if (!element.visible) continue;
 
         try {
-          // Press Escape
+          const before = await page.evaluate(DISMISSIBLE_STATE, element.selector);
           await page.keyboard.press('Escape');
+          const after = await page.evaluate(DISMISSIBLE_STATE, element.selector);
 
-          // Check if element is still visible (same fixed-position caveat as above).
-          const stillVisible = await page.evaluate((sel) => {
-            const el = document.querySelector(sel);
-            if (!el) return false; // removed from the DOM counts as dismissed
-            const style = getComputedStyle(el);
-            return (
-              style.display !== 'none' &&
-              style.visibility !== 'hidden' &&
-              el.getClientRects().length > 0
-            );
-          }, element.selector);
+          // Our marked element still there: its own visibility decides. Gone from the
+          // DOM: dismissed only if fewer dismissible elements are visible now. A handler
+          // that replaced the node and left the dialog open (a framework re-render)
+          // drops our marker but not the dialog, which a bare null check read as closed.
+          const stillVisible =
+            after.marked !== null ? after.marked : after.visibleCount >= before.visibleCount;
 
           interactions.push({
             key: 'Escape',
@@ -506,11 +552,19 @@ export class KeyboardTester {
         }
       }
     } finally {
-      await page.evaluate(() =>
-        document
-          .querySelectorAll('[data-iris-kbd^="escape-"]')
-          .forEach((el) => el.removeAttribute('data-iris-kbd')),
-      );
+      // A page that navigated mid-test has no markers left; a failed cleanup must not
+      // replace the results collected so far.
+      try {
+        await page.evaluate(
+          (nonce) =>
+            document
+              .querySelectorAll(`[data-iris-kbd^="${nonce}-"]`)
+              .forEach((el) => Element.prototype.removeAttribute.call(el, 'data-iris-kbd')),
+          nonce,
+        );
+      } catch {
+        // Cleanup only.
+      }
     }
 
     return interactions;

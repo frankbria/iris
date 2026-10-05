@@ -310,6 +310,72 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(await page.locator('[data-iris-kbd]').count()).toBe(0);
     });
 
+    // A handler that replaces the dialog node (a re-render) and leaves it open drops our
+    // marker; that is not a dismissal.
+    it('fails a dialog that Escape replaces but leaves open', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div id="host"><div role="dialog" aria-modal="true"><button>Ok</button></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('host').innerHTML =
+            '<div role="dialog" aria-modal="true"><button>Ok</button></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'rerender',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toHaveLength(1);
+      expect(escape[0]).toMatchObject({ success: false, actualBehavior: 'Still visible' });
+    });
+
+    // A <form>'s named controls shadow its methods: `form.setAttribute` is the input.
+    it('does not abort on a dialog whose controls shadow its methods', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <form role="dialog" aria-modal="true" id="f" class="sheet">
+          <input name="setAttribute"><input name="getAttribute"><input name="id">
+        </form></body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testEscapeHandling: true,
+        testFocusOrder: true,
+      }).run(page, 'clobber');
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toHaveLength(1);
+      expect(escape[0].target).toBe('FORM#f.sheet');
+    });
+
+    it("never mistakes the page's own data-iris-kbd attribute for a marker", async () => {
+      // The page's element comes first in document order with the value our first marker
+      // would have had without a per-run nonce; it ignores ArrowDown.
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div data-iris-kbd="arrow-0" tabindex="0">decoy</div>
+        <ul role="menu"><li role="menuitem" tabindex="0">One</li><li role="menuitem" tabindex="-1">Two</li></ul>
+        <script>{const m=document.querySelector('[role=menu]');
+          const items=[...m.querySelectorAll('[role=menuitem]')];
+          m.addEventListener('keydown',(e)=>{ if(e.key!=='ArrowDown')return;
+            items[Math.min(items.indexOf(document.activeElement)+1,items.length-1)].focus();});}</script>
+        </body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testArrowKeyNavigation: true }).run(
+        page,
+        'decoy',
+      );
+      expect(
+        result.interactions.filter((i) => i.key === 'ArrowDown').map((i) => i.success),
+      ).toEqual([true]);
+      // The page's own attribute is left alone.
+      expect(await page.locator('[data-iris-kbd="arrow-0"]').count()).toBe(1);
+    });
+
     it('does not crash on an SVG link', async () => {
       await load(
         page,
