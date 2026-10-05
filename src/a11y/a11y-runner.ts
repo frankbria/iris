@@ -126,7 +126,10 @@ function erroredPage(page: string, error: unknown): AccessibilityTestResult['res
   return {
     page,
     // Stripped here, once: the CLI prints it and every report and store carries it.
-    error: stripUserinfo(error instanceof Error ? error.message : String(error)),
+    // Never empty: an empty reason must not read as no error anywhere it is shown.
+    error:
+      stripUserinfo(error instanceof Error ? error.message : String(error ?? '')) ||
+      'Unknown error',
     axeResult: {
       testName: page,
       url: page,
@@ -650,11 +653,12 @@ export class AccessibilityRunner {
           )
           .join('');
         // A page that could not be scanned found nothing, which is not "no violations".
-        const body = r.error
-          ? `<p class="error">Could not be scanned: ${esc(r.error)}</p>`
-          : r.axeResult.violations.length === 0
-            ? '<p class="ok">No violations found.</p>'
-            : violations;
+        const body =
+          r.error !== undefined
+            ? `<p class="error">Could not be scanned: ${esc(r.error)}</p>`
+            : r.axeResult.violations.length === 0
+              ? '<p class="ok">No violations found.</p>'
+              : violations;
         return `
       <section class="page">
         <h3>${esc(r.page)} <small>${esc(r.axeResult.url)}</small></h3>
@@ -714,7 +718,7 @@ export class AccessibilityRunner {
     const suites = results
       .map((r) => {
         const violations = r.axeResult.violations;
-        if (r.error) {
+        if (r.error !== undefined) {
           // JUnit's <error>: the test could not run, which a CI reader must not read as a pass.
           return `  <testsuite name="${esc(r.page)}" tests="1" failures="0" errors="1">
     <testcase name="${esc(r.page)} accessibility" classname="a11y">

@@ -183,6 +183,14 @@ describe('AccessibilityRunner', () => {
       expect(mockBrowser.close).toHaveBeenCalled();
     });
 
+    // Codex: an empty reason was falsy, so the reports rendered the page as a pass.
+    it('never records an empty reason for a page that failed', async () => {
+      mockAxeRunner.run.mockRejectedValueOnce(new Error(''));
+      const result = await accessibilityRunner.run();
+      expect(result.results[0].error).toBe('Unknown error');
+      expect(result.summary).toMatchObject({ passed: false, pagesErrored: 1 });
+    });
+
     it('should still close the browser when the run itself throws', async () => {
       // The report write is outside the per-page isolation: a failure there still throws.
       accessibilityRunner = new AccessibilityRunner({
