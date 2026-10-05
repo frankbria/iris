@@ -75,6 +75,7 @@ async function runA11y(params: A11yJobParams) {
     },
     failureThreshold: Object.fromEntries(params.failOn.map((impact) => [impact, true])),
     failOnHttpError: true,
+    failFast: true, // the job fails at its first page error: scan nothing more
     // No `output`: the result is stored, not written to the worker's disk.
   }).run();
   // The runner keeps going past a page that fails (#287); a hosted job still fails as a

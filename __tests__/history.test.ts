@@ -79,6 +79,7 @@ const a11yRun: AccessibilityTestResult = {
     totalViolations: 3,
     score: 60,
     passed: false,
+    scannedPassed: false,
     violationsBySeverity: { critical: 1, serious: 1, moderate: 1, minor: 0 },
     pagesTested: 1,
     pagesErrored: 0,

@@ -113,4 +113,37 @@ describe('a11y runner page isolation (#287)', () => {
     },
     120_000,
   );
+
+  // Codex / internal review: an unscanned page has no violations, so counting it raised the
+  // score (75 -> 88), and a run that scanned nothing scored 100/100.
+  it('scores only the pages it scanned, and gives no score when none was', async () => {
+    // No lang: one serious violation under wcag2a.
+    const flawed =
+      'data:text/html;charset=utf-8,' +
+      encodeURIComponent('<!doctype html><html><head><title>t</title></head><body>x</body></html>');
+    const alone = await new AccessibilityRunner(config([flawed])).run();
+    const withBroken = await new AccessibilityRunner(config([flawed, broken])).run();
+    expect(alone.summary.score).toBeLessThan(100);
+    expect(withBroken.summary.score).toBe(alone.summary.score);
+    expect(withBroken.summary.scannedPassed).toBe(alone.summary.scannedPassed);
+
+    const nothing = await new AccessibilityRunner(config([broken])).run();
+    expect(nothing.summary.score).toBeNull();
+    expect(nothing.summary.passed).toBe(false);
+    expect(nothing.summary.scannedPassed).toBe(true); // no scanned page violated anything
+  }, 120_000);
+
+  it('stops at the first failing page with failFast (the hosted worker sets it)', async () => {
+    const result = await new AccessibilityRunner(
+      config([broken, PAGE('Never scanned')], { failFast: true }),
+    ).run();
+    expect(result.results.map((r) => r.page)).toEqual([broken]);
+  }, 120_000);
+
+  it('strips URL credentials from the recorded error', async () => {
+    const withCreds = broken.replace('http://', 'http://ops:hunter2@');
+    const result = await new AccessibilityRunner(config([withCreds])).run();
+    expect(result.results[0].error).toMatch(/net::ERR_/);
+    expect(result.results[0].error).not.toContain('hunter2');
+  }, 120_000);
 });

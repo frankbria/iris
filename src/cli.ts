@@ -1381,32 +1381,36 @@ program
       const duration = Date.now() - startTime;
       console.log(`\n📊 Accessibility testing completed in ${duration}ms`);
       console.log(`   Total violations: ${result.summary.totalViolations}`);
-      console.log(`   Accessibility score: ${result.summary.score}/100`);
+      console.log(
+        `   Accessibility score: ${result.summary.score === null ? 'n/a (no page scanned)' : `${result.summary.score}/100`}`,
+      );
 
-      // Pages that could not be scanned (#287): reported, and the run exits 3 as it did
-      // when one of them ended the run, since nothing was measured there.
+      // Pages that could not be scanned (#287) are listed. A violation on the pages that
+      // were scanned is still a finding (exit 4); only a run whose sole problem is pages it
+      // could not reach exits 3, the runtime code the error used to end the run with. 3 is
+      // what a pipeline may retry as a flake, so it must never hide a violation.
       const errored = result.results.filter((r) => r.error !== undefined);
       if (errored.length > 0) {
         console.log(`\n⚠️  ${errored.length} page(s) could not be scanned:`);
         for (const r of errored) console.log(`   ${r.page}: ${r.error}`);
+      }
+      const reportLine = () => {
         if (options.format === 'html' && result.reportPath) {
           console.log(`\n📋 Report generated: ${result.reportPath}`);
         }
-        process.exit(3); // Environment/runtime error
-      }
+      };
 
-      if (!result.summary.passed) {
+      if (!result.summary.scannedPassed) {
         console.log(`\n❌ Accessibility violations found!`);
         console.log(`   Critical: ${result.summary.violationsBySeverity.critical || 0}`);
         console.log(`   Serious: ${result.summary.violationsBySeverity.serious || 0}`);
         console.log(`   Moderate: ${result.summary.violationsBySeverity.moderate || 0}`);
         console.log(`   Minor: ${result.summary.violationsBySeverity.minor || 0}`);
-
-        if (options.format === 'html' && result.reportPath) {
-          console.log(`\n📋 Report generated: ${result.reportPath}`);
-        }
-
+        reportLine();
         process.exit(4); // Accessibility failure exit code
+      } else if (errored.length > 0) {
+        reportLine();
+        process.exit(3); // Environment/runtime error: pages could not be scanned
       } else {
         console.log(`\n✅ All accessibility tests passed!`);
       }

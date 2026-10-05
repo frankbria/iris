@@ -346,6 +346,7 @@ describe('a11y reports', () => {
     totalViolations: 1,
     score: 90,
     passed: false,
+    scannedPassed: false,
     violationsBySeverity: { critical: 1, serious: 0, moderate: 0, minor: 0 },
     pagesTested: 1,
     pagesErrored: 0,

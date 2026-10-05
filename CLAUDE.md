@@ -258,8 +258,12 @@ plans/
   result; the other pages still run. `summary.pagesErrored` counts them, and an errored page
   is never a pass: not in `checkOverallPass`, history (`failed`), the HTML report ("Could not
   be scanned"), JUnit (`<error>`), the MCP tool (a tool error) or `iris a11y` (lists them,
-  exit 3). The report directory is created before writing. The hosted worker keeps
-  fail-the-job semantics by throwing the first page error itself
+  exit 3 unless a scanned page has violations: those exit 4, `summary.scannedPassed`).
+  The score covers scanned pages only (`null` when none was: an unscanned page has no
+  violations and raised it). Errors are userinfo-stripped where they are made
+  (`stripUserinfo`, src/report-encoding.ts). The report directory is created before
+  writing. The hosted worker sets `failFast` (no browser time on pages whose results
+  would be thrown away) and throws the page error itself, keeping fail-the-job semantics
 - **A failed analysis is not a verdict (#281).** The classifier answers an outage or a tripped
   breaker with a fallback (`analysisFailed: true`, `severity: 'medium'`). The visual runner
   grades such a comparison by its pixels (`estimateSeverity`), counts it in

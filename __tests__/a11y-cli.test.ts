@@ -18,6 +18,7 @@ describe('a11y CLI command', () => {
       totalViolations: 0,
       score: 100,
       passed: true,
+      scannedPassed: true,
       violationsBySeverity: { critical: 0, serious: 0, moderate: 0, minor: 0 },
     },
     results: [],
@@ -226,7 +227,12 @@ describe('a11y CLI command', () => {
         AccessibilityRunner: jest.fn().mockImplementation(() => ({
           run: jest.fn().mockResolvedValue({
             ...passingResult,
-            summary: { ...passingResult.summary, totalViolations: 2, passed: false },
+            summary: {
+              ...passingResult.summary,
+              totalViolations: 2,
+              passed: false,
+              scannedPassed: false,
+            },
           }),
         })),
       }));
@@ -248,6 +254,44 @@ describe('a11y CLI command', () => {
   describe('exit codes', () => {
     // #287: a page the runner could not scan is reported, not counted as clean; the run
     // exits 3 as it did when that page's error ended the run.
+    it('exits 4, not 3, when scanned pages have violations and another page errored', async () => {
+      jest.doMock('../src/a11y/a11y-runner', () => ({
+        AccessibilityRunner: jest.fn().mockImplementation(() => ({
+          run: jest.fn().mockResolvedValue({
+            ...passingResult,
+            summary: {
+              ...passingResult.summary,
+              totalViolations: 1,
+              passed: false,
+              scannedPassed: false,
+              pagesErrored: 1,
+              violationsBySeverity: { critical: 1, serious: 0, moderate: 0, minor: 0 },
+            },
+            results: [
+              { page: '/bad', axeResult: { violations: [{}] } },
+              {
+                page: '/down',
+                error: 'net::ERR_CONNECTION_REFUSED',
+                axeResult: { violations: [] },
+              },
+            ],
+          }),
+        })),
+      }));
+
+      jest.resetModules();
+      const { runCli } = await import('../src/cli');
+      await expect(runCli(['node', 'iris', 'a11y', '--pages', '/bad,/down'])).rejects.toThrow(
+        'process.exit called',
+      );
+
+      // A violation is a finding a pipeline must not retry away as a flake (exit 3).
+      expect(processExitSpy).toHaveBeenCalledWith(4);
+      const out = consoleLogSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(out).toMatch(/Critical: 1/);
+      expect(out).toMatch(/\/down: net::ERR_CONNECTION_REFUSED/);
+    });
+
     it('lists pages that could not be scanned and exits 3', async () => {
       jest.doMock('../src/a11y/a11y-runner', () => ({
         AccessibilityRunner: jest.fn().mockImplementation(() => ({
@@ -302,6 +346,7 @@ describe('a11y CLI command', () => {
               totalViolations: 3,
               score: 70,
               passed: false,
+              scannedPassed: false,
               violationsBySeverity: { critical: 1, serious: 2, moderate: 0, minor: 0 },
             },
             results: [],
@@ -350,6 +395,7 @@ describe('a11y CLI command', () => {
               totalViolations: 1,
               score: 90,
               passed: false,
+              scannedPassed: false,
               violationsBySeverity: { critical: 1, serious: 0, moderate: 0, minor: 0 },
             },
             results: [],
@@ -379,6 +425,7 @@ describe('a11y CLI command', () => {
               totalViolations: 1,
               score: 90,
               passed: false,
+              scannedPassed: false,
               violationsBySeverity: { critical: 1, serious: 0, moderate: 0, minor: 0 },
             },
             results: [],

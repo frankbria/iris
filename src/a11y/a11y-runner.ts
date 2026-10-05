@@ -18,7 +18,7 @@ import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
 import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
-import { escapeHtml, escapeXml, safeHref } from '../report-encoding';
+import { escapeHtml, escapeXml, safeHref, stripUserinfo } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 
 export interface AccessibilityRunnerConfig {
@@ -74,12 +74,24 @@ export interface AccessibilityRunnerConfig {
    * scanned, recorded and billed as a success).
    */
   failOnHttpError?: boolean;
+  /**
+   * Stop at the first page that fails instead of scanning the rest (#287). The hosted
+   * worker sets it: its job fails as a whole anyway, so the other pages would be browser
+   * time spent on results that are thrown away.
+   */
+  failFast?: boolean;
 }
 
 export interface AccessibilityTestResult {
   summary: {
     totalViolations: number;
-    score: number; // 0-100 accessibility score
+    /** 0-100 over the pages that were scanned; null when none could be (#287). */
+    score: number | null;
+    /**
+     * Whether the pages that WERE scanned meet the failure threshold (#287). `passed` is
+     * false when any page errored too; this tells a violation from an unscanned page.
+     */
+    scannedPassed: boolean;
     passed: boolean;
     violationsBySeverity: {
       critical: number;
@@ -113,7 +125,8 @@ function erroredPage(page: string, error: unknown): AccessibilityTestResult['res
   const empty = { total: 0, violations: 0, passes: 0, incomplete: 0, inapplicable: 0 };
   return {
     page,
-    error: error instanceof Error ? error.message : String(error),
+    // Stripped here, once: the CLI prints it and every report and store carries it.
+    error: stripUserinfo(error instanceof Error ? error.message : String(error)),
     axeResult: {
       testName: page,
       url: page,
@@ -194,6 +207,7 @@ export class AccessibilityRunner {
           erroredPage(pagePattern, error),
         );
         results.push(result);
+        if (result.error !== undefined && this.config.failFast) break;
 
         // Aggregate severity counts
         const severityCounts = this.axeRunner.getSeverityCounts(result.axeResult);
@@ -208,8 +222,15 @@ export class AccessibilityRunner {
         (sum, count) => sum + count,
         0,
       );
-      const score = this.calculateAccessibilityScore(violationsBySeverity, results.length);
-      const passed = this.checkOverallPass(results);
+      // Over scanned pages only: an unscanned page has no violations, and counting it would
+      // raise the score (one failing page and one unreachable one scored 88, not 75).
+      const scanned = results.filter((r) => r.error === undefined);
+      const score =
+        scanned.length > 0
+          ? this.calculateAccessibilityScore(violationsBySeverity, scanned.length)
+          : null;
+      const scannedPassed = this.checkOverallPass(scanned);
+      const passed = scannedPassed && scanned.length === results.length;
 
       // Count keyboard test results
       const keyboardResults = results.filter((r) => r.keyboardResult);
@@ -220,6 +241,7 @@ export class AccessibilityRunner {
         totalViolations,
         score,
         passed,
+        scannedPassed,
         violationsBySeverity,
         pagesTested: results.length,
         pagesErrored: results.filter((r) => r.error !== undefined).length,
@@ -665,7 +687,7 @@ export class AccessibilityRunner {
 <body>
   <h1>Accessibility Report</h1>
   <div class="summary">
-    <div><strong>${summary.score}/100</strong><br>Score</div>
+    <div><strong>${summary.score === null ? '—' : `${summary.score}/100`}</strong><br>Score</div>
     <div><strong>${summary.passed ? 'PASS' : 'FAIL'}</strong><br>Result</div>
     <div><strong>${summary.totalViolations}</strong><br>Violations</div>
     <div><strong>${summary.pagesTested}</strong><br>Pages</div>
