@@ -154,6 +154,43 @@ describe('FilesystemArtifactStore', () => {
     ]);
   });
 
+  // #472: what retention deletes, and nothing beside it.
+  it('deletes everything under a prefix and nothing else; refuses an unsafe prefix', async () => {
+    const run1 = runArtifactKey({
+      orgId: 'o1',
+      projectId: 'p',
+      runId: 'r1',
+      kind: 'current',
+      name: 'a',
+    });
+    const run1diff = runArtifactKey({
+      orgId: 'o1',
+      projectId: 'p',
+      runId: 'r1',
+      kind: 'diff',
+      name: 'a',
+    });
+    const run2 = runArtifactKey({
+      orgId: 'o1',
+      projectId: 'p',
+      runId: 'r2',
+      kind: 'current',
+      name: 'a',
+    });
+    const base = baselineKey({ orgId: 'o1', projectId: 'p', name: 'a' });
+    for (const k of [run1, run1diff, run2, base]) await store.put(k, Buffer.from('x'), 'image/png');
+    expect(await store.deletePrefix('org/o1/project/p/run/r1/')).toBe(2);
+    expect(await store.get(run1)).toBeNull();
+    expect(await store.get(run2)).not.toBeNull();
+    expect(await store.get(base)).not.toBeNull();
+    expect(await store.deletePrefix('org/o1/project/p/run/none/')).toBe(0);
+    for (const bad of ['', '/', 'org/o1', '../', 'org/../', 'org//']) {
+      await expect(store.deletePrefix(bad)).rejects.toThrow(/Invalid artifact prefix/);
+    }
+    // An org's view cannot delete another org's prefix.
+    await expect(orgArtifacts(store, 'o2').deletePrefix('org/o1/')).rejects.toThrow(/Invalid/);
+  });
+
   it('gives the local file as the retrieval URL', async () => {
     const key = baselineKey({ orgId: 'o1', projectId: 'p1', name: 'n1' });
     await store.put(key, Buffer.from('x'), 'image/png');
@@ -258,6 +295,25 @@ if (!s3Configured) {
     await new Promise((r) => setTimeout(r, 2500));
     expect((await fetch(url)).status).toBe(403);
   });
+
+  it('deletes a prefix across listing pages (over 1000 objects)', async () => {
+    const keys = Array.from({ length: 1005 }, (_, i) =>
+      runArtifactKey({
+        orgId: 'orgA',
+        projectId: 'p',
+        runId: 'many',
+        kind: 'current',
+        name: `n${i}`,
+      }),
+    );
+    for (let i = 0; i < keys.length; i += 50)
+      await Promise.all(
+        keys.slice(i, i + 50).map((k) => store.put(k, Buffer.from('x'), 'image/png')),
+      );
+    expect(await store.deletePrefix('org/orgA/project/p/run/many/')).toBe(1005);
+    expect(await store.get(keys[1004])).toBeNull();
+    expect((await store.get(key))?.toString()).toBe('org A screenshot');
+  }, 120_000);
 
   it('caps a signed URL at 15 minutes', async () => {
     expect(new URL(await store.signedUrl(key, 3600)).searchParams.get('X-Amz-Expires')).toBe('900');

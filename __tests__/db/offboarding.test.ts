@@ -13,6 +13,10 @@ import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
 import { offboarding, OffboardingError } from '../../src/offboarding';
 import { orgSuspensions } from '../../src/org-suspension';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { baselineKey, FilesystemArtifactStore, runArtifactKey } from '../../src/artifact-store';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 if (!ADMIN_URL) {
@@ -334,5 +338,72 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     );
     await expect(off.restoreOrg('nope', { actor: 'ops' })).rejects.toThrow(OffboardingError);
     await expect(off.deleteUser('nobody')).rejects.toThrow(OffboardingError);
+  });
+
+  // #472: images in object storage follow their rows, through a queue that survives a
+  // store failure. A real store (the filesystem one) and a real failure (no permission).
+  it("deletes a purged org's and an expired run's images, keeps baselines, retries a failure", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-purge-'));
+    const store = new FilesystemArtifactStore(root);
+    try {
+      const now = new Date();
+      await user('ora');
+      await org('org-img', 'ora', now);
+      // A visual run 120 days old with an image, a recent one, and the project's baseline.
+      const visual = async (daysAgo: number) => {
+        const finished = at(now, -daysAgo);
+        const [{ id }] = (
+          await sql<{
+            id: string;
+          }>`insert into runs (org_id, kind, status, summary, started_at, finished_at)
+            values ('org-img', 'visual', 'succeeded', 'v', ${finished}, ${finished}) returning id`.execute(
+            db,
+          )
+        ).rows;
+        const key = runArtifactKey({
+          orgId: 'org-img',
+          projectId: 'shop',
+          runId: id,
+          kind: 'current',
+          name: 'home',
+        });
+        await store.put(key, Buffer.from('png'), 'image/png');
+        await sql`insert into run_results (org_id, run_id, position, url, passed, result)
+          values ('org-img', ${id}, 0, '/', true, ${JSON.stringify({ project: 'shop', artifacts: { current: key } })})`.execute(
+          db,
+        );
+        return key;
+      };
+      const oldImage = await visual(120);
+      const newImage = await visual(5);
+      const baseline = baselineKey({ orgId: 'org-img', projectId: 'shop', name: 'home' });
+      await store.put(baseline, Buffer.from('png'), 'image/png');
+
+      // The store refuses (its directory is read-only): the prefix stays queued.
+      const project = path.join(root, 'org/org-img/project/shop/run');
+      fs.chmodSync(project, 0o500);
+      const failed = await offboarding(db).runRetention({ now, artifacts: store });
+      expect(failed.failures.some((f) => f.startsWith('artifacts '))).toBe(true);
+      expect(await count('artifact_purges', "org_id = 'org-img'")).toBe(1);
+      fs.chmodSync(project, 0o700);
+
+      // Next pass: the expired run's images go; the recent run and the baseline stay.
+      const ok = await offboarding(db).runRetention({ now, artifacts: store });
+      expect(ok.failures).toEqual([]);
+      expect(ok.artifactPrefixesPurged).toBe(1);
+      expect(await store.get(oldImage)).toBeNull();
+      expect(await store.get(newImage)).not.toBeNull();
+      expect(await store.get(baseline)).not.toBeNull();
+      expect(await count('artifact_purges', "org_id = 'org-img'")).toBe(0);
+
+      // Purging the org takes everything of it.
+      await offboarding(db).requestOrgDeletion('org-img', { reason: 'x', actor: 'ops' });
+      await offboarding(db).runRetention({ now: at(now, 31), artifacts: store });
+      expect(await store.get(newImage)).toBeNull();
+      expect(await store.get(baseline)).toBeNull();
+      expect(fs.existsSync(path.join(root, 'org/org-img'))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

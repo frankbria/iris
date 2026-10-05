@@ -1004,7 +1004,9 @@ admin
       const { offboarding, purgeOrgAiState } = await import('./offboarding');
       const { resolveDataDir } = await import('./data-dir');
       const off = offboarding(db);
-      const report = await off.runRetention();
+      // Object storage too, when this container has it (#472); otherwise it stays queued.
+      const artifacts = (await import('./artifact-store')).resolveArtifactStore() ?? undefined;
+      const report = await off.runRetention({ artifacts });
       const { join } = await import('path');
       const ai = purgeOrgAiState(await off.purgedOrgIds(), join(resolveDataDir(), 'cache'));
       console.log(
