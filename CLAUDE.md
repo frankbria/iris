@@ -1092,7 +1092,7 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - **`runsPerMonth` is a job-API quota**: RPC `executeBrowserAction` runs are recorded but not
   counted; RPC use is bounded by concurrent sessions and metered as browser minutes. Tests that open several sessions for one real org put it on `team`
   (`api-key-auth.test.ts`).
-- **`byokAllowed`**: `planAwareCredentials()` (src/api-key-auth.ts) returns no stored key
+- **`byokAllowed`**: `managedAiResolver()` (src/billing/managed-ai.ts, #479) returns no stored key
   for a plan without it.
 - Not enforced yet, no hosted surface: agent turns (CLI-only, #428), vision calls (hosted
   jobs run no AI), storage (#315).
