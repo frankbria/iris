@@ -482,7 +482,8 @@ export class VisualTestRunner {
         screenshotBuffer.buffer,
         {
           threshold: this.config.diff.threshold,
-          includeAA: this.config.diff.antiAliasing,
+          // "Tolerate anti-aliasing" is pixelmatch's includeAA: false (#283).
+          includeAA: !this.config.diff.antiAliasing,
           alpha: 0.1,
           diffMask: true,
           diffColor: [255, 0, 0],

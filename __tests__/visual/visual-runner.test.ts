@@ -803,6 +803,24 @@ describe('VisualTestRunner', () => {
   describe('severity estimation without AI (real diff engine output)', () => {
     const { VisualDiffEngine: RealDiffEngine } = jest.requireActual('../../src/visual/diff');
 
+    // #283: `antiAliasing: true` means "tolerate anti-aliasing", which in pixelmatch is
+    // includeAA: false (detect AA pixels and do not count them). It was passed straight through.
+    it.each([
+      [true, false],
+      [false, true],
+    ])('antiAliasing %p compares with includeAA %p', async (antiAliasing, includeAA) => {
+      visualRunner = new VisualTestRunner({
+        ...defaultConfig,
+        diff: { ...defaultConfig.diff, antiAliasing },
+      });
+      await visualRunner.run();
+      expect(mockDiffEngine.compare).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ includeAA }),
+      );
+    });
+
     /** 100x100 white PNG with the top `rows` rows black: `rows`% of pixels differ. */
     async function png(rows: number): Promise<Buffer> {
       const sharp = jest.requireActual('sharp');

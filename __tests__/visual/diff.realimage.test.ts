@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import pixelmatch from 'pixelmatch';
 import { VisualDiffEngine, MAX_DECODED_PIXELS } from '../../src/visual/diff';
 import { DiffOptions } from '../../src/visual/types';
 
@@ -204,6 +205,43 @@ describe('VisualDiffEngine real-image page size changes (#282)', () => {
       expect(decode).not.toHaveBeenCalled();
     } finally {
       decode.mockRestore();
+    }
+  });
+});
+
+// Issue #283: pixelmatch's per-pixel `threshold` was fed `alpha` (the diff image's opacity
+// for unchanged pixels). The engine's count must be pixelmatch's own for the same options.
+describe('VisualDiffEngine pixelmatch option mapping (#283)', () => {
+  const engine = new VisualDiffEngine();
+
+  /** 50x50, every pixel the given grey. */
+  const grey = (v: number) =>
+    sharp({
+      create: { width: 50, height: 50, channels: 4, background: { r: v, g: v, b: v, alpha: 1 } },
+    })
+      .png()
+      .toBuffer();
+  const rgba = async (png: Buffer) => sharp(png).raw().ensureAlpha().toBuffer();
+
+  it('uses pixelThreshold as the per-pixel threshold, independent of alpha', async () => {
+    const [a, b] = await Promise.all([grey(255), grey(250)]); // a faint change everywhere
+    const direct = (threshold: number) =>
+      Promise.all([rgba(a), rgba(b)]).then(([x, y]) =>
+        pixelmatch(x, y, undefined, 50, 50, { threshold, includeAA: false }),
+      );
+    expect(await direct(0)).toBe(2500); // pixelmatch itself: at 0 every faint change counts
+    expect(await direct(0.1)).toBe(0); // and at its default 0.1 none does
+
+    for (const alpha of [0.1, 0.9]) {
+      const strict = await engine.compare(a, b, {
+        ...baseOptions,
+        alpha,
+        pixelThreshold: 0,
+        threshold: 0.5,
+      });
+      expect(strict.pixelDifference).toBe(await direct(0));
+      const lenient = await engine.compare(a, b, { ...baseOptions, alpha, threshold: 0.5 });
+      expect(lenient.pixelDifference).toBe(await direct(0.1)); // default per-pixel threshold
     }
   });
 });

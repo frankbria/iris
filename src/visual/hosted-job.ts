@@ -170,8 +170,7 @@ export async function runVisualJob(
             diffColor: [255, 0, 0],
           });
           let diffKey: string | undefined;
-          // The engine's early exit on large, very different images returns an empty buffer:
-          // no image to publish, so no diff link (a zero-byte "png" would not render).
+          // No difference, no diff image to publish (a zero-byte "png" would not render).
           if (compared.diffBuffer?.length && compared.pixelDifference > 0) {
             diffKey = keyOf('diff');
             await ctx.artifacts.put(diffKey, compared.diffBuffer, 'image/png');
