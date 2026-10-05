@@ -101,7 +101,10 @@ export function offboarding(db: Kysely<unknown>) {
     await sql`delete from org_suspensions where org_id = ${orgId}`.execute(tx);
     await sql`insert into org_suspensions (org_id, action, reason, actor)
       values (${orgId}, 'suspend', 'Organization deleted', 'system')`.execute(tx);
-    await sql`update organization set name = 'Deleted organization', slug = ${'deleted-' + orgId},
+    // Slugs are customer-chosen and unique: `deleted-<id>` could already be taken, and a
+    // collision would fail every purge. A random one cannot collide.
+    await sql`update organization set name = 'Deleted organization',
+      slug = 'deleted-' || gen_random_uuid(),
       logo = null, metadata = null where id = ${orgId}`.execute(tx);
     await sql`update org_deletions set purged_at = now(), reason = 'purged', requested_by = 'purged'
       where org_id = ${orgId}`.execute(tx);
@@ -151,6 +154,16 @@ export function offboarding(db: Kysely<unknown>) {
           select purged_at from org_deletions where org_id = ${orgId} for update`.execute(tx);
         if (!rows.length) throw new OffboardingError(`No pending deletion for ${orgId}`);
         if (rows[0].purged_at) throw new OffboardingError(`${orgId} was already purged`);
+        // Its only owner may have been deleted during the grace period (delete-user allows
+        // that for an org being deleted): restoring would leave a live org nobody owns.
+        // Same lock as deleteUser, so the two cannot interleave.
+        await sql`select pg_advisory_xact_lock(hashtext('iris-delete-user'))`.execute(tx);
+        const owner = await sql`select 1 from member where "organizationId" = ${orgId}
+          and 'owner' = any (string_to_array(replace(role, ' ', ''), ','))`.execute(tx);
+        if (!owner.rows.length)
+          throw new OffboardingError(
+            `${orgId} has no owner left: add one before restoring, or let the purge run`,
+          );
         await sql`delete from org_deletions where org_id = ${orgId}`.execute(tx);
         // An operator's own suspension (abuse) is not ours to lift.
         await lockSuspensions(tx, orgId);

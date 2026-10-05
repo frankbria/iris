@@ -182,6 +182,11 @@ describe('iris admin refusals', () => {
   test('delete-org, restore-org, delete-user and retention', async () => {
     await sql`insert into organization (id, name, slug, "createdAt")
       values ('org-d', 'D', 'd', now())`.execute(db);
+    // An owner: restoring an org nobody owns is refused.
+    await sql`insert into "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+      values ('u-owner', 'O', 'owner@iris.test', true, now(), now())`.execute(db);
+    await sql`insert into member (id, "organizationId", "userId", role, "createdAt")
+      values ('m-owner', 'org-d', 'u-owner', 'owner', now())`.execute(db);
     const del = await iris(['admin', 'delete-org', 'org-d', '--reason', 'customer request'], env);
     expect(del.code).toBe(0);
     expect(del.stdout).toMatch(/^org org-d is suspended; its data is purged after \d{4}-/);

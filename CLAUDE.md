@@ -1218,9 +1218,11 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
 - **Deletion is a soft delete**: `org_deletions` (purge_after = request + 30 days) plus a
   suspension, so #348's enforcement stops keys, jobs and portal writes at once.
   `restoreOrg` lifts only the suspension the request added (its exact reason), never an
-  operator's abuse suspension.
+  operator's abuse suspension, and refuses an org whose only owner was deleted during the
+  grace period (same lock as `deleteUser`). Both take #348's suspension lock before reading
+  the latest state.
 - **The purge keeps a tombstone**: the org row stays ("Deleted organization", slug
-  `deleted-<id>`, one `system` suspension) so `usage_events` (FK, no cascade) survive 7
+  `deleted-<uuid>`: a customer may own `deleted-<id>`; one `system` suspension) so `usage_events` (FK, no cascade) survive 7
   years, detached from runs (`run_id = null`) and with nothing naming the tenant. The
   7-year pass deletes usage, suspensions, the deletion row and the org. One transaction
   per org: a failure is logged and retried by the next pass.

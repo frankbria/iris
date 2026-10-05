@@ -136,6 +136,9 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
       values ('inv-p', 'org-p', 'x@iris.test', 'member', 'pending', now(), 'bob')`.execute(db);
     await sql`insert into session (id, "expiresAt", token, "createdAt", "updatedAt", "userId", "activeOrganizationId")
       values ('s-bob', ${at(now, 365)}, 'tok-bob', now(), now(), 'bob', 'org-p')`.execute(db);
+    // A customer org that already took the slug a tombstone might have used.
+    await sql`insert into organization (id, name, slug, "createdAt")
+      values ('org-squat', 'Squat', 'deleted-org-p', now())`.execute(db);
     const off = offboarding(db);
     await off.requestOrgDeletion('org-p', { reason: 'customer request', actor: 'ops' });
 
@@ -159,7 +162,9 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     expect(await count('usage_events', "org_id = 'org-p' and run_id is null")).toBe(2);
     const { rows } = await sql<{ name: string; slug: string }>`
       select name, slug from organization where id = 'org-p'`.execute(db);
-    expect(rows).toEqual([{ name: 'Deleted organization', slug: 'deleted-org-p' }]);
+    expect(rows).toEqual([
+      { name: 'Deleted organization', slug: expect.stringMatching(/^deleted-[0-9a-f-]{36}$/) },
+    ]);
     expect((await orgSuspensions(db).status('org-p')).suspended).toBe(true);
     await expect(off.restoreOrg('org-p', { actor: 'ops' })).rejects.toThrow(OffboardingError);
 
@@ -306,6 +311,18 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     await offboarding(db).requestOrgDeletion('org-h', { reason: 'leaving', actor: 'ops' });
     await offboarding(db).deleteUser('hal');
     expect(await count('"user"', "id = 'hal'")).toBe(0);
+  });
+
+  it('refuses to restore an org whose only owner was deleted meanwhile', async () => {
+    const now = new Date();
+    await user('max');
+    await org('org-orphan', 'max', now);
+    const off = offboarding(db);
+    await off.requestOrgDeletion('org-orphan', { reason: 'x', actor: 'ops' });
+    await off.deleteUser('max');
+    await expect(off.restoreOrg('org-orphan', { actor: 'ops' })).rejects.toThrow(/no owner left/);
+    // Still pending: the purge will run.
+    expect(await count('org_deletions', "org_id = 'org-orphan'")).toBe(1);
   });
 
   it('refuses unknown orgs and users', async () => {
