@@ -315,9 +315,11 @@ export class KeyboardTester {
         let visible = rect.width > 0 && rect.height > 0;
         for (let n: Element | null = el; n && visible;) {
           const style = getComputedStyle(n);
+          // `visibility` is inherited and a descendant may override it, so only the focused
+          // element's computed value counts; display and opacity hide everything below.
           if (
             style.display === 'none' ||
-            style.visibility === 'hidden' ||
+            (n === el && style.visibility === 'hidden') ||
             Number(style.opacity) === 0
           ) {
             visible = false;
@@ -325,7 +327,7 @@ export class KeyboardTester {
           // Up through a shadow root's host and, at the top of a same-origin frame's
           // document, its <iframe> in the outer page: hidden there hides everything inside.
           // A shadow root is detected by shape, not instanceof (each frame has its own realm).
-          const root = n.getRootNode() as Node & { host?: Element };
+          const root = Node.prototype.getRootNode.call(n) as Node & { host?: Element };
           n =
             n.parentElement ??
             (root.nodeType === 11 && root.host

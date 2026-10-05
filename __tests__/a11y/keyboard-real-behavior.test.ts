@@ -388,6 +388,21 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.passed).toBe(false);
     });
 
+    it('accepts a visible control inside a visibility:hidden container', async () => {
+      const result = await walk(
+        '<div style="visibility:hidden"><button id="shown" style="visibility:visible">Shown</button></div>',
+      );
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'BUTTON#shown', visible: true }),
+      ]);
+      expect(result.passed).toBe(true);
+    });
+
+    it('does not abort on a form that shadows getRootNode', async () => {
+      const result = await walk('<form><input name="getRootNode"><button id="b">B</button></form>');
+      expect(result.focusOrder.map((f) => f.element)).toEqual(['INPUT', 'BUTTON#b']);
+    });
+
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
       const result = await walk(links);
