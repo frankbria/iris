@@ -418,3 +418,11 @@ Write/Edit, not as a pre-push afterthought.
 - A streaming `loading.tsx` turns `notFound()` and `redirect()` into a 200 (the status line is sent before the page throws). Put the streamed page and its `loading.tsx` in a route group, and run auth in that group's `layout.tsx`, above the boundary; wrap `requireOrg` in React `cache()` so the page reuses it.
 - The portal must import read modules with no runner dependencies (`src/run-reads.ts`), never `history-store`: one import pulled Playwright into `next build`.
 - Next 16's `error.tsx` gets `retry()` (refresh then reset); `reset()` alone re-renders the same failed result.
+
+## #280, #257, #260 (2026-10-03/04)
+- `1 - 0.95` is `0.050000000000000044`: compare a threshold in the space the value was computed in (similarity), not after subtracting, or exact boundaries move up a level. Test the exact boundaries.
+- A mutation that survives usually means the test never reaches the branch: the race test passed without the after-hook because the before-check already refused every create. Set up the state the guard exists for (a user with no free org).
+- A before-hook count plus the library's insert is not atomic. Recount in an after-hook under a per-user advisory lock; and the undo must survive rows a concurrent request attached in the gap (fall back to suspending).
+- BetterAuth stores several roles as one comma string (`admin,owner`): match the role as a token, never by equality.
+- SeaweedFS with no `-s3.config` serves anonymous requests; the identities file is what makes a bucket private. GitHub service containers cannot pass a command, so start it as a step.
+- The GLM review bot can fail silently (`is_error: true`, $0, "I'll analyze this" left as the comment): read its result, do not count a green check as a review.
