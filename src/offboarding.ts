@@ -48,6 +48,14 @@ export function offboarding(db: Kysely<unknown>) {
         order by created_at desc, id desc limit 1`.execute(q)
     ).rows[0];
 
+  /**
+   * The org's suspension lock (the one `orgSuspensions` takes, #348). Taken before the
+   * latest state is read, so an operator acting at the same moment is seen, not
+   * overwritten. Re-entrant within a transaction.
+   */
+  const lockSuspensions = (q: Kysely<unknown>, orgId: string) =>
+    sql`select pg_advisory_xact_lock(hashtext(${'org_suspensions:' + orgId}))`.execute(q);
+
   /** Appends a suspension row dated after the org's latest one (the #348 lock order). */
   const stampSuspension = async (
     q: Kysely<unknown>,
@@ -56,7 +64,7 @@ export function offboarding(db: Kysely<unknown>) {
     reason: string,
     actor: string,
   ) => {
-    await sql`select pg_advisory_xact_lock(hashtext(${'org_suspensions:' + orgId}))`.execute(q);
+    await lockSuspensions(q, orgId);
     await sql`insert into org_suspensions (org_id, action, reason, actor, created_at)
       values (${orgId}, ${action}, ${reason}, ${actor}, greatest(clock_timestamp(),
         (select max(created_at) from org_suspensions where org_id = ${orgId})
@@ -128,6 +136,7 @@ export function offboarding(db: Kysely<unknown>) {
           on conflict (org_id) do nothing returning purge_after`.execute(tx);
         if (!inserted.rows.length)
           throw new OffboardingError(`Deletion of ${orgId} was already requested`);
+        await lockSuspensions(tx, orgId);
         if ((await latestSuspension(tx, orgId))?.action !== 'suspend')
           await stampSuspension(tx, orgId, 'suspend', DELETION_REASON, actor);
         log('info', 'org deletion requested', { orgId, actor });
@@ -144,6 +153,7 @@ export function offboarding(db: Kysely<unknown>) {
         if (rows[0].purged_at) throw new OffboardingError(`${orgId} was already purged`);
         await sql`delete from org_deletions where org_id = ${orgId}`.execute(tx);
         // An operator's own suspension (abuse) is not ours to lift.
+        await lockSuspensions(tx, orgId);
         const last = await latestSuspension(tx, orgId);
         if (last?.action === 'suspend' && last.reason === DELETION_REASON)
           await stampSuspension(tx, orgId, 'unsuspend', 'Organization deletion cancelled', actor);
