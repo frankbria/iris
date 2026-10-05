@@ -256,6 +256,78 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
     });
   });
 
+  // #285: elements were addressed by `TAG#id` / `TAG.firstClass`. Radix ids contain colons,
+  // Tailwind classes contain `:` and `[`, an id-less class-less element gave `UL.`: all
+  // invalid selectors, so working widgets failed. An SVG <a> (className is not a string)
+  // threw and aborted the whole run.
+  describe('elements whose ids and classes make poor selectors (#285)', () => {
+    it('tests a Radix-style dialog whose id and classes are not valid selectors', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" id="radix-:r1:" data-state="open" aria-modal="true"
+             class="md:w-[400px] fixed">
+          <button>Close</button>
+        </div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') document.getElementById('radix-:r1:').remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'radix',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toHaveLength(1);
+      expect(escape[0]).toMatchObject({ success: true, actualBehavior: 'Closed' });
+      expect(escape[0].target).toContain('radix-:r1:'); // readable, not a marker
+    });
+
+    it('tests each id-less, class-less menu on its own', async () => {
+      // Two menus with nothing to tell them apart by tag, id or class. The first ignores
+      // ArrowDown, the second handles it: each verdict must be about its own menu.
+      const menu = (handler: boolean) => `<ul role="menu">
+          <li role="menuitem" tabindex="0">One</li><li role="menuitem" tabindex="-1">Two</li>
+        </ul>${
+          handler
+            ? `<script>{const m=document.querySelectorAll('[role=menu]')[1];
+                const items=[...m.querySelectorAll('[role=menuitem]')];
+                m.addEventListener('keydown',(e)=>{ if(e.key!=='ArrowDown')return;
+                  items[Math.min(items.indexOf(document.activeElement)+1,items.length-1)].focus();});}</script>`
+            : ''
+        }`;
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>${menu(false)}${menu(true)}</body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testArrowKeyNavigation: true }).run(
+        page,
+        'menus',
+      );
+      const arrow = result.interactions.filter((i) => i.key === 'ArrowDown');
+      expect(arrow.map((i) => i.success)).toEqual([false, true]);
+      // The markers used to address them are removed afterwards.
+      expect(await page.locator('[data-iris-kbd]').count()).toBe(0);
+    });
+
+    it('does not crash on an SVG link', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <svg width="100" height="40" class="icon"><a href="/next" class="svg-link">
+          <text x="0" y="20">Next</text></a></svg>
+        <a href="/plain">Plain</a></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testFocusOrder: true }).run(page, 'svg');
+      // Both links, labelled by tag first (an SVG element's tagName is lowercase).
+      expect(result.focusOrder.map((f) => f.element.split(/[#.]/)[0].toUpperCase())).toEqual([
+        'A',
+        'A',
+      ]);
+      expect(result.focusOrder[0].element).toContain('svg-link');
+    });
+  });
+
   // The ARIA announcements were collected, stamped success:true, and then left
   // out of the verdict entirely.
   describe('ARIA announcement validation', () => {
