@@ -591,8 +591,13 @@ export class KeyboardTester {
           const before = await page.evaluate(DISMISSIBLE_STATE, probe);
           // Already dismissed by an earlier candidate's Escape (a .modal wrapper and its
           // inner [role=dialog], stacked modals closed by one handler): nothing to test.
-          // Present = our marked node, or (re-rendered) the same dialog by id or tag + class.
-          if (!(before.marked ?? before.same ?? false)) continue;
+          // Skip only a confirmed dismissal: our node, or its identified replacement, is
+          // hidden; or its identity is lost and nothing dismissible is visible at all. A
+          // lost identity with dialogs still showing is tested, and the count decides: a
+          // re-render can change id-less markup in any way, and "cannot tell" must never
+          // read as "closed".
+          const present = before.marked ?? before.same ?? before.visibleCount > 0;
+          if (!present) continue;
           await page.keyboard.press('Escape');
           const after = await page.evaluate(DISMISSIBLE_STATE, probe);
 

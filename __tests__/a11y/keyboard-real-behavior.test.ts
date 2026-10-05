@@ -472,6 +472,30 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       ]);
     });
 
+    // Codex: A closes on Escape and B is re-rendered with a new class before B's turn, so its
+    // identity is lost; it is still showing, so it is tested rather than skipped.
+    it('tests a dialog whose identity an earlier re-render lost while it stays open', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" class="a" id="a"><button>A</button></div>
+        <div id="host"><div role="dialog" class="sheet"><button>B</button></div></div>
+        <script>let n = 0; document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('a')?.remove();
+          document.getElementById('host').innerHTML =
+            '<div role="dialog" class="sheet shaking-' + (n++) + '"><button>B</button></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'lost-identity',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => i.success)).toEqual([true, false]);
+      expect(result.passed).toBe(false);
+    });
+
     it('does not fail a dialog that an earlier Escape already closed', async () => {
       await load(
         page,
