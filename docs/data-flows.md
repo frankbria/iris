@@ -52,7 +52,7 @@ Sign-in rate limits are counted per client IP in the portal process's memory (Be
 | Where | Postgres, `0001_initial.ts`; plugin options in `src/auth/config.ts`. |
 | Access | Members of the org (roles owner/admin/member). Operators. |
 | Encryption | As above. |
-| Retention | Invitation: expires after 48 hours (BetterAuth default, not overridden); the row stays. Tenants cannot delete an org themselves (`disableOrganizationDeletion`); the operator does it on request (`iris admin delete-org`): suspended at once, restorable for **30 days** (`restore-org`), then purged. Members, invitations, keys, provider keys, plans and runs are deleted; the org row stays as a tombstone (name "Deleted organization", a random `deleted-<uuid>` slug) holding only its billing records, for 7 years. |
+| Retention | Invitation: expires after 48 hours (BetterAuth default, not overridden); the row stays. Tenants cannot delete an org themselves (`disableOrganizationDeletion`); the operator does it on request (`iris admin delete-org`): suspended at once, restorable for **30 days** (`restore-org`), then purged. Members, invitations, keys, provider keys, plans, the AI setting (`org_ai_settings`, which names the user who set it) and runs are deleted; the org row stays as a tombstone (name "Deleted organization", a random `deleted-<uuid>` slug) holding only its billing records, for 7 years. |
 
 ### API keys
 
