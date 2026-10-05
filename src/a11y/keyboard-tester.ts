@@ -64,19 +64,30 @@ export interface KeyboardInteraction {
  * dismissible elements are visible. A string-free function is fine here: the a11y
  * modules are excluded from coverage instrumentation (see jest.config.ts).
  */
-const DISMISSIBLE_STATE = (selector: string): { marked: boolean | null; visibleCount: number } => {
+const DISMISSIBLE_STATE = ({
+  selector,
+  id,
+}: {
+  selector: string;
+  id: string | null;
+}): { marked: boolean | null; sameId: boolean | null; visibleCount: number } => {
   const isVisible = (el: Element) => {
     const style = getComputedStyle(el);
     return (
-      style.display !== 'none' && style.visibility !== 'hidden' && el.getClientRects().length > 0
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      Element.prototype.getClientRects.call(el).length > 0
     );
   };
   const marked = document.querySelector(selector);
+  const byId = id ? document.getElementById(id) : null;
   const all = document.querySelectorAll(
     '[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]',
   );
   return {
     marked: marked ? isVisible(marked) : null,
+    // A re-render that replaced the node usually keeps its id: that is the same dialog.
+    sameId: id ? !!byId && isVisible(byId) : null,
     visibleCount: Array.from(all).filter(isVisible).length,
   };
 };
@@ -527,6 +538,7 @@ export class KeyboardTester {
         const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
         return {
           selector: `[data-iris-kbd-${nonce}="escape-${i}"]`,
+          id,
           label: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
           visible: isVisible(el),
         };
@@ -538,19 +550,27 @@ export class KeyboardTester {
         if (!element.visible) continue;
 
         try {
-          const before = await page.evaluate(DISMISSIBLE_STATE, element.selector);
+          const probe = { selector: element.selector, id: element.id };
+          const before = await page.evaluate(DISMISSIBLE_STATE, probe);
           // Already dismissed by an earlier candidate's Escape (a .modal wrapper and its
           // inner [role=dialog], stacked modals closed by one handler): nothing to test.
-          if (before.marked !== true) continue;
+          // Present = our marked node, or (re-rendered) an element with its id, visible.
+          if (!(before.marked ?? before.sameId ?? false)) continue;
           await page.keyboard.press('Escape');
-          const after = await page.evaluate(DISMISSIBLE_STATE, element.selector);
+          const after = await page.evaluate(DISMISSIBLE_STATE, probe);
 
-          // Our marked element still there: its own visibility decides. Gone from the
-          // DOM: dismissed only if fewer dismissible elements are visible now. A handler
-          // that replaced the node and left the dialog open (a framework re-render)
-          // drops our marker but not the dialog, which a bare null check read as closed.
+          // Our marked element still there: its own visibility decides. Gone (a handler
+          // that replaced the node, as a framework re-render does): an element with its
+          // id decides, as the id lookup did before markers; with no id, dismissed only if
+          // fewer dismissible elements are visible now. A bare null check read a
+          // replaced-but-open dialog as closed. ponytail: the count is a heuristic for
+          // id-less re-renders; Escape semantics proper are #286.
           const stillVisible =
-            after.marked !== null ? after.marked : after.visibleCount >= before.visibleCount;
+            after.marked !== null
+              ? after.marked
+              : after.sameId !== null
+                ? after.sameId
+                : after.visibleCount >= before.visibleCount;
 
           interactions.push({
             key: 'Escape',

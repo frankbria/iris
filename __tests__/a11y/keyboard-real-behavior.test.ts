@@ -385,6 +385,27 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
 
     // One Escape closes a .modal wrapper and its inner [role=dialog] together: the inner
     // candidate is gone before its own turn, which is not a failure.
+    // Codex's case: Escape swaps the wrapper for a bare, still-open dialog with the same id.
+    // The page-wide count drops (2 -> 1), but the dialog with that id is still open.
+    it('fails an id-ed dialog that a re-render leaves open, though the count dropped', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div id="host"><div class="modal"><div role="dialog" id="d"><button>Ok</button></div></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('host').innerHTML = '<div role="dialog" id="d"><button>Ok</button></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'rerender-id',
+      );
+      const dialog = result.interactions.find((i) => i.key === 'Escape' && i.target.includes('#d'));
+      expect(dialog).toMatchObject({ success: false, actualBehavior: 'Still visible' });
+      expect(result.passed).toBe(false);
+    });
+
     it('does not fail a dialog that an earlier Escape already closed', async () => {
       await load(
         page,
