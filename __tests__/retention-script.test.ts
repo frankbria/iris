@@ -131,6 +131,26 @@ console.log(JSON.stringify({ orgsPurged: [], runsDeleted: 4 }));`;
     expect(calls('worker').split('\n')).toHaveLength(2); // it ran again
   }, 120_000);
 
+  it('alerts when docker itself fails, and still tries the other services', () => {
+    // A `docker` wrapper on PATH that fails `ps` for this run only.
+    fs.writeFileSync(
+      path.join(bin, 'docker'),
+      `#!/bin/sh\nif [ "$1" = ps ] && [ -n "$FAIL_PS" ]; then echo "Cannot connect to the Docker daemon" >&2; exit 1; fi\nexec ${execFileSync('sh', ['-c', 'command -v docker'], { encoding: 'utf8' }).trim()} "$@"\n`,
+      { mode: 0o755 },
+    );
+    try {
+      const r = run({ FAIL_PS: '1' });
+      expect(r.status).toBe(1);
+      const hooks = fs.readFileSync(hookLog, 'utf8');
+      expect(hooks).toContain(
+        'retention-iris|docker ps failed: Cannot connect to the Docker daemon',
+      );
+      expect(hooks).toContain('retention-worker|docker ps failed');
+    } finally {
+      fs.rmSync(path.join(bin, 'docker'));
+    }
+  }, 120_000);
+
   it('alerts when a service has no running container', () => {
     const r = run({ RETENTION_SERVICES: 'iris portal' });
     expect(r.status).toBe(1);

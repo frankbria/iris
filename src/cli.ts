@@ -992,6 +992,9 @@ admin
       console.log(
         JSON.stringify({ ...report, aiLedgerRows: ai.ledgerRows, aiCacheRows: ai.cacheRows }),
       );
+      // A failed step is logged and the rest still ran; exit 3 so the timer alerts.
+      if (report.failures.length)
+        throw new Error(`retention steps failed: ${report.failures.join(', ')}`);
     });
   });
 

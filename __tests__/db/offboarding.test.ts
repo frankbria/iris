@@ -166,10 +166,34 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     // A second pass is a no-op.
     expect((await off.runRetention({ now: at(now, 32) })).orgsPurged).toEqual([]);
 
+    // A write that lands on the tombstone after the purge (a late billing webhook)
+    // must not keep it alive past its 7 years.
+    await sql`insert into org_plans (org_id, plan) values ('org-p', 'pro')`.execute(db);
+
     // Seven years after the purge, the tombstone and its billing records go.
-    await off.runRetention({ now: at(now, 31 + 7 * 366) });
+    const late = await off.runRetention({ now: at(now, 31 + 7 * 366) });
+    expect(late.failures).toEqual([]);
+    expect(late.tombstonesDropped).toBeGreaterThanOrEqual(1);
     expect(await count('usage_events', "org_id = 'org-p'")).toBe(0);
+    expect(await count('org_plans', "org_id = 'org-p'")).toBe(0);
     expect(await count('organization', "id = 'org-p'")).toBe(0);
+  });
+
+  // Both containers run the pass; each lists the org, the row lock lets one purge it.
+  // The same re-check is what lets a restore that commits after the listing win.
+  it('purges an org once when two passes run at the same time', async () => {
+    const now = new Date();
+    await user('kim');
+    await org('org-twice', 'kim', now);
+    await offboarding(db).requestOrgDeletion('org-twice', { reason: 'x', actor: 'ops' });
+    const [a, b] = await Promise.all([
+      offboarding(db).runRetention({ now: at(now, 31) }),
+      offboarding(db).runRetention({ now: at(now, 31) }),
+    ]);
+    expect([...a.orgsPurged, ...b.orgsPurged].filter((o) => o === 'org-twice')).toHaveLength(1);
+    const { rows } = await sql<{ n: number }>`select count(*)::int as n from org_suspensions
+      where org_id = 'org-twice'`.execute(db);
+    expect(rows[0].n).toBe(1);
   });
 
   it('drops finished runs after 90 days but keeps their billing records', async () => {
@@ -207,7 +231,20 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     await user('gus');
     await sql`insert into terms_acceptances (user_id, document, version, accepted_at, ip)
       values ('gus', 'terms', '2026-10-02', now(), '203.0.113.7')`.execute(db);
+    // Elsewhere: an audit row naming them, and an invitation addressed to them.
+    await sql`insert into organization (id, name, slug, "createdAt")
+      values ('org-g', 'G', 'g', now())`.execute(db);
+    await sql`insert into audit_log (org_id, actor_user_id, action) values ('org-g', 'gus', 'key.create')`.execute(
+      db,
+    );
+    await user('ivy');
+    await sql`insert into invitation (id, "organizationId", email, role, status, "expiresAt", "inviterId")
+      values ('inv-g', 'org-g', 'GUS@iris.test', 'member', 'pending', now(), 'ivy')`.execute(db);
     await offboarding(db).deleteUser('gus');
+    // The raw id is the pseudonym's preimage: nothing keeps it.
+    expect(await count('audit_log', "actor_user_id = 'gus'")).toBe(0);
+    expect(await count('audit_log', "org_id = 'org-g'")).toBe(1);
+    expect(await count('invitation', "id = 'inv-g'")).toBe(0);
 
     const { rows } = await sql<{ user_id: string | null; user_hash: string; ip: string }>`
       select user_id, user_hash, ip from terms_acceptances where document = 'terms'

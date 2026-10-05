@@ -33,6 +33,8 @@ export interface RetentionReport {
   sessionsDeleted: number;
   verificationsDeleted: number;
   termsDropped: number;
+  /** Steps that failed this pass (logged); non-empty makes the CLI exit 3. */
+  failures: string[];
 }
 
 export function offboarding(db: Kysely<unknown>) {
@@ -61,10 +63,8 @@ export function offboarding(db: Kysely<unknown>) {
           + interval '1 microsecond'))`.execute(q);
   };
 
-  /** Deletes an org's data and scrubs its row into a tombstone holding its billing records. */
-  const purgeOrg = async (tx: Kysely<unknown>, orgId: string) => {
-    // Billing records outlive their runs (7 years): detach before the runs go.
-    await sql`update usage_events set run_id = null where org_id = ${orgId}`.execute(tx);
+  /** Every org-scoped table a purge or a tombstone drop clears (usage is handled apart). */
+  const clearOrgData = async (tx: Kysely<unknown>, orgId: string) => {
     await sql`delete from runs where org_id = ${orgId}`.execute(tx); // results cascade
     await sql`delete from provider_keys where org_id = ${orgId}`.execute(tx);
     await sql`delete from apikey where "referenceId" = ${orgId}`.execute(tx);
@@ -74,6 +74,21 @@ export function offboarding(db: Kysely<unknown>) {
     await sql`delete from invitation where "organizationId" = ${orgId}`.execute(tx);
     await sql`update session set "activeOrganizationId" = null
       where "activeOrganizationId" = ${orgId}`.execute(tx);
+  };
+
+  /**
+   * Deletes an org's data and scrubs its row into a tombstone holding its billing records.
+   * Re-checks the request under its row lock: a restore that committed after the pass
+   * listed the org wins (`restoreOrg` takes the same lock), and two containers running
+   * the pass at once purge each org once. Returns false when there was nothing to do.
+   */
+  const purgeOrg = async (tx: Kysely<unknown>, orgId: string, now: Date): Promise<boolean> => {
+    const due = await sql`select 1 from org_deletions where org_id = ${orgId}
+      and purged_at is null and purge_after <= ${now} for update`.execute(tx);
+    if (!due.rows.length) return false;
+    // Billing records outlive their runs (7 years): detach before the runs go.
+    await sql`update usage_events set run_id = null where org_id = ${orgId}`.execute(tx);
+    await clearOrgData(tx, orgId);
     // One suspension remains (the reasons may name people): the tombstone stays unusable.
     await sql`delete from org_suspensions where org_id = ${orgId}`.execute(tx);
     await sql`insert into org_suspensions (org_id, action, reason, actor)
@@ -82,6 +97,20 @@ export function offboarding(db: Kysely<unknown>) {
       logo = null, metadata = null where id = ${orgId}`.execute(tx);
     await sql`update org_deletions set purged_at = now(), reason = 'purged', requested_by = 'purged'
       where org_id = ${orgId}`.execute(tx);
+    return true;
+  };
+
+  /**
+   * After 7 years: the tombstone and its billing records. Anything written to it after the
+   * purge (a late webhook, a session's last usage checkpoint) goes too, so no foreign key
+   * keeps it alive.
+   */
+  const dropTombstone = async (tx: Kysely<unknown>, orgId: string) => {
+    await sql`delete from usage_events where org_id = ${orgId}`.execute(tx);
+    await clearOrgData(tx, orgId);
+    await sql`delete from org_suspensions where org_id = ${orgId}`.execute(tx);
+    await sql`delete from org_deletions where org_id = ${orgId}`.execute(tx);
+    await sql`delete from organization where id = ${orgId}`.execute(tx);
   };
 
   return {
@@ -129,8 +158,13 @@ export function offboarding(db: Kysely<unknown>) {
      */
     async deleteUser(userId: string) {
       await db.transaction().execute(async (tx) => {
-        const exists = await sql`select 1 from "user" where id = ${userId} for update`.execute(tx);
-        if (!exists.rows.length) throw new OffboardingError(`Unknown user: ${userId}`);
+        // ponytail: one lock for every user deletion. Two co-owners deleted at once would
+        // each see the other as the surviving owner; operator-run and rare, so a global
+        // lock is enough. Per-org locks if this ever becomes self-serve.
+        await sql`select pg_advisory_xact_lock(hashtext('iris-delete-user'))`.execute(tx);
+        const user = await sql<{ email: string }>`
+          select email from "user" where id = ${userId} for update`.execute(tx);
+        if (!user.rows.length) throw new OffboardingError(`Unknown user: ${userId}`);
         const { rows } = await sql<{ org: string }>`
           select m."organizationId" as org from member m
           where m."userId" = ${userId}
@@ -145,64 +179,98 @@ export function offboarding(db: Kysely<unknown>) {
             `${userId} is the only owner of ${rows.map((r) => r.org).join(', ')}: ` +
               'delete those organizations or add another owner first',
           );
+        // The raw id is the preimage of the terms pseudonym: keep it nowhere else.
+        await sql`update audit_log set actor_user_id = null where actor_user_id = ${userId}`.execute(
+          tx,
+        );
+        // Invitations addressed to them in other orgs (only ones they sent cascade).
+        await sql`delete from invitation where lower(email) = lower(${user.rows[0].email})`.execute(
+          tx,
+        );
         await sql`delete from "user" where id = ${userId}`.execute(tx);
       });
-      log('info', 'user deleted', { userId });
+      // No id in the log either: it would re-link the pseudonymised terms rows.
+      log('info', 'user deleted');
     },
 
-    /** The daily pass. `now` is injectable so tests cross 30 days, 90 days and 7 years. */
+    /**
+     * The daily pass. `now` is injectable so tests cross 30 days, 90 days and 7 years.
+     * Each step runs on its own: a failure is logged, counted in `failures`, and the other
+     * steps still run (the CLI then exits non-zero, so the timer alerts). Every step is
+     * idempotent, so the next pass finishes what this one could not.
+     */
     async runRetention({ now = new Date() }: { now?: Date } = {}): Promise<RetentionReport> {
-      const due = await sql<{ org_id: string }>`
-        select org_id from org_deletions where purged_at is null and purge_after <= ${now}
-        order by purge_after`.execute(db);
-      const orgsPurged: string[] = [];
-      for (const { org_id } of due.rows) {
-        // One transaction per org: a failure leaves that org for the next pass.
+      const failures: string[] = [];
+      const step = async <T>(name: string, fallback: T, fn: () => Promise<T>): Promise<T> => {
         try {
-          await db.transaction().execute((tx) => purgeOrg(tx, org_id));
-          orgsPurged.push(org_id);
-          log('info', 'org purged', { orgId: org_id });
+          return await fn();
         } catch (err) {
-          log('error', 'org purge failed', { orgId: org_id, err: (err as Error).message });
+          failures.push(name);
+          log('error', 'retention step failed', { step: name, err: (err as Error).message });
+          return fallback;
+        }
+      };
+      const sevenYearsAgo = sql`${now}::timestamptz - make_interval(years => ${RECORD_RETENTION_YEARS})`;
+      const affected = (r: { numAffectedRows?: bigint }) => Number(r.numAffectedRows ?? 0);
+
+      const orgsPurged: string[] = [];
+      const due = await step('list orgs due', [] as string[], async () =>
+        (
+          await sql<{ org_id: string }>`select org_id from org_deletions
+            where purged_at is null and purge_after <= ${now} order by purge_after`.execute(db)
+        ).rows.map((r) => r.org_id),
+      );
+      for (const orgId of due) {
+        // One transaction per org: a failure leaves that org for the next pass.
+        const purged = await step(`purge ${orgId}`, false, () =>
+          db.transaction().execute((tx) => purgeOrg(tx, orgId, now)),
+        );
+        if (purged) {
+          orgsPurged.push(orgId);
+          log('info', 'org purged', { orgId });
         }
       }
 
-      const sevenYearsAgo = sql`${now}::timestamptz - make_interval(years => ${RECORD_RETENTION_YEARS})`;
-      const tombstonesDropped = await db.transaction().execute(async (tx) => {
-        const { rows } = await sql<{ org_id: string }>`
-          select org_id from org_deletions where purged_at < ${sevenYearsAgo}`.execute(tx);
-        for (const { org_id } of rows) {
-          await sql`delete from usage_events where org_id = ${org_id}`.execute(tx);
-          await sql`delete from org_suspensions where org_id = ${org_id}`.execute(tx);
-          await sql`delete from org_deletions where org_id = ${org_id}`.execute(tx);
-          await sql`delete from organization where id = ${org_id}`.execute(tx);
-        }
-        return rows.length;
-      });
-
-      const runsDeleted = await db.transaction().execute(async (tx) => {
-        const cutoff = sql`${now}::timestamptz - make_interval(days => ${RUN_RETENTION_DAYS})`;
-        await sql`update usage_events u set run_id = null from runs r
-          where u.org_id = r.org_id and u.run_id = r.id
-            and r.finished_at is not null and r.finished_at < ${cutoff}`.execute(tx);
-        const res = await sql`delete from runs
-          where finished_at is not null and finished_at < ${cutoff}`.execute(tx);
-        return Number(res.numAffectedRows ?? 0);
-      });
-
-      const sessionsDeleted = Number(
-        (await sql`delete from session where "expiresAt" < ${now}`.execute(db)).numAffectedRows ??
-          0,
-      );
-      const verificationsDeleted = Number(
-        (await sql`delete from verification where "expiresAt" < ${now}`.execute(db))
-          .numAffectedRows ?? 0,
-      );
-      const termsDropped = Number(
+      let tombstonesDropped = 0;
+      const old = await step('list tombstones', [] as string[], async () =>
         (
+          await sql<{ org_id: string }>`select org_id from org_deletions
+            where purged_at < ${sevenYearsAgo}`.execute(db)
+        ).rows.map((r) => r.org_id),
+      );
+      for (const orgId of old) {
+        if (
+          await step(`drop tombstone ${orgId}`, false, () =>
+            db.transaction().execute(async (tx) => (await dropTombstone(tx, orgId), true)),
+          )
+        )
+          tombstonesDropped++;
+      }
+
+      const runsDeleted = await step('runs', 0, () =>
+        db.transaction().execute(async (tx) => {
+          const cutoff = sql`${now}::timestamptz - make_interval(days => ${RUN_RETENTION_DAYS})`;
+          await sql`update usage_events u set run_id = null from runs r
+            where u.org_id = r.org_id and u.run_id = r.id
+              and r.finished_at is not null and r.finished_at < ${cutoff}`.execute(tx);
+          return affected(
+            await sql`delete from runs where finished_at is not null and finished_at < ${cutoff}`.execute(
+              tx,
+            ),
+          );
+        }),
+      );
+      const sessionsDeleted = await step('sessions', 0, async () =>
+        affected(await sql`delete from session where "expiresAt" < ${now}`.execute(db)),
+      );
+      const verificationsDeleted = await step('verifications', 0, async () =>
+        affected(await sql`delete from verification where "expiresAt" < ${now}`.execute(db)),
+      );
+      const termsDropped = await step('terms', 0, async () =>
+        affected(
           await sql`delete from terms_acceptances
-            where user_id is null and pseudonymised_at < ${sevenYearsAgo}`.execute(db)
-        ).numAffectedRows ?? 0,
+            where user_id is null and pseudonymised_at < ${sevenYearsAgo}`.execute(db),
+        ),
       );
 
       const report = {
@@ -212,8 +280,12 @@ export function offboarding(db: Kysely<unknown>) {
         sessionsDeleted,
         verificationsDeleted,
         termsDropped,
+        failures,
       };
-      log('info', 'retention pass', { ...report, orgsPurged: orgsPurged.length });
+      log(failures.length ? 'error' : 'info', 'retention pass', {
+        ...report,
+        orgsPurged: orgsPurged.length,
+      });
       return report;
     },
 

@@ -32,8 +32,12 @@ alert() {
 
 failed=0
 for service in $services; do
-  container=$(docker ps -q --filter "label=com.docker.compose.project=$project" \
-    --filter "label=com.docker.compose.service=$service")
+  if ! container=$(docker ps -q --filter "label=com.docker.compose.project=$project" \
+    --filter "label=com.docker.compose.service=$service" 2>&1); then
+    alert "retention-$service" "docker ps failed: $(tr -cd '[:print:]' <<<"$container" | cut -c1-300)"
+    failed=1
+    continue
+  fi
   if [ -z "$container" ]; then
     alert "retention-$service" "no running $service container in compose project $project"
     failed=1
