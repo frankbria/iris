@@ -225,7 +225,7 @@ const page = (color: string) =>
     expect(third.detail.results[0].result.newBaseline).toBeUndefined();
     expect(third.detail.results[0].result.diffPercentage).toBe(0);
 
-    // Usage: one visual_job per run, keyed by the job.
+    // Usage: one visual_job row per run, keyed by the job.
     const usage = await sql<{ n: number }>`select count(*)::int as n from usage_events
       where org_id = 'org-a' and kind = 'visual_job'`.execute(db);
     expect(usage.rows[0].n).toBe(3);
@@ -344,6 +344,21 @@ const page = (color: string) =>
     expect(a.results[0].artifacts!.current).not.toBe(b.results[0].artifacts!.current);
     expect(a.results[0].newBaseline).toBe(true);
     expect(b.results[0].newBaseline).toBeUndefined();
+  }, 120_000);
+
+  // Owner decision (2026-10-05): a visual job is billed per comparison, so a plan's
+  // runsPerMonth limits screenshots, not jobs.
+  it('bills a visual job per comparison (pages x devices)', async () => {
+    const res = await api('POST', '/v1/visual/jobs', 'key-a', {
+      project: 'billing',
+      urls: [url()],
+      devices: ['desktop', 'mobile'],
+    });
+    const { id } = (await res.json()) as { id: string };
+    await processNextVisualJob(postgresJobs(db), { artifacts: store });
+    const { rows } = await sql<{ quantity: string }>`select quantity from usage_events
+      where org_id = 'org-a' and idempotency_key = ${`job:${id}`}`.execute(db);
+    expect(rows.map((r) => Number(r.quantity))).toEqual([2]);
   }, 120_000);
 
   it('baselines belong to a project: another project starts its own', async () => {
