@@ -143,7 +143,7 @@ export class KeyboardTester {
             key: 'Tab',
             target: 'page',
             expectedBehavior: 'Whole Tab order walked',
-            actualBehavior: `Walked the first ${focusOrder.length} stops only`,
+            actualBehavior: `Stopped after ${focusOrder.length} stops: the walk did not finish`,
             success: true, // informational: the stops it reached were still judged
             timestamp: new Date(),
           });
@@ -260,6 +260,9 @@ export class KeyboardTester {
     let wrapped = false;
     const seen = new Set<string>();
     let lastPath = '';
+    // Truncated means the press budget ran out before the walk finished: wraps and presses
+    // inside an opaque frame use presses without adding stops.
+    let finished = false;
     for (let i = 0; i < MAX_TAB_STOPS; i++) {
       await page.keyboard.press('Tab');
       const stop = await page.evaluate(() => {
@@ -319,8 +322,15 @@ export class KeyboardTester {
           ) {
             visible = false;
           }
-          const root = n.getRootNode();
-          n = n.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+          // Up through a shadow root's host and, at the top of a same-origin frame's
+          // document, its <iframe> in the outer page: hidden there hides everything inside.
+          // A shadow root is detected by shape, not instanceof (each frame has its own realm).
+          const root = n.getRootNode() as Node & { host?: Element };
+          n =
+            n.parentElement ??
+            (root.nodeType === 11 && root.host
+              ? root.host
+              : (n.ownerDocument?.defaultView?.frameElement ?? null));
         }
 
         // Through the prototypes: a <form>'s named controls shadow its methods (#285).
@@ -344,7 +354,10 @@ export class KeyboardTester {
       if (!stop) {
         // Focus left the page: the first time, the walk wrapped to the document start
         // (keep going); the second time, it has seen everything.
-        if (wrapped) break;
+        if (wrapped) {
+          finished = true;
+          break;
+        }
         wrapped = true;
         lastPath = '';
         continue;
@@ -352,7 +365,10 @@ export class KeyboardTester {
       // Tab moving inside a cross-origin frame shows the same IFRAME each time: keep
       // pressing until focus leaves it (bounded by the cap), it is not a cycle.
       if (stop.opaque && stop.path === lastPath) continue;
-      if (seen.has(stop.path)) break;
+      if (seen.has(stop.path)) {
+        finished = true;
+        break;
+      }
       seen.add(stop.path);
       lastPath = stop.path;
       const { path: _path, opaque: _opaque, ...element } = stop;
@@ -360,7 +376,7 @@ export class KeyboardTester {
     }
     const stops = [...after, ...before];
     // Reaching the cap means the walk did not see the whole order: said, not silent.
-    return { stops, truncated: stops.length >= MAX_TAB_STOPS };
+    return { stops, truncated: !finished };
   }
 
   /**

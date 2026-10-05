@@ -377,13 +377,24 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.passed).toBe(false);
     });
 
+    it('treats a control inside an invisible iframe as invisible', async () => {
+      const result = await walk(
+        `<iframe style="opacity:0" srcdoc="<button id=in>In</button>"></iframe>`,
+      );
+      await page.waitForTimeout(0);
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'BUTTON#in', visible: false }),
+      ]);
+      expect(result.passed).toBe(false);
+    });
+
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
       const result = await walk(links);
       expect(result.focusOrder).toHaveLength(200);
       expect(result.interactions).toEqual([
         expect.objectContaining({
-          actualBehavior: 'Walked the first 200 stops only',
+          actualBehavior: 'Stopped after 200 stops: the walk did not finish',
           success: true,
         }),
       ]);
