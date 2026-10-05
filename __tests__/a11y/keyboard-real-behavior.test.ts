@@ -256,6 +256,329 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
     });
   });
 
+  // #285: elements were addressed by `TAG#id` / `TAG.firstClass`. Radix ids contain colons,
+  // Tailwind classes contain `:` and `[`, an id-less class-less element gave `UL.`: all
+  // invalid selectors, so working widgets failed. An SVG <a> (className is not a string)
+  // threw and aborted the whole run.
+  describe('elements whose ids and classes make poor selectors (#285)', () => {
+    it('tests a Radix-style dialog whose id and classes are not valid selectors', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" id="radix-:r1:" data-state="open" aria-modal="true"
+             class="md:w-[400px] fixed">
+          <button>Close</button>
+        </div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') document.getElementById('radix-:r1:').remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'radix',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toHaveLength(1);
+      expect(escape[0]).toMatchObject({ success: true, actualBehavior: 'Closed' });
+      expect(escape[0].target).toContain('radix-:r1:'); // readable, not a marker
+    });
+
+    it('tests each id-less, class-less menu on its own', async () => {
+      // Two menus with nothing to tell them apart by tag, id or class. The first ignores
+      // ArrowDown, the second handles it: each verdict must be about its own menu.
+      const menu = (handler: boolean) => `<ul role="menu">
+          <li role="menuitem" tabindex="0">One</li><li role="menuitem" tabindex="-1">Two</li>
+        </ul>${
+          handler
+            ? `<script>{const m=document.querySelectorAll('[role=menu]')[1];
+                const items=[...m.querySelectorAll('[role=menuitem]')];
+                m.addEventListener('keydown',(e)=>{ if(e.key!=='ArrowDown')return;
+                  items[Math.min(items.indexOf(document.activeElement)+1,items.length-1)].focus();});}</script>`
+            : ''
+        }`;
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>${menu(false)}${menu(true)}</body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testArrowKeyNavigation: true }).run(
+        page,
+        'menus',
+      );
+      const arrow = result.interactions.filter((i) => i.key === 'ArrowDown');
+      expect(arrow.map((i) => i.success)).toEqual([false, true]);
+      // The markers used to address them are removed afterwards.
+      expect(
+        await page.evaluate(() =>
+          [...document.querySelectorAll('*')].some((el) =>
+            el.getAttributeNames().some((n) => n.startsWith('data-iris-kbd')),
+          ),
+        ),
+      ).toBe(false);
+    });
+
+    // A handler that replaces the dialog node (a re-render) and leaves it open drops our
+    // marker; that is not a dismissal.
+    it('fails a dialog that Escape replaces but leaves open', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div id="host"><div role="dialog" aria-modal="true"><button>Ok</button></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('host').innerHTML =
+            '<div role="dialog" aria-modal="true"><button>Ok</button></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'rerender',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toHaveLength(1);
+      expect(escape[0]).toMatchObject({ success: false, actualBehavior: 'Still visible' });
+    });
+
+    // A <form>'s named controls shadow its methods: `form.setAttribute` is the input.
+    it('does not abort on a dialog whose controls shadow its methods', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <form role="dialog" aria-modal="true" id="f" class="sheet">
+          <input name="setAttribute"><input name="getAttribute"><input name="id">
+        </form></body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testEscapeHandling: true,
+        testFocusOrder: true,
+      }).run(page, 'clobber');
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toHaveLength(1);
+      expect(escape[0].target).toBe('FORM#f.sheet');
+    });
+
+    it("leaves the page's own data-iris-trap attribute alone and judges our container", async () => {
+      // A decoy ahead of the dialog with the value our first trap marker would have had.
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div data-iris-trap="0"><a href="#x">decoy</a></div>
+        <div role="dialog" aria-modal="true"><button id="only">Only</button></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key === 'Tab') { e.preventDefault(); document.getElementById('only').focus(); }
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testTrapDetection: true }).run(
+        page,
+        'trap-decoy',
+      );
+      expect(result.trapTests).toEqual([expect.objectContaining({ trapped: true })]);
+      expect(await page.locator('[data-iris-trap="0"]').count()).toBe(1);
+    });
+
+    it("never mistakes the page's own data-iris-kbd attribute for a marker", async () => {
+      // The page's element comes first in document order with the value our first marker
+      // would have had without a per-run nonce; it ignores ArrowDown.
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div data-iris-kbd="arrow-0" tabindex="0">decoy</div>
+        <ul role="menu" data-iris-kbd="mine"><li role="menuitem" tabindex="0">One</li><li role="menuitem" tabindex="-1">Two</li></ul>
+        <script>{const m=document.querySelector('[role=menu]');
+          const items=[...m.querySelectorAll('[role=menuitem]')];
+          m.addEventListener('keydown',(e)=>{ if(e.key!=='ArrowDown')return;
+            items[Math.min(items.indexOf(document.activeElement)+1,items.length-1)].focus();});}</script>
+        </body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testArrowKeyNavigation: true }).run(
+        page,
+        'decoy',
+      );
+      expect(
+        result.interactions.filter((i) => i.key === 'ArrowDown').map((i) => i.success),
+      ).toEqual([true]);
+      // The page's own attributes are left alone, including the one on the tested menu.
+      expect(await page.locator('[data-iris-kbd="arrow-0"]').count()).toBe(1);
+      expect(await page.locator('[role=menu][data-iris-kbd="mine"]').count()).toBe(1);
+    });
+
+    // One Escape closes a .modal wrapper and its inner [role=dialog] together: the inner
+    // candidate is gone before its own turn, which is not a failure.
+    // Codex's case: Escape swaps the wrapper for a bare, still-open dialog with the same id.
+    // The page-wide count drops (2 -> 1), but the dialog with that id is still open.
+    it('fails an id-ed dialog that a re-render leaves open, though the count dropped', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div id="host"><div class="modal"><div role="dialog" id="d"><button>Ok</button></div></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('host').innerHTML = '<div role="dialog" id="d"><button>Ok</button></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'rerender-id',
+      );
+      const dialog = result.interactions.find((i) => i.key === 'Escape' && i.target.includes('#d'));
+      expect(dialog).toMatchObject({ success: false, actualBehavior: 'Still visible' });
+      expect(result.passed).toBe(false);
+    });
+
+    // Codex: Escape closes the first dialog and re-renders the second (id-less) one, which
+    // stays open. Its marker is gone before its turn; tag + class still identify it.
+    it('tests an id-less dialog that an earlier Escape re-rendered but left open', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" class="sheet a" id="a"><button>A</button></div>
+        <div id="host"><div role="dialog" class="sheet b"><button>B</button></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('a')?.remove();
+          document.getElementById('host').innerHTML =
+            '<div role="dialog" class="sheet b"><button>B</button></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'rerender-b',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => i.success)).toEqual([true, false]); // A closed, B ignored it
+      expect(result.passed).toBe(false);
+    });
+
+    // Codex: the re-render changes the class list (`sheet` -> `sheet shaking`) and leaves the
+    // dialog open. No exact match is unknown, not dismissed; the visible count decides.
+    it('fails an id-less dialog that a re-render reclassed but left open', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div id="host"><div role="dialog" class="sheet"><button>Ok</button></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('host').innerHTML =
+            '<div role="dialog" class="sheet shaking"><button>Ok</button></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'reclassed',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([
+        expect.objectContaining({ success: false, actualBehavior: 'Still visible' }),
+      ]);
+    });
+
+    // GLM: a .modal wrapper and its id-less inner panel close together beside a persistent
+    // dialog that ignores Escape. The panel is gone before its turn and must not be blamed:
+    // only the chat dialog fails.
+    it('does not blame a dialog that closed with its wrapper while another stays open', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div class="modal" id="wrap"><div role="dialog" class="panel"><button>Ok</button></div></div>
+        <div role="dialog" id="chat"><button>Chat</button></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') document.getElementById('wrap')?.remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'wrapper-and-chat',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => [i.target.split('.')[0], i.success])).toEqual([
+        ['DIV#wrap', true],
+        ['DIV#chat', false],
+      ]);
+    });
+
+    // Codex: the open dialog is re-rendered with other classes and a hidden template keeps
+    // the original classes. A class match may never establish dismissal.
+    it('does not take a hidden template with the old classes for a dismissal', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div id="host"><div role="dialog" class="sheet shaking"><button>Ok</button></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('host').innerHTML =
+            '<div role="dialog" class="sheet"><button>Ok</button></div>' +
+            '<div role="dialog" class="sheet shaking" hidden></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'template',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => i.success)).toEqual([false]);
+    });
+
+    it('does not fail a dialog that an earlier Escape already closed', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div class="modal" id="wrap"><div role="dialog" aria-modal="true"><button>Ok</button></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') document.getElementById('wrap')?.remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'nested',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => i.success)).toEqual([true]);
+      expect(result.passed).toBe(true);
+    });
+
+    it('does not abort on clobbered menus or trap containers, and cleans up', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <form role="menu"><input name="getAttribute"><input name="querySelector"><input name="contains"></form>
+        <form role="dialog" aria-modal="true">
+          <input name="removeAttribute"><input name="querySelectorAll"><button>Ok</button>
+        </form></body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testArrowKeyNavigation: true,
+        testTrapDetection: true,
+      }).run(page, 'clobbered');
+      expect(result.interactions.filter((i) => i.key === 'ArrowDown')).toHaveLength(1);
+      // Our per-run trap marker (data-iris-trap-<nonce>) is gone again.
+      expect(
+        await page.evaluate(() =>
+          [...document.querySelectorAll('*')].some((el) =>
+            el.getAttributeNames().some((n) => n.startsWith('data-iris-trap')),
+          ),
+        ),
+      ).toBe(false);
+    });
+
+    it('does not crash on an SVG link', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <svg width="100" height="40" class="icon"><a href="/next" class="svg-link">
+          <text x="0" y="20">Next</text></a></svg>
+        <a href="/plain">Plain</a></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testFocusOrder: true }).run(page, 'svg');
+      // Both links, labelled by tag first (an SVG element's tagName is lowercase).
+      expect(result.focusOrder.map((f) => f.element.split(/[#.]/)[0].toUpperCase())).toEqual([
+        'A',
+        'A',
+      ]);
+      expect(result.focusOrder[0].element).toContain('svg-link');
+    });
+  });
+
   // The ARIA announcements were collected, stamped success:true, and then left
   // out of the verdict entirely.
   describe('ARIA announcement validation', () => {

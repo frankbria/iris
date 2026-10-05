@@ -244,7 +244,9 @@ describe('KeyboardTester', () => {
       // after Escape.
       mockPage.evaluate
         .mockResolvedValueOnce([{ selector: 'DIV.modal', visible: true }] as never)
-        .mockResolvedValueOnce(false as never); // no longer visible -> dismissed
+        // State before and after Escape (#285): the marked modal was visible, then hidden.
+        .mockResolvedValueOnce({ marked: true, visibleCount: 1 } as never)
+        .mockResolvedValueOnce({ marked: false, visibleCount: 0 } as never);
 
       const result = await keyboardTester.run(mockPage, 'escape-test');
 

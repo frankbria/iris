@@ -15,6 +15,7 @@
  * e2e suite, not Istanbul.
  */
 
+import { randomBytes } from 'crypto';
 import { Page } from 'playwright';
 import type { KeyboardTestResult } from './types';
 
@@ -57,6 +58,61 @@ export interface KeyboardInteraction {
   success: boolean;
   timestamp: Date;
 }
+
+/**
+ * In-page: is the marked element visible (null when it is gone), and how many
+ * dismissible elements are visible. A string-free function is fine here: the a11y
+ * modules are excluded from coverage instrumentation (see jest.config.ts).
+ */
+const DISMISSIBLE_STATE = ({
+  selector,
+  id,
+  tag,
+  cls,
+}: {
+  selector: string;
+  id: string | null;
+  tag: string;
+  cls: string;
+}): { marked: boolean | null; same: boolean | null; visibleCount: number } => {
+  const isVisible = (el: Element) => {
+    const style = getComputedStyle(el);
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      Element.prototype.getClientRects.call(el).length > 0
+    );
+  };
+  const all = Array.from(
+    document.querySelectorAll('[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]'),
+  );
+  const marked = document.querySelector(selector);
+  // A re-render that replaced the node: the same dialog is the element with its id, or,
+  // without one, the dismissible element with its tag and exact class list (what the old
+  // `TAG.class` selector found). With neither, it cannot be told apart: null.
+  let same: boolean | null = null;
+  if (id) {
+    const byId = document.getElementById(id);
+    same = !!byId && isVisible(byId);
+  } else if (cls) {
+    // Tag + exact class list is weak evidence: it may show the dialog is still open (a
+    // visible match), never that it closed. A hidden template or a sibling sharing the
+    // classes must not establish dismissal; anything short of a visible match is unknown,
+    // and the visible count decides.
+    const stillOpen = all.some(
+      (el) =>
+        el.tagName === tag &&
+        (Element.prototype.getAttribute.call(el, 'class') ?? '').trim() === cls &&
+        isVisible(el),
+    );
+    same = stillOpen ? true : null;
+  }
+  return {
+    marked: marked ? isVisible(marked) : null,
+    same,
+    visibleCount: all.filter(isVisible).length,
+  };
+};
 
 /**
  * KeyboardTester handles keyboard navigation and accessibility testing
@@ -179,17 +235,21 @@ export class KeyboardTester {
           rect.height > 0 &&
           window.getComputedStyle(htmlEl).visibility !== 'hidden';
 
+        // A label, never a selector. `getAttribute('class')`, not `className`: on an SVG
+        // <a> that is an SVGAnimatedString, and `.split` threw and ended the run (#285).
+        // Through Element.prototype: a <form>'s named controls shadow its methods and
+        // properties (`<input name="setAttribute">`), which threw and ended the run.
+        const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
+        const id = attr('id');
+        const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
         return {
-          element:
-            el.tagName +
-            (el.id ? `#${el.id}` : '') +
-            (el.className ? `.${el.className.split(' ')[0]}` : ''),
+          element: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
           tabIndex: htmlEl.tabIndex,
           focusable: true,
           visible: isVisible,
           tagName: el.tagName,
-          role: el.getAttribute('role') || undefined,
-          ariaLabel: el.getAttribute('aria-label') || undefined,
+          role: attr('role') || undefined,
+          ariaLabel: attr('aria-label') || undefined,
         };
       });
     });
@@ -247,8 +307,11 @@ export class KeyboardTester {
 
     // Tag candidates so each can be re-found after the DOM shifts (a dismissed
     // dialog may be removed outright, which would invalidate positional lookup).
+    // A per-run attribute name, as for the keyboard markers: a page's own data-iris-trap
+    // attribute is never matched, overwritten or removed.
+    const attr = `data-iris-trap-${randomBytes(4).toString('hex')}`;
     const candidates = await page.evaluate(
-      ({ containers, focusable }) => {
+      ({ containers, focusable, attr }) => {
         const isVisible = (el: Element) => {
           const style = getComputedStyle(el);
           // Not offsetParent: that is null for position:fixed modals even when shown.
@@ -259,13 +322,17 @@ export class KeyboardTester {
           );
         };
         const describe = (el: Element | undefined) =>
-          el ? el.tagName + (el.id ? `#${el.id}` : '') : '';
+          el
+            ? el.tagName +
+              ((id) => (id ? `#${id}` : ''))(Element.prototype.getAttribute.call(el, 'id'))
+            : '';
 
         return Array.from(document.querySelectorAll(containers))
           .filter(isVisible)
           .map((container, index) => {
-            container.setAttribute('data-iris-trap', String(index));
-            const inside = container.querySelectorAll(focusable);
+            // Through Element.prototype: a <form>'s named controls shadow its methods (#285).
+            Element.prototype.setAttribute.call(container, attr, String(index));
+            const inside = Element.prototype.querySelectorAll.call(container, focusable);
             return {
               index,
               container: describe(container),
@@ -275,7 +342,7 @@ export class KeyboardTester {
             };
           });
       },
-      { containers: CONTAINERS, focusable: FOCUSABLE },
+      { containers: CONTAINERS, focusable: FOCUSABLE, attr },
     );
 
     const traps: FocusTrap[] = [];
@@ -286,34 +353,44 @@ export class KeyboardTester {
         // Tab off the LAST focusable: a real trap wraps back to the first,
         // a leaky one lets focus escape to the document.
         await page.evaluate(
-          ({ index, focusable }) => {
-            const container = document.querySelector(`[data-iris-trap="${index}"]`);
-            const inside = container?.querySelectorAll(focusable);
+          ({ index, focusable, attr }) => {
+            const container = document.querySelector(`[${attr}="${index}"]`);
+            const inside = container
+              ? Element.prototype.querySelectorAll.call(container, focusable)
+              : undefined;
             (inside?.[inside.length - 1] as HTMLElement | undefined)?.focus();
           },
-          { index: candidate.index, focusable: FOCUSABLE },
+          { index: candidate.index, focusable: FOCUSABLE, attr },
         );
         await page.keyboard.press('Tab');
 
-        const trapped = await page.evaluate((index) => {
-          const container = document.querySelector(`[data-iris-trap="${index}"]`);
-          return (
-            !!container && !!document.activeElement && container.contains(document.activeElement)
-          );
-        }, candidate.index);
+        const trapped = await page.evaluate(
+          ({ index, attr }) => {
+            const container = document.querySelector(`[${attr}="${index}"]`);
+            return (
+              !!container &&
+              !!document.activeElement &&
+              Node.prototype.contains.call(container, document.activeElement)
+            );
+          },
+          { index: candidate.index, attr },
+        );
 
         await page.keyboard.press('Escape');
 
-        const escaped = await page.evaluate((index) => {
-          const el = document.querySelector(`[data-iris-trap="${index}"]`);
-          if (!el) return true; // removed from the DOM entirely
-          const style = getComputedStyle(el);
-          return (
-            style.display === 'none' ||
-            style.visibility === 'hidden' ||
-            el.getClientRects().length === 0
-          );
-        }, candidate.index);
+        const escaped = await page.evaluate(
+          ({ index, attr }) => {
+            const el = document.querySelector(`[${attr}="${index}"]`);
+            if (!el) return true; // removed from the DOM entirely
+            const style = getComputedStyle(el);
+            return (
+              style.display === 'none' ||
+              style.visibility === 'hidden' ||
+              el.getClientRects().length === 0
+            );
+          },
+          { index: candidate.index, attr },
+        );
 
         traps.push({
           container: candidate.container,
@@ -326,11 +403,17 @@ export class KeyboardTester {
       }
     } finally {
       // Leave the page as we found it — the markers are ours, not the app's.
-      await page.evaluate(() =>
-        document
-          .querySelectorAll('[data-iris-trap]')
-          .forEach((el) => el.removeAttribute('data-iris-trap')),
-      );
+      try {
+        await page.evaluate(
+          (attr) =>
+            document
+              .querySelectorAll(`[${attr}]`)
+              .forEach((el) => Element.prototype.removeAttribute.call(el, attr)),
+          attr,
+        );
+      } catch {
+        // Cleanup only: a page that navigated away took the markers with it.
+      }
     }
 
     return traps;
@@ -343,73 +426,112 @@ export class KeyboardTester {
     const interactions: KeyboardInteraction[] = [];
 
     // Find elements with arrow key navigation (menus, listboxes, etc.)
-    const arrowNavigableElements = await page.evaluate(() => {
+    // Each widget is addressed by a marker of ours, not a selector built from its id and
+    // class: Radix ids (`radix-:r1:`), Tailwind classes (`md:w-[400px]`) and id-less,
+    // class-less elements made invalid or ambiguous selectors (#285). Removed afterwards.
+    // A per-run attribute NAME: a page's own attributes are never matched, overwritten or
+    // removed, whatever they are called.
+    const nonce = randomBytes(4).toString('hex');
+    const arrowNavigableElements = await page.evaluate((nonce) => {
       const elements = document.querySelectorAll(
         '[role="menu"], [role="listbox"], [role="tree"], [role="grid"], [role="tablist"]',
       );
-      return Array.from(elements).map((el) => ({
-        selector: el.tagName + (el.id ? `#${el.id}` : `.${el.className.split(' ')[0]}`),
-        role: el.getAttribute('role'),
-      }));
-    });
+      return Array.from(elements).map((el, i) => {
+        Element.prototype.setAttribute.call(el, `data-iris-kbd-${nonce}`, `arrow-${i}`);
+        // Through Element.prototype: a <form>'s named controls shadow its methods and
+        // properties (`<input name="setAttribute">`), which threw and ended the run.
+        const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
+        const id = attr('id');
+        const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
+        return {
+          selector: `[data-iris-kbd-${nonce}="arrow-${i}"]`,
+          label: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
+          role: attr('role'),
+        };
+      });
+    }, nonce);
 
-    for (const element of arrowNavigableElements) {
-      try {
-        // Focus the element. A composite widget usually delegates focus to its
-        // active descendant, so read where focus actually landed rather than
-        // assuming it sits on the container.
+    try {
+      for (const element of arrowNavigableElements) {
         try {
-          await page.focus(element.selector);
+          // Focus the element. A composite widget usually delegates focus to its
+          // active descendant, so read where focus actually landed rather than
+          // assuming it sits on the container.
+          try {
+            await page.focus(element.selector);
+          } catch {
+            // Focusing the container can legitimately fail; the fallback below
+            // decides whether focus actually landed somewhere useful.
+          }
+
+          // page.focus() is a silent no-op on a non-focusable container, which is
+          // the normal shape of a roving-tabindex widget (`<ul role="menu">` with
+          // focus on its items). Without this fallback the key press never reaches
+          // the widget's handler and a perfectly good menu false-fails.
+          await page.evaluate((selector) => {
+            const container = document.querySelector(selector);
+            if (!container) return;
+
+            const active = document.activeElement;
+            if (
+              active &&
+              active !== document.body &&
+              Node.prototype.contains.call(container, active)
+            )
+              return;
+
+            const candidate = Element.prototype.querySelector.call(
+              container,
+              '[tabindex]:not([tabindex="-1"]), [tabindex="-1"], a[href], button:not([disabled]),' +
+                ' input:not([disabled]), [role="menuitem"], [role="option"], [role="tab"], [role="treeitem"]',
+            );
+            (candidate as HTMLElement | null)?.focus();
+          }, element.selector);
+
+          const before = await this.activeElementPath(page);
+          await page.keyboard.press('ArrowDown');
+          const after = await this.activeElementPath(page);
+
+          // The verdict is whether focus MOVED. Previously this was hardcoded true,
+          // so a menu that ignored arrow keys entirely still passed.
+          const moved = after !== null && after !== before;
+
+          interactions.push({
+            key: 'ArrowDown',
+            target: element.label,
+            expectedBehavior: `Focus moves to next item in ${element.role}`,
+            actualBehavior: moved
+              ? `Focus moved to ${after}`
+              : `Focus did not move (${before ?? 'nothing focused'})`,
+            success: moved,
+            timestamp: new Date(),
+          });
         } catch {
-          // Focusing the container can legitimately fail; the fallback below
-          // decides whether focus actually landed somewhere useful.
+          interactions.push({
+            key: 'ArrowDown',
+            target: element.label,
+            expectedBehavior: `Focus moves to next item in ${element.role}`,
+            actualBehavior: 'Failed to test navigation',
+            success: false,
+            timestamp: new Date(),
+          });
         }
-
-        // page.focus() is a silent no-op on a non-focusable container, which is
-        // the normal shape of a roving-tabindex widget (`<ul role="menu">` with
-        // focus on its items). Without this fallback the key press never reaches
-        // the widget's handler and a perfectly good menu false-fails.
-        await page.evaluate((selector) => {
-          const container = document.querySelector(selector);
-          if (!container) return;
-
-          const active = document.activeElement;
-          if (active && active !== document.body && container.contains(active)) return;
-
-          const candidate = container.querySelector(
-            '[tabindex]:not([tabindex="-1"]), [tabindex="-1"], a[href], button:not([disabled]),' +
-              ' input:not([disabled]), [role="menuitem"], [role="option"], [role="tab"], [role="treeitem"]',
-          );
-          (candidate as HTMLElement | null)?.focus();
-        }, element.selector);
-
-        const before = await this.activeElementPath(page);
-        await page.keyboard.press('ArrowDown');
-        const after = await this.activeElementPath(page);
-
-        // The verdict is whether focus MOVED. Previously this was hardcoded true,
-        // so a menu that ignored arrow keys entirely still passed.
-        const moved = after !== null && after !== before;
-
-        interactions.push({
-          key: 'ArrowDown',
-          target: element.selector,
-          expectedBehavior: `Focus moves to next item in ${element.role}`,
-          actualBehavior: moved
-            ? `Focus moved to ${after}`
-            : `Focus did not move (${before ?? 'nothing focused'})`,
-          success: moved,
-          timestamp: new Date(),
-        });
+      }
+    } finally {
+      // A page that navigated mid-test has no markers left; a failed cleanup must not
+      // replace the results collected so far.
+      try {
+        await page.evaluate(
+          (nonce) =>
+            document
+              .querySelectorAll(`[data-iris-kbd-${nonce}]`)
+              .forEach((el) =>
+                Element.prototype.removeAttribute.call(el, `data-iris-kbd-${nonce}`),
+              ),
+          nonce,
+        );
       } catch {
-        interactions.push({
-          key: 'ArrowDown',
-          target: element.selector,
-          expectedBehavior: `Focus moves to next item in ${element.role}`,
-          actualBehavior: 'Failed to test navigation',
-          success: false,
-          timestamp: new Date(),
-        });
+        // Cleanup only.
       }
     }
 
@@ -425,7 +547,8 @@ export class KeyboardTester {
     // Find dismissible components. Visibility deliberately avoids offsetParent:
     // it is null for position:fixed elements, which describes most real modals,
     // so those were skipped here and silently recorded as passing Escape handling.
-    const dismissibleElements = await page.evaluate(() => {
+    const nonce = randomBytes(4).toString('hex');
+    const dismissibleElements = await page.evaluate((nonce) => {
       const isVisible = (el: Element) => {
         const style = getComputedStyle(el);
         return (
@@ -438,48 +561,97 @@ export class KeyboardTester {
       const elements = document.querySelectorAll(
         '[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]',
       );
-      return Array.from(elements).map((el) => ({
-        selector: el.tagName + (el.id ? `#${el.id}` : `.${el.className.split(' ')[0]}`),
-        visible: isVisible(el),
-      }));
-    });
+      // Addressed by a marker of ours, as in arrow navigation (#285).
+      return Array.from(elements).map((el, i) => {
+        Element.prototype.setAttribute.call(el, `data-iris-kbd-${nonce}`, `escape-${i}`);
+        // Through Element.prototype: a <form>'s named controls shadow its methods and
+        // properties (`<input name="setAttribute">`), which threw and ended the run.
+        const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
+        const id = attr('id');
+        const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
+        return {
+          selector: `[data-iris-kbd-${nonce}="escape-${i}"]`,
+          id,
+          tag: el.tagName,
+          cls: (attr('class') ?? '').trim(),
+          label: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
+          visible: isVisible(el),
+        };
+      });
+    }, nonce);
 
-    for (const element of dismissibleElements) {
-      if (!element.visible) continue;
+    try {
+      for (const element of dismissibleElements) {
+        if (!element.visible) continue;
 
+        try {
+          const probe = {
+            selector: element.selector,
+            id: element.id,
+            tag: element.tag,
+            cls: element.cls,
+          };
+          const before = await page.evaluate(DISMISSIBLE_STATE, probe);
+          // Already dismissed by an earlier candidate's Escape (a .modal wrapper and its
+          // inner [role=dialog], stacked modals closed by one handler): nothing to test.
+          // Skip a candidate that is gone before its turn: our node hidden or removed and
+          // nothing identifies a replacement (an id, or tag + class that is still showing).
+          // Testing it instead would press Escape on whatever else is showing and record a
+          // failure against an element that no longer exists (a .modal wrapper and its
+          // inner panel closed together beside a persistent chat dialog). A re-render that
+          // changes an id-less dialog's markup before its turn is then not tested: proper
+          // Escape semantics (topmost focused dialog) are #286, which has that fixture.
+          if (!(before.marked ?? before.same ?? false)) continue;
+          await page.keyboard.press('Escape');
+          const after = await page.evaluate(DISMISSIBLE_STATE, probe);
+
+          // Our marked element still there: its own visibility decides. Gone (a handler
+          // that replaced the node, as a framework re-render does): an element with its
+          // id decides, as the id lookup did before markers; with no id, dismissed only if
+          // fewer dismissible elements are visible now. A bare null check read a
+          // replaced-but-open dialog as closed. ponytail: the count is a heuristic for
+          // id-less re-renders; Escape semantics proper are #286.
+          const stillVisible =
+            after.marked !== null
+              ? after.marked
+              : after.same !== null
+                ? after.same
+                : after.visibleCount >= before.visibleCount;
+
+          interactions.push({
+            key: 'Escape',
+            target: element.label,
+            expectedBehavior: 'Modal/dialog closes on Escape',
+            actualBehavior: stillVisible ? 'Still visible' : 'Closed',
+            success: !stillVisible,
+            timestamp: new Date(),
+          });
+        } catch {
+          interactions.push({
+            key: 'Escape',
+            target: element.label,
+            expectedBehavior: 'Modal/dialog closes on Escape',
+            actualBehavior: 'Failed to test',
+            success: false,
+            timestamp: new Date(),
+          });
+        }
+      }
+    } finally {
+      // A page that navigated mid-test has no markers left; a failed cleanup must not
+      // replace the results collected so far.
       try {
-        // Press Escape
-        await page.keyboard.press('Escape');
-
-        // Check if element is still visible (same fixed-position caveat as above).
-        const stillVisible = await page.evaluate((sel) => {
-          const el = document.querySelector(sel);
-          if (!el) return false; // removed from the DOM counts as dismissed
-          const style = getComputedStyle(el);
-          return (
-            style.display !== 'none' &&
-            style.visibility !== 'hidden' &&
-            el.getClientRects().length > 0
-          );
-        }, element.selector);
-
-        interactions.push({
-          key: 'Escape',
-          target: element.selector,
-          expectedBehavior: 'Modal/dialog closes on Escape',
-          actualBehavior: stillVisible ? 'Still visible' : 'Closed',
-          success: !stillVisible,
-          timestamp: new Date(),
-        });
+        await page.evaluate(
+          (nonce) =>
+            document
+              .querySelectorAll(`[data-iris-kbd-${nonce}]`)
+              .forEach((el) =>
+                Element.prototype.removeAttribute.call(el, `data-iris-kbd-${nonce}`),
+              ),
+          nonce,
+        );
       } catch {
-        interactions.push({
-          key: 'Escape',
-          target: element.selector,
-          expectedBehavior: 'Modal/dialog closes on Escape',
-          actualBehavior: 'Failed to test',
-          success: false,
-          timestamp: new Date(),
-        });
+        // Cleanup only.
       }
     }
 

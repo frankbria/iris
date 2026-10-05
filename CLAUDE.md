@@ -253,6 +253,12 @@ plans/
   patterns get the base URL. Local runs may open `file:` and `data:` (like a11y; hosted
   forces both off). Baselines belong to a page URL, so a test that compares two versions of
   a page serves them from one URL (`e2e/visual-diff-e2e.test.ts`), never two `data:` URLs
+- **The keyboard tester addresses elements by marker (#285).** Arrow-key and Escape checks
+  set a per-run attribute `data-iris-kbd-<nonce>="<kind>-<n>"` on each widget and use that attribute as the selector,
+  removed in `finally`; the trap check's marker is per-run too (`data-iris-trap-<nonce>`). Selectors built from id and class were
+  invalid for Radix ids (`radix-:r1:`), Tailwind classes and id-less elements, and ambiguous
+  between look-alikes. Labels read `getAttribute('class')`: an SVG `<a>`'s `className` is
+  an `SVGAnimatedString`, and `.split` on it aborted the whole a11y run
 - **The a11y runner isolates pages (#287).** A page that fails (navigation, timeout, a check
   that throws on hostile markup) is that page's result with `error` and an empty axe
   result; the other pages still run. `summary.pagesErrored` counts them, and an errored page
@@ -1728,7 +1734,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 2174/2175 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 2183/2184 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation
