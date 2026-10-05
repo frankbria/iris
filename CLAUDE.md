@@ -256,7 +256,8 @@ plans/
 - **The a11y runner isolates pages (#287).** A page that fails (navigation, timeout, a check
   that throws on hostile markup) is that page's result with `error` and an empty axe
   result; the other pages still run. `summary.pagesErrored` counts them, and an errored page
-  is never a pass: not in `checkOverallPass`, history (`failed`), the HTML report ("Could not
+  is never a pass: not in `checkOverallPass`, history (`failed`, the reason kept; SQLite
+  migration 3 adds `a11y_test_results.error`), the HTML report ("Could not
   be scanned"), JUnit (`<error>`), the MCP tool (a tool error) or `iris a11y` (lists them,
   exit 3 unless a scanned page has violations: those exit 4, `summary.scannedPassed`).
   The score covers scanned pages only (`null` when none was: an unscanned page has no

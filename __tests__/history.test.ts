@@ -197,7 +197,7 @@ describe('run history persistence (issue #77)', () => {
       // A version-1 database: no `error` column, schema_version 1.
       const old = initializeDatabase(dbPath);
       old.exec(
-        'ALTER TABLE visual_test_results DROP COLUMN error; DELETE FROM schema_version WHERE version > 1',
+        'ALTER TABLE visual_test_results DROP COLUMN error; ALTER TABLE a11y_test_results DROP COLUMN error; DELETE FROM schema_version WHERE version > 1',
       );
       old.close();
 
@@ -275,7 +275,10 @@ describe('run history persistence (issue #77)', () => {
       }
       const store = sqliteHistoryStore(dbPath);
       const [run] = await store.list();
-      expect((await store.get(run.id))!.results[0].passed).toBe(false);
+      const [page] = (await store.get(run.id))!.results;
+      expect(page.passed).toBe(false);
+      // The reason is kept locally too (migration 3), as hosted keeps it.
+      expect(page.result).toMatchObject({ error: 'net::ERR_CONNECTION_REFUSED' });
     });
 
     it('scores each page on its own violations, not the run-wide score', () => {

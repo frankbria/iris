@@ -713,6 +713,7 @@ export function recordSqliteRun(db: Database.Database, run: RunInput): number {
         // The column is NOT NULL: an unscanned page stores 0, with status failed (#287).
         score: (result.score as number | undefined) ?? 0,
         status: stored[i].passed ? 'passed' : 'failed',
+        error: (result.error as string | undefined) ?? null,
         timestamp: run.finishedAt,
       });
     }
@@ -803,6 +804,7 @@ export function sqliteHistoryStore(dbPath: string): HistoryStore {
                     keyboardPassed: a.keyboardPassed,
                     screenReaderPassed: a.screenReaderPassed,
                     score: a.score,
+                    ...(a.error && { error: a.error }),
                   },
                 }))
               : [];
