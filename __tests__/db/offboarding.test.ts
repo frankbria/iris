@@ -196,6 +196,42 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     expect(rows[0].n).toBe(1);
   });
 
+  it('runs every step even when one fails, and reports the failure', async () => {
+    const now = new Date();
+    await user('lea');
+    await sql`insert into session (id, "expiresAt", token, "createdAt", "updatedAt", "userId")
+      values ('s-stuck', ${at(now, -1)}, 't-stuck', now(), now(), 'lea')`.execute(db);
+    await sql`insert into verification (id, identifier, value, "expiresAt", "createdAt", "updatedAt")
+      values ('v-after', 'lea', 'z', ${at(now, -1)}, now(), now())`.execute(db);
+    // A real failure in the sessions step: the database refuses the delete.
+    await sql
+      .raw(
+        `create function iris_test_refuse() returns trigger language plpgsql as
+      $$ begin raise exception 'refused by test'; end $$`,
+      )
+      .execute(db);
+    await sql
+      .raw(
+        `create trigger refuse_session_delete before delete on session
+      for each row execute function iris_test_refuse()`,
+      )
+      .execute(db);
+    try {
+      const report = await offboarding(db).runRetention({ now });
+      expect(report.failures).toEqual(['sessions']);
+      // The step after it still ran.
+      expect(await count('verification', "id = 'v-after'")).toBe(0);
+    } finally {
+      await sql.raw('drop trigger refuse_session_delete on session').execute(db);
+      await sql.raw('drop function iris_test_refuse()').execute(db);
+    }
+  });
+
+  it('lists the purged orgs, whose AI state each container then removes', async () => {
+    expect(await offboarding(db).purgedOrgIds()).toEqual(expect.arrayContaining(['org-twice']));
+    expect(await offboarding(db).purgedOrgIds()).not.toContain('org-r');
+  });
+
   it('drops finished runs after 90 days but keeps their billing records', async () => {
     const now = new Date();
     await user('dan');
