@@ -102,7 +102,9 @@ export function initializeDatabase(dbPath: string): Database.Database {
     if (version < 1) applyMigrationV1(db);
     if (version < 2) applyMigrationV2(db);
   });
-  setUpSchema();
+  // IMMEDIATE takes the write lock before the version is read: two processes opening a
+  // version-1 file at once (`iris watch` beside `iris run`) must not both upgrade it (#284).
+  setUpSchema.immediate();
 
   return db;
 }

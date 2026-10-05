@@ -51,6 +51,21 @@ describe('Visual Diff CLI E2E Tests', () => {
   let page: Page;
   let cwd: string;
 
+  // One URL whose content changes between runs: a baseline belongs to its page, so a
+  // different data: URL would be a different page with a baseline of its own.
+  let served = '';
+  let site: http.Server;
+  let siteUrl = '';
+  beforeAll(async () => {
+    site = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(served);
+    });
+    await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
+    siteUrl = `http://127.0.0.1:${(site.address() as AddressInfo).port}/`;
+  });
+  afterAll(() => new Promise((resolve) => site.close(resolve)));
+
   beforeAll(async () => {
     // Launch browser for test page setup
     browser = await chromium.launch({ headless: true });
@@ -195,21 +210,6 @@ describe('Visual Diff CLI E2E Tests', () => {
   });
 
   describe('Diff Detection', () => {
-    // One URL whose content changes between runs: a baseline belongs to its page, so a
-    // different data: URL would be a different page with a baseline of its own.
-    let served = '';
-    let site: http.Server;
-    let siteUrl = '';
-    beforeAll(async () => {
-      site = http.createServer((_req, res) => {
-        res.writeHead(200, { 'content-type': 'text/html' });
-        res.end(served);
-      });
-      await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
-      siteUrl = `http://127.0.0.1:${(site.address() as AddressInfo).port}/`;
-    });
-    afterAll(() => new Promise((resolve) => site.close(resolve)));
-
     it('should detect visual differences when content changes', async () => {
       served = '<html><body><h1>Original Content</h1></body></html>';
 
@@ -429,12 +429,11 @@ describe('Visual Diff CLI E2E Tests', () => {
     });
 
     it('should classify severity levels correctly', async () => {
-      const baselineHtml = '<html><body><h1>Title</h1><p>Content</p></body></html>';
-      const minorChangeHtml = '<html><body><h1>Title</h1><p>Content .</p></body></html>'; // Minor punctuation change
+      served = '<html><body><h1>Title</h1><p>Content</p></body></html>';
 
       // Create baseline
       const config: VisualTestRunnerConfig = {
-        pages: ['data:text/html,' + encodeURIComponent(baselineHtml)],
+        pages: [siteUrl],
         baseline: { strategy: 'branch', reference: 'main' },
         capture: {
           viewport: { width: 800, height: 600 },
@@ -451,7 +450,7 @@ describe('Visual Diff CLI E2E Tests', () => {
           },
         },
         diff: {
-          threshold: 0.01,
+          threshold: 0, // any changed pixel fails: a punctuation change is only a few
           semanticAnalysis: true,
           aiProvider: 'openai',
           antiAliasing: true,
@@ -463,19 +462,17 @@ describe('Visual Diff CLI E2E Tests', () => {
       const baselineRunner = new VisualTestRunner(config);
       await baselineRunner.run();
 
-      // Test minor change
-      const testRunner = new VisualTestRunner({
-        ...config,
-        pages: ['data:text/html,' + encodeURIComponent(minorChangeHtml)],
-        updateBaseline: false,
-      });
+      // The same page with a punctuation change (one URL: a baseline belongs to its page).
+      served = '<html><body><h1>Title</h1><p>Content .</p></body></html>';
+      const testRunner = new VisualTestRunner({ ...config, updateBaseline: false });
       const result = await testRunner.run();
 
-      if (result.summary.failed > 0) {
-        const failedResult = result.results.find((r) => !r.passed);
-        expect(failedResult?.severity).toBeDefined();
-        expect(['minor', 'moderate', 'breaking']).toContain(failedResult?.severity);
-      }
+      // Compared, not re-baselined, and graded.
+      expect(result.summary).toMatchObject({ newBaselines: 0, failed: 1 });
+      const [compared] = result.results;
+      expect(compared.error).toBeUndefined();
+      expect(compared.pixelDifference).toBeGreaterThan(0);
+      expect(['minor', 'moderate', 'breaking']).toContain(compared.severity);
     });
   });
 
