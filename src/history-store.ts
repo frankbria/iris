@@ -1,3 +1,4 @@
+import { stripUserinfo } from './report-encoding';
 import type Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
 import { describeAction } from './actions';
@@ -157,13 +158,16 @@ function resultsOf(run: RunInput): StoredRunResult[] {
         const counts = violationCounts(page);
         return {
           url: page.page,
-          passed: page.axeResult.violations.length === 0,
+          // A page that could not be scanned found nothing: not a pass (#287).
+          passed: page.error === undefined && page.axeResult.violations.length === 0,
           result: {
+            ...(page.error !== undefined && { error: boundedError(page.error) }),
             violations: counts,
             // Absent sub-tests mean "not run", which is not a failure to record.
             keyboardPassed: page.keyboardResult?.passed ?? true,
             screenReaderPassed: page.screenReaderResult?.passed ?? true,
-            score: calculateAccessibilityScore(counts, 1),
+            // An unscanned page has no score (#287), not a perfect one.
+            ...(page.error === undefined && { score: calculateAccessibilityScore(counts, 1) }),
           },
         };
       });
@@ -204,9 +208,6 @@ const toJsonb = (value: unknown) =>
  */
 const wellFormed = (text: string) => text.replace(UNSTORABLE, '\uFFFD');
 const UNSTORABLE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]|\u0000/g;
-
-/** Every `scheme://user:password@` in free text, without the userinfo. */
-const stripUserinfo = (text: string) => text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
 
 /**
  * A URL without its `user:password@`: history is readable by everyone in the org.
@@ -709,8 +710,10 @@ export function recordSqliteRun(db: Database.Database, run: RunInput): number {
         keyboardPassed: result.keyboardPassed as boolean,
         screenReaderPassed: result.screenReaderPassed as boolean,
         // Scored per page against its own violations.
-        score: result.score as number,
-        status: page.axeResult.violations.length > 0 ? 'failed' : 'passed',
+        // The column is NOT NULL: an unscanned page stores 0, with status failed (#287).
+        score: (result.score as number | undefined) ?? 0,
+        status: stored[i].passed ? 'passed' : 'failed',
+        error: (result.error as string | undefined) ?? null,
         timestamp: run.finishedAt,
       });
     }
@@ -801,6 +804,7 @@ export function sqliteHistoryStore(dbPath: string): HistoryStore {
                     keyboardPassed: a.keyboardPassed,
                     screenReaderPassed: a.screenReaderPassed,
                     score: a.score,
+                    ...(a.error && { error: a.error }),
                   },
                 }))
               : [];

@@ -104,6 +104,20 @@ function visualConfig(url: string): VisualTestRunnerConfig {
   };
 }
 
+/**
+ * The per-page error the a11y runner records for a page it could not scan (#287: it used
+ * to throw, which ended every other page's scan too).
+ */
+async function a11yError(
+  a11y: { AccessibilityRunner: typeof import('../src/a11y/a11y-runner').AccessibilityRunner },
+  config: ReturnType<typeof a11yConfig>,
+): Promise<string | undefined> {
+  const result = await new a11y.AccessibilityRunner(config).run();
+  expect(result.results).toHaveLength(1);
+  expect(result.summary.passed).toBe(false);
+  return result.results[0].error;
+}
+
 /** The per-page error the visual runner records in place of a comparison. */
 async function visualError(visual: VisualModule, url: string): Promise<string | undefined> {
   const result = await new visual.VisualTestRunner(visualConfig(url)).run();
@@ -153,15 +167,15 @@ describe('runner URL policy', () => {
     const { a11y, visual } = loadRunners(false);
 
     it('a11y refuses the metadata host', async () => {
-      await expect(new a11y.AccessibilityRunner(a11yConfig(METADATA_URL)).run()).rejects.toThrow(
+      expect(await a11yError(a11y, a11yConfig(METADATA_URL))).toMatch(
         /blocked by navigation policy: .*link-local\/metadata/,
       );
     });
 
     it('a11y refuses a redirect to the metadata host', async () => {
-      await expect(
-        new a11y.AccessibilityRunner(a11yConfig(`${origin}/to-metadata`)).run(),
-      ).rejects.toThrow(/redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/);
+      expect(await a11yError(a11y, a11yConfig(`${origin}/to-metadata`))).toMatch(
+        /redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
+      );
     });
 
     it('visual refuses the metadata host', async () => {
@@ -206,12 +220,12 @@ describe('runner URL policy', () => {
     });
 
     it('a11y applies an explicit strict policy to data: (the MCP tool passes {})', async () => {
-      await expect(
-        new a11y.AccessibilityRunner({
+      expect(
+        await a11yError(a11y, {
           ...a11yConfig('data:text/html,hi'),
           urlPolicy: {},
-        }).run(),
-      ).rejects.toThrow(/blocked by navigation policy/);
+        }),
+      ).toMatch(/blocked by navigation policy/);
     });
   });
 
@@ -219,7 +233,7 @@ describe('runner URL policy', () => {
     const { a11y, visual } = loadRunners(true);
 
     it('a11y refuses a loopback page before any request reaches it', async () => {
-      await expect(new a11y.AccessibilityRunner(a11yConfig(`${origin}/`)).run()).rejects.toThrow(
+      expect(await a11yError(a11y, a11yConfig(`${origin}/`))).toMatch(
         /blocked by navigation policy: .*private\/loopback/,
       );
       expect(hits).toEqual([]);
@@ -239,9 +253,9 @@ describe('runner URL policy', () => {
     });
 
     it('a11y refuses data: even though the unset default allows it locally', async () => {
-      await expect(
-        new a11y.AccessibilityRunner(a11yConfig('data:text/html,hi')).run(),
-      ).rejects.toThrow(/blocked by navigation policy/);
+      expect(await a11yError(a11y, a11yConfig('data:text/html,hi'))).toMatch(
+        /blocked by navigation policy/,
+      );
     });
   });
 });

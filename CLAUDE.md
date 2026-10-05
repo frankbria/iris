@@ -253,6 +253,18 @@ plans/
   patterns get the base URL. Local runs may open `file:` and `data:` (like a11y; hosted
   forces both off). Baselines belong to a page URL, so a test that compares two versions of
   a page serves them from one URL (`e2e/visual-diff-e2e.test.ts`), never two `data:` URLs
+- **The a11y runner isolates pages (#287).** A page that fails (navigation, timeout, a check
+  that throws on hostile markup) is that page's result with `error` and an empty axe
+  result; the other pages still run. `summary.pagesErrored` counts them, and an errored page
+  is never a pass: not in `checkOverallPass`, history (`failed`, the reason kept; SQLite
+  migration 3 adds `a11y_test_results.error`), the HTML report ("Could not
+  be scanned"), JUnit (`<error>`), the MCP tool (a tool error) or `iris a11y` (lists them,
+  exit 3 unless a scanned page has violations: those exit 4, `summary.scannedPassed`).
+  The score covers scanned pages only (`null` when none was: an unscanned page has no
+  violations and raised it). Errors are userinfo-stripped where they are made
+  (`stripUserinfo`, src/report-encoding.ts). The report directory is created before
+  writing. The hosted worker sets `failFast` (no browser time on pages whose results
+  would be thrown away) and throws the page error itself, keeping fail-the-job semantics
 - **A failed analysis is not a verdict (#281).** The classifier answers an outage or a tripped
   breaker with a fallback (`analysisFailed: true`, `severity: 'medium'`). The visual runner
   grades such a comparison by its pixels (`estimateSeverity`), counts it in
@@ -1184,7 +1196,8 @@ index; 0005: `attempts`, `claim_token`, `heartbeat_at`, #435), no broker (ADR 00
   job is visible through `jobs.get` alone.
 - **The worker needs hosted mode** (exit 2 without `IRIS_HOSTED`): the runner's
   `urlPolicy` default and the egress proxy are what keep tenant URLs off internal hosts.
-  A page that fails navigation fails the whole job (one error, not per page). Jobs set
+  A page that fails navigation fails the whole job (one error, not per page): the runner
+  itself records a failing page and goes on (#287), and `runA11y` throws its error. Jobs set
   `failOnHttpError`: the egress proxy answers a plain-HTTP request to an internal address
   with a 403 *document*, which would otherwise be scanned and billed as a success.
   A result that cannot be stored is recorded as a generic error; the detail is logged.

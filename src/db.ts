@@ -40,6 +40,8 @@ export interface A11yTestResult {
   score: number;
   status: 'passed' | 'failed' | 'warning';
   timestamp: Date;
+  /** Why the page could not be scanned, when it could not be (#287). */
+  error?: string | null;
 }
 
 /**
@@ -101,12 +103,23 @@ export function initializeDatabase(dbPath: string): Database.Database {
     const version = versionRow?.version || 0;
     if (version < 1) applyMigrationV1(db);
     if (version < 2) applyMigrationV2(db);
+    if (version < 3) applyMigrationV3(db);
   });
   // IMMEDIATE takes the write lock before the version is read: two processes opening a
   // version-1 file at once (`iris watch` beside `iris run`) must not both upgrade it (#284).
   setUpSchema.immediate();
 
   return db;
+}
+
+/**
+ * Migration 3 (#287): `a11y_test_results.error`, why a page could not be scanned.
+ */
+function applyMigrationV3(db: Database.Database): void {
+  db.exec(`
+    ALTER TABLE a11y_test_results ADD COLUMN error TEXT;
+    INSERT INTO schema_version (version) VALUES (3);
+  `);
 }
 
 /**
@@ -315,9 +328,9 @@ export function insertA11yTestResult(db: Database.Database, result: A11yTestResu
     INSERT INTO a11y_test_results (
       test_run_id, page, violations_critical, violations_serious,
       violations_moderate, violations_minor, keyboard_passed,
-      screen_reader_passed, score, status, timestamp
+      screen_reader_passed, score, status, timestamp, error
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertResult = stmt.run(
@@ -332,6 +345,7 @@ export function insertA11yTestResult(db: Database.Database, result: A11yTestResu
     result.score,
     result.status,
     result.timestamp.toISOString(),
+    result.error ?? null,
   );
 
   return insertResult.lastInsertRowid as number;
@@ -391,6 +405,7 @@ export function getA11yTestResults(
     screenReaderPassed: row.screen_reader_passed === 1,
     score: row.score,
     status: row.status,
+    error: row.error,
     timestamp: new Date(row.timestamp),
   }));
 }
