@@ -426,3 +426,12 @@ Write/Edit, not as a pre-push afterthought.
 - BetterAuth stores several roles as one comma string (`admin,owner`): match the role as a token, never by equality.
 - SeaweedFS with no `-s3.config` serves anonymous requests; the identities file is what makes a bucket private. GitHub service containers cannot pass a command, so start it as a step.
 - The GLM review bot can fail silently (`is_error: true`, $0, "I'll analyze this" left as the comment): read its result, do not count a green check as a review.
+
+## #349, #460, #268, #463, #472, #346 (2026-10-04/05)
+- The root `tsc` does not compile `__tests__/`, and ts-jest caches diagnostics: after widening an interface that test fakes implement, run those suites with `jest --no-cache` (CI caught `api-jobs`/`protocol-observability` that passed locally).
+- Do not switch branches while `codex review` runs: it reviews the working tree, so a switch made it review the wrong PR.
+- Never rebase a pushed branch to catch up with main: merge main in (a rebase needs a force-push).
+- Worker writes that happen before the claim-checked `finish()` (object storage, baseline seeding) need their own isolation: per-attempt keys and insert-only seeding, or a reaped attempt overwrites the winner.
+- Anything deleted in a database transaction but stored outside it (object storage) needs a queue written in that same transaction, drained afterwards, with failed entries rotated so one bad entry cannot starve the rest.
+- A plan quota must be checked under the same per-org lock as the insert it guards, and must count outstanding work as well as billed usage, or parallel submits overshoot.
+- Pin new limits' effect on existing tests: the free plan's 1 session broke spawned tests that opened two; put those orgs on a bigger plan rather than weakening the limit.
