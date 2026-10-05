@@ -357,14 +357,17 @@ export class VisualTestRunner {
     const artifactsDir = this.config.artifactsDir ?? '.iris';
 
     try {
-      // Before the first navigation, so no redirect hop or sub-resource escapes it.
-      // `{}` still refuses metadata hosts; IRIS_HOSTED makes it strict (#335).
-      await installUrlPolicyGuard(page, {});
+      // Before the first navigation, so no redirect hop or sub-resource escapes it. Local
+      // runs may open file: and data: pages, as the a11y runner may; metadata hosts are
+      // still refused, and IRIS_HOSTED forces all three off (#335, #284).
+      await installUrlPolicyGuard(page, { allowFile: true, allowData: true });
 
       // Navigate to page (assuming pagePattern is a URL for now)
       // Trim a trailing slash off the base so `https://host/` + `/about` doesn't double up.
       const base = (this.config.baseURL ?? 'http://localhost:3000').replace(/\/$/, '');
-      const url = pagePattern.startsWith('http') ? pagePattern : `${base}${pagePattern}`;
+      // Any scheme is absolute (#284): `data:`, `file:` and `about:` used to get the base
+      // prepended. Only a scheme-less pattern (`/about`) is relative to the base.
+      const url = /^[a-z][a-z0-9+.-]*:/i.test(pagePattern) ? pagePattern : `${base}${pagePattern}`;
       await guardedGoto(page, url, { waitUntil: 'networkidle' });
 
       // Wait for stabilization

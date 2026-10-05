@@ -238,6 +238,20 @@ describe('VisualTestRunner', () => {
       });
     });
 
+    // #284: only scheme-less patterns get the base URL. A data: or file: page used to become
+    // `http://localhost:3000data:...`, and the visual guard refused both schemes locally.
+    it('uses data: and file: pages as given, and may open them locally', async () => {
+      const pages = ['data:text/html,%3Cp%3Ehi%3C%2Fp%3E', 'file:///tmp/iris-284/page.html'];
+      visualRunner = new VisualTestRunner({ ...defaultConfig, pages });
+
+      const result = await visualRunner.run();
+
+      for (const url of pages) {
+        expect(mockPage.goto).toHaveBeenCalledWith(url, { waitUntil: 'networkidle' });
+      }
+      expect(result.results.map((r) => r.error)).toEqual([undefined, undefined]);
+    });
+
     it('should resolve relative pages against a configured baseURL', async () => {
       const customConfig = {
         ...defaultConfig,

@@ -171,6 +171,66 @@ describe('VisualReporter', () => {
     });
   });
 
+  // #284: without --output the report goes to .iris/reports/, but its image links were
+  // resolved against the working directory, so none of them loaded.
+  it('links images that resolve from the default report location', async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-284-'));
+    const cwd = process.cwd();
+    process.chdir(work);
+    try {
+      // Paths as the runner writes them: relative to the working directory.
+      const shot = path.join('.iris', 'runs', 'r1', 'current', 'about.png');
+      fs.mkdirSync(path.dirname(shot), { recursive: true });
+      fs.writeFileSync(shot, 'png');
+      const reporter = new VisualReporter({ format: 'html' }); // no outputPath
+      const failed = {
+        ...mockResults.results[1],
+        screenshotPath: shot,
+        baselinePath: shot,
+        diffPath: shot,
+      };
+      const { reportPath } = await reporter.generateReport({ ...mockResults, results: [failed] });
+
+      const srcs = [...fs.readFileSync(reportPath, 'utf-8').matchAll(/<img src="([^"]+)"/g)].map(
+        (m) => decodeURIComponent(m[1]),
+      );
+      expect(srcs.length).toBeGreaterThan(0);
+      for (const src of srcs) {
+        expect(fs.existsSync(path.resolve(path.dirname(reportPath), src))).toBe(true);
+      }
+    } finally {
+      process.chdir(cwd);
+      fs.rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  // #284: a comparison that could not be made (navigation, capture, decode limit) carries
+  // its reason; every format must show it instead of "Visual regression detected".
+  describe.each(['html', 'junit', 'markdown'] as const)('failure reason (%s)', (format) => {
+    it('shows the error of a comparison that could not be made', async () => {
+      const reporter = new VisualReporter({
+        format,
+        outputPath: path.join(tempDir, `error.${format}`),
+      });
+      const broken = {
+        page: '/checkout',
+        device: 'desktop',
+        passed: false,
+        similarity: 0,
+        pixelDifference: 1,
+        threshold: 0.1,
+        severity: 'breaking' as const,
+        screenshotPath: '',
+        error: 'net::ERR_CONNECTION_REFUSED at http://localhost:3000/checkout',
+      };
+      const { reportPath } = await reporter.generateReport({ ...mockResults, results: [broken] });
+      const content = fs.readFileSync(reportPath, 'utf-8');
+      // Markdown escapes the underscores (report-encoding, #339); the text is the same.
+      expect(content).toMatch(/ERR\\?_CONNECTION\\?_REFUSED/);
+      if (format === 'junit') expect(content).toMatch(/<failure message="Comparison failed: net::/);
+    });
+  });
+
   describe('HTML Report Generation', () => {
     it('should generate valid HTML report', async () => {
       const reporter = new VisualReporter({

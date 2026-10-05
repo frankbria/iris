@@ -162,8 +162,8 @@ code is the ordering key.
 | `P1.1` | [#280](https://github.com/frankbria/iris/issues/280) | Visual severity treats a pixel count as a fraction | — | DONE (PR #466) |
 | `P1.2` | [#281](https://github.com/frankbria/iris/issues/281) | Failed AI analysis must not downgrade a regression to pass | P1.1 (#280) | DONE (#485) |
 | `P1.3` | [#282](https://github.com/frankbria/iris/issues/282) | Diff full-page captures whose height changed; bound decoded image size | — | DONE (#486) |
-| `P1.4` | [#283](https://github.com/frankbria/iris/issues/283) | Diff engine: fix pixelmatch option mapping and random early exit | — | DONE |
-| `P1.5` | [#284](https://github.com/frankbria/iris/issues/284) | Visual report and runner: broken image links, dropped errors, mangled URLs | P0.28 (#343) | TODO |
+| `P1.4` | [#283](https://github.com/frankbria/iris/issues/283) | Diff engine: fix pixelmatch option mapping and random early exit | — | DONE (#487) |
+| `P1.5` | [#284](https://github.com/frankbria/iris/issues/284) | Visual report and runner: broken image links, dropped errors, mangled URLs | P0.28 (#343) | DONE |
 | `P1.6` | [#285](https://github.com/frankbria/iris/issues/285) | Keyboard tester: invalid selectors and crash on SVG links | — | TODO |
 | `P1.7` | [#286](https://github.com/frankbria/iris/issues/286) | Keyboard tester verdicts: focus order, roving tabindex, Escape | P1.6 (#285) | TODO |
 | `P1.8` | [#287](https://github.com/frankbria/iris/issues/287) | a11y runner: per-page error isolation and report directory creation | — | TODO |

@@ -23,6 +23,8 @@ export interface VisualTestResult {
   severity: 'low' | 'medium' | 'high' | 'critical' | null;
   status: 'passed' | 'failed' | 'new_baseline';
   timestamp: Date;
+  /** Why the comparison could not be made (navigation, capture), when it could not (#284). */
+  error?: string | null;
 }
 
 export interface A11yTestResult {
@@ -39,8 +41,6 @@ export interface A11yTestResult {
   status: 'passed' | 'failed' | 'warning';
   timestamp: Date;
 }
-
-const SCHEMA_VERSION = 1;
 
 /**
  * Initialize SQLite database and create all tables if they don't exist.
@@ -98,13 +98,25 @@ export function initializeDatabase(dbPath: string): Database.Database {
       .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
       .get() as { version: number } | undefined;
 
-    if ((versionRow?.version || 0) < SCHEMA_VERSION) {
-      applyMigrationV1(db);
-    }
+    const version = versionRow?.version || 0;
+    if (version < 1) applyMigrationV1(db);
+    if (version < 2) applyMigrationV2(db);
   });
-  setUpSchema();
+  // IMMEDIATE takes the write lock before the version is read: two processes opening a
+  // version-1 file at once (`iris watch` beside `iris run`) must not both upgrade it (#284).
+  setUpSchema.immediate();
 
   return db;
+}
+
+/**
+ * Migration 2 (#284): `visual_test_results.error`, why a comparison could not be made.
+ */
+function applyMigrationV2(db: Database.Database): void {
+  db.exec(`
+    ALTER TABLE visual_test_results ADD COLUMN error TEXT;
+    INSERT INTO schema_version (version) VALUES (2);
+  `);
 }
 
 /**
@@ -213,9 +225,9 @@ export function insertVisualTestResult(db: Database.Database, result: VisualTest
   const stmt = db.prepare(`
     INSERT INTO visual_test_results (
       test_run_id, page, device, baseline_ref, current_ref, diff_ref,
-      diff_percentage, ai_analysis, severity, status, timestamp
+      diff_percentage, ai_analysis, severity, status, timestamp, error
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertResult = stmt.run(
@@ -230,6 +242,7 @@ export function insertVisualTestResult(db: Database.Database, result: VisualTest
     result.severity,
     result.status,
     result.timestamp.toISOString(),
+    result.error ?? null,
   );
 
   return insertResult.lastInsertRowid as number;
@@ -288,6 +301,7 @@ export function getVisualTestResults(
     diffPercentage: row.diff_percentage,
     aiAnalysis: row.ai_analysis,
     severity: row.severity,
+    error: row.error,
     status: row.status,
     timestamp: new Date(row.timestamp),
   }));
