@@ -307,7 +307,13 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       const arrow = result.interactions.filter((i) => i.key === 'ArrowDown');
       expect(arrow.map((i) => i.success)).toEqual([false, true]);
       // The markers used to address them are removed afterwards.
-      expect(await page.locator('[data-iris-kbd]').count()).toBe(0);
+      expect(
+        await page.evaluate(() =>
+          [...document.querySelectorAll('*')].some((el) =>
+            el.getAttributeNames().some((n) => n.startsWith('data-iris-kbd')),
+          ),
+        ),
+      ).toBe(false);
     });
 
     // A handler that replaces the dialog node (a re-render) and leaves it open drops our
@@ -358,7 +364,7 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
         page,
         `<!doctype html><html lang="en"><head><title>t</title></head><body>
         <div data-iris-kbd="arrow-0" tabindex="0">decoy</div>
-        <ul role="menu"><li role="menuitem" tabindex="0">One</li><li role="menuitem" tabindex="-1">Two</li></ul>
+        <ul role="menu" data-iris-kbd="mine"><li role="menuitem" tabindex="0">One</li><li role="menuitem" tabindex="-1">Two</li></ul>
         <script>{const m=document.querySelector('[role=menu]');
           const items=[...m.querySelectorAll('[role=menuitem]')];
           m.addEventListener('keydown',(e)=>{ if(e.key!=='ArrowDown')return;
@@ -372,8 +378,9 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(
         result.interactions.filter((i) => i.key === 'ArrowDown').map((i) => i.success),
       ).toEqual([true]);
-      // The page's own attribute is left alone.
+      // The page's own attributes are left alone, including the one on the tested menu.
       expect(await page.locator('[data-iris-kbd="arrow-0"]').count()).toBe(1);
+      expect(await page.locator('[role=menu][data-iris-kbd="mine"]').count()).toBe(1);
     });
 
     it('does not crash on an SVG link', async () => {

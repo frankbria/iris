@@ -377,21 +377,22 @@ export class KeyboardTester {
     // Each widget is addressed by a marker of ours, not a selector built from its id and
     // class: Radix ids (`radix-:r1:`), Tailwind classes (`md:w-[400px]`) and id-less,
     // class-less elements made invalid or ambiguous selectors (#285). Removed afterwards.
-    // Per run, so a page's own `data-iris-kbd` attribute is never mistaken for ours.
+    // A per-run attribute NAME: a page's own attributes are never matched, overwritten or
+    // removed, whatever they are called.
     const nonce = randomBytes(4).toString('hex');
     const arrowNavigableElements = await page.evaluate((nonce) => {
       const elements = document.querySelectorAll(
         '[role="menu"], [role="listbox"], [role="tree"], [role="grid"], [role="tablist"]',
       );
       return Array.from(elements).map((el, i) => {
-        Element.prototype.setAttribute.call(el, 'data-iris-kbd', `${nonce}-arrow-${i}`);
+        Element.prototype.setAttribute.call(el, `data-iris-kbd-${nonce}`, `arrow-${i}`);
         // Through Element.prototype: a <form>'s named controls shadow its methods and
         // properties (`<input name="setAttribute">`), which threw and ended the run.
         const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
         const id = attr('id');
         const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
         return {
-          selector: `[data-iris-kbd="${nonce}-arrow-${i}"]`,
+          selector: `[data-iris-kbd-${nonce}="arrow-${i}"]`,
           label: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
           role: el.getAttribute('role'),
         };
@@ -465,8 +466,10 @@ export class KeyboardTester {
         await page.evaluate(
           (nonce) =>
             document
-              .querySelectorAll(`[data-iris-kbd^="${nonce}-"]`)
-              .forEach((el) => Element.prototype.removeAttribute.call(el, 'data-iris-kbd')),
+              .querySelectorAll(`[data-iris-kbd-${nonce}]`)
+              .forEach((el) =>
+                Element.prototype.removeAttribute.call(el, `data-iris-kbd-${nonce}`),
+              ),
           nonce,
         );
       } catch {
@@ -502,14 +505,14 @@ export class KeyboardTester {
       );
       // Addressed by a marker of ours, as in arrow navigation (#285).
       return Array.from(elements).map((el, i) => {
-        Element.prototype.setAttribute.call(el, 'data-iris-kbd', `${nonce}-escape-${i}`);
+        Element.prototype.setAttribute.call(el, `data-iris-kbd-${nonce}`, `escape-${i}`);
         // Through Element.prototype: a <form>'s named controls shadow its methods and
         // properties (`<input name="setAttribute">`), which threw and ended the run.
         const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
         const id = attr('id');
         const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
         return {
-          selector: `[data-iris-kbd="${nonce}-escape-${i}"]`,
+          selector: `[data-iris-kbd-${nonce}="escape-${i}"]`,
           label: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
           visible: isVisible(el),
         };
@@ -558,8 +561,10 @@ export class KeyboardTester {
         await page.evaluate(
           (nonce) =>
             document
-              .querySelectorAll(`[data-iris-kbd^="${nonce}-"]`)
-              .forEach((el) => Element.prototype.removeAttribute.call(el, 'data-iris-kbd')),
+              .querySelectorAll(`[data-iris-kbd-${nonce}]`)
+              .forEach((el) =>
+                Element.prototype.removeAttribute.call(el, `data-iris-kbd-${nonce}`),
+              ),
           nonce,
         );
       } catch {

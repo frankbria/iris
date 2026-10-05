@@ -254,7 +254,7 @@ plans/
   forces both off). Baselines belong to a page URL, so a test that compares two versions of
   a page serves them from one URL (`e2e/visual-diff-e2e.test.ts`), never two `data:` URLs
 - **The keyboard tester addresses elements by marker (#285).** Arrow-key and Escape checks
-  set `data-iris-kbd="<kind>-<n>"` on each widget and use that attribute as the selector,
+  set a per-run attribute `data-iris-kbd-<nonce>="<kind>-<n>"` on each widget and use that attribute as the selector,
   removed in `finally` (as `data-iris-trap` is). Selectors built from id and class were
   invalid for Radix ids (`radix-:r1:`), Tailwind classes and id-less elements, and ambiguous
   between look-alikes. Labels read `getAttribute('class')`: an SVG `<a>`'s `className` is
