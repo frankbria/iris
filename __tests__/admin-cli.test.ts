@@ -177,4 +177,38 @@ describe('iris admin refusals', () => {
     const r = await iris(['admin', 'org-status', 'org-b'], env);
     expect(r).toMatchObject({ code: 0, stdout: 'org org-b: active\nno suspension history\n' });
   }, 60_000);
+
+  // #349: deletion is a soft delete the operator can undo, then retention purges it.
+  test('delete-org, restore-org, delete-user and retention', async () => {
+    await sql`insert into organization (id, name, slug, "createdAt")
+      values ('org-d', 'D', 'd', now())`.execute(db);
+    const del = await iris(['admin', 'delete-org', 'org-d', '--reason', 'customer request'], env);
+    expect(del.code).toBe(0);
+    expect(del.stdout).toMatch(/^org org-d is suspended; its data is purged after \d{4}-/);
+    const again = await iris(['admin', 'delete-org', 'org-d', '--reason', 'x'], env);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toMatch(/already requested/);
+
+    expect(await iris(['admin', 'restore-org', 'org-d'], env)).toMatchObject({
+      code: 0,
+      stdout: 'deletion of org org-d cancelled\n',
+    });
+    expect((await iris(['admin', 'restore-org', 'org-d'], env)).code).toBe(1);
+
+    await sql`insert into "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+      values ('u-gone', 'G', 'gone@iris.test', true, now(), now())`.execute(db);
+    expect(await iris(['admin', 'delete-user', 'u-gone'], env)).toMatchObject({
+      code: 0,
+      stdout: 'user u-gone deleted\n',
+    });
+    expect((await iris(['admin', 'delete-user', 'u-gone'], env)).code).toBe(1);
+
+    const r = await iris(['admin', 'retention'], env);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      orgsPurged: [],
+      aiLedgerRows: 0,
+      aiCacheRows: 0,
+    });
+  }, 240_000);
 });
