@@ -137,6 +137,13 @@ describe('FilesystemArtifactStore', () => {
       malformed: 'org/orgA/project/p/run/run1/diff/a b.png',
       notAString: 42,
     });
+    // A name like `__proto__` is just a name: no prototype assignment, still signed.
+    const proto = await signRunArtifacts(
+      store,
+      scope,
+      JSON.parse(`{"__proto__": "${baselineKey({ orgId: 'orgA', projectId: 'p', name: 'n' })}"}`),
+    );
+    expect(Object.keys(proto.signed)).toEqual(['__proto__']);
     expect(Object.keys(signed).sort()).toEqual(['baseline', 'diff']);
     expect(dropped.sort()).toEqual([
       'lookalike',

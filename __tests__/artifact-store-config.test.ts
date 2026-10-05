@@ -64,6 +64,25 @@ describe('resolveArtifactStore', () => {
     },
   );
 
+  it('refuses the rest of the settings without an endpoint (a typo, not "off")', () => {
+    process.env.IRIS_S3_BUCKET = 'iris';
+    expect(() => resolveArtifactStore()).toThrow(/IRIS_S3_BUCKET set but IRIS_S3_ENDPOINT is not/);
+  });
+
+  it.each([
+    ['http://s3.internal:8333', /https/],
+    ['https://user:pw@s3.example.com', /credentials/],
+    ['not a url', /http\(s\) URL/],
+  ])('refuses the endpoint %s', (endpoint, why) => {
+    Object.assign(process.env, {
+      IRIS_S3_ENDPOINT: endpoint,
+      IRIS_S3_BUCKET: 'iris',
+      IRIS_S3_ACCESS_KEY_ID: 'id',
+      IRIS_S3_SECRET_ACCESS_KEY: 'secret',
+    });
+    expect(() => resolveArtifactStore()).toThrow(why);
+  });
+
   it('refuses an endpoint that is not http(s)', () => {
     Object.assign(process.env, {
       IRIS_S3_ENDPOINT: 'file:///etc',
@@ -72,5 +91,23 @@ describe('resolveArtifactStore', () => {
       IRIS_S3_SECRET_ACCESS_KEY: 'secret',
     });
     expect(() => resolveArtifactStore()).toThrow(/IRIS_S3_ENDPOINT/);
+  });
+
+  it('accepts https anywhere and http on loopback', () => {
+    Object.assign(process.env, {
+      IRIS_S3_BUCKET: 'iris',
+      IRIS_S3_ACCESS_KEY_ID: 'id',
+      IRIS_S3_SECRET_ACCESS_KEY: 'secret',
+    });
+    for (const endpoint of [
+      'https://s3.example.com',
+      'http://127.0.0.1:58333',
+      'http://localhost:9000',
+    ]) {
+      process.env.IRIS_S3_ENDPOINT = endpoint;
+      const store = resolveArtifactStore();
+      expect(store).toBeInstanceOf(S3ArtifactStore);
+      store!.close();
+    }
   });
 });

@@ -443,8 +443,33 @@ if (ADMIN_URL && !S3_READY && process.env.CI) throw new Error('IRIS_TEST_S3_* is
     const edited = new URL(url);
     edited.pathname = edited.pathname.replace('/org/org-a/', '/org/org-b/');
     expect((await fetch(edited)).status).toBe(403);
-    await new Promise((r) => setTimeout(r, 3000));
-    expect((await fetch(url)).status).toBe(403);
+    // It works now, and stops working once its 2 s are up. Polled rather than slept: the
+    // expiry is judged by SeaweedFS's clock (the Docker VM's), and WSL's clock steps (#190).
+    expect((await fetch(url)).status).toBe(200);
+    let status = 200;
+    for (let i = 0; i < 20 && status === 200; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      status = (await fetch(url)).status;
+    }
+    expect(status).toBe(403);
+  });
+
+  // A page slug can look like an API key (`iris_` + 16 alphanumerics); redaction must not
+  // rewrite the stored key before it is signed.
+  it('signs a key whose name looks like an API key, unmangled', async () => {
+    const id = await visualRun('org-a', {});
+    const key = runArtifactKey({
+      orgId: 'org-a',
+      projectId: 'shop',
+      runId: id,
+      kind: 'current',
+      name: 'iris_abcdefghijklmnopqrst',
+    });
+    await store.put(key, Buffer.from('lookalike png'), 'image/png');
+    await sql`update run_results set result = ${JSON.stringify({ artifacts: { current: key } })}
+      where run_id = ${id}`.execute(db);
+    const { url } = (await detail(base, id)).results[0].result.artifacts.current;
+    expect(await (await fetch(url)).text()).toBe('lookalike png');
   });
 
   it('another org cannot read the run at all', async () => {

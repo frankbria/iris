@@ -205,20 +205,24 @@ export async function handleJobsRequest(
       if (!run) return send(res, 404, { error: 'Not found' });
       // Every key of the org reads this. #254 stored the run without typed values or URL
       // userinfo; secret-looking query values (a reset link's token) are cut here too.
-      // Artifacts are signed after that pass: a signed URL's X-Amz-Signature would be cut.
-      const body = redactStrings(run) as typeof run;
-      for (const r of body.results) {
-        const { artifacts, ...rest } = r.result as Record<string, unknown>;
-        if (artifacts === undefined) continue;
+      // Artifact keys are taken out first (a key segment can look like an API key, which
+      // redaction would rewrite), and signed after: redaction would cut X-Amz-Signature.
+      const keysByResult = run.results.map((r) => {
+        const result = r.result && typeof r.result === 'object' ? r.result : {};
+        const { artifacts, ...rest } = result as Record<string, unknown>;
         r.result = rest; // raw keys never leave; signed URLs replace them below
-        if (!deps.artifacts) continue;
+        return artifacts;
+      });
+      const body = redactStrings(run) as typeof run;
+      for (const [i, artifacts] of keysByResult.entries()) {
+        if (artifacts === undefined || !deps.artifacts) continue;
         const { signed, dropped } = await signRunArtifacts(
           deps.artifacts,
           { orgId: scope.orgId, runId: run.id },
           artifacts,
           deps.artifactUrlTtlSeconds,
         );
-        r.result = { ...rest, artifacts: signed };
+        body.results[i].result = { ...body.results[i].result, artifacts: signed };
         if (dropped.length)
           log('warn', 'run artifacts not signed', { orgId: scope.orgId, runId: run.id, dropped });
       }

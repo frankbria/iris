@@ -191,8 +191,24 @@ export function orgArtifacts(store: ArtifactStore, orgId: string): ArtifactStore
  */
 export function resolveArtifactStore(env: NodeJS.ProcessEnv = process.env): S3ArtifactStore | null {
   const endpoint = env.IRIS_S3_ENDPOINT;
-  if (!endpoint) return null;
-  if (!/^https?:\/\//.test(endpoint)) throw new Error('IRIS_S3_ENDPOINT must be an http(s) URL');
+  if (!endpoint) {
+    // The rest set without an endpoint is a typo, not "no artifacts".
+    const stray = Object.keys(env).filter((k) => k.startsWith('IRIS_S3_') && env[k]);
+    if (stray.length) throw new Error(`${stray.join(', ')} set but IRIS_S3_ENDPOINT is not`);
+    return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new Error('IRIS_S3_ENDPOINT must be an http(s) URL');
+  }
+  // Clients receive URLs on this host: credentials in it would be handed out, and plain
+  // http would carry the capability URLs in the clear (loopback, i.e. dev, excepted).
+  const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
+  if (url.username || url.password) throw new Error('IRIS_S3_ENDPOINT must not carry credentials');
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))
+    throw new Error('IRIS_S3_ENDPOINT must be https (http only for a loopback host)');
   const bucket = env.IRIS_S3_BUCKET;
   const accessKeyId = env.IRIS_S3_ACCESS_KEY_ID;
   const secretAccessKey = readSecretEnv('IRIS_S3_SECRET_ACCESS_KEY', env);
@@ -230,7 +246,8 @@ export async function signRunArtifacts(
   artifacts: unknown,
   ttlSeconds = DEFAULT_TTL_SECONDS,
 ): Promise<{ signed: Record<string, SignedArtifact>; dropped: string[] }> {
-  const signed: Record<string, SignedArtifact> = {};
+  // No prototype: a stored name like `__proto__` is an ordinary key here, not a setter.
+  const signed: Record<string, SignedArtifact> = Object.create(null);
   const dropped: string[] = [];
   if (!artifacts || typeof artifacts !== 'object' || Array.isArray(artifacts))
     return { signed, dropped };
