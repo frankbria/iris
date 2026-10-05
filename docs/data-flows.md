@@ -153,12 +153,19 @@ is processed in Chromium's memory for the duration of the job.
 ### Screenshots and visual artifacts
 
 The local CLI writes screenshots, diffs and baselines under `<artifactsDir>/runs/<runId>/`
-and `.iris/baselines` on the user's own machine (`src/visual/artifacts.ts`, #343). The hosted
-service stores none today. The store exists (`src/artifact-store.ts`, #257: a private
-S3-compatible bucket, keys `org/<org>/project/<project>/run/<runId>/…` and
-`…/baselines/…`, reads only through signed URLs of at most 15 minutes: run detail, #460, signs only the
-caller's org's keys for that run), but nothing writes to it until hosted visual jobs (#268).
-Retention follows #349.
+and `.iris/baselines` on the user's own machine (`src/visual/artifacts.ts`, #343).
+
+The hosted service stores them for visual jobs (#268, `src/visual/hosted-job.ts`) in a
+private S3-compatible bucket (`src/artifact-store.ts`, #257):
+
+| | |
+|---|---|
+| Data | Full-page PNG screenshots of the pages a tenant tests (they may show anything those pages show), red-on-transparent diff images, and each project's approved baseline per page and device. `visual_baselines` (Postgres, migration 0011) records the project, page URL, device, object key, source run and approving key id. |
+| Purpose | Visual regression testing: comparing a page with its approved look. |
+| Where | Bucket keys `org/<org>/project/<project>/run/<run uuid>/{current,diff}/<name>.png` and `org/<org>/project/<project>/baselines/<name>.png`. |
+| Access | The org's API keys, through run detail's signed URLs (5 minutes, at most 15; only that org's keys for that run, #460). The bucket is never public. |
+| Retention | Run images: with the run, **90 days** after it finishes; baselines: until replaced by an approval or the org is purged. **Not yet enforced for the objects**: the retention pass removes the rows, and deleting the objects is #472. |
+| Third parties | The hosting / object-storage provider (#273). Not sent to an AI vendor: hosted visual jobs run no AI analysis yet. |
 
 ### Browser sessions
 

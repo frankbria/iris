@@ -69,6 +69,7 @@ src/
 │   ├── models.ts          # Model pins + live provider model-list probe
 │   └── index.ts           # Module exports
 ├── visual/                # Visual testing modules
+│   ├── hosted-job.ts      # runVisualJob: hosted visual-diff job against project baselines, images to object storage (#268)
 │   ├── capture.ts         # Screenshot capture with stabilization
 │   ├── diff.ts            # SSIM + pixel diff engine
 │   └── baseline.ts        # Git-integrated baseline management
@@ -81,7 +82,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
@@ -93,7 +94,7 @@ src/
 ├── report-encoding.ts     # One encoder per report format: HTML, XML (JUnit), Markdown, safe hrefs (#339)
 ├── history.ts             # Records visual/a11y runs to the SQLite history (command layer, not the runners)
 ├── jobs-api.ts            # Hosted REST on the RPC listener: jobs (#267), runs + run detail (#269)
-├── worker.ts              # `iris worker`: claims queued a11y jobs, runs the hardened runner, stores the result (#267)
+├── worker.ts              # `iris worker`: claims queued a11y and visual jobs, runs them hardened, stores the result (#267, #268)
 ├── billing/plans.ts       # Plan catalog (free/pro/team), resolveEntitlements, orgEntitlements(db), one-free-org cap (#260)
 ├── offboarding.ts         # Org soft delete/restore/purge to tombstone, user deletion, daily retention, AI-state purge (#349)
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
@@ -126,6 +127,7 @@ __tests__/
 ├── artifact-store.test.ts         # Keys, filesystem store, S3 store on real SeaweedFS: unsigned/tampered/expired 403, 15 min cap (#257)
 ├── api-runs.test.ts               # Results API over real sockets + Postgres: list, filters, cursors, detail, 404 cross-org (#269); signed artifact URLs on SeaweedFS (#460)
 ├── api-jobs.test.ts               # Job REST over real sockets: 401/503/400/413/404/405/429, org isolation, WS upgrade intact (#267)
+├── hosted-visual-job.test.ts      # Real Postgres + SeaweedFS + Chromium: first run baselines, second diffs, approve, project scoping, 403 page (#268)
 ├── hosted-a11y-job.test.ts        # Real Postgres + Chromium, IRIS_HOSTED=1: HTTP submit -> worker -> HTTP result, usage row, refusals (#267)
 ├── worker-cli.test.ts             # `iris worker` refuses outside hosted mode (exit 2) / without a database (3) (#267)
 ├── db/jobs.test.ts                # Real Postgres: enqueue/claim (SKIP LOCKED)/finish in one tx/fail, org isolation (#267)
@@ -1133,6 +1135,34 @@ index; 0005: `attempts`, `claim_token`, `heartbeat_at`, #435), no broker (ADR 00
 - **Tests**: set `process.env.IRIS_HOSTED = '1'` at the top of the file and start
   `hostedEgressProxy({ lookup, connect })` before the first launch; no isolateModules is
   needed, because the worker loads the runner lazily.
+
+### Hosted Visual Jobs (issue #268)
+
+`POST /v1/visual/jobs { project, urls, devices?, threshold? }` beside the a11y route (same
+auth, buckets, body cap, per-org outstanding cap); `iris worker` runs them with
+`runVisualJob` (src/visual/hosted-job.ts). ADR 0001 §3: baselines belong to a project
+and change only through approval; git-branch baselines stay local.
+
+- **A project is a caller-chosen id** (`[A-Za-z0-9_-]{1,64}`), no table of its own:
+  `visual_baselines` (migration 0011) is keyed `(org_id, project, name)` with
+  `name = artifactName(page, device)`; `(org_id, run_id) -> runs` sets null when the run
+  is pruned. Org purge deletes the rows (#349); deleting the objects is #472.
+- **A project's first screenshot of a page becomes its baseline** (`approved_by =
+  'first-run'`, result `newBaseline: true`, passes). After that a run only diffs;
+  `POST /v1/runs/:id/results/:position/approve` copies that result's current image to the
+  baseline key and replaces the row (`approved_by` = the key id). 404 for another org or
+  position, 409 for a non-visual result or one whose screenshot is gone.
+- **Images never touch the worker's disk**: current and diff go to
+  `runArtifactKey(org, project, <run uuid>, …)` (the uuid is what #460 checks), the
+  baseline to `baselineKey()`. Results keep `project`, `newBaseline` and the keys.
+- **An HTTP >= 400 page fails the job**, like a11y's `failOnHttpError`: the egress proxy
+  answers a refused target with a 403 page, which must not become a baseline.
+- **Without `IRIS_S3_*`** the API answers 503 to visual submits and approvals, and the
+  worker claims a11y only; a partial config makes either exit 3. `runWorker` claims a11y
+  first, then visual, one job per tick.
+- No AI classification in hosted visual jobs yet (BYOK/credits wiring is #346).
+- `ApiJobs` (src/jobs-api.ts) is the slice of `OrgJobs` the API uses; approval is optional
+  in it, so the API tests' in-memory store needs no visual support.
 
 ### Results API (issue #269)
 
