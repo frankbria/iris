@@ -22,7 +22,9 @@ export async function approveBaseline(
 ): Promise<ApproveState> {
   const organizationId = String(form.get("organizationId") ?? "")
   const runId = String(form.get("runId") ?? "")
-  const position = Number(form.get("position"))
+  const rawPosition = String(form.get("position") ?? "")
+  // Digits only: `Number("")` is 0, which would name the first result.
+  const position = /^\d{1,4}$/.test(rawPosition) ? Number(rawPosition) : -1
   // BetterAuth reads an empty id as "the active org".
   if (!organizationId) return { error: "You cannot approve baselines here." }
   const auth = getAuth()
@@ -40,11 +42,13 @@ export async function approveBaseline(
   const store = artifactStore()
   if (!store) return { error: "Visual baselines are not configured." }
   const session = await auth.api.getSession({ headers: requestHeaders })
+  // Every approval names who made it (the audit row); no session, no approval.
+  if (!session) return { error: "Sign in again to approve." }
   const outcome = await approveVisualResult(getDb(), store, {
     orgId: organizationId,
     runId,
     position,
-    actor: { userId: session?.user.id ?? null },
+    actor: { userId: session.user.id },
   })
   if (outcome.status === "not-found")
     return { error: "That result was not found." }
