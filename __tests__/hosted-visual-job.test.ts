@@ -205,6 +205,19 @@ const page = (color: string) =>
       page: url(),
       device: 'desktop',
     });
+    // Recorded: who approved it, on the baseline and in the audit log (#463).
+    const audit = await sql<{ actor_api_key_id: string; action: string; target: string }>`
+      select actor_api_key_id, action, target from audit_log where org_id = 'org-a'`.execute(db);
+    expect(audit.rows).toEqual([
+      {
+        actor_api_key_id: 'key-org-a',
+        action: 'visual_baseline.approve',
+        target: `run:${second.id}#0`,
+      },
+    ]);
+    const by = await sql<{ approved_by: string }>`select approved_by from visual_baselines
+      where org_id = 'org-a' and project = 'shop'`.execute(db);
+    expect(by.rows[0].approved_by).toBe('key:key-org-a');
 
     // 4. Same page again: passes against the approved baseline.
     const third = await run();
