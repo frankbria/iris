@@ -101,6 +101,13 @@ for (const key of [
   // "refuses to start without it" test, whose child inherits process.env.
   'IRIS_KEY_ENCRYPTION_KEY',
   'IRIS_KEY_ENCRYPTION_KEY_FILE',
+  // The hosted artifact store (#460): a developer's real bucket must not reach a test.
+  'IRIS_S3_ENDPOINT',
+  'IRIS_S3_BUCKET',
+  'IRIS_S3_REGION',
+  'IRIS_S3_ACCESS_KEY_ID',
+  'IRIS_S3_SECRET_ACCESS_KEY',
+  'IRIS_S3_SECRET_ACCESS_KEY_FILE',
   // Added with #192, which taught `iris connect` to read these. Without them
   // here an exported IRIS_CONNECT_HOST=0.0.0.0 fails the connect-default test on
   // a developer's machine while CI stays green — #185 exactly, recurring the

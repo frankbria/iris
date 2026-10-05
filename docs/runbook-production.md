@@ -605,6 +605,23 @@ Unset contacts show a `[placeholder]` on `/contact`. Without `IRIS_SECURITY_CONT
 process starts, so each deploy renews it; a portal left running for a year without a
 deploy serves an expired file.
 
+## Artifact storage (issues #257, #460)
+
+Run detail (`GET /v1/runs/:id`) returns visual artifacts as signed URLs (5 minutes) when
+`iris connect` has an S3-compatible store. Set on the `iris` service, the secret as a file:
+
+| Variable | Value |
+| --- | --- |
+| `IRIS_S3_ENDPOINT` | `https://…` of the bucket's S3 API (unset: run detail shows no artifacts) |
+| `IRIS_S3_BUCKET` | a private bucket |
+| `IRIS_S3_REGION` | default `us-east-1` |
+| `IRIS_S3_ACCESS_KEY_ID` | read access is enough for `iris connect` |
+| `IRIS_S3_SECRET_ACCESS_KEY_FILE` | a secret file, like `database_url` |
+
+A partial configuration stops `iris connect` (exit 3) rather than serving without
+artifacts. The production vendor is not chosen yet (#273); the compose file does not pass
+these until it is. Nothing writes artifacts until hosted visual jobs (#268).
+
 ## Retention and offboarding (issue #349)
 
 Periods (owner decisions, 2026-10-03; the 7 years await counsel's confirmation, #450):
