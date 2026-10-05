@@ -421,6 +421,18 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.focusOrder.map((f) => f.element.toUpperCase())).toEqual(['A#ICON', 'A#NEXT']);
     });
 
+    it('tells apart controls of a form that shadows children and parentNode', async () => {
+      const result =
+        await walk(`<form><input name="children" id="c"><input name="parentNode" id="p">
+        <input id="ghost" style="opacity:0"></form>`);
+      expect(result.focusOrder.map((f) => f.element)).toEqual([
+        'INPUT#c',
+        'INPUT#p',
+        'INPUT#ghost',
+      ]);
+      expect(result.passed).toBe(false); // the invisible one is reached and judged
+    });
+
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
       const result = await walk(links);

@@ -313,14 +313,22 @@ export class KeyboardTester {
         if (!top || top === document.body || top === document.documentElement) return null;
         let el: Element = top;
         const path: string[] = [];
-        // Within its own tree: an element in a shadow root has no parentElement at the top,
-        // so its siblings are the root's children.
+        // Within its own tree (an element in a shadow root has its root as parentNode). Read
+        // through Node.prototype's getters: a <form>'s named controls shadow `children`,
+        // `parentNode` and `parentElement` (an input named "children" gave every sibling the
+        // same path, and the walk read them as one repeated stop).
+        const getter = (name: 'parentNode' | 'childNodes') =>
+          Object.getOwnPropertyDescriptor(Node.prototype, name)!.get!;
+        const parentOf = getter('parentNode');
+        const childNodesOf = getter('childNodes');
         const pathOf = (node: Element) => {
           const parts: string[] = [];
-          for (let n: Element | null = node; n; n = n.parentElement) {
-            const parent = n.parentNode as ParentNode | null;
-            if (!parent || !('children' in parent)) break;
-            parts.unshift(`${n.tagName}:${Array.prototype.indexOf.call(parent.children, n)}`);
+          for (let n: Node | null = node; n && n.nodeType === 1;) {
+            const parent = parentOf.call(n) as Node | null;
+            if (!parent) break;
+            const index = Array.prototype.indexOf.call(childNodesOf.call(parent), n);
+            parts.unshift(`${(n as Element).tagName}:${index}`);
+            n = parent;
           }
           return parts.join('>');
         };
