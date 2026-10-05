@@ -67,10 +67,14 @@ export interface KeyboardInteraction {
 const DISMISSIBLE_STATE = ({
   selector,
   id,
+  tag,
+  cls,
 }: {
   selector: string;
   id: string | null;
-}): { marked: boolean | null; sameId: boolean | null; visibleCount: number } => {
+  tag: string;
+  cls: string;
+}): { marked: boolean | null; same: boolean | null; visibleCount: number } => {
   const isVisible = (el: Element) => {
     const style = getComputedStyle(el);
     return (
@@ -79,16 +83,29 @@ const DISMISSIBLE_STATE = ({
       Element.prototype.getClientRects.call(el).length > 0
     );
   };
-  const marked = document.querySelector(selector);
-  const byId = id ? document.getElementById(id) : null;
-  const all = document.querySelectorAll(
-    '[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]',
+  const all = Array.from(
+    document.querySelectorAll('[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]'),
   );
+  const marked = document.querySelector(selector);
+  // A re-render that replaced the node: the same dialog is the element with its id, or,
+  // without one, the dismissible element with its tag and exact class list (what the old
+  // `TAG.class` selector found). With neither, it cannot be told apart: null.
+  let same: boolean | null = null;
+  if (id) {
+    const byId = document.getElementById(id);
+    same = !!byId && isVisible(byId);
+  } else if (cls) {
+    same = all.some(
+      (el) =>
+        el.tagName === tag &&
+        (Element.prototype.getAttribute.call(el, 'class') ?? '').trim() === cls &&
+        isVisible(el),
+    );
+  }
   return {
     marked: marked ? isVisible(marked) : null,
-    // A re-render that replaced the node usually keeps its id: that is the same dialog.
-    sameId: id ? !!byId && isVisible(byId) : null,
-    visibleCount: Array.from(all).filter(isVisible).length,
+    same,
+    visibleCount: all.filter(isVisible).length,
   };
 };
 
@@ -539,6 +556,8 @@ export class KeyboardTester {
         return {
           selector: `[data-iris-kbd-${nonce}="escape-${i}"]`,
           id,
+          tag: el.tagName,
+          cls: (attr('class') ?? '').trim(),
           label: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
           visible: isVisible(el),
         };
@@ -550,12 +569,17 @@ export class KeyboardTester {
         if (!element.visible) continue;
 
         try {
-          const probe = { selector: element.selector, id: element.id };
+          const probe = {
+            selector: element.selector,
+            id: element.id,
+            tag: element.tag,
+            cls: element.cls,
+          };
           const before = await page.evaluate(DISMISSIBLE_STATE, probe);
           // Already dismissed by an earlier candidate's Escape (a .modal wrapper and its
           // inner [role=dialog], stacked modals closed by one handler): nothing to test.
-          // Present = our marked node, or (re-rendered) an element with its id, visible.
-          if (!(before.marked ?? before.sameId ?? false)) continue;
+          // Present = our marked node, or (re-rendered) the same dialog by id or tag + class.
+          if (!(before.marked ?? before.same ?? false)) continue;
           await page.keyboard.press('Escape');
           const after = await page.evaluate(DISMISSIBLE_STATE, probe);
 
@@ -568,8 +592,8 @@ export class KeyboardTester {
           const stillVisible =
             after.marked !== null
               ? after.marked
-              : after.sameId !== null
-                ? after.sameId
+              : after.same !== null
+                ? after.same
                 : after.visibleCount >= before.visibleCount;
 
           interactions.push({

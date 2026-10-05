@@ -406,6 +406,30 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.passed).toBe(false);
     });
 
+    // Codex: Escape closes the first dialog and re-renders the second (id-less) one, which
+    // stays open. Its marker is gone before its turn; tag + class still identify it.
+    it('tests an id-less dialog that an earlier Escape re-rendered but left open', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" class="sheet a" id="a"><button>A</button></div>
+        <div id="host"><div role="dialog" class="sheet b"><button>B</button></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('a')?.remove();
+          document.getElementById('host').innerHTML =
+            '<div role="dialog" class="sheet b"><button>B</button></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'rerender-b',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => i.success)).toEqual([true, false]); // A closed, B ignored it
+      expect(result.passed).toBe(false);
+    });
+
     it('does not fail a dialog that an earlier Escape already closed', async () => {
       await load(
         page,
