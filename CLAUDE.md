@@ -1174,6 +1174,9 @@ and change only through approval; git-branch baselines stay local.
 - **Without `IRIS_S3_*`** the API answers 503 to visual submits and approvals, and the
   worker claims a11y only; a partial config makes either exit 3. `runWorker` claims a11y
   first, then visual, one job per tick.
+- **Billed per comparison** (owner decision, 2026-10-05): the `visual_job` usage row's
+  quantity is the job's comparisons (pages x devices), so `runsPerMonth` limits screenshots,
+  not jobs; enforcement (#346) sums `quantity`. An a11y job is quantity 1.
 - No AI classification in hosted visual jobs yet (BYOK/credits wiring is #346).
 - `ApiJobs` (src/jobs-api.ts) is the slice of `OrgJobs` the API uses; approval is optional
   in it, so the API tests' in-memory stores (`api-jobs`, `protocol-observability`) need

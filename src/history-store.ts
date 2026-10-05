@@ -537,7 +537,9 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
         await insertUsage(tx, job.orgId, [
           {
             kind: job.kind === 'visual' ? 'visual_job' : 'a11y_job',
-            quantity: 1,
+            // A visual job counts per comparison, pages x devices (owner decision,
+            // 2026-10-05): one job may take 80 screenshots. An a11y job counts once.
+            quantity: job.kind === 'visual' ? Math.max(results.length, 1) : 1,
             idempotencyKey: `job:${job.id}`,
             runId: job.id,
           },
