@@ -127,7 +127,7 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `audit_log`: org, `actor_user_id`, `actor_api_key_id` (plain ids, no foreign keys, so an entry outlives its actor), action, target, `metadata jsonb`, time. |
 | Purpose | An org's audit trail (#361). |
 | Where | Postgres, `0001_initial.ts`. |
-| Status | **The table exists; nothing writes to it yet (#361).** Update this entry when #361 defines what is recorded. |
+| Status | **One action is recorded so far**: a visual baseline approval (`visual_baseline.approve`, #463), with the approving user or API key id, the run and result, and the project, page and device (`src/visual-baselines.ts`). Everything else is #361. Update this entry as #361 adds actions. |
 | Retention | Deleted when the org is purged. Otherwise **undecided** until #361 defines what is recorded. |
 
 ### AI cost ledger
