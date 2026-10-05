@@ -231,6 +231,15 @@ plans/
 - **Budget is reserved before a call and settled after it (issue #244).** `CostTracker.reserve()` checks the breaker and inserts a `pending = 1` row at the call's worst-case cost (8k in / 1k out tokens at the model's rate; text calls add one token per request character, since the instruction is uncapped short of the RPC payload limit) in one `BEGIN IMMEDIATE` transaction, so calls in flight count against the budget, across connections and processes. `settle(id, usage)` rewrites the row with the real cost; `release(id)` deletes it when no reply came back. Admission is "spend + reservations < limit", so N parallel calls end within the limit plus one call. `trackOperation()` never throws: a call that was answered is paid for, and dropping its row is how spend went missing. A pending row left by a crashed process keeps counting at its estimate (fails safe)
   - A reply the provider billed but IRIS rejected (empty, not JSON, outside the schema) throws `AIResponseRejectedError` carrying `usage`, and the smart client settles it before moving on. After a call is settled nothing may send it to the next vendor: a cache-write failure is logged, not treated as a provider failure
 - **SmartAIVisionClient**: Cache-first; calls the configured provider only. Other vendors are tried (configured provider still first) only when `enableFallback` is passed or `ai.fallback === true` in the config (#245). The old default walked a fixed `ollama → openai → anthropic` chain, so an OpenAI user with a local Ollama got Ollama's answer and an outage billed a vendor, or a BYOK key, the user never chose. Strict `=== true`, because `config.json` is untyped and `"false"` is truthy
+- **A page that grew or shrank is diffed, not refused (#282).** `VisualDiffEngine.compare`
+  runs pixelmatch over the overlap and counts every pixel of the larger canvas outside it as
+  changed (painted `diffColor` in the diff image). A transparent pad would not do:
+  pixelmatch blends alpha against white, so it reads as unchanged beside a white page. Such
+  a comparison never passes and carries `layoutChange { baseline, current }` (runner
+  result, stored hosted result, every report format). Decoding is bounded:
+  `MAX_DECODED_PIXELS` (1920 x 16384) is checked from the header before any pixel is
+  allocated, and the padded canvas too; sharp's `limitInputPixels` is the backstop, but it
+  also applies to `metadata()`, so the header is read by an unlimited instance
 - **A failed analysis is not a verdict (#281).** The classifier answers an outage or a tripped
   breaker with a fallback (`analysisFailed: true`, `severity: 'medium'`). The visual runner
   grades such a comparison by its pixels (`estimateSeverity`), counts it in
@@ -1222,7 +1231,8 @@ and change only through approval; git-branch baselines stay local.
 - **Bounded**: no new page after `JOB_DEADLINE_MS` (10 min; heartbeats keep a slow live
   job from being reaped, #442), 30 s per page load, 5 s for fonts, and a full page taller
   than `MAX_PAGE_HEIGHT` (16384 px) is refused before it is decoded for a diff (#282). A
-  comparison that cannot be made (height changed) stores its `error`. `runWorker`
+  page whose size changed is diffed (`layoutChange`, below); a comparison that cannot be
+  made stores its `error`. `runWorker`
   alternates which kind it claims first, so neither starves.
 - **Without `IRIS_S3_*`** the API answers 503 to visual submits and approvals, and the
   worker claims a11y only; a partial config makes either exit 3. `runWorker` claims a11y
@@ -1692,7 +1702,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 2152/2153 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 2160/2161 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

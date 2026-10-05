@@ -5,6 +5,13 @@ import * as imageSsim from '../vendor/image-ssim';
 import { DiffOptions, DiffResult, DiffAnalysis, PreparedImage, SSIMResult } from './types';
 
 /**
+ * Most pixels `compare()` will decode from one image (#282). Decoding is RGBA, 4 bytes a
+ * pixel, and a full-page capture has no height ceiling of its own: this is the hosted
+ * `MAX_PAGE_HEIGHT` (16384) at desktop width, about 126 MB per decoded image.
+ */
+export const MAX_DECODED_PIXELS = 1920 * 16_384;
+
+/**
  * VisualDiffEngine handles pixel-level and semantic comparison of images
  */
 export class VisualDiffEngine {
@@ -52,20 +59,18 @@ export class VisualDiffEngine {
         }
       }
 
+      // Sizes from the headers first: the canvas a size change needs is checked before
+      // either image is decoded, and it is at least as large as each image (#282).
+      const [b, c] = await Promise.all([headerSize(baselineBuffer), headerSize(currentBuffer)]);
+      assertDecodable(Math.max(b.width, c.width), Math.max(b.height, c.height));
+
       // Prepare images for comparison
       const baseline = await this.prepareImage(baselineBuffer);
       const current = await this.prepareImage(currentBuffer);
 
-      // Check dimensions match
+      // A full-page capture whose page grew or shrank (#282): diff what both show.
       if (baseline.width !== current.width || baseline.height !== current.height) {
-        return {
-          success: false,
-          passed: false,
-          similarity: 0,
-          pixelDifference: 0,
-          threshold: options.threshold,
-          error: `Image dimension mismatch: baseline ${baseline.width}x${baseline.height} vs current ${current.width}x${current.height}`,
-        };
+        return await this.compareResized(baseline, current, options);
       }
 
       // Create diff buffer
@@ -355,11 +360,86 @@ export class VisualDiffEngine {
   }
 
   /**
+   * Compare images of different sizes (#282): pixelmatch over the overlap, and every
+   * pixel of the larger canvas outside it counted as changed and painted `diffColor`.
+   *
+   * Not by padding and letting pixelmatch judge: it blends alpha against white, so a
+   * transparent pad beside a white page would read as unchanged. A size change never
+   * passes; no SSIM (it needs equal sizes) and no sampled early exit.
+   */
+  private async compareResized(
+    baseline: PreparedImage,
+    current: PreparedImage,
+    options: DiffOptions,
+  ): Promise<DiffResult> {
+    const width = Math.max(baseline.width, current.width);
+    const height = Math.max(baseline.height, current.height);
+    assertDecodable(width, height);
+    const overlapW = Math.min(baseline.width, current.width);
+    const overlapH = Math.min(baseline.height, current.height);
+
+    const crop = (image: PreparedImage): Buffer => {
+      const out = Buffer.alloc(overlapW * overlapH * 4);
+      for (let y = 0; y < overlapH; y++) {
+        image.buffer.copy(
+          out,
+          y * overlapW * 4,
+          y * image.width * 4,
+          (y * image.width + overlapW) * 4,
+        );
+      }
+      return out;
+    };
+    const overlapDiff = Buffer.alloc(overlapW * overlapH * 4);
+    const changedInOverlap = pixelmatch(
+      crop(baseline),
+      crop(current),
+      overlapDiff,
+      overlapW,
+      overlapH,
+      {
+        threshold: options.alpha,
+        includeAA: options.includeAA,
+        alpha: options.alpha,
+        aaColor: options.diffColor,
+        diffColor: options.diffColor,
+        diffMask: options.diffMask,
+      },
+    );
+
+    // The canvas starts as all changed (opaque diffColor); the overlap's own diff goes on top.
+    const [r, g, b] = options.diffColor ?? [255, 0, 0];
+    const canvas = Buffer.alloc(width * height * 4, Buffer.from([r, g, b, 255]));
+    for (let y = 0; y < overlapH; y++) {
+      overlapDiff.copy(canvas, y * width * 4, y * overlapW * 4, (y + 1) * overlapW * 4);
+    }
+
+    const totalPixels = width * height;
+    const pixelDifference = changedInOverlap + (totalPixels - overlapW * overlapH);
+    return {
+      success: true,
+      passed: false,
+      similarity: (totalPixels - pixelDifference) / totalPixels,
+      pixelDifference,
+      threshold: options.threshold,
+      diffBuffer: await this.generateDiffImage(canvas, width, height),
+      layoutChange: {
+        baseline: { width: baseline.width, height: baseline.height },
+        current: { width: current.width, height: current.height },
+      },
+    };
+  }
+
+  /**
    * Prepare image buffer for comparison by normalizing format
    */
   async prepareImage(buffer: Buffer): Promise<PreparedImage> {
-    const image = sharp(buffer);
-    const metadata = await image.metadata();
+    // The header gives the size without decoding: refuse before allocating the pixels,
+    // with a message naming the size. `limitInputPixels` on the decode is the backstop for
+    // a header that lies (#282); sharp applies it to `metadata()` too, hence two instances.
+    const metadata = await sharp(buffer, { limitInputPixels: false }).metadata();
+    assertDecodable(metadata.width ?? 0, metadata.height ?? 0);
+    const image = sharp(buffer, { limitInputPixels: MAX_DECODED_PIXELS });
 
     const processedBuffer = await image.raw().ensureAlpha().toBuffer();
 
@@ -554,5 +634,21 @@ export class VisualDiffEngine {
     if (global.gc) {
       global.gc();
     }
+  }
+}
+
+/** An image's size from its header alone: nothing is decoded. */
+async function headerSize(buffer: Buffer): Promise<{ width: number; height: number }> {
+  const { width = 0, height = 0 } = await sharp(buffer, { limitInputPixels: false }).metadata();
+  return { width, height };
+}
+
+/** Refuse an image (or canvas) too large to decode safely, naming its size (#282). */
+function assertDecodable(width: number, height: number): void {
+  const pixels = width * height;
+  if (pixels > MAX_DECODED_PIXELS) {
+    throw new Error(
+      `Image ${width}x${height} is ${pixels} pixels; the limit is ${MAX_DECODED_PIXELS} (a full page this tall cannot be compared)`,
+    );
   }
 }

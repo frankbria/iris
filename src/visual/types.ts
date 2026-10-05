@@ -170,6 +170,15 @@ export interface DiffResult {
   threshold: number;
   diffBuffer?: Buffer;
   /**
+   * Present when the two images differ in size, which for a full-page capture means the
+   * page grew or shrank (#282). Such a comparison never passes; the overlap is diffed and
+   * every pixel outside it counts as changed.
+   */
+  layoutChange?: {
+    baseline: { width: number; height: number };
+    current: { width: number; height: number };
+  };
+  /**
    * Structural Similarity Index (0-1), present only on failed comparisons.
    *
    * `similarity` above counts *how many* pixels moved; SSIM describes *how

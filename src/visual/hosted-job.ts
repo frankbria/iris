@@ -185,8 +185,10 @@ export async function runVisualJob(
             threshold: params.threshold,
             ...(compared.ssim !== undefined && { ssim: compared.ssim }),
             ...(!compared.passed && { severity: severityOf(compared.similarity) }),
-            // A comparison that could not be made (a page whose height changed, #282)
-            // says why, instead of a bare "breaking".
+            // The page grew or shrank: diffed over the larger canvas, never a pass (#282).
+            ...(compared.layoutChange && { layoutChange: compared.layoutChange }),
+            // A comparison that could not be made (an image over the decode limit) says
+            // why, instead of a bare "breaking".
             ...(!compared.success && compared.error && { error: compared.error }),
             screenshotPath: '',
             project: params.project,

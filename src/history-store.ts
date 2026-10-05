@@ -143,6 +143,8 @@ function resultsOf(run: RunInput): StoredRunResult[] {
           ...(c.project !== undefined && { project: c.project }),
           ...(c.newBaseline && { newBaseline: true }),
           ...(c.artifacts && { artifacts: c.artifacts }),
+          // The page grew or shrank (#282): numbers only.
+          ...(c.layoutChange && { layoutChange: c.layoutChange }),
           // Why a comparison could not be made; page-influenced text, so bounded.
           ...(c.error && { error: [...stripUserinfo(c.error)].slice(0, 500).join('') }),
         },
