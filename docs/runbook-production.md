@@ -615,9 +615,13 @@ Run detail (`GET /v1/runs/:id`) returns visual artifacts as signed URLs (5 minut
 | `IRIS_S3_ENDPOINT` | `https://…` of the bucket's S3 API (unset: run detail shows no artifacts) |
 | `IRIS_S3_BUCKET` | a private bucket |
 | `IRIS_S3_REGION` | default `us-east-1` |
-| `IRIS_S3_ACCESS_KEY_ID` | read access is enough for `iris connect` |
+| `IRIS_S3_ACCESS_KEY_ID` | read and write on the bucket |
 | `IRIS_S3_SECRET_ACCESS_KEY_FILE` | a secret file, like `database_url` |
 
+The worker (visual jobs, #268) and the portal (screenshots and approval on run detail,
+#463) take the same variables. The worker and the portal need **write** access (the
+worker stores screenshots; approving in the portal copies an image to a new baseline
+key); `iris connect` needs read and write too, as API approval does the same copy.
 A partial configuration stops `iris connect` (exit 3) rather than serving without
 artifacts. The production vendor is not chosen yet (#273); the compose file does not pass
 these until it is. Nothing writes artifacts until hosted visual jobs (#268).

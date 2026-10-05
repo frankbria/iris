@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process"
 import path from "node:path"
 
+import { CreateBucketCommand, S3Client } from "@aws-sdk/client-s3"
 import { Client } from "pg"
 
 import { e2eEnv } from "./env"
@@ -33,4 +34,29 @@ export default async function globalSetup() {
       stdio: "inherit",
     }
   )
+
+  // The run's screenshot bucket (#463). The S3 port answers before its storage is
+  // ready, so the first create is retried briefly; "already exists" is fine.
+  const s3 = new S3Client({
+    endpoint: env.s3.endpoint,
+    region: "us-east-1",
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: env.s3.accessKeyId,
+      secretAccessKey: env.s3.secretAccessKey,
+    },
+  })
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await s3.send(new CreateBucketCommand({ Bucket: env.s3.bucket }))
+      break
+    } catch (error) {
+      const name = (error as { name?: string }).name
+      if (name === "BucketAlreadyOwnedByYou" || name === "BucketAlreadyExists")
+        break
+      if (attempt >= 30) throw error
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+  }
+  s3.destroy()
 }
