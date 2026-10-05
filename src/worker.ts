@@ -257,6 +257,9 @@ export async function runWorker(options: {
     maxAttempts,
     artifacts,
   } = options;
+  if (artifacts && !jobs.baselines)
+    throw new Error('Visual jobs (artifacts) need a job store with baselines');
+  let tick = 0;
   // A live job beats every heartbeatMs; the reaper must not mistake one late beat for death.
   if (heartbeatMs * 2 >= staleMs) {
     throw new Error(`heartbeatMs (${heartbeatMs}) must be under half of staleMs (${staleMs})`);
@@ -299,11 +302,15 @@ export async function runWorker(options: {
           log('error', 'worker queue depth query failed', { err: errMessage(err) });
         }
       }
-      // One job per tick, a11y first; visual jobs only when there is somewhere to put
-      // their images (the API refuses them without a store, #268).
-      ran = (await processNextA11yJob(jobs, { heartbeatMs })) !== null;
-      if (!ran && artifacts)
-        ran = (await processNextVisualJob(jobs, { artifacts, heartbeatMs })) !== null;
+      // One job per tick, the first kind alternating so neither starves the other; visual
+      // jobs only when there is somewhere to put their images (the API refuses them
+      // without a store, #268).
+      const kinds: Array<() => Promise<ClaimedJob | null>> = [
+        () => processNextA11yJob(jobs, { heartbeatMs }),
+        ...(artifacts ? [() => processNextVisualJob(jobs, { artifacts, heartbeatMs })] : []),
+      ];
+      if (tick++ % 2) kinds.reverse();
+      for (const next of kinds) if ((ran = (await next()) !== null)) break;
     } catch (err) {
       log('error', 'worker error', { err: errMessage(err) });
     } finally {

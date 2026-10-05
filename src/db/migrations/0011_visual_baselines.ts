@@ -9,7 +9,9 @@ import { type Kysely, sql } from 'kysely';
  */
 const STATEMENTS = [
   `create table visual_baselines (
-     org_id text not null references organization (id),
+     -- Cascade: a rollback to a release without this table in its purge must not have
+     -- its org purge refused by these rows (expand/contract, #273).
+     org_id text not null references organization (id) on delete cascade,
      project text not null,
      name text not null,
      page text not null,

@@ -15,7 +15,7 @@ import {
 import type { ExecutionResult } from './executor';
 import { insertUsage, type UsageEvent } from './billing/usage';
 import type { VisualTestResult as VisualRunResult } from './visual/visual-runner';
-import { baselineKey, orgArtifacts, type ArtifactStore } from './artifact-store';
+import { baselineObjectKey, orgArtifacts, type ArtifactStore } from './artifact-store';
 import { artifactName } from './visual/artifacts';
 import { suspendedSql } from './org-suspension';
 import {
@@ -137,6 +137,8 @@ function resultsOf(run: RunInput): StoredRunResult[] {
           ...(c.project !== undefined && { project: c.project }),
           ...(c.newBaseline && { newBaseline: true }),
           ...(c.artifacts && { artifacts: c.artifacts }),
+          // Why a comparison could not be made; page-influenced text, so bounded.
+          ...(c.error && { error: [...stripUserinfo(c.error)].slice(0, 500).join('') }),
         },
       }));
     case 'a11y':
@@ -350,7 +352,10 @@ export interface VisualBaseline {
 /** One org's baselines: the worker reads and seeds them, approval replaces them. */
 export interface OrgBaselines {
   get(project: string, name: string): Promise<VisualBaseline | null>;
+  /** Replaces the baseline: approval only. */
   set(b: Omit<VisualBaseline, 'updatedAt'>): Promise<void>;
+  /** A project's first baseline of a page: `false` when one exists (it is not touched). */
+  insertIfAbsent(b: Omit<VisualBaseline, 'updatedAt'>): Promise<boolean>;
 }
 
 export type ApproveResult =
@@ -447,6 +452,14 @@ function orgBaselines(db: Kysely<unknown>, orgId: string): OrgBaselines {
           }
         : null;
     },
+    async insertIfAbsent(b) {
+      const res = await sql`insert into visual_baselines
+          (org_id, project, name, page, device, object_key, run_id, approved_by)
+        values (${orgId}, ${b.project}, ${b.name}, ${b.page}, ${b.device}, ${b.objectKey},
+          ${b.runId}, ${b.approvedBy})
+        on conflict (org_id, project, name) do nothing`.execute(db);
+      return Boolean(res.numAffectedRows);
+    },
     async set(b) {
       await sql`insert into visual_baselines
           (org_id, project, name, page, device, object_key, run_id, approved_by)
@@ -491,7 +504,7 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
         )
           return { status: 'conflict', reason: 'Not a visual comparison with a screenshot' };
         const name = artifactName(row.url, device);
-        const objectKey = baselineKey({ orgId, projectId: project, name });
+        const objectKey = baselineObjectKey(orgId, project, name, runId);
         const image = await orgArtifacts(artifacts, orgId).get(current);
         if (!image) return { status: 'conflict', reason: 'The screenshot is no longer stored' };
         await orgArtifacts(artifacts, orgId).put(objectKey, image, 'image/png');

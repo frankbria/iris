@@ -61,6 +61,24 @@ export function baselineKey(args: ProjectScope & { name: string }): string {
   return `${projectPrefix(args)}/baselines/${segment('artifact name', args.name)}.png`;
 }
 
+/**
+ * A baseline image's key: per (project, page/device) **and run**, so an image is never
+ * replaced in place. A seeding job cannot overwrite another's, and an old run's link to
+ * the baseline it was compared with keeps showing that image after a later approval.
+ */
+export function baselineObjectKey(
+  orgId: string,
+  project: string,
+  name: string,
+  runId: string,
+): string {
+  return baselineKey({
+    orgId,
+    projectId: project,
+    name: `${name}--${runId.replace(/-/g, '').slice(0, 12)}`,
+  });
+}
+
 /** Local mode: artifacts are files under `root`; the "signed" URL is the file's URL. */
 export class FilesystemArtifactStore implements ArtifactStore {
   private readonly root: string;

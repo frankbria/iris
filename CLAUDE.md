@@ -1148,7 +1148,11 @@ and change only through approval; git-branch baselines stay local.
   `name = artifactName(page, device)`; `(org_id, run_id) -> runs` sets null when the run
   is pruned. Org purge deletes the rows (#349); deleting the objects is #472.
 - **A project's first screenshot of a page becomes its baseline** (`approved_by =
-  'first-run'`, result `newBaseline: true`, passes). After that a run only diffs;
+  'first-run'`, result `newBaseline: true`, passes), seeded **insert-only**
+  (`insertIfAbsent`): of two racing jobs one seeds and the other compares with it, and a
+  stale (reaped) job never overwrites a baseline or an approval. Baseline images are
+  immutable: `baselineObjectKey()` adds the run (`<name>--<12 hex>`), so an old run's link
+  keeps showing the image it was compared with. After that a run only diffs;
   `POST /v1/runs/:id/results/:position/approve` copies that result's current image to the
   baseline key and replaces the row (`approved_by` = the key id). 404 for another org or
   position, 409 for a non-visual result or one whose screenshot is gone.
@@ -1157,6 +1161,11 @@ and change only through approval; git-branch baselines stay local.
   baseline to `baselineKey()`. Results keep `project`, `newBaseline` and the keys.
 - **An HTTP >= 400 page fails the job**, like a11y's `failOnHttpError`: the egress proxy
   answers a refused target with a 403 page, which must not become a baseline.
+- **Bounded**: no new page after `JOB_DEADLINE_MS` (10 min; heartbeats keep a slow live
+  job from being reaped, #442), 30 s per page load, 5 s for fonts, and a full page taller
+  than `MAX_PAGE_HEIGHT` (16384 px) is refused before it is decoded for a diff (#282). A
+  comparison that cannot be made (height changed) stores its `error`. `runWorker`
+  alternates which kind it claims first, so neither starves.
 - **Without `IRIS_S3_*`** the API answers 503 to visual submits and approvals, and the
   worker claims a11y only; a partial config makes either exit 3. `runWorker` claims a11y
   first, then visual, one job per tick.

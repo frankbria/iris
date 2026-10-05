@@ -25,6 +25,8 @@ import { hostedEgressProxy } from '../src/egress-proxy';
 import { postgresHistory, postgresJobs } from '../src/history-store';
 import { startServer, type Authenticator, type Principal } from '../src/protocol';
 import { processNextVisualJob } from '../src/worker';
+import { runVisualJob } from '../src/visual/hosted-job';
+import { orgArtifacts } from '../src/artifact-store';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 const S3 = {
@@ -215,6 +217,88 @@ const page = (color: string) =>
       where org_id = 'org-a' and kind = 'visual_job'`.execute(db);
     expect(usage.rows[0].n).toBe(3);
   }, 180_000);
+
+  // Two jobs of one project that both find no baseline: one seeds, the other compares
+  // with it. A stale seeder (reaped, still running) never overwrites, even an approval.
+  it('seeds a first baseline once, whatever the race, and never over an approval', async () => {
+    color = '#00c';
+    const submit = async () =>
+      (
+        (await (
+          await api('POST', '/v1/visual/jobs', 'key-a', { project: 'race', urls: [url()] })
+        ).json()) as {
+          id: string;
+        }
+      ).id;
+    const ids = [await submit(), await submit()];
+    await Promise.all([
+      processNextVisualJob(postgresJobs(db), { artifacts: store }),
+      processNextVisualJob(postgresJobs(db), { artifacts: store }),
+    ]);
+    const details = await Promise.all(
+      ids.map(async (id) => (await api('GET', `/v1/runs/${id}`)).json()),
+    );
+    expect(details.filter((d) => d.results[0].result.newBaseline)).toHaveLength(1);
+    expect(details.every((d) => d.status === 'succeeded')).toBe(true);
+
+    // A seeding attempt after an approval changes nothing.
+    const baselines = postgresJobs(db).baselines('org-a');
+    const before = await sql`select object_key, approved_by from visual_baselines
+      where org_id = 'org-a' and project = 'race'`.execute(db);
+    const row = before.rows[0] as { object_key: string };
+    expect(
+      await baselines.insertIfAbsent({
+        project: 'race',
+        name: (
+          await sql<{
+            name: string;
+          }>`select name from visual_baselines where project = 'race'`.execute(db)
+        ).rows[0].name,
+        page: url(),
+        device: 'desktop',
+        objectKey: 'org/org-a/project/race/baselines/stale.png',
+        runId: null,
+        approvedBy: 'first-run',
+      }),
+    ).toBe(false);
+    const after = await sql`select object_key, approved_by from visual_baselines
+      where org_id = 'org-a' and project = 'race'`.execute(db);
+    expect(after.rows).toEqual(before.rows);
+    expect(row.object_key).toMatch(/--[0-9a-f]{12}\.png$/);
+  }, 180_000);
+
+  it('an old run keeps linking the baseline it was compared with', async () => {
+    // From the first test: run 2 compared with run 1's baseline; run 2 was then approved.
+    const { rows } = await sql<{ id: string }>`select id from runs where org_id = 'org-a'
+      and kind = 'visual' and status = 'failed' order by finished_at limit 1`.execute(db);
+    const detail = await (await api('GET', `/v1/runs/${rows[0].id}`)).json();
+    const { url: baselineUrl } = detail.results[0].result.artifacts.baseline;
+    const { url: currentUrl } = detail.results[0].result.artifacts.current;
+    // The baseline it was compared with (black), not the approved one (its own, red).
+    const [b, c] = await Promise.all(
+      [baselineUrl, currentUrl].map(async (u) => Buffer.from(await (await fetch(u)).arrayBuffer())),
+    );
+    expect(b.equals(c)).toBe(false);
+  });
+
+  it('stops at the deadline and refuses a too-tall page', async () => {
+    const ctx = {
+      artifacts: orgArtifacts(store, 'org-a'),
+      baselines: postgresJobs(db).baselines('org-a'),
+      orgId: 'org-a',
+      runId: '00000000-0000-4000-8000-000000000001',
+    };
+    const params = {
+      project: 'limits',
+      urls: [url()],
+      devices: ['desktop' as const],
+      threshold: 0.01,
+    };
+    await expect(runVisualJob(params, { ...ctx, deadlineMs: -1 })).rejects.toThrow(
+      /ran out of time/,
+    );
+    await expect(runVisualJob(params, { ...ctx, maxPageHeight: 100 })).rejects.toThrow(/px tall/);
+  }, 120_000);
 
   it('baselines belong to a project: another project starts its own', async () => {
     color = '#c00';
