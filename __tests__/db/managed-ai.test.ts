@@ -93,6 +93,7 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
     await spend('org-m', 9.5, 'managed');
     await spend('org-m', 100, 'byok'); // its own spend never uses the credit
     await spend('org-m', 100, 'managed', sql`date_trunc('month', now()) - interval '1 day'`); // last month
+    await spend('org-b', 100, 'managed'); // another org's spend is its own
     expect(await managedSpendThisMonth(db, 'org-m')).toBeCloseTo(9.5);
     expect(await resolver()({ orgId: 'org-m' })).toEqual({ ...MANAGED, billingMode: 'managed' });
 
