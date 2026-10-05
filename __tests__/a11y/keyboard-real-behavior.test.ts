@@ -496,6 +496,28 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.passed).toBe(false);
     });
 
+    // Codex: the open dialog is re-rendered with other classes and a hidden template keeps
+    // the original classes. A class match may never establish dismissal.
+    it('does not take a hidden template with the old classes for a dismissal', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div id="host"><div role="dialog" class="sheet shaking"><button>Ok</button></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('host').innerHTML =
+            '<div role="dialog" class="sheet"><button>Ok</button></div>' +
+            '<div role="dialog" class="sheet shaking" hidden></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'template',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => i.success)).toEqual([false]);
+    });
+
     it('does not fail a dialog that an earlier Escape already closed', async () => {
       await load(
         page,

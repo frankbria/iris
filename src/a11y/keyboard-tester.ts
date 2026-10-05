@@ -95,14 +95,17 @@ const DISMISSIBLE_STATE = ({
     const byId = document.getElementById(id);
     same = !!byId && isVisible(byId);
   } else if (cls) {
-    // Exact class list, so a sibling sharing its first class is not taken for it. No match
-    // (the re-render changed its classes) is unknown, not dismissed: the count decides.
-    const match = all.find(
+    // Tag + exact class list is weak evidence: it may show the dialog is still open (a
+    // visible match), never that it closed. A hidden template or a sibling sharing the
+    // classes must not establish dismissal; anything short of a visible match is unknown,
+    // and the visible count decides.
+    const stillOpen = all.some(
       (el) =>
         el.tagName === tag &&
-        (Element.prototype.getAttribute.call(el, 'class') ?? '').trim() === cls,
+        (Element.prototype.getAttribute.call(el, 'class') ?? '').trim() === cls &&
+        isVisible(el),
     );
-    same = match ? isVisible(match) : null;
+    same = stillOpen ? true : null;
   }
   return {
     marked: marked ? isVisible(marked) : null,
