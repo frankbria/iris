@@ -216,4 +216,13 @@ describe('iris admin refusals', () => {
       aiCacheRows: 0,
     });
   }, 240_000);
+
+  // #472: a broken store config is reported, and the rest of the pass still runs.
+  test('retention with a partial IRIS_S3_* still runs, then exits 3', async () => {
+    const r = await iris(['admin', 'retention'], { ...env, IRIS_S3_BUCKET: 'iris' });
+    expect(r.code).toBe(3);
+    const report = JSON.parse(r.stdout);
+    expect(report.failures).toEqual([expect.stringMatching(/^artifact store: IRIS_S3_BUCKET set/)]);
+    expect(report).toHaveProperty('sessionsDeleted');
+  }, 120_000);
 });

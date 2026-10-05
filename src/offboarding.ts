@@ -296,7 +296,7 @@ export function offboarding(db: Kysely<unknown>) {
               'org/' || x.org_id || '/project/' || (x.result->>'project') || '/run/' || x.run_id || '/'
             from run_results x join runs r on r.org_id = x.org_id and r.id = x.run_id
             where r.kind = 'visual' and r.finished_at is not null and r.finished_at < ${cutoff}
-              and x.result ? 'project'`.execute(tx);
+              and jsonb_typeof(x.result->'project') = 'string'`.execute(tx);
           await sql`update usage_events u set run_id = null from runs r
             where u.org_id = r.org_id and u.run_id = r.id
               and r.finished_at is not null and r.finished_at < ${cutoff}`.execute(tx);
@@ -331,6 +331,16 @@ export function offboarding(db: Kysely<unknown>) {
               try {
                 await orgArtifacts(artifacts, row.org_id).deletePrefix(row.prefix);
               } catch (err) {
+                // A prefix that can never be valid (not safe segments, or outside its org)
+                // would be retried forever at the head of the queue: drop it, loudly.
+                if (/^Invalid artifact (prefix|key)/.test((err as Error).message)) {
+                  log('error', 'artifact purge entry dropped: invalid prefix', {
+                    orgId: row.org_id,
+                    err: (err as Error).message,
+                  });
+                  await sql`delete from artifact_purges where id = ${row.id}`.execute(db);
+                  continue;
+                }
                 // One bad prefix must not stop the rest; it stays queued for the next pass.
                 failures.push(`artifacts ${row.prefix}`);
                 log('error', 'artifact purge failed', {

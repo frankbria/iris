@@ -406,4 +406,38 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('a visual run with no string project, or an invalid queued prefix, stalls nothing', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-purge-'));
+    try {
+      const now = new Date();
+      await user('pia');
+      await sql`insert into organization (id, name, slug, "createdAt") values ('org-odd', 'O', 'odd', now())`.execute(
+        db,
+      );
+      const finished = at(now, -120);
+      const [{ id }] = (
+        await sql<{
+          id: string;
+        }>`insert into runs (org_id, kind, status, summary, started_at, finished_at)
+          values ('org-odd', 'visual', 'succeeded', 'v', ${finished}, ${finished}) returning id`.execute(
+          db,
+        )
+      ).rows;
+      await sql`insert into run_results (org_id, run_id, position, url, passed, result)
+        values ('org-odd', ${id}, 0, '/', true, '{"project": null}')`.execute(db);
+      await sql`insert into artifact_purges (org_id, prefix) values ('org-odd', 'org/org-odd/../')`.execute(
+        db,
+      );
+      const report = await offboarding(db).runRetention({
+        now,
+        artifacts: new FilesystemArtifactStore(root),
+      });
+      expect(report.failures).toEqual([]);
+      expect(await count('runs', "org_id = 'org-odd'")).toBe(0);
+      expect(await count('artifact_purges', "org_id = 'org-odd'")).toBe(0);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
