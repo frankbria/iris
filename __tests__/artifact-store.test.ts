@@ -15,6 +15,7 @@ import {
   FilesystemArtifactStore,
   orgArtifacts,
   runArtifactKey,
+  signRunArtifacts,
   S3ArtifactStore,
 } from '../src/artifact-store';
 
@@ -102,6 +103,48 @@ describe('FilesystemArtifactStore', () => {
     await mine.put(own, Buffer.from('org A'), 'image/png');
     expect((await mine.get(own))?.toString()).toBe('org A');
     expect(fs.readFileSync(path.join(root, theirs), 'utf8')).toBe('org B');
+  });
+
+  // #460: what run detail signs from a stored `artifacts` value.
+  it("signs only this run's keys and same-org baselines, nothing malformed", async () => {
+    const scope = { orgId: 'orgA', runId: 'run1' };
+    expect(await signRunArtifacts(store, scope, null)).toEqual({ signed: {}, dropped: [] });
+    expect(await signRunArtifacts(store, scope, ['x'])).toEqual({ signed: {}, dropped: [] });
+    const { signed, dropped } = await signRunArtifacts(store, scope, {
+      diff: runArtifactKey({
+        orgId: 'orgA',
+        projectId: 'p',
+        runId: 'run1',
+        kind: 'diff',
+        name: 'n',
+      }),
+      baseline: baselineKey({ orgId: 'orgA', projectId: 'p', name: 'n' }),
+      otherRun: runArtifactKey({
+        orgId: 'orgA',
+        projectId: 'p',
+        runId: 'run2',
+        kind: 'diff',
+        name: 'n',
+      }),
+      otherOrg: runArtifactKey({
+        orgId: 'orgB',
+        projectId: 'p',
+        runId: 'run1',
+        kind: 'diff',
+        name: 'n',
+      }),
+      lookalike: 'org/orgAB/project/p/run/run1/diff/n.png',
+      malformed: 'org/orgA/project/p/run/run1/diff/a b.png',
+      notAString: 42,
+    });
+    expect(Object.keys(signed).sort()).toEqual(['baseline', 'diff']);
+    expect(dropped.sort()).toEqual([
+      'lookalike',
+      'malformed',
+      'notAString',
+      'otherOrg',
+      'otherRun',
+    ]);
   });
 
   it('gives the local file as the retrieval URL', async () => {
