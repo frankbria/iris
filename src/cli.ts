@@ -1004,7 +1004,17 @@ admin
       const { offboarding, purgeOrgAiState } = await import('./offboarding');
       const { resolveDataDir } = await import('./data-dir');
       const off = offboarding(db);
-      const report = await off.runRetention();
+      // Object storage too, when this container has it (#472); otherwise it stays queued.
+      // A bad IRIS_S3_* must not stop the rest of the pass: reported, not thrown.
+      let artifacts: import('./artifact-store').ArtifactStore | undefined;
+      let storeError: string | undefined;
+      try {
+        artifacts = (await import('./artifact-store')).resolveArtifactStore() ?? undefined;
+      } catch (err) {
+        storeError = (err as Error).message;
+      }
+      const report = await off.runRetention({ artifacts });
+      if (storeError) report.failures.push(`artifact store: ${storeError}`);
       const { join } = await import('path');
       const ai = purgeOrgAiState(await off.purgedOrgIds(), join(resolveDataDir(), 'cache'));
       console.log(

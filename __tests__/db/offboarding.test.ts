@@ -13,6 +13,10 @@ import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
 import { offboarding, OffboardingError } from '../../src/offboarding';
 import { orgSuspensions } from '../../src/org-suspension';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { baselineKey, FilesystemArtifactStore, runArtifactKey } from '../../src/artifact-store';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 if (!ADMIN_URL) {
@@ -334,5 +338,125 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     );
     await expect(off.restoreOrg('nope', { actor: 'ops' })).rejects.toThrow(OffboardingError);
     await expect(off.deleteUser('nobody')).rejects.toThrow(OffboardingError);
+  });
+
+  // #472: images in object storage follow their rows, through a queue that survives a
+  // store failure. A real store (the filesystem one) and a real failure (no permission).
+  it("deletes a purged org's and an expired run's images, keeps baselines, retries a failure", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-purge-'));
+    const store = new FilesystemArtifactStore(root);
+    try {
+      const now = new Date();
+      await user('ora');
+      await org('org-img', 'ora', now);
+      // A visual run 120 days old with an image, a recent one, and the project's baseline.
+      const visual = async (daysAgo: number) => {
+        const finished = at(now, -daysAgo);
+        const [{ id }] = (
+          await sql<{
+            id: string;
+          }>`insert into runs (org_id, kind, status, summary, started_at, finished_at, params)
+            values ('org-img', 'visual', 'succeeded', 'v', ${finished}, ${finished},
+              '{"project": "shop"}') returning id`.execute(db)
+        ).rows;
+        const key = runArtifactKey({
+          orgId: 'org-img',
+          projectId: 'shop',
+          runId: id,
+          kind: 'current',
+          name: 'home',
+        });
+        await store.put(key, Buffer.from('png'), 'image/png');
+        await sql`insert into run_results (org_id, run_id, position, url, passed, result)
+          values ('org-img', ${id}, 0, '/', true, ${JSON.stringify({ project: 'shop', artifacts: { current: key } })})`.execute(
+          db,
+        );
+        return key;
+      };
+      const oldImage = await visual(120);
+      // A job that failed after uploading: no result rows, its images go all the same.
+      const [{ id: failedRun }] = (
+        await sql<{
+          id: string;
+        }>`insert into runs (org_id, kind, status, error, started_at, finished_at, params)
+          values ('org-img', 'visual', 'failed', 'x', ${at(now, -120)}, ${at(now, -120)},
+            '{"project": "shop"}') returning id`.execute(db)
+      ).rows;
+      const failedImage = runArtifactKey({
+        orgId: 'org-img',
+        projectId: 'shop',
+        runId: failedRun,
+        kind: 'current',
+        name: 'home',
+      });
+      await store.put(failedImage, Buffer.from('png'), 'image/png');
+      const newImage = await visual(5);
+      const baseline = baselineKey({ orgId: 'org-img', projectId: 'shop', name: 'home' });
+      await store.put(baseline, Buffer.from('png'), 'image/png');
+
+      // The store refuses (its directory is read-only): the prefix stays queued.
+      const project = path.join(root, 'org/org-img/project/shop/run');
+      fs.chmodSync(project, 0o500);
+      const failed = await offboarding(db).runRetention({ now, artifacts: store });
+      expect(failed.failures.some((f) => f.startsWith('artifacts '))).toBe(true);
+      expect(await count('artifact_purges', "org_id = 'org-img'")).toBe(2);
+      // Failed entries went behind (attempted_at), so untried ones come first next time.
+      expect(
+        await count('artifact_purges', "org_id = 'org-img' and attempted_at is not null"),
+      ).toBe(2);
+      fs.chmodSync(project, 0o700);
+
+      // Next pass: the expired run's images go; the recent run and the baseline stay.
+      const ok = await offboarding(db).runRetention({ now, artifacts: store });
+      expect(ok.failures).toEqual([]);
+      expect(ok.artifactPrefixesPurged).toBe(2);
+      expect(await store.get(oldImage)).toBeNull();
+      expect(await store.get(failedImage)).toBeNull();
+      expect(await store.get(newImage)).not.toBeNull();
+      expect(await store.get(baseline)).not.toBeNull();
+      expect(await count('artifact_purges', "org_id = 'org-img'")).toBe(0);
+
+      // Purging the org takes everything of it.
+      await offboarding(db).requestOrgDeletion('org-img', { reason: 'x', actor: 'ops' });
+      await offboarding(db).runRetention({ now: at(now, 31), artifacts: store });
+      expect(await store.get(newImage)).toBeNull();
+      expect(await store.get(baseline)).toBeNull();
+      expect(fs.existsSync(path.join(root, 'org/org-img'))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('a visual run with no string project, or an invalid queued prefix, stalls nothing', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-purge-'));
+    try {
+      const now = new Date();
+      await user('pia');
+      await sql`insert into organization (id, name, slug, "createdAt") values ('org-odd', 'O', 'odd', now())`.execute(
+        db,
+      );
+      const finished = at(now, -120);
+      const [{ id }] = (
+        await sql<{
+          id: string;
+        }>`insert into runs (org_id, kind, status, summary, started_at, finished_at)
+          values ('org-odd', 'visual', 'succeeded', 'v', ${finished}, ${finished}) returning id`.execute(
+          db,
+        )
+      ).rows;
+      await sql`update runs set params = '{"project": null}' where id = ${id}`.execute(db);
+      await sql`insert into artifact_purges (org_id, prefix) values ('org-odd', 'org/org-odd/../')`.execute(
+        db,
+      );
+      const report = await offboarding(db).runRetention({
+        now,
+        artifacts: new FilesystemArtifactStore(root),
+      });
+      expect(report.failures).toEqual([]);
+      expect(await count('runs', "org_id = 'org-odd'")).toBe(0);
+      expect(await count('artifact_purges', "org_id = 'org-odd'")).toBe(0);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

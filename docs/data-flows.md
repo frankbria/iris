@@ -164,7 +164,7 @@ private S3-compatible bucket (`src/artifact-store.ts`, #257):
 | Purpose | Visual regression testing: comparing a page with its approved look. |
 | Where | Bucket keys `org/<org>/project/<project>/run/<run uuid>/{current,diff}/<name>.png` and `org/<org>/project/<project>/baselines/<name>.png`. |
 | Access | The org's API keys, through run detail's signed URLs (5 minutes, at most 15; only that org's keys for that run, #460). The bucket is never public. |
-| Retention | Run images: with the run, **90 days** after it finishes; baselines: until replaced by an approval or the org is purged. **Not yet enforced for the objects**: the retention pass removes the rows, and deleting the objects is #472. |
+| Retention | Run images: with the run, **90 days** after it finishes; baselines: until the org is purged (a replaced baseline stays, since older runs' detail links the image they were compared with). The daily retention pass queues each prefix (`artifact_purges`, migration 0012) in the transaction that deletes its rows and deletes the objects when the container has `IRIS_S3_*`; a store failure is retried by the next pass (#472). |
 | Third parties | The hosting / object-storage provider (#273). Not sent to an AI vendor: hosted visual jobs run no AI analysis yet. |
 
 ### Browser sessions

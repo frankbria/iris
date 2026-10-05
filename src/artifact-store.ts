@@ -1,7 +1,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import { GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectsCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  NoSuchKey,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { ArtifactKind } from './visual/artifacts';
 import { readSecretEnv } from './secret-env';
@@ -18,6 +25,21 @@ export interface ArtifactStore {
   get(key: string): Promise<Buffer | null>;
   /** A short-lived URL for reading one artifact (at most 15 minutes for S3). */
   signedUrl(key: string, ttlSeconds?: number): Promise<string>;
+  /**
+   * Deletes every artifact under `prefix` (safe segments ending in `/`, #472); returns
+   * how many went. Nothing there is not an error.
+   */
+  deletePrefix(prefix: string): Promise<number>;
+}
+
+/** Safe segments ending in `/`: what may be bulk-deleted. Never empty, never the root. */
+const PREFIX = /^(?:[A-Za-z0-9_-]+\/)+$/;
+
+function assertPrefix(prefix: string): string {
+  if (typeof prefix !== 'string' || prefix.length > 1024 || !PREFIX.test(prefix)) {
+    throw new Error(`Invalid artifact prefix: ${JSON.stringify(prefix)}`);
+  }
+  return prefix;
 }
 
 const SEGMENT = /^[A-Za-z0-9_-]{1,128}$/;
@@ -110,6 +132,27 @@ export class FilesystemArtifactStore implements ArtifactStore {
   async signedUrl(key: string): Promise<string> {
     return pathToFileURL(this.file(key)).href;
   }
+
+  async deletePrefix(prefix: string): Promise<number> {
+    const dir = path.join(this.root, assertPrefix(prefix));
+    let count = 0;
+    const walk = async (d: string): Promise<void> => {
+      let entries: fs.Dirent[];
+      try {
+        entries = await fs.promises.readdir(d, { withFileTypes: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw error;
+      }
+      for (const e of entries) {
+        if (e.isDirectory()) await walk(path.join(d, e.name));
+        else count++;
+      }
+    };
+    await walk(dir);
+    await fs.promises.rm(dir, { recursive: true, force: true });
+    return count;
+  }
 }
 
 export interface S3ArtifactStoreConfig {
@@ -174,6 +217,29 @@ export class S3ArtifactStore implements ArtifactStore {
     );
   }
 
+  async deletePrefix(prefix: string): Promise<number> {
+    const Prefix = assertPrefix(prefix);
+    let count = 0;
+    let ContinuationToken: string | undefined;
+    // List a page (at most 1000 keys), delete it in one call, until the listing ends.
+    do {
+      const page = await this.client.send(
+        new ListObjectsV2Command({ Bucket: this.bucket, Prefix, ContinuationToken }),
+      );
+      const Objects = (page.Contents ?? []).flatMap((o) => (o.Key ? [{ Key: o.Key }] : []));
+      if (Objects.length) {
+        const res = await this.client.send(
+          new DeleteObjectsCommand({ Bucket: this.bucket, Delete: { Objects, Quiet: true } }),
+        );
+        if (res.Errors?.length)
+          throw new Error(`Could not delete ${res.Errors.length} artifact(s) under ${Prefix}`);
+        count += Objects.length;
+      }
+      ContinuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+    return count;
+  }
+
   /** Releases the client's sockets (long-lived processes keep one store). */
   close(): void {
     this.client.destroy();
@@ -197,6 +263,7 @@ export function orgArtifacts(store: ArtifactStore, orgId: string): ArtifactStore
     put: async (key, body, contentType) => store.put(own(key), body, contentType),
     get: async (key) => store.get(own(key)),
     signedUrl: async (key, ttlSeconds) => store.signedUrl(own(key), ttlSeconds),
+    deletePrefix: async (prefix) => store.deletePrefix(own(prefix)),
   };
 }
 

@@ -3,6 +3,7 @@ import * as path from 'path';
 import Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
 import { log } from './log';
+import { orgArtifacts, type ArtifactStore } from './artifact-store';
 
 /**
  * Org offboarding, account deletion and the daily retention pass (#349; owner decisions
@@ -33,6 +34,8 @@ export interface RetentionReport {
   sessionsDeleted: number;
   verificationsDeleted: number;
   termsDropped: number;
+  /** Object-storage prefixes deleted this pass (#472). */
+  artifactPrefixesPurged: number;
   /** Steps that failed this pass (logged); non-empty makes the CLI exit 3. */
   failures: string[];
 }
@@ -108,6 +111,10 @@ export function offboarding(db: Kysely<unknown>) {
     await sql`update organization set name = 'Deleted organization',
       slug = 'deleted-' || gen_random_uuid(),
       logo = null, metadata = null where id = ${orgId}`.execute(tx);
+    // Its images in object storage, all of them (#472): deleted by the artifacts step.
+    await sql`insert into artifact_purges (org_id, prefix) values (${orgId}, ${`org/${orgId}/`})`.execute(
+      tx,
+    );
     await sql`update org_deletions set purged_at = now(), reason = 'purged', requested_by = 'purged'
       where org_id = ${orgId}`.execute(tx);
     return true;
@@ -224,7 +231,14 @@ export function offboarding(db: Kysely<unknown>) {
      * steps still run (the CLI then exits non-zero, so the timer alerts). Every step is
      * idempotent, so the next pass finishes what this one could not.
      */
-    async runRetention({ now = new Date() }: { now?: Date } = {}): Promise<RetentionReport> {
+    async runRetention({
+      now = new Date(),
+      artifacts,
+    }: {
+      now?: Date;
+      /** Where purged orgs' and expired runs' images are (#472); queued until given one. */
+      artifacts?: ArtifactStore;
+    } = {}): Promise<RetentionReport> {
       const failures: string[] = [];
       const step = async <T>(name: string, fallback: T, fn: () => Promise<T>): Promise<T> => {
         try {
@@ -275,6 +289,15 @@ export function offboarding(db: Kysely<unknown>) {
       const runsDeleted = await step('runs', 0, () =>
         db.transaction().execute(async (tx) => {
           const cutoff = sql`${now}::timestamptz - make_interval(days => ${RUN_RETENTION_DAYS})`;
+          // A visual run's images go with it (#472). Baselines stay: they belong to the
+          // project, and run detail of later runs links them.
+          // The prefix comes from the job's own params, not its results: a job that failed
+          // after uploading has no result rows but its images still go.
+          await sql`insert into artifact_purges (org_id, prefix)
+            select org_id, 'org/' || org_id || '/project/' || (params->>'project') || '/run/' || id || '/'
+            from runs
+            where kind = 'visual' and finished_at is not null and finished_at < ${cutoff}
+              and jsonb_typeof(params->'project') = 'string'`.execute(tx);
           await sql`update usage_events u set run_id = null from runs r
             where u.org_id = r.org_id and u.run_id = r.id
               and r.finished_at is not null and r.finished_at < ${cutoff}`.execute(tx);
@@ -298,6 +321,47 @@ export function offboarding(db: Kysely<unknown>) {
         ),
       );
 
+      // Last, so rows deleted above are already queued (#472). Without a store the queue
+      // waits for a container that has one.
+      const artifactPrefixesPurged = artifacts
+        ? await step('artifacts', 0, async () => {
+            const { rows } = await sql<{ id: string; org_id: string; prefix: string }>`
+              select id, org_id, prefix from artifact_purges
+              order by attempted_at nulls first, id limit 500`.execute(db);
+            let done = 0;
+            for (const row of rows) {
+              try {
+                await orgArtifacts(artifacts, row.org_id).deletePrefix(row.prefix);
+              } catch (err) {
+                // A prefix that can never be valid (not safe segments, or outside its org)
+                // would be retried forever at the head of the queue: drop it, loudly.
+                if (/^Invalid artifact (prefix|key)/.test((err as Error).message)) {
+                  log('error', 'artifact purge entry dropped: invalid prefix', {
+                    orgId: row.org_id,
+                    err: (err as Error).message,
+                  });
+                  await sql`delete from artifact_purges where id = ${row.id}`.execute(db);
+                  continue;
+                }
+                // One bad prefix must not stop the rest; it stays queued for the next pass.
+                failures.push(`artifacts ${row.prefix}`);
+                // Behind the entries not yet tried, so a stuck one cannot starve the rest.
+                await sql`update artifact_purges set attempted_at = now() where id = ${row.id}`.execute(
+                  db,
+                );
+                log('error', 'artifact purge failed', {
+                  orgId: row.org_id,
+                  err: (err as Error).message,
+                });
+                continue;
+              }
+              await sql`delete from artifact_purges where id = ${row.id}`.execute(db);
+              done++;
+            }
+            return done;
+          })
+        : 0;
+
       const report = {
         orgsPurged,
         tombstonesDropped,
@@ -305,6 +369,7 @@ export function offboarding(db: Kysely<unknown>) {
         sessionsDeleted,
         verificationsDeleted,
         termsDropped,
+        artifactPrefixesPurged,
         failures,
       };
       log(failures.length ? 'error' : 'info', 'retention pass', {

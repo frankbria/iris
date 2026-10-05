@@ -82,7 +82,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268; 0012: artifact purges, #472)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
@@ -1304,8 +1304,14 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   container's `/data`. `purgeOrgAiState(purgedOrgIds, cacheDir)` matches `org_id` and the
   `org=<id>:` key prefix by `substr` (an `_` in an id is no LIKE wildcard). That is why the
   timer runs `retention` in both `iris` and `worker`; the Postgres part is idempotent.
-- **Not purged yet**: object-storage artifacts (nothing writes them until #268; then add a
-  prefix delete to the purge) and live orgs' AI ledger rows (no period decided).
+- **Object storage follows the rows (#472)**: `purgeOrg` queues `org/<org>/` and the runs
+  step queues each expired visual run's `org/<org>/project/<p>/run/<id>/` in
+  `artifact_purges` (migration 0012), in the same transaction that deletes the rows; the
+  last step drains it with `ArtifactStore.deletePrefix()` (filesystem rm, S3 list +
+  batched delete, paginated) and removes an entry only once its objects are gone. A
+  failure is reported (exit 3) and retried next pass. Without `IRIS_S3_*` the queue waits.
+  Baselines stay until the org is purged (older runs link them).
+- **Not purged**: live orgs' AI ledger rows (no period decided).
 
 ### BYOK Provider Keys (issue #344)
 
