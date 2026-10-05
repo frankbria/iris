@@ -105,7 +105,22 @@ describe('visual-diff when AI analysis is unavailable (#281)', () => {
 
     // The whole background changes colour: far past the 15% "breaking" line.
     colour = 'rgb(220, 30, 30)';
-    const run = await visualDiff(['--pages', '/', '--semantic', '--fail-on', 'breaking']);
+    const report = path.join(work, 'report.json');
+    const run = await visualDiff([
+      '--pages',
+      '/',
+      '--semantic',
+      '--fail-on',
+      'breaking',
+      '--output',
+      report,
+    ]);
+
+    // Failed for the reason this test sets up: the breaker refused the call before any
+    // request left. A 401 from a real vendor would be analysisFailed too, so say which.
+    const analysis = JSON.parse(fs.readFileSync(report, 'utf8')).results[0].aiAnalysis;
+    expect(analysis.analysisFailed).toBe(true);
+    expect(analysis.description).toMatch(/Budget limit exceeded/);
 
     expect(run.out).toMatch(/Breaking: 1/);
     expect(run.out).toMatch(/AI: unavailable for 1 comparison/);
