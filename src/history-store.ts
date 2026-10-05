@@ -15,8 +15,14 @@ import {
 import type { ExecutionResult } from './executor';
 import { insertUsage, type UsageEvent } from './billing/usage';
 import type { VisualTestResult as VisualRunResult } from './visual/visual-runner';
-import { baselineObjectKey, orgArtifacts, type ArtifactStore } from './artifact-store';
-import { artifactName } from './visual/artifacts';
+import type { ArtifactStore } from './artifact-store';
+import {
+  approveVisualResult,
+  orgBaselines,
+  type ApproveResult,
+  type OrgBaselines,
+} from './visual-baselines';
+export type { ApproveResult, OrgBaselines, VisualBaseline } from './visual-baselines';
 import { suspendedSql } from './org-suspension';
 import {
   InvalidCursorError,
@@ -334,35 +340,6 @@ interface ClaimedJobBase {
   orgSuspended: boolean;
 }
 
-/** A project's approved screenshot of one page on one device (#268). */
-export interface VisualBaseline {
-  project: string;
-  /** `artifactName(page, device)`. */
-  name: string;
-  page: string;
-  device: string;
-  objectKey: string;
-  /** The run the image came from; null once that run is pruned. */
-  runId: string | null;
-  /** The approving API key's id, or `first-run`. */
-  approvedBy: string;
-  updatedAt: Date;
-}
-
-/** One org's baselines: the worker reads and seeds them, approval replaces them. */
-export interface OrgBaselines {
-  get(project: string, name: string): Promise<VisualBaseline | null>;
-  /** Replaces the baseline: approval only. */
-  set(b: Omit<VisualBaseline, 'updatedAt'>): Promise<void>;
-  /** A project's first baseline of a page: `false` when one exists (it is not touched). */
-  insertIfAbsent(b: Omit<VisualBaseline, 'updatedAt'>): Promise<boolean>;
-}
-
-export type ApproveResult =
-  | { status: 'approved'; baseline: VisualBaseline }
-  | { status: 'not-found' }
-  | { status: 'conflict'; reason: string };
-
 /** The org-scoped half: what the API does for a tenant. */
 export interface OrgJobs {
   /**
@@ -422,104 +399,19 @@ export interface ReapResult {
 
 const JOB_ERROR_MAX = 500;
 
-function orgBaselines(db: Kysely<unknown>, orgId: string): OrgBaselines {
-  return {
-    async get(project, name) {
-      const { rows } = await sql<{
-        project: string;
-        name: string;
-        page: string;
-        device: string;
-        object_key: string;
-        run_id: string | null;
-        approved_by: string;
-        updated_at: Date;
-      }>`select project, name, page, device, object_key, run_id, approved_by, updated_at
-         from visual_baselines where org_id = ${orgId} and project = ${project} and name = ${name}`.execute(
-        db,
-      );
-      const r = rows[0];
-      return r
-        ? {
-            project: r.project,
-            name: r.name,
-            page: r.page,
-            device: r.device,
-            objectKey: r.object_key,
-            runId: r.run_id,
-            approvedBy: r.approved_by,
-            updatedAt: r.updated_at,
-          }
-        : null;
-    },
-    async insertIfAbsent(b) {
-      const res = await sql`insert into visual_baselines
-          (org_id, project, name, page, device, object_key, run_id, approved_by)
-        values (${orgId}, ${b.project}, ${b.name}, ${b.page}, ${b.device}, ${b.objectKey},
-          ${b.runId}, ${b.approvedBy})
-        on conflict (org_id, project, name) do nothing`.execute(db);
-      return Boolean(res.numAffectedRows);
-    },
-    async set(b) {
-      await sql`insert into visual_baselines
-          (org_id, project, name, page, device, object_key, run_id, approved_by)
-        values (${orgId}, ${b.project}, ${b.name}, ${b.page}, ${b.device}, ${b.objectKey},
-          ${b.runId}, ${b.approvedBy})
-        on conflict (org_id, project, name) do update set page = excluded.page,
-          device = excluded.device, object_key = excluded.object_key, run_id = excluded.run_id,
-          approved_by = excluded.approved_by, updated_at = now()`.execute(db);
-    },
-  };
-}
-
 export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
   return {
     baselines: (orgId) => orgBaselines(db, orgId),
     forOrg: ({ orgId, apiKeyId }) => ({
       baselines: orgBaselines(db, orgId),
 
-      async approveVisualResult(runId, position, artifacts) {
-        if (!UUID.test(runId) || !Number.isSafeInteger(position) || position < 0)
-          return { status: 'not-found' };
-        const { rows } = await sql<{
-          kind: string;
-          url: string | null;
-          result: Record<string, unknown>;
-        }>`
-          select r.kind, x.url, x.result from runs r
-          join run_results x on x.org_id = r.org_id and x.run_id = r.id
-          where r.org_id = ${orgId} and r.id = ${runId} and x.position = ${position}`.execute(db);
-        const row = rows[0];
-        if (!row) return { status: 'not-found' };
-        const result = row.result ?? {};
-        const current = (result.artifacts as { current?: unknown } | undefined)?.current;
-        const project = result.project;
-        const device = result.device;
-        if (
-          row.kind !== 'visual' ||
-          typeof current !== 'string' ||
-          typeof project !== 'string' ||
-          typeof device !== 'string' ||
-          !row.url
-        )
-          return { status: 'conflict', reason: 'Not a visual comparison with a screenshot' };
-        const name = artifactName(row.url, device);
-        const objectKey = baselineObjectKey(orgId, project, name, runId);
-        const image = await orgArtifacts(artifacts, orgId).get(current);
-        if (!image) return { status: 'conflict', reason: 'The screenshot is no longer stored' };
-        await orgArtifacts(artifacts, orgId).put(objectKey, image, 'image/png');
-        const baselines = orgBaselines(db, orgId);
-        await baselines.set({
-          project,
-          name,
-          page: row.url,
-          device,
-          objectKey,
+      approveVisualResult: (runId, position, artifacts) =>
+        approveVisualResult(db, artifacts, {
+          orgId,
           runId,
-          approvedBy: apiKeyId ?? 'unknown',
-        });
-        return { status: 'approved', baseline: (await baselines.get(project, name))! };
-      },
+          position,
+          actor: { apiKeyId: apiKeyId ?? null },
+        }),
 
       async enqueue({ kind, params }, { maxOutstanding = Infinity } = {}) {
         // One transaction under a per-org advisory lock: the count and the insert

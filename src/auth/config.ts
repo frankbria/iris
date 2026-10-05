@@ -132,10 +132,13 @@ const ac = createAccessControl({
   apiKey: ['create', 'read', 'update', 'delete'],
   // The org's own AI provider keys (BYOK, #344). Members see which are configured.
   providerKey: ['create', 'read', 'delete'],
+  // Making a visual result a project's new baseline (#463): owners and admins only.
+  visualBaseline: ['approve'],
 } as const);
 const keyManager = {
   apiKey: ['create', 'read', 'update', 'delete'] as const,
   providerKey: ['create', 'read', 'delete'] as const,
+  visualBaseline: ['approve'] as const,
 };
 const roles = {
   owner: ac.newRole({ ...ownerAc.statements, ...keyManager }),

@@ -2,6 +2,12 @@
 import "server-only"
 
 import { orgRunReads } from "../../../src/run-reads"
+import {
+  resolveArtifactStore,
+  signRunArtifacts,
+  type ArtifactStore,
+  type SignedArtifact,
+} from "../../../src/artifact-store"
 import { getDb } from "@/lib/auth"
 import { RUN_KINDS, RUN_STATUSES } from "@/lib/run-format"
 
@@ -26,4 +32,25 @@ export function listFilters(
     status: RUN_STATUSES.find((s) => s === status),
     cursor: one(params.cursor),
   }
+}
+
+let store: ArtifactStore | null | undefined
+/** The org artifact store from `IRIS_S3_*` (#460); `null` when the portal has none. */
+export function artifactStore(): ArtifactStore | null {
+  if (store === undefined) store = resolveArtifactStore()
+  return store
+}
+
+/**
+ * A visual result's images as signed URLs for this org and run (#460, #463): only the
+ * run's own keys and the org's baselines are signed. `null` without a store.
+ */
+export async function visualImages(
+  orgId: string,
+  runId: string,
+  artifacts: unknown
+): Promise<Record<string, SignedArtifact> | null> {
+  const s = artifactStore()
+  if (!s) return null
+  return (await signRunArtifacts(s, { orgId, runId }, artifacts)).signed
 }

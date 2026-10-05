@@ -99,6 +99,7 @@ src/
 ├── offboarding.ts         # Org soft delete/restore/purge to tombstone, user deletion, daily retention, AI-state purge (#349)
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
 ├── artifact-store.ts      # ArtifactStore: filesystem (local) + S3 (hosted, SeaweedFS in dev/CI/staging); tenant-first keys, signed URLs (#257)
+├── visual-baselines.ts    # Project baselines (orgBaselines) and audited approval, no runner imports: API + portal (#268, #463)
 ├── run-reads.ts           # Read-only run queries (types, keyset cursor, listPage, get): no runner imports, so the portal can use it (#270)
 ├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
 └── config.ts              # Configuration types and validation
@@ -1236,6 +1237,18 @@ hosted `iris connect` passes the same `postgresHistory` it records into.
   message with a link back to the newest page, not an error page.
 - Run detail goes through `redactStrings()` (src/log.ts), the same pass as the API (#269).
 - `lib/run-format.ts` turns a stored result into words per run kind; unit-tested.
+- **Visual runs show their screenshots (#463)**: artifact keys are taken out of the results
+  before redaction and signed (`visualImages()` in `lib/runs.ts`, the API's
+  `signRunArtifacts`, only with `IRIS_S3_*` in the portal), then rendered as baseline /
+  this run / differences with alt text naming page and device. A failed comparison gets an
+  **Approve as new baseline** form only when `hasPermission({ visualBaseline: ['approve'] })`
+  passes (owners and admins, a `createAuth()` role resource); the server action checks it
+  again, refuses a suspended org, and calls `approveVisualResult()` from
+  `src/visual-baselines.ts` (the lean module the API uses too: never `history-store`).
+  Approval writes the baseline row and an `audit_log` row (`visual_baseline.approve`) in one
+  transaction; `approved_by` is `user:<id>` from the portal, `key:<id>` from the API.
+- Portal E2E has a SeaweedFS bucket of its own (`iris-portal-e2e`, made by global setup);
+  `IRIS_TEST_S3_*` default to docker-compose.dev.yml's.
 
 ### Artifact Store (issue #257)
 
