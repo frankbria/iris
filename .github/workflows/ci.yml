@@ -736,12 +736,13 @@ jobs:
           scp "${ssh_opts[@]}" deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/deploy.sh"
           # Backups (#274): shipped for the operator to review and install as root-owned
           # copies; the deploy never runs or installs them (docs/runbook-production.md).
-          # Watchdog (#275): the same, installed as a root-owned copy by the operator.
-          scp "${ssh_opts[@]}" deploy/backup.sh deploy/restore.sh deploy/watchdog.sh \
+          # Watchdog (#275) and retention (#349): the same, installed as root-owned copies.
+          scp "${ssh_opts[@]}" deploy/backup.sh deploy/restore.sh deploy/watchdog.sh deploy/retention.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:$release/"
           scp "${ssh_opts[@]}" deploy/systemd/iris-backup.service deploy/systemd/iris-backup.timer \
             deploy/systemd/iris-backup-failed.service deploy/systemd/iris-watchdog.service \
-            deploy/systemd/iris-watchdog.timer "$DEPLOY_USER@$DEPLOY_HOST:$release/systemd/"
+            deploy/systemd/iris-watchdog.timer deploy/systemd/iris-retention.service \
+            deploy/systemd/iris-retention.timer "$DEPLOY_USER@$DEPLOY_HOST:$release/systemd/"
           # Host ports only when set (defaults 4000 / 3000, nginx's upstreams).
           {
             printf "PORTAL_URL='%s'\nSMTP_FROM='%s'\n" "$PORTAL_URL" "$SMTP_FROM"
@@ -782,6 +783,6 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | box "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
           # The refs were checked against ghcr.io/...@sha256:<64 hex> above, so they
           # are safe on this command line.
-          box "cd $release && chmod 700 deploy.sh backup.sh restore.sh watchdog.sh \
+          box "cd $release && chmod 700 deploy.sh backup.sh restore.sh watchdog.sh retention.sh \
             && IRIS_IMAGE='$IRIS_IMAGE' PORTAL_IMAGE='$PORTAL_IMAGE' ./deploy.sh; \
             rc=\$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit \$rc"

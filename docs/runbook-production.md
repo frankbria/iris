@@ -605,6 +605,59 @@ Unset contacts show a `[placeholder]` on `/contact`. Without `IRIS_SECURITY_CONT
 process starts, so each deploy renews it; a portal left running for a year without a
 deploy serves an expired file.
 
+## Retention and offboarding (issue #349)
+
+Periods (owner decisions, 2026-10-03; the 7 years await counsel's confirmation, #450):
+deleted orgs are kept 30 days before purge; their billing records 7 years; finished runs
+90 days; expired sessions and tokens are purged daily; terms evidence is kept 7 years
+after the user is deleted. `docs/data-flows.md` has the per-store detail.
+
+### Delete or restore an org, delete a user
+
+Customers ask through the support contact; there is no self-serve deletion yet.
+
+```bash
+cd "$(readlink -f /opt/iris-production/current)"
+docker compose exec iris node dist/cli.js admin delete-org <orgId> --reason "Customer request (ticket 123)"
+docker compose exec iris node dist/cli.js admin restore-org <orgId>      # within the 30 days
+docker compose exec iris node dist/cli.js admin delete-user <userId>
+```
+
+- `delete-org` suspends the org at once (everything in "Abuse handling" applies) and
+  prints the purge date. `restore-org` cancels it and lifts that suspension only: an
+  operator's own suspension (abuse) stays. After the purge, restore refuses.
+- The purge deletes runs, results, API keys, provider keys, members, invitations, the
+  plan and audit rows. The org row stays as a tombstone ("Deleted organization",
+  suspended) holding its billing records for 7 years. The members' accounts stay.
+- `delete-user` refuses while the user is the only owner of an org that is not being
+  deleted: delete that org first, or have them add another owner. Their memberships,
+  sessions and logins go with them; their terms acceptances are kept under a hash.
+- Artifacts in object storage are not purged yet: nothing writes them until #268.
+
+### The daily pass
+
+`deploy/retention.sh` runs `iris admin retention` in the `iris` and `worker` containers
+(found by compose labels). The Postgres part is idempotent, so it runs in both; each
+container also deletes purged orgs' rows from its own AI ledger and vision cache.
+Install it like the watchdog, as root-owned copies:
+
+```bash
+r="$(readlink -f /opt/iris-production/current)"
+install -o root -g root -m 0755 "$r/retention.sh" /usr/local/sbin/iris-retention
+install -o root -g root -m 0644 "$r/systemd/iris-retention.service" "$r/systemd/iris-retention.timer" /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now iris-retention.timer
+systemctl start iris-retention.service && journalctl -t iris-retention -n 5
+```
+
+It runs at 04:30 UTC, after the backup, so a purge never precedes that day's backup.
+Each container's report is a journal line (`orgsPurged`, `runsDeleted`, …). A missing
+container or a failed run alerts through `/etc/iris/alert-hook retention-<service> …`
+and fails the unit; the next day's run picks up whatever was left. Settings
+(`RETENTION_COMPOSE_PROJECT`, `RETENTION_SERVICES`) go in `/etc/iris/retention.env`.
+
+A purged org's data stays in backups until they age out (14 days on the host; the
+off-box copy follows its remote's policy, #445).
+
 ## Troubleshooting
 
 Run these from the serving release: `cd "$(readlink -f /opt/iris-production/current)"`.

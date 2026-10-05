@@ -846,7 +846,10 @@ const admin = program
 
 /** Opens the hosted database for one admin command, runs `fn`, and closes it. */
 async function withAdminDb(
-  fn: (suspensions: ReturnType<typeof import('./org-suspension').orgSuspensions>) => Promise<void>,
+  fn: (
+    suspensions: ReturnType<typeof import('./org-suspension').orgSuspensions>,
+    db: import('kysely').Kysely<unknown>,
+  ) => Promise<void>,
 ): Promise<void> {
   const { isHostedMode } = await import('./hosted');
   if (!isHostedMode()) {
@@ -856,6 +859,7 @@ async function withAdminDb(
   }
   const { createPostgresDb, probeDatabase, resolveDatabaseUrl } = await import('./db/postgres');
   const { orgSuspensions, UnknownOrgError } = await import('./org-suspension');
+  const { OffboardingError } = await import('./offboarding');
   let db: ReturnType<typeof createPostgresDb> | undefined;
   try {
     db = createPostgresDb(resolveDatabaseUrl(), { queryTimeoutMs: 10_000 });
@@ -868,10 +872,10 @@ async function withAdminDb(
   }
   let code = 0;
   try {
-    await fn(orgSuspensions(db));
+    await fn(orgSuspensions(db), db);
   } catch (err) {
     console.error((err as Error).message);
-    code = err instanceof UnknownOrgError ? 1 : 3;
+    code = err instanceof UnknownOrgError || err instanceof OffboardingError ? 1 : 3;
   } finally {
     await db.destroy();
   }
@@ -923,6 +927,74 @@ admin
       const history = await suspensions.history(orgId);
       if (!history.length) console.log('no suspension history');
       for (const event of history) console.log(formatEvent(event));
+    });
+  });
+
+/** Offboarding and retention (#349): deletion is a 30-day soft delete, then a purge. */
+admin
+  .command('delete-org <orgId>')
+  .description('Request deletion: suspended now, purged after 30 days unless restored')
+  .requiredOption('--reason <text>', 'Why (recorded for operators)')
+  .option('--actor <name>', 'Who is acting (default: $SUDO_USER, $USER, or "operator")')
+  .action(async (orgId: string, options: { reason: string; actor?: string }) => {
+    const by = { reason: options.reason.trim(), actor: (options.actor ?? defaultActor()).trim() };
+    if (!by.reason || !by.actor) {
+      console.error('--reason and --actor must not be blank');
+      process.exit(2); // Invalid usage
+      return;
+    }
+    await withAdminDb(async (_s, db) => {
+      const { offboarding } = await import('./offboarding');
+      const purgeAfter = await offboarding(db).requestOrgDeletion(orgId, by);
+      console.log(
+        `org ${orgId} is suspended; its data is purged after ${purgeAfter.toISOString()}`,
+      );
+    });
+  });
+
+admin
+  .command('restore-org <orgId>')
+  .description('Cancel a pending deletion (within the 30 days) and lift its suspension')
+  .option('--actor <name>', 'Who is acting (default: $SUDO_USER, $USER, or "operator")')
+  .action(async (orgId: string, options: { actor?: string }) => {
+    await withAdminDb(async (_s, db) => {
+      const { offboarding } = await import('./offboarding');
+      await offboarding(db).restoreOrg(orgId, { actor: (options.actor ?? defaultActor()).trim() });
+      console.log(`deletion of org ${orgId} cancelled`);
+    });
+  });
+
+admin
+  .command('delete-user <userId>')
+  .description('Delete a user account; terms evidence is kept pseudonymised for 7 years')
+  .action(async (userId: string) => {
+    await withAdminDb(async (_s, db) => {
+      const { offboarding } = await import('./offboarding');
+      await offboarding(db).deleteUser(userId);
+      console.log(`user ${userId} deleted`);
+    });
+  });
+
+admin
+  .command('retention')
+  .description(
+    'Daily pass: purge orgs past their grace period, old runs, expired sessions and tokens, ' +
+      "expired records, and this container's AI ledger/cache rows of purged orgs",
+  )
+  .action(async () => {
+    await withAdminDb(async (_s, db) => {
+      const { offboarding, purgeOrgAiState } = await import('./offboarding');
+      const { resolveDataDir } = await import('./data-dir');
+      const off = offboarding(db);
+      const report = await off.runRetention();
+      const { join } = await import('path');
+      const ai = purgeOrgAiState(await off.purgedOrgIds(), join(resolveDataDir(), 'cache'));
+      console.log(
+        JSON.stringify({ ...report, aiLedgerRows: ai.ledgerRows, aiCacheRows: ai.cacheRows }),
+      );
+      // A failed step is logged and the rest still ran; exit 3 so the timer alerts.
+      if (report.failures.length)
+        throw new Error(`retention steps failed: ${report.failures.join(', ')}`);
     });
   });
 

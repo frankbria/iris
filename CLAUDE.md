@@ -81,7 +81,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
@@ -95,6 +95,7 @@ src/
 ├── jobs-api.ts            # Hosted REST on the RPC listener: jobs (#267), runs + run detail (#269)
 ├── worker.ts              # `iris worker`: claims queued a11y jobs, runs the hardened runner, stores the result (#267)
 ├── billing/plans.ts       # Plan catalog (free/pro/team), resolveEntitlements, orgEntitlements(db), one-free-org cap (#260)
+├── offboarding.ts         # Org soft delete/restore/purge to tombstone, user deletion, daily retention, AI-state purge (#349)
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
 ├── artifact-store.ts      # ArtifactStore: filesystem (local) + S3 (hosted, SeaweedFS in dev/CI/staging); tenant-first keys, signed URLs (#257)
 ├── run-reads.ts           # Read-only run queries (types, keyset cursor, listPage, get): no runner imports, so the portal can use it (#270)
@@ -130,6 +131,9 @@ __tests__/
 ├── protocol-auth.test.ts          # RPC upgrade auth seam: 401/503, pending upgrades vs cap, org-scoped status, revocation re-check (#341)
 ├── api-key-auth.test.ts           # Real Postgres + spawned hosted `iris connect`: real keys, revoked/disabled 401, startup refusals (#341)
 ├── db/postgres.test.ts            # Real Postgres: migrate, idempotency, org_id catalog check, BetterAuth round trip (#248)
+├── db/offboarding.test.ts         # Real Postgres: soft delete + restore, purge to tombstone, 90-day runs, sessions, 7-year records (#349)
+├── offboarding-ai-state.test.ts   # SQLite ledger + vision cache rows of purged orgs removed, others kept (#349)
+├── retention-script.test.ts       # deploy/retention.sh vs Docker: runs in iris + worker, alerts on failure/missing (#349)
 ├── db/entitlements.test.ts        # Real Postgres: no row is free, setPlan + overrides, per org, unknown plan reads as free (#260)
 ├── billing/plans.test.ts          # Catalog values and override resolution: only known keys and valid values (#260)
 ├── db/history-store.test.ts       # Real Postgres: runs per org, cross-org list/get empty, same-org key FK, no typed values (#254)
@@ -175,6 +179,7 @@ deploy/
 ├── deploy.sh                      # On-box deploy by digest: SMTP + migration gates, rollback (#273)
 ├── backup.sh                      # Daily age-encrypted pg_dump + master key, retention, rclone copy (#274)
 ├── restore.sh                     # Decrypt + pg_restore in a disposable pinned postgres container (#274)
+├── retention.sh                   # Daily `iris admin retention` in the iris + worker containers (#349)
 ├── systemd/iris-backup*.{service,timer} # Daily schedule + failure alert, installed by the operator (#274)
 └── nginx/iris.conf                # TLS ingress site template for the host's nginx (#347)
 
@@ -485,8 +490,9 @@ The org is the tenant (ADR 0001 §4). The organization plugin's options live in
   The login form passes `?next=` (checked by `safeNext()`) as that URL. `new URL()`
   collapses dot-segments, so `/.//host` parses to the path `//host`, and `safeNext()`
   checks the parsed path as well as the origin.
-- Org deletion is disabled (`disableOrganizationDeletion`) until offboarding (#349):
-  `runs`, `usage_events` and the other tenant tables reference the org with no cascade.
+- Tenants cannot delete orgs (`disableOrganizationDeletion`): `runs`, `usage_events` and the
+  other tenant tables reference the org with no cascade. Operators do it with
+  `iris admin delete-org` (#349, below).
 
 ### Portal API Keys (issue #340)
 
@@ -1202,6 +1208,35 @@ it yet; #268 (visual jobs), #460 (URLs in run detail) and #349 (purge) build on 
 - **Tests need `IRIS_TEST_S3_ENDPOINT` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY`**:
   required under `CI`, skipped locally when unset (the Postgres pattern). Each run makes and
   removes its own bucket.
+
+### Offboarding and Retention (issue #349)
+
+`src/offboarding.ts`, migration 0010, `iris admin delete-org | restore-org | delete-user |
+retention`, `deploy/retention.sh` + `deploy/systemd/iris-retention.*`. Periods are the
+owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
+
+- **Deletion is a soft delete**: `org_deletions` (purge_after = request + 30 days) plus a
+  suspension, so #348's enforcement stops keys, jobs and portal writes at once.
+  `restoreOrg` lifts only the suspension the request added (its exact reason), never an
+  operator's abuse suspension, and refuses an org whose only owner was deleted during the
+  grace period (same lock as `deleteUser`). Both take #348's suspension lock before reading
+  the latest state.
+- **The purge keeps a tombstone**: the org row stays ("Deleted organization", slug
+  `deleted-<uuid>`: a customer may own `deleted-<id>`; one `system` suspension) so `usage_events` (FK, no cascade) survive 7
+  years, detached from runs (`run_id = null`) and with nothing naming the tenant. The
+  7-year pass deletes usage, suspensions, the deletion row and the org. One transaction
+  per org: a failure is logged and retried by the next pass.
+- **Runs after 90 days**: usage rows are detached first, since `usage_events -> runs` has
+  no delete rule and would block the delete.
+- **Terms evidence is pseudonymised by the database**, not by code: whatever deletes a user
+  (BetterAuth, `delete-user`, SQL) fires the trigger. `deleteUser` refuses while the user
+  is the only owner (comma roles, as #260) of an org with no pending deletion.
+- **AI state is per container**: the cost ledger and vision cache are SQLite under each
+  container's `/data`. `purgeOrgAiState(purgedOrgIds, cacheDir)` matches `org_id` and the
+  `org=<id>:` key prefix by `substr` (an `_` in an id is no LIKE wildcard). That is why the
+  timer runs `retention` in both `iris` and `worker`; the Postgres part is idempotent.
+- **Not purged yet**: object-storage artifacts (nothing writes them until #268; then add a
+  prefix delete to the purge) and live orgs' AI ledger rows (no period decided).
 
 ### BYOK Provider Keys (issue #344)
 

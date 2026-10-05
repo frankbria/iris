@@ -11,9 +11,13 @@ personal data, a retention period or a transmission to a third party updates thi
 the same pull request, and the privacy policy and subprocessor list when the change is
 visible to customers.
 
-Retention marked **undecided (#349)** has no configured limit today: the data stays until it
-is deleted by hand. Issue #349 (account deletion, org offboarding and data retention)
-decides it. Nothing below invents a period that is not in the code.
+Retention periods are the owner's decisions of 2026-10-03 (#349), applied by the daily
+retention pass (`iris admin retention`, `src/offboarding.ts`, `deploy/retention.sh`):
+deleted orgs are soft-deleted for **30 days**, then purged to a tombstone; their billing
+records are kept **7 years**, detached and pseudonymised; finished runs are kept **90 days**;
+expired sessions and tokens are purged **daily**; terms-acceptance evidence is kept **7 years**
+after the user is deleted, pseudonymised. What is still marked **undecided** has no
+configured limit: the data stays until it is deleted by hand.
 
 ## Where the hosted service runs
 
@@ -34,7 +38,7 @@ through the host's nginx (`deploy/nginx/iris.conf`, #347). Postgres publishes no
 | Where | Postgres, migration `src/db/migrations/0001_initial.ts`; config in `src/auth/config.ts`. |
 | Access | The user (portal). Operators with database access. |
 | Encryption | TLS in transit. Passwords hashed. No application-level encryption at rest; disk encryption depends on the hosting provider. |
-| Retention | Session: BetterAuth's defaults, as `createAuth()` sets no `session` options: expires 7 days after it was last extended (use extends it at most once a day); all sessions are revoked on password reset. Reset token: 1 hour (BetterAuth default). Expired session and verification rows are not purged on a schedule. User and account rows: until deleted, **undecided (#349)**. |
+| Retention | Session: BetterAuth's defaults, as `createAuth()` sets no `session` options: expires 7 days after it was last extended (use extends it at most once a day); all sessions are revoked on password reset. Reset token: 1 hour (BetterAuth default). Expired session and verification rows are purged by the daily retention pass. User and account rows: until the user is deleted (`iris admin delete-user`, on request; refused while the user is a live org's only owner). |
 
 Sign-in rate limits are counted per client IP in the portal process's memory (BetterAuth
 `rateLimit`, `src/auth/config.ts`); lost on restart, never written to disk.
@@ -48,7 +52,7 @@ Sign-in rate limits are counted per client IP in the portal process's memory (Be
 | Where | Postgres, `0001_initial.ts`; plugin options in `src/auth/config.ts`. |
 | Access | Members of the org (roles owner/admin/member). Operators. |
 | Encryption | As above. |
-| Retention | Invitation: expires after 48 hours (BetterAuth default, not overridden); the row stays. Org deletion is disabled (`disableOrganizationDeletion`) until #349: **undecided (#349)**. |
+| Retention | Invitation: expires after 48 hours (BetterAuth default, not overridden); the row stays. Tenants cannot delete an org themselves (`disableOrganizationDeletion`); the operator does it on request (`iris admin delete-org`): suspended at once, restorable for **30 days** (`restore-org`), then purged. Members, invitations, keys, provider keys, plans and runs are deleted; the org row stays as a tombstone (name "Deleted organization", a random `deleted-<uuid>` slug) holding only its billing records, for 7 years. |
 
 ### API keys
 
@@ -59,7 +63,7 @@ Sign-in rate limits are counted per client IP in the portal process's memory (Be
 | Where | Postgres, `0001_initial.ts`; `@better-auth/api-key` with `references: 'organization'` in `src/auth/config.ts`; verification in `src/api-key-auth.ts`. |
 | Access | Org members can list (owners/admins create and revoke). The plaintext is shown once, at creation. |
 | Encryption | Hashed at rest. |
-| Retention | Revoke deletes the row at once. Otherwise until revoked or the org is offboarded: **undecided (#349)**. |
+| Retention | Revoke deletes the row at once. Otherwise until revoked or the org is purged (30 days after its deletion is requested). |
 
 ### AI provider keys (BYOK)
 
@@ -70,7 +74,7 @@ Sign-in rate limits are counted per client IP in the portal process's memory (Be
 | Where | Postgres, `0001_initial.ts`; `src/byok/store.ts`, `src/byok/crypto.ts`. |
 | Access | Owners/admins set and remove; members see only which providers are set. The plaintext leaves the store only through `credentialsFor()`, for the server to make that org's calls. Never shown back, never logged. |
 | Encryption | Envelope encryption: a fresh AES-256-GCM data key per stored key, wrapped by a master key from `IRIS_KEY_ENCRYPTION_KEY(_FILE)`; both layers bind key id, org and provider as AAD. |
-| Retention | Until the org removes it (deleted at once), or offboarding: **undecided (#349)**. |
+| Retention | Until the org removes it (deleted at once), or the org is purged (30 days after its deletion is requested). |
 
 ### Run history and job queue
 
@@ -81,7 +85,7 @@ Sign-in rate limits are counted per client IP in the portal process's memory (Be
 | Where | Postgres, migrations `0001`, `0002`, `0004`, `0005`; `src/history-store.ts`, `src/jobs-api.ts`, `src/worker.ts`. |
 | Access | Everyone in the org (that is why credentials in URLs are refused with a 400 and typed values are never stored). Operators. |
 | Encryption | As above. |
-| Retention | **Undecided (#349).** No pruning exists. |
+| Retention | **90 days** after the run finished (the daily retention pass); queued and running jobs are never pruned. A deleted org's runs go when it is purged. The run's billing records stay (their `run_id` is cleared). |
 
 The worker writes no report or screenshot file (`src/worker.ts`: no `output`); page content
 is processed in Chromium's memory for the duration of the job.
@@ -94,7 +98,7 @@ is processed in Chromium's memory for the duration of the job.
 | Purpose | Metering and billing (#263). |
 | Where | Postgres, `0001`, `0003`; `src/billing/usage.ts`. |
 | Access | Operators; the org's own usage view (#271, pending). |
-| Retention | **Undecided (#349)**; it is a billing record, so the period also depends on tax and accounting rules. |
+| Retention | While the org exists, and **7 years** after it is purged, on a tombstone org with no name, members or keys (pseudonymised); then deleted. The 7 years is the owner's decision pending counsel's confirmation for the jurisdiction (#450). |
 
 ### Org plans
 
@@ -104,7 +108,7 @@ is processed in Chromium's memory for the duration of the job.
 | Purpose | Entitlements (#260): which limits apply to the org; enforcement is #346. |
 | Where | Postgres, `0009`; `src/billing/plans.ts`. |
 | Access | Operators; Stripe webhooks will set it (#261). |
-| Retention | With the org (#349). |
+| Retention | Deleted when the org is purged. |
 
 ### Terms acceptances
 
@@ -114,7 +118,7 @@ is processed in Chromium's memory for the duration of the job.
 | Purpose | Evidence of which version of the Terms and AUP each person accepted (#276). |
 | Where | Postgres, `0006_terms_acceptances.ts`; `src/legal/acceptance.ts`. |
 | Access | Operators. |
-| Retention | Deleted with the user (`on delete cascade`). Otherwise **undecided (#349)**. |
+| Retention | While the user exists. When the user is deleted, a database trigger (migration 0010) replaces `user_id` with a SHA-256 of it (`user_hash`, `pseudonymised_at`): the document, version, time and IP are kept **7 years** for disputes, then deleted. |
 
 ### Audit log
 
@@ -124,7 +128,7 @@ is processed in Chromium's memory for the duration of the job.
 | Purpose | An org's audit trail (#361). |
 | Where | Postgres, `0001_initial.ts`. |
 | Status | **The table exists; nothing writes to it yet (#361).** Update this entry when #361 defines what is recorded. |
-| Retention | **Undecided (#349).** |
+| Retention | Deleted when the org is purged. Otherwise **undecided** until #361 defines what is recorded. |
 
 ### AI cost ledger
 
@@ -134,7 +138,7 @@ is processed in Chromium's memory for the duration of the job.
 | Purpose | Budget circuit breaker and reservations before each AI call (#242, #244, #255). |
 | Where | `<IRIS_DATA_DIR>/cache/cost-tracking.db` (`src/ai-client/factory.ts`, `src/ai-client/smart-client.ts`, `src/ai-client/cost-tracker.ts`); in production the `iris-data` / `worker-data` volumes. |
 | Access | Operators. |
-| Retention | No pruning: **undecided (#349)**. Not included in backups. |
+| Retention | A purged org's rows are deleted by the daily retention pass in each container. Live orgs' rows: no pruning, **undecided**. Not included in backups. |
 
 ### AI vision cache
 

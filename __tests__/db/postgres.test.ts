@@ -191,6 +191,7 @@ describe('migrate process against a server that never answers', () => {
       ['0007_org_suspensions', 'Success'],
       ['0008_runs_finished_idx', 'Success'],
       ['0009_org_plans', 'Success'],
+      ['0010_offboarding', 'Success'],
     ]);
 
     const tables = await sql<{ table_name: string }>`
@@ -206,6 +207,7 @@ describe('migrate process against a server that never answers', () => {
         'audit_log',
         'org_suspensions',
         'org_plans',
+        'org_deletions',
       ]),
     );
   });
@@ -215,17 +217,17 @@ describe('migrate process against a server that never answers', () => {
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('9');
+    expect(applied.rows[0].n).toBe('10');
   });
 
   // A rollback deploys an older image (#273): its catalog lacks what a newer release applied.
   it('an older release on a newer schema applies nothing and succeeds', async () => {
     const older: Record<string, unknown> = { ...MIGRATIONS };
-    delete older['0009_org_plans'];
+    delete older['0010_offboarding'];
     const log = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
       expect(await migrateToLatest(db, older as typeof MIGRATIONS)).toEqual([]);
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/schema is ahead.*0009_org_plans/));
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/schema is ahead.*0010_offboarding/));
     } finally {
       log.mockRestore();
     }
@@ -233,17 +235,17 @@ describe('migrate process against a server that never answers', () => {
 
   it('refuses a release with pending migrations on a schema with newer ones', async () => {
     const branched: Record<string, unknown> = { ...MIGRATIONS };
-    delete branched['0009_org_plans'];
+    delete branched['0010_offboarding'];
     const up = jest.fn();
     branched['0003b_branch'] = { up };
     await expect(migrateToLatest(db, branched as typeof MIGRATIONS)).rejects.toThrow(
-      /does not know \(0009_org_plans\).*unapplied ones \(0003b_branch\).*branched off/,
+      /does not know \(0010_offboarding\).*unapplied ones \(0003b_branch\).*branched off/,
     );
     expect(up).not.toHaveBeenCalled();
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('9');
+    expect(applied.rows[0].n).toBe('10');
   });
 
   it('gives every IRIS table org_id NOT NULL and an index that leads with it', async () => {
@@ -279,7 +281,7 @@ describe('migrate process against a server that never answers', () => {
     }
   });
 
-  it('keeps the user-scoped exemption honest: user_id first in an index, cascade, one row per version', async () => {
+  it('keeps the user-scoped exemption honest: user_id first in an index, pseudonymised on delete, one row per version', async () => {
     const lead = await sql<{ n: string }>`
       select count(*) as n from pg_index i
       join pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
@@ -300,9 +302,13 @@ describe('migrate process against a server that never answers', () => {
         db,
       ),
     ).rejects.toThrow(/check constraint/);
+    // Deleting the user keeps the evidence, pseudonymised (#349): no row names the user.
     await sql`delete from "user" where id = 'u_terms'`.execute(db);
-    const left = await sql<{ n: string }>`select count(*) as n from terms_acceptances`.execute(db);
-    expect(left.rows[0].n).toBe('0');
+    const left = await sql<{ user_id: string | null; user_hash: string | null }>`
+      select user_id, user_hash from terms_acceptances`.execute(db);
+    expect(left.rows).toHaveLength(1);
+    expect(left.rows[0].user_id).toBeNull();
+    expect(left.rows[0].user_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("refuses a run result that points at another org's run", async () => {
