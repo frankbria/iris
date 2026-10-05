@@ -1156,6 +1156,10 @@ and change only through approval; git-branch baselines stay local.
   `POST /v1/runs/:id/results/:position/approve` copies that result's current image to the
   baseline key and replaces the row (`approved_by` = the key id). 404 for another org or
   position, 409 for a non-visual result or one whose screenshot is gone.
+- **Every attempt writes its own images**: names carry 12 hex of the claim token
+  (`<name>--<tag>`, seeded baselines too), so a reaped attempt still running cannot
+  replace the images the winning attempt's results point at. Repeated URLs are compared
+  once.
 - **Images never touch the worker's disk**: current and diff go to
   `runArtifactKey(org, project, <run uuid>, …)` (the uuid is what #460 checks), the
   baseline to `baselineKey()`. Results keep `project`, `newBaseline` and the keys.
@@ -1171,7 +1175,9 @@ and change only through approval; git-branch baselines stay local.
   first, then visual, one job per tick.
 - No AI classification in hosted visual jobs yet (BYOK/credits wiring is #346).
 - `ApiJobs` (src/jobs-api.ts) is the slice of `OrgJobs` the API uses; approval is optional
-  in it, so the API tests' in-memory store needs no visual support.
+  in it, so the API tests' in-memory stores (`api-jobs`, `protocol-observability`) need
+  no visual support. The root `tsc` does not compile `__tests__/`: after changing a type
+  that tests implement, run them with `jest --no-cache` (ts-jest caches diagnostics).
 
 ### Results API (issue #269)
 

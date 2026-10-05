@@ -47,6 +47,12 @@ export async function runVisualJob(
     orgId: string;
     /** The run's uuid, which is also the run id in its artifact keys (#460). */
     runId: string;
+    /**
+     * This claim of the job (its claim token). Image names carry it, so a reaped attempt
+     * that is still running writes its own objects and cannot replace the images of the
+     * attempt that wins (whose results point at them).
+     */
+    attempt: string;
     /** No new page is started after this long (default `JOB_DEADLINE_MS`). */
     deadlineMs?: number;
     /** Taller screenshots are refused (default `MAX_PAGE_HEIGHT`). */
@@ -62,7 +68,8 @@ export async function runVisualJob(
   const browser = await launchBrowser();
   try {
     for (const device of params.devices) {
-      for (const url of params.urls) {
+      // A repeated URL would compare twice under one key: once is the answer.
+      for (const url of [...new Set(params.urls)]) {
         const context = await newHardenedContext(browser, { viewport: VIEWPORTS[device] });
         try {
           const page = await context.newPage();
@@ -103,13 +110,14 @@ export async function runVisualJob(
             throw new Error(`${url} is ${height} px tall (${device}); the limit is ${maxHeight}`);
 
           const name = artifactName(url, device);
+          const tag = ctx.attempt.replace(/-/g, '').slice(0, 12);
           const keyOf = (kind: 'current' | 'diff') =>
             runArtifactKey({
               orgId: ctx.orgId,
               projectId: params.project,
               runId: ctx.runId,
               kind,
-              name,
+              name: `${name}--${tag}`,
             });
           const current = keyOf('current');
           await ctx.artifacts.put(current, shot.buffer, 'image/png');
@@ -120,7 +128,7 @@ export async function runVisualJob(
             // running, cannot overwrite a baseline (or an approval made meanwhile). The
             // image goes to a key of its own first, so a winning row never points at a
             // missing or replaced object.
-            const objectKey = baselineObjectKey(ctx.orgId, params.project, name, ctx.runId);
+            const objectKey = baselineObjectKey(ctx.orgId, params.project, name, ctx.attempt);
             await ctx.artifacts.put(objectKey, shot.buffer, 'image/png');
             const seeded = await ctx.baselines.insertIfAbsent({
               project: params.project,

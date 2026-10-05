@@ -113,6 +113,7 @@ export function processNextVisualJob(
         baselines: baselines(job.orgId),
         orgId: job.orgId,
         runId: job.id,
+        attempt: job.claimToken,
       });
     },
     { heartbeatMs },

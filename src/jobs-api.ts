@@ -51,7 +51,7 @@ const A11yJobBody = z
 const VisualJobBody = z
   .object({
     project: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, 'must be 1-64 of A-Z a-z 0-9 _ -'),
-    urls: JobUrls,
+    urls: JobUrls.transform((u) => [...new Set(u)]),
     devices: z
       .array(z.enum(['desktop', 'laptop', 'tablet', 'mobile']))
       .min(1)

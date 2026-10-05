@@ -287,6 +287,7 @@ const page = (color: string) =>
       baselines: postgresJobs(db).baselines('org-a'),
       orgId: 'org-a',
       runId: '00000000-0000-4000-8000-000000000001',
+      attempt: '00000000-0000-4000-8000-0000000000aa',
     };
     const params = {
       project: 'limits',
@@ -298,6 +299,38 @@ const page = (color: string) =>
       /ran out of time/,
     );
     await expect(runVisualJob(params, { ...ctx, maxPageHeight: 100 })).rejects.toThrow(/px tall/);
+  }, 120_000);
+
+  // A reaped attempt that is still running and its retry share the run id: their images
+  // must not share keys, or the stale one replaces what the winner's results point at.
+  it("keeps each attempt's images apart, and compares a repeated URL once", async () => {
+    const base = {
+      artifacts: orgArtifacts(store, 'org-a'),
+      baselines: postgresJobs(db).baselines('org-a'),
+      orgId: 'org-a',
+      runId: '00000000-0000-4000-8000-000000000002',
+    };
+    // The run the job belongs to (a seeded baseline records it).
+    await sql`insert into runs (id, org_id, kind, status)
+      values (${base.runId}, 'org-a', 'visual', 'running')`.execute(db);
+    const params = {
+      project: 'attempts',
+      urls: [url(), url()],
+      devices: ['desktop' as const],
+      threshold: 0.01,
+    };
+    const a = await runVisualJob(params, {
+      ...base,
+      attempt: '11111111-1111-4111-8111-111111111111',
+    });
+    const b = await runVisualJob(params, {
+      ...base,
+      attempt: '22222222-2222-4222-8222-222222222222',
+    });
+    expect(a.results).toHaveLength(1);
+    expect(a.results[0].artifacts!.current).not.toBe(b.results[0].artifacts!.current);
+    expect(a.results[0].newBaseline).toBe(true);
+    expect(b.results[0].newBaseline).toBeUndefined();
   }, 120_000);
 
   it('baselines belong to a project: another project starts its own', async () => {
