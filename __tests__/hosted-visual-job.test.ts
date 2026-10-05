@@ -42,9 +42,11 @@ if (!READY) {
 }
 
 const PUBLIC = '8.8.8.8';
-const page = (color: string) =>
+const page = (color: string, extra = 0) =>
   `<!doctype html><html><head><style>html,body{margin:0;height:100%;background:#fff}` +
-  `div{height:300px;background:${color}}</style></head><body><div></div></body></html>`;
+  `div{height:300px;background:${color}}</style></head><body><div></div>` +
+  (extra ? `<p style="margin:0;height:${extra}px"></p>` : '') +
+  `</body></html>`;
 
 (READY ? describe : describe.skip)('hosted visual-diff job API, end to end (#268)', () => {
   const dbName = `iris_vis_${process.pid}_${randomBytes(4).toString('hex')}`;
@@ -60,6 +62,7 @@ const page = (color: string) =>
   let site: http.Server;
   let sitePort: number;
   let color = '#000';
+  let extra = 0;
   let status = 200;
   let server: ReturnType<typeof startServer>;
   let base: string;
@@ -119,7 +122,7 @@ const page = (color: string) =>
     site = http.createServer((_req, res) => {
       res.statusCode = status;
       res.setHeader('content-type', 'text/html');
-      res.end(page(color));
+      res.end(page(color, extra));
     });
     site.listen(0, '127.0.0.1');
     await once(site, 'listening');
@@ -293,6 +296,35 @@ const page = (color: string) =>
     );
     expect(b.equals(c)).toBe(false);
   });
+
+  // #282: a full page whose height changed used to be refused ("dimension mismatch"),
+  // so a page that grew was reported breaking with no diff image. It is diffed now.
+  it('diffs a page that grew and records that its size changed', async () => {
+    color = '#000';
+    extra = 0;
+    await run('grow'); // baseline: the viewport-high page
+    // The div is 300px, so the page only outgrows the 1080px viewport past 780px more.
+    extra = 1200; // a 1500px page
+    try {
+      const grown = await run('grow');
+      expect(grown.detail).toMatchObject({ status: 'failed' });
+      const r = grown.detail.results[0];
+      expect(r.passed).toBe(false);
+      expect(r.result.error).toBeUndefined();
+      const { baseline, current } = r.result.layoutChange;
+      expect(current.width).toBe(baseline.width);
+      expect(current.height).toBeGreaterThan(baseline.height);
+      // Only the new rows changed: the overlap is identical (the same top of the page).
+      expect(r.result.diffPercentage).toBeCloseTo(
+        (current.height - baseline.height) / current.height,
+        3,
+      );
+      expect(Object.keys(r.result.artifacts).sort()).toEqual(['baseline', 'current', 'diff']);
+      expect(await fetchText(r.result.artifacts.diff.url)).toBe(200);
+    } finally {
+      extra = 0;
+    }
+  }, 180_000);
 
   it('stops at the deadline and refuses a too-tall page', async () => {
     const ctx = {

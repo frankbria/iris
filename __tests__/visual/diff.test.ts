@@ -87,34 +87,8 @@ describe('VisualDiffEngine', () => {
       expect(result.passed).toBe(false);
     });
 
-    it('should handle images with different dimensions', async () => {
-      // Arrange
-      const mockSharp = {
-        raw: jest.fn().mockReturnThis(),
-        ensureAlpha: jest.fn().mockReturnThis(),
-        toBuffer: jest.fn().mockResolvedValue(Buffer.from('processed-image')),
-        metadata: jest
-          .fn()
-          .mockResolvedValueOnce({ width: 1920, height: 1080, channels: 4 })
-          .mockResolvedValueOnce({ width: 1024, height: 768, channels: 4 }),
-      };
-      (sharp as any).mockReturnValue(mockSharp);
-
-      const options: DiffOptions = {
-        threshold: 0.1,
-        includeAA: false,
-        alpha: 0.1,
-        diffMask: true,
-        diffColor: [255, 0, 0],
-      };
-
-      // Act
-      const result = await diffEngine.compare(mockBaselineBuffer, mockCurrentBuffer, options);
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('dimension mismatch');
-    });
+    // Images of different sizes are diffed, not refused (#282): see diff.realimage.test.ts,
+    // which runs real sharp and pixelmatch over a page that grew or shrank.
 
     it('should handle comparison errors gracefully', async () => {
       // Arrange
@@ -176,10 +150,10 @@ describe('VisualDiffEngine', () => {
 
       await diffEngine.compare(mockBaselineBuffer, mockCurrentBuffer, options);
 
-      // 2 decodes (baseline + current) + 1 sharp() to encode the diff PNG = 3.
-      // A re-decode for SSIM would make it 5.
+      // Per image a header read and a decode (#282: the size is checked before decoding),
+      // then 1 sharp() to encode the diff PNG = 5. A re-decode for SSIM would make it 7.
       const sharpCalls = (sharp as jest.MockedFunction<any>).mock.calls.length - sharpCallsBefore;
-      expect(sharpCalls).toBe(3);
+      expect(sharpCalls).toBe(5);
     });
 
     it('should skip SSIM on the passing path to keep it fast', async () => {

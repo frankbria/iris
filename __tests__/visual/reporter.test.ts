@@ -139,6 +139,38 @@ describe('VisualReporter', () => {
     });
   });
 
+  // #282: a page that grew or shrank is diffed over the larger canvas; every format
+  // says so, since "breaking" alone reads like a content regression.
+  describe.each(['html', 'junit', 'markdown'] as const)('page size change (%s)', (format) => {
+    it('names both sizes', async () => {
+      const reporter = new VisualReporter({
+        format,
+        outputPath: path.join(tempDir, `size-change.${format}`),
+      });
+      const changed = {
+        ...mockResults.results[1],
+        layoutChange: {
+          baseline: { width: 1920, height: 1080 },
+          current: { width: 1920, height: 1500 },
+        },
+      };
+      const artifacts = await reporter.generateReport({ ...mockResults, results: [changed] });
+      const content = fs.readFileSync(artifacts.reportPath, 'utf-8');
+
+      expect(content).toMatch(/Page size changed/);
+      expect(content).toContain('1920x1080 → 1920x1500');
+    });
+
+    it('says nothing about size when it did not change', async () => {
+      const reporter = new VisualReporter({
+        format,
+        outputPath: path.join(tempDir, `no-size-change.${format}`),
+      });
+      const artifacts = await reporter.generateReport(mockResults);
+      expect(fs.readFileSync(artifacts.reportPath, 'utf-8')).not.toMatch(/Page size changed/);
+    });
+  });
+
   describe('HTML Report Generation', () => {
     it('should generate valid HTML report', async () => {
       const reporter = new VisualReporter({

@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { VisualDiffEngine } from '../../src/visual/diff';
+import { VisualDiffEngine, MAX_DECODED_PIXELS } from '../../src/visual/diff';
 import { DiffOptions } from '../../src/visual/types';
 
 // Regression guard for the P0.2 threshold-inversion bug (issue #55).
@@ -105,5 +105,64 @@ describe('VisualDiffEngine real-image SSIM integration', () => {
 
     expect(result.passed).toBe(true);
     expect(result.ssim).toBeUndefined();
+  });
+});
+
+// Issue #282: a full-page capture whose height changed used to be refused as a
+// "dimension mismatch", so a page that grew was never diffed (breaking, similarity 0,
+// no diff image). It is now diffed over a canvas of the larger size.
+describe('VisualDiffEngine real-image page size changes (#282)', () => {
+  const engine = new VisualDiffEngine();
+
+  it('diffs a page that grew, counting the new rows as changed', async () => {
+    const baseline = await makePng(100, 100, 0);
+    const current = await makePng(100, 120, 0); // same top 100 rows, 20 new ones
+
+    const result = await engine.compare(baseline, current, { ...baseOptions, threshold: 0.1 });
+
+    expect(result.success).toBe(true);
+    expect(result.passed).toBe(false); // a layout change is never a pass
+    expect(result.layoutChange).toEqual({
+      baseline: { width: 100, height: 100 },
+      current: { width: 100, height: 120 },
+    });
+    expect(result.pixelDifference).toBe(20 * 100);
+    expect(result.similarity).toBeCloseTo(1 - 2000 / 12000);
+    const diff = await sharp(result.diffBuffer!).metadata();
+    expect([diff.width, diff.height]).toEqual([100, 120]);
+  });
+
+  it('also counts changes inside the overlap, and works when the page shrank', async () => {
+    const baseline = await makePng(100, 120, 0);
+    const current = await makePng(100, 100, 10); // 10 changed rows, 20 rows gone
+
+    const result = await engine.compare(baseline, current, { ...baseOptions, threshold: 0.1 });
+
+    expect(result.success).toBe(true);
+    expect(result.pixelDifference).toBe(10 * 100 + 20 * 100);
+    expect(result.layoutChange?.current).toEqual({ width: 100, height: 100 });
+  });
+
+  it('refuses an image over the decode limit before decoding it, with a clear error', async () => {
+    // 6000 x 6000 = 36M pixels, over the limit (1920 x 16384). Solid colour, so the
+    // PNG itself is small: the bound is on decoded pixels, not on file size.
+    const huge = await sharp({
+      create: { width: 6000, height: 6000, channels: 4, background: '#ffffff' },
+    })
+      .png()
+      .toBuffer();
+    expect(6000 * 6000).toBeGreaterThan(MAX_DECODED_PIXELS);
+    const small = await makePng(100, 100, 0);
+    const decode = jest.spyOn(sharp.prototype, 'raw');
+    try {
+      const result = await engine.compare(small, huge, { ...baseOptions, threshold: 0.1 });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/6000x6000.*36000000 pixels.*limit is 31457280/);
+      // The small baseline may decode; the huge image never does.
+      expect(decode.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      decode.mockRestore();
+    }
   });
 });

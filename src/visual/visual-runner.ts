@@ -142,7 +142,9 @@ export interface VisualTestResult {
     project?: string;
     /** Hosted: no baseline existed, so this screenshot became it. */
     newBaseline?: boolean;
-    /** Why the comparison could not be made (e.g. the page's height changed). */
+    /** The page's size changed between baseline and this run (#282). */
+    layoutChange?: import('./types').DiffResult['layoutChange'];
+    /** Why the comparison could not be made (e.g. an image over the decode limit, #282). */
     error?: string;
     /** Hosted: object keys of this comparison's images (signed in run detail, #460). */
     artifacts?: { current?: string; diff?: string; baseline?: string };
@@ -550,6 +552,10 @@ export class VisualTestRunner {
         pixelDifference: diffResult.pixelDifference,
         threshold: this.config.diff.threshold,
         ssim: diffResult.ssim,
+        // The page grew or shrank (#282): diffed over the larger canvas, never a pass.
+        ...(diffResult.layoutChange && { layoutChange: diffResult.layoutChange }),
+        // A comparison that could not be made (an image over the decode limit) says why.
+        ...(!diffResult.success && diffResult.error && { error: diffResult.error }),
         severity,
         aiAnalysis,
         screenshotPath,

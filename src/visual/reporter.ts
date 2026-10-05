@@ -17,6 +17,16 @@ import type { VisualTestResult } from './visual-runner';
  */
 const differingShare = (r: { similarity: number }) => `${((1 - r.similarity) * 100).toFixed(2)}%`;
 
+/** "1920x1080 → 1920x1400" when the page's size changed (#282); numbers only, so no escaping. */
+const sizeChange = (r: {
+  layoutChange?: {
+    baseline: { width: number; height: number };
+    current: { width: number; height: number };
+  };
+}): string | undefined =>
+  r.layoutChange &&
+  `${r.layoutChange.baseline.width}x${r.layoutChange.baseline.height} → ${r.layoutChange.current.width}x${r.layoutChange.current.height}`;
+
 export interface ReportConfig {
   format: 'html' | 'json' | 'junit' | 'markdown';
   outputPath?: string;
@@ -281,6 +291,14 @@ export class VisualReporter {
               <span class="metric-value">${(result.threshold * 100).toFixed(2)}%</span>
             </div>
             ${
+              sizeChange(result)
+                ? `<div class="metric">
+              <span class="metric-label">Page size changed</span>
+              <span class="metric-value">${sizeChange(result)}</span>
+            </div>`
+                : ''
+            }
+            ${
               // Only failures carry a structural score, so this metric appears
               // exactly where it is worth reading (issue #77).
               result.ssim !== undefined
@@ -460,7 +478,7 @@ ${
 Similarity: ${(test.similarity * 100).toFixed(2)}%
 Pixel Difference: ${differingShare(test)}
 Threshold: ${(test.threshold * 100).toFixed(2)}%
-Severity: ${escapeXml(test.severity || 'unknown')}
+${sizeChange(test) ? `Page size changed: ${sizeChange(test)}\n` : ''}Severity: ${escapeXml(test.severity || 'unknown')}
 ${
   test.aiAnalysis
     ? // Escaped: this is a <failure> element's body, and every field below is
@@ -546,6 +564,9 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
       markdown += `- **Similarity:** ${(result.similarity * 100).toFixed(2)}%\n`;
       markdown += `- **Pixel Difference:** ${differingShare(result)}\n`;
       markdown += `- **Threshold:** ${(result.threshold * 100).toFixed(2)}%\n`;
+      if (sizeChange(result)) {
+        markdown += `- **Page size changed:** ${sizeChange(result)}\n`;
+      }
       if (result.ssim !== undefined) {
         markdown += `- **Structural (SSIM):** ${(result.ssim * 100).toFixed(2)}%\n`;
       }
