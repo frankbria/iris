@@ -1087,7 +1087,10 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - **Sessions**: the hosted authenticator puts the plan's `maxConcurrentSessions` on the
   principal (`Principal.maxSessions`); the RPC cap is `min(plan, operator
   maxSessionsPerOrg)`, so the operator value stays the hard ceiling. A plan change applies to
-  new connections. Tests that open several sessions for one real org put it on `team`
+  new connections (`recheck` does not refresh it). One plan lookup per upgrade and REST
+  request; a failed lookup fails closed (503), like the suspension check.
+- **`runsPerMonth` is a job-API quota**: RPC `executeBrowserAction` runs are recorded but not
+  counted; RPC use is bounded by concurrent sessions and metered as browser minutes. Tests that open several sessions for one real org put it on `team`
   (`api-key-auth.test.ts`).
 - **`byokAllowed`**: `planAwareCredentials()` (src/api-key-auth.ts) returns no stored key
   for a plan without it.

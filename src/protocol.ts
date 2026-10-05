@@ -890,7 +890,9 @@ export function startServer(
               ) {
                 throw {
                   code: -32000,
-                  message: `Organization session limit reached (${orgCap}); try again later`,
+                  message: orgCap
+                    ? `Organization session limit reached (${orgCap}); try again later`
+                    : "The organization's plan allows no browser sessions",
                   refused: true,
                 };
               }
