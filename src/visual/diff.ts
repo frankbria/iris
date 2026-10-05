@@ -59,6 +59,11 @@ export class VisualDiffEngine {
         }
       }
 
+      // Sizes from the headers first: the canvas a size change needs is checked before
+      // either image is decoded, and it is at least as large as each image (#282).
+      const [b, c] = await Promise.all([headerSize(baselineBuffer), headerSize(currentBuffer)]);
+      assertDecodable(Math.max(b.width, c.width), Math.max(b.height, c.height));
+
       // Prepare images for comparison
       const baseline = await this.prepareImage(baselineBuffer);
       const current = await this.prepareImage(currentBuffer);
@@ -404,13 +409,7 @@ export class VisualDiffEngine {
 
     // The canvas starts as all changed (opaque diffColor); the overlap's own diff goes on top.
     const [r, g, b] = options.diffColor ?? [255, 0, 0];
-    const canvas = Buffer.alloc(width * height * 4);
-    for (let i = 0; i < canvas.length; i += 4) {
-      canvas[i] = r;
-      canvas[i + 1] = g;
-      canvas[i + 2] = b;
-      canvas[i + 3] = 255;
-    }
+    const canvas = Buffer.alloc(width * height * 4, Buffer.from([r, g, b, 255]));
     for (let y = 0; y < overlapH; y++) {
       overlapDiff.copy(canvas, y * width * 4, y * overlapW * 4, (y + 1) * overlapW * 4);
     }
@@ -636,6 +635,12 @@ export class VisualDiffEngine {
       global.gc();
     }
   }
+}
+
+/** An image's size from its header alone: nothing is decoded. */
+async function headerSize(buffer: Buffer): Promise<{ width: number; height: number }> {
+  const { width = 0, height = 0 } = await sharp(buffer, { limitInputPixels: false }).metadata();
+  return { width, height };
 }
 
 /** Refuse an image (or canvas) too large to decode safely, naming its size (#282). */

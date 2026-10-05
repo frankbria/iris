@@ -150,10 +150,11 @@ describe('VisualDiffEngine', () => {
 
       await diffEngine.compare(mockBaselineBuffer, mockCurrentBuffer, options);
 
-      // Per image a header read and a decode (#282: the size is checked before decoding),
-      // then 1 sharp() to encode the diff PNG = 5. A re-decode for SSIM would make it 7.
+      // Per image: compare()'s header read (the canvas check), prepareImage()'s own header
+      // read and the decode (#282), then 1 sharp() to encode the diff PNG = 7. A re-decode
+      // for SSIM would make it 9.
       const sharpCalls = (sharp as jest.MockedFunction<any>).mock.calls.length - sharpCallsBefore;
-      expect(sharpCalls).toBe(5);
+      expect(sharpCalls).toBe(7);
     });
 
     it('should skip SSIM on the passing path to keep it fast', async () => {

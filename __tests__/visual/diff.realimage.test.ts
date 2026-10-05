@@ -143,6 +143,47 @@ describe('VisualDiffEngine real-image page size changes (#282)', () => {
     expect(result.layoutChange?.current).toEqual({ width: 100, height: 100 });
   });
 
+  it('handles different widths too, with the diff mask the runner uses', async () => {
+    // Baseline wider, current taller: the overlap is 100x100, the canvas 120x120.
+    // A row-stride slip in the crop or the canvas copy shows up as a wrong count.
+    const baseline = await makePng(120, 100, 0);
+    const current = await makePng(100, 120, 10); // 10 changed rows inside the overlap
+
+    const result = await engine.compare(baseline, current, {
+      ...baseOptions,
+      diffMask: true,
+      threshold: 0.1,
+    });
+
+    expect(result.pixelDifference).toBe(10 * 100 + (120 * 120 - 100 * 100));
+    const { data, info } = await sharp(result.diffBuffer!)
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    expect([info.width, info.height]).toEqual([120, 120]);
+    const alphaAt = (x: number, y: number) => data[(y * info.width + x) * info.channels + 3];
+    expect(alphaAt(50, 50)).toBe(0); // unchanged overlap: transparent under diffMask
+    expect(alphaAt(50, 5)).toBe(255); // changed overlap row
+    expect(alphaAt(110, 50)).toBe(255); // outside the overlap: counted as changed
+  });
+
+  it('refuses a pair whose shared canvas is too large, before decoding either', async () => {
+    // Each fits (30M and 6M pixels), but a canvas holding both is 6000x6000 = 36M.
+    const solid = (width: number, height: number) =>
+      sharp({ create: { width, height, channels: 4, background: '#ffffff' } })
+        .png()
+        .toBuffer();
+    const [wide, tall] = await Promise.all([solid(6000, 5000), solid(1000, 6000)]);
+    const decode = jest.spyOn(sharp.prototype, 'raw');
+    try {
+      const result = await engine.compare(wide, tall, { ...baseOptions, threshold: 0.1 });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/6000x6000/);
+      expect(decode).not.toHaveBeenCalled();
+    } finally {
+      decode.mockRestore();
+    }
+  });
+
   it('refuses an image over the decode limit before decoding it, with a clear error', async () => {
     // 6000 x 6000 = 36M pixels, over the limit (1920 x 16384). Solid colour, so the
     // PNG itself is small: the bound is on decoded pixels, not on file size.
@@ -159,8 +200,8 @@ describe('VisualDiffEngine real-image page size changes (#282)', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/6000x6000.*36000000 pixels.*limit is 31457280/);
-      // The small baseline may decode; the huge image never does.
-      expect(decode.mock.calls.length).toBeLessThanOrEqual(1);
+      // Refused from the headers: neither image is decoded.
+      expect(decode).not.toHaveBeenCalled();
     } finally {
       decode.mockRestore();
     }
