@@ -259,12 +259,17 @@ plans/
   invalid for Radix ids (`radix-:r1:`), Tailwind classes and id-less elements, and ambiguous
   between look-alikes. Labels read `getAttribute('class')`: an SVG `<a>`'s `className` is
   an `SVGAnimatedString`, and `.split` on it aborted the whole a11y run
-- **Keyboard verdicts come from the keyboard (#286).** Focus order is the real Tab sequence
-  from the document start (blur, then Tab until focus leaves, repeats a stop, or 200 stops),
+- **Keyboard verdicts come from the keyboard (#286).** Focus order is the real Tab sequence,
   failing only a positive tabindex (manual order) or a stop that is invisible where focus
-  lands; `-1` is the roving-tabindex pattern and never fails. The Escape check reloads the
-  page first when the trap check pressed Escape, since that closed every Escape-dismissible
-  dialog before the Escape check could see it. Escape identity after a re-render is #491
+  lands (ancestors walked: opacity is not inherited); `-1` is the roving-tabindex pattern
+  and never fails. No page script can reset the browser's sequential-focus starting point
+  (blur keeps it at an autofocused control; focusing `<body>` makes Tab skip positive
+  tabindex), so the walk blurs and, when focus wraps to the document part-way, puts the
+  stops after the wrap first; it ends on a second wrap, a repeated stop, or 200 stops (an
+  informational interaction says so). Stops are the deep active element (shadow roots,
+  same-origin iframes); a cross-origin iframe is pressed through. The Escape check reloads
+  the page (`load`, failure tolerated) when the trap check pressed Escape, since that closed
+  every Escape-dismissible dialog first. Escape identity after a re-render is #491
 - **The a11y runner isolates pages (#287).** A page that fails (navigation, timeout, a check
   that throws on hostile markup) is that page's result with `error` and an empty axe
   result; the other pages still run. `summary.pagesErrored` counts them, and an errored page

@@ -309,6 +309,87 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
     });
   });
 
+  // Review of #286: where the walk starts and what it can see inside.
+  describe('Tab walk boundaries (#286 review)', () => {
+    const walk = async (html: string) => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>${html}</body></html>`,
+      );
+      return new KeyboardTester({ ...config, testFocusOrder: true }).run(page, 'walk');
+    };
+
+    it('starts at the document start even when the page autofocused a later control', async () => {
+      const result = await walk(
+        '<a href="#1" id="first">1</a><a href="#2" id="second">2</a><input id="last" autofocus>',
+      );
+      expect(result.focusOrder.map((f) => f.element)).toEqual([
+        'A#first',
+        'A#second',
+        'INPUT#last',
+      ]);
+    });
+
+    it('reports the order from the top when the page autofocused a control mid-page', async () => {
+      const result = await walk(
+        '<a href="#1" id="a1">1</a><input id="mid" autofocus><a href="#3" id="a3">3</a><button tabindex="1" id="pos">P</button>',
+      );
+      // Positive tabindex first, then tree order, whatever the page focused at load.
+      expect(result.focusOrder.map((f) => f.element)).toEqual([
+        'BUTTON#pos',
+        'A#a1',
+        'INPUT#mid',
+        'A#a3',
+      ]);
+      expect(result.passed).toBe(false); // the positive tabindex
+    });
+
+    it('records stops inside a shadow root and goes on past it', async () => {
+      const result = await walk(`<div id="host"></div><a href="#after" id="after">after</a>
+        <script>const r = document.getElementById('host').attachShadow({ mode: 'open' });
+          r.innerHTML = '<button id="s1">S1</button><button id="s2">S2</button>';</script>`);
+      expect(result.focusOrder.map((f) => f.element)).toEqual([
+        'BUTTON#s1',
+        'BUTTON#s2',
+        'A#after',
+      ]);
+    });
+
+    it('records stops inside a same-origin iframe and goes on past it', async () => {
+      const result =
+        await walk(`<iframe srcdoc="<button id=f1>F1</button><button id=f2>F2</button>"></iframe>
+        <a href="#after" id="after">after</a>`);
+      await page.waitForTimeout(0);
+      expect(result.focusOrder.map((f) => f.element)).toEqual([
+        'BUTTON#f1',
+        'BUTTON#f2',
+        'A#after',
+      ]);
+    });
+
+    it('treats a stop inside an invisible parent as invisible', async () => {
+      const result = await walk(
+        '<div style="opacity:0"><a href="#x" id="hidden-by-parent">x</a></div>',
+      );
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'A#hidden-by-parent', visible: false }),
+      ]);
+      expect(result.passed).toBe(false);
+    });
+
+    it('says so when the Tab order is longer than it walks', async () => {
+      const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
+      const result = await walk(links);
+      expect(result.focusOrder).toHaveLength(200);
+      expect(result.interactions).toEqual([
+        expect.objectContaining({
+          actualBehavior: 'Walked the first 200 stops only',
+          success: true,
+        }),
+      ]);
+    }, 60_000);
+  });
+
   describe('Escape is tested on its own, after the trap test (#286)', () => {
     const DIALOG = (closes: boolean) =>
       `<!doctype html><html lang="en"><head><title>t</title></head><body>

@@ -136,7 +136,18 @@ export class KeyboardTester {
     try {
       // Test 1: Focus order
       if (this.config.testFocusOrder) {
-        focusOrder = await this.testFocusOrder(page);
+        const walked = await this.testFocusOrder(page);
+        focusOrder = walked.stops;
+        if (walked.truncated) {
+          interactions.push({
+            key: 'Tab',
+            target: 'page',
+            expectedBehavior: 'Whole Tab order walked',
+            actualBehavior: `Walked the first ${focusOrder.length} stops only`,
+            success: true, // informational: the stops it reached were still judged
+            timestamp: new Date(),
+          });
+        }
         const focusOrderValid = this.validateFocusOrder(focusOrder);
         if (!focusOrderValid) {
           passed = false;
@@ -183,7 +194,14 @@ export class KeyboardTester {
         // Escape was gone by now and this test recorded nothing for it (#286). Start again
         // from the page as loaded. The URL guard is per page, so the reload is guarded too.
         if (trapTests.length > 0) {
-          await page.reload({ waitUntil: 'networkidle' });
+          // 'load', not 'networkidle': a page with long-polling or a socket never goes idle.
+          // A reload that fails leaves the page as it is: the check still runs, it does not
+          // cost every result collected so far.
+          try {
+            await page.reload({ waitUntil: 'load' });
+          } catch {
+            // Fall back to the current DOM.
+          }
         }
         const escapeTests = await this.testEscapeHandling(page);
         interactions.push(...escapeTests);
@@ -221,55 +239,128 @@ export class KeyboardTester {
    * Tab. Stops when focus leaves the page, returns to a stop already seen (the order wrapped
    * or a trap cycles), or after `MAX_TAB_STOPS`.
    */
-  private async testFocusOrder(page: Page): Promise<FocusableElement[]> {
+  private async testFocusOrder(
+    page: Page,
+  ): Promise<{ stops: FocusableElement[]; truncated: boolean }> {
     const MAX_TAB_STOPS = 200;
-    // Start from the document, not from wherever the page put focus.
+    // Where Tab starts is the browser's sequential-focus starting point, and nothing a page
+    // script can do resets it to the document start (blur() leaves it at the blurred,
+    // e.g. autofocused, element; focusing <body> puts it in the tree, where Tab skips
+    // positive-tabindex elements). So the walk does not try: it blurs, and if focus wraps
+    // to the document part-way, the stops after the wrap come first (see below).
     await page.evaluate(() => {
-      const active = document.activeElement as HTMLElement | null;
+      const active = document.activeElement;
       if (active && active !== document.body) HTMLElement.prototype.blur.call(active);
     });
 
-    const stops: FocusableElement[] = [];
+    // Stops before focus first wraps to the document, and after. If the walk began mid-page
+    // (an autofocused control), the order a user meets from the top is after + before.
+    const before: FocusableElement[] = [];
+    const after: FocusableElement[] = [];
+    let wrapped = false;
     const seen = new Set<string>();
+    let lastPath = '';
     for (let i = 0; i < MAX_TAB_STOPS; i++) {
       await page.keyboard.press('Tab');
       const stop = await page.evaluate(() => {
-        const el = document.activeElement;
-        if (!el || el === document.body || el === document.documentElement) return null;
-        // Through the prototypes: a <form>'s named controls shadow its methods (#285).
-        const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
-        const parts: string[] = [];
-        for (let n: Element | null = el; n && n.parentElement; n = n.parentElement) {
-          parts.unshift(
-            `${n.tagName}:${Array.prototype.indexOf.call(n.parentElement.children, n)}`,
-          );
+        // The element that really has focus: through shadow roots and same-origin iframes
+        // (document.activeElement stays the host or the IFRAME while Tab moves inside).
+        // A cross-origin iframe is opaque: the IFRAME itself, marked so.
+        const top = document.activeElement;
+        if (!top || top === document.body || top === document.documentElement) return null;
+        let el: Element = top;
+        const path: string[] = [];
+        let opaque = false;
+        // Within its own tree: an element in a shadow root has no parentElement at the top,
+        // so its siblings are the root's children.
+        const pathOf = (node: Element) => {
+          const parts: string[] = [];
+          for (let n: Element | null = node; n; n = n.parentElement) {
+            const parent = n.parentNode as ParentNode | null;
+            if (!parent || !('children' in parent)) break;
+            parts.unshift(`${n.tagName}:${Array.prototype.indexOf.call(parent.children, n)}`);
+          }
+          return parts.join('>');
+        };
+        for (;;) {
+          path.push(pathOf(el));
+          const inner: Element | null | undefined = el.shadowRoot?.activeElement;
+          if (inner) {
+            el = inner;
+            continue;
+          }
+          if (el.tagName === 'IFRAME') {
+            let doc: Document | null = null;
+            try {
+              doc = (el as HTMLIFrameElement).contentDocument;
+            } catch {
+              doc = null;
+            }
+            const active: Element | null | undefined = doc?.activeElement;
+            if (!doc) opaque = true;
+            else if (active && active !== doc.body && active !== doc.documentElement) {
+              el = active;
+              continue;
+            }
+          }
+          break;
         }
+
+        // Visible where focus landed: its own box, and nothing above it hidden (opacity is
+        // not inherited by getComputedStyle, so ancestors are walked, across shadow roots).
         const rect = Element.prototype.getBoundingClientRect.call(el);
-        const style = getComputedStyle(el);
+        let visible = rect.width > 0 && rect.height > 0;
+        for (let n: Element | null = el; n && visible;) {
+          const style = getComputedStyle(n);
+          if (
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            Number(style.opacity) === 0
+          ) {
+            visible = false;
+          }
+          const root = n.getRootNode();
+          n = n.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+        }
+
+        // Through the prototypes: a <form>'s named controls shadow its methods (#285).
+        const node = el;
+        const attr = (name: string) => Element.prototype.getAttribute.call(node, name);
         const id = attr('id');
         const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
         const role = attr('role');
         const ariaLabel = attr('aria-label');
         return {
-          path: parts.join('>'),
+          path: path.join('|'),
+          opaque,
           tagName: el.tagName,
           ...(role && { role }),
           ...(ariaLabel && { ariaLabel }),
           element: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
           tabIndex: Number.parseInt(attr('tabindex') ?? '0', 10) || 0,
-          visible:
-            rect.width > 0 &&
-            rect.height > 0 &&
-            style.visibility !== 'hidden' &&
-            Number(style.opacity) > 0,
+          visible,
         };
       });
-      if (!stop || seen.has(stop.path)) break;
+      if (!stop) {
+        // Focus left the page: the first time, the walk wrapped to the document start
+        // (keep going); the second time, it has seen everything.
+        if (wrapped) break;
+        wrapped = true;
+        lastPath = '';
+        continue;
+      }
+      // Tab moving inside a cross-origin frame shows the same IFRAME each time: keep
+      // pressing until focus leaves it (bounded by the cap), it is not a cycle.
+      if (stop.opaque && stop.path === lastPath) continue;
+      if (seen.has(stop.path)) break;
       seen.add(stop.path);
-      const { path: _path, ...element } = stop;
-      stops.push({ ...element, focusable: true });
+      lastPath = stop.path;
+      const { path: _path, opaque: _opaque, ...element } = stop;
+      (wrapped ? after : before).push({ ...element, focusable: true });
     }
-    return stops;
+    const stops = [...after, ...before];
+    // Reaching the cap means the walk did not see the whole order: said, not silent.
+    return { stops, truncated: stops.length >= MAX_TAB_STOPS };
   }
 
   /**
