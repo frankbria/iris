@@ -657,6 +657,7 @@ program
     let history: import('./history-store').PostgresHistory | undefined;
     let usage: ReturnType<typeof import('./billing/usage').usageLedger> | undefined;
     let jobs: import('./history-store').PostgresJobs | undefined;
+    let artifacts: import('./artifact-store').ArtifactStore | null = null;
     let aiCredentials:
       | ((
           p: import('./protocol').Principal,
@@ -673,6 +674,8 @@ program
       try {
         const { hostedServices } = await import('./api-key-auth');
         ({ authenticate, history, aiCredentials, usage, jobs } = await hostedServices());
+        // Signs run-detail artifacts (#460); unset IRIS_S3_ENDPOINT means none.
+        artifacts = (await import('./artifact-store')).resolveArtifactStore();
       } catch (err) {
         console.error(`Cannot start in hosted mode: ${(err as Error).message}`);
         process.exit(3); // Environment/runtime error
@@ -719,7 +722,17 @@ program
     const wss = startServer(
       port,
       authenticate
-        ? { host, authenticate, history, runs: history, aiCredentials, usage, jobs, limits }
+        ? {
+            host,
+            authenticate,
+            history,
+            runs: history,
+            artifacts: artifacts ?? undefined,
+            aiCredentials,
+            usage,
+            jobs,
+            limits,
+          }
         : { host, authToken, limits },
     );
     // Wait for the bind before claiming it. `listen` fails asynchronously, so

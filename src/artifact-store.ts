@@ -4,6 +4,7 @@ import { pathToFileURL } from 'url';
 import { GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { ArtifactKind } from './visual/artifacts';
+import { readSecretEnv } from './secret-env';
 
 /**
  * Where visual artifacts live (#257): the local file system for the CLI, an
@@ -179,4 +180,100 @@ export function orgArtifacts(store: ArtifactStore, orgId: string): ArtifactStore
     get: async (key) => store.get(own(key)),
     signedUrl: async (key, ttlSeconds) => store.signedUrl(own(key), ttlSeconds),
   };
+}
+
+/**
+ * The hosted artifact store from the environment (#460): `IRIS_S3_ENDPOINT` (http or
+ * https), `IRIS_S3_BUCKET`, `IRIS_S3_REGION` (default `us-east-1`),
+ * `IRIS_S3_ACCESS_KEY_ID` and `IRIS_S3_SECRET_ACCESS_KEY(_FILE)`. No endpoint: `null`
+ * (run detail then shows no artifacts). A partial configuration throws, naming what is
+ * missing, so a typo cannot quietly turn artifacts off.
+ */
+export function resolveArtifactStore(env: NodeJS.ProcessEnv = process.env): S3ArtifactStore | null {
+  const endpoint = env.IRIS_S3_ENDPOINT;
+  if (!endpoint) {
+    // The rest set without an endpoint is a typo, not "no artifacts".
+    const stray = Object.keys(env).filter((k) => k.startsWith('IRIS_S3_') && env[k]);
+    if (stray.length) throw new Error(`${stray.join(', ')} set but IRIS_S3_ENDPOINT is not`);
+    return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new Error('IRIS_S3_ENDPOINT must be an http(s) URL');
+  }
+  // Clients receive URLs on this host: credentials in it would be handed out, and plain
+  // http would carry the capability URLs in the clear (loopback, i.e. dev, excepted).
+  const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
+  if (url.username || url.password) throw new Error('IRIS_S3_ENDPOINT must not carry credentials');
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))
+    throw new Error('IRIS_S3_ENDPOINT must be https (http only for a loopback host)');
+  const bucket = env.IRIS_S3_BUCKET;
+  const accessKeyId = env.IRIS_S3_ACCESS_KEY_ID;
+  const secretAccessKey = readSecretEnv('IRIS_S3_SECRET_ACCESS_KEY', env);
+  const missing = Object.entries({
+    IRIS_S3_BUCKET: bucket,
+    IRIS_S3_ACCESS_KEY_ID: accessKeyId,
+    IRIS_S3_SECRET_ACCESS_KEY: secretAccessKey,
+  })
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+  if (missing.length) throw new Error(`IRIS_S3_ENDPOINT is set but ${missing.join(', ')} is not`);
+  return new S3ArtifactStore({
+    endpoint,
+    region: env.IRIS_S3_REGION || 'us-east-1',
+    bucket: bucket!,
+    credentials: { accessKeyId: accessKeyId!, secretAccessKey: secretAccessKey! },
+  });
+}
+
+export interface SignedArtifact {
+  url: string;
+  expiresAt: string;
+}
+
+/**
+ * A run's recorded artifact keys (`result.artifacts`, written by the hosted visual job,
+ * #268) as signed URLs for one reader (#460). A key is signed only when it is this run's
+ * artifact (`org/<org>/project/<p>/run/<runId>/…`) or a baseline of the same org
+ * (`org/<org>/project/<p>/baselines/…`); anything else (another org's, another run's, a
+ * malformed value) is dropped, so a stored key never widens what a reader can fetch.
+ */
+export async function signRunArtifacts(
+  store: ArtifactStore,
+  { orgId, runId }: { orgId: string; runId: string },
+  artifacts: unknown,
+  ttlSeconds = DEFAULT_TTL_SECONDS,
+): Promise<{ signed: Record<string, SignedArtifact>; dropped: string[] }> {
+  // No prototype: a stored name like `__proto__` is an ordinary key here, not a setter.
+  const signed: Record<string, SignedArtifact> = Object.create(null);
+  const dropped: string[] = [];
+  if (!artifacts || typeof artifacts !== 'object' || Array.isArray(artifacts))
+    return { signed, dropped };
+  const org = orgArtifacts(store, orgId);
+  const prefix = `org/${segment('org id', orgId)}/project/`;
+  const ttl = Math.min(
+    Math.max(Number.isFinite(ttlSeconds) ? Math.trunc(ttlSeconds) : DEFAULT_TTL_SECONDS, 1),
+    MAX_TTL_SECONDS,
+  );
+  for (const [name, key] of Object.entries(artifacts)) {
+    const rest =
+      typeof key === 'string' && key.startsWith(prefix) ? key.slice(prefix.length).split('/') : [];
+    // <project>/run/<runId>/<kind>/<name>.png, or <project>/baselines/<name>.png
+    const ours =
+      (rest.length === 5 && rest[1] === 'run' && rest[2] === runId) ||
+      (rest.length === 3 && rest[1] === 'baselines');
+    if (!ours || typeof key !== 'string') {
+      dropped.push(name);
+      continue;
+    }
+    try {
+      const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
+      signed[name] = { url: await org.signedUrl(key, ttl), expiresAt };
+    } catch {
+      dropped.push(name); // an invalid key: assertKey refused it
+    }
+  }
+  return { signed, dropped };
 }

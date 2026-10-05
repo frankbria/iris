@@ -13,6 +13,8 @@ import { createPostgresDb } from '../src/db/postgres';
 import { migrateToLatest } from '../src/db/migrate';
 import { postgresHistory, postgresJobs, RunInput } from '../src/history-store';
 import { metrics } from '../src/metrics';
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { baselineKey, runArtifactKey, S3ArtifactStore } from '../src/artifact-store';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 if (!ADMIN_URL) {
@@ -262,5 +264,224 @@ const rpcRun = (success: boolean, startedAt: Date): RunInput => ({
     expect(text).toMatch(/method="GET \/v1\/runs\/:id"/);
     expect(text).toMatch(/method="GET \/v1\/runs"/);
     expect(text).not.toContain(aRuns[0]);
+  });
+});
+
+const S3 = {
+  endpoint: process.env.IRIS_TEST_S3_ENDPOINT,
+  accessKeyId: process.env.IRIS_TEST_S3_ACCESS_KEY_ID,
+  secretAccessKey: process.env.IRIS_TEST_S3_SECRET_ACCESS_KEY,
+};
+const S3_READY = Boolean(S3.endpoint && S3.accessKeyId && S3.secretAccessKey);
+if (ADMIN_URL && !S3_READY && process.env.CI) throw new Error('IRIS_TEST_S3_* is required in CI');
+
+/**
+ * Signed artifact URLs in run detail (#460), over real SeaweedFS. A result's
+ * `result.artifacts` holds object keys, as the hosted visual writer (#268) will record
+ * them; run detail turns the ones that belong to the caller's org and run into
+ * short-lived signed URLs.
+ */
+(ADMIN_URL && S3_READY ? describe : describe.skip)('run detail artifacts (#460)', () => {
+  const dbName = `iris_runs_art_${process.pid}_${randomBytes(4).toString('hex')}`;
+  const bucket = `iris-art-${randomBytes(4).toString('hex')}`;
+  const credentials = { accessKeyId: S3.accessKeyId!, secretAccessKey: S3.secretAccessKey! };
+  const store = new S3ArtifactStore({
+    endpoint: S3.endpoint!,
+    region: 'us-east-1',
+    bucket,
+    credentials,
+  });
+  let db: Kysely<unknown>;
+  let base: string;
+  let bareBase: string;
+  let server: ReturnType<typeof startServer>;
+  let bare: ReturnType<typeof startServer>;
+  let runId: string;
+  let otherRunId: string;
+  const keysOf = (run: string) => ({
+    current: runArtifactKey({
+      orgId: 'org-a',
+      projectId: 'shop',
+      runId: run,
+      kind: 'current',
+      name: 'home',
+    }),
+    diff: runArtifactKey({
+      orgId: 'org-a',
+      projectId: 'shop',
+      runId: run,
+      kind: 'diff',
+      name: 'home',
+    }),
+    baseline: baselineKey({ orgId: 'org-a', projectId: 'shop', name: 'home' }),
+  });
+
+  async function admin(query: string) {
+    const client = new Client({ connectionString: ADMIN_URL });
+    await client.connect();
+    try {
+      await client.query(query);
+    } finally {
+      await client.end();
+    }
+  }
+
+  async function visualRun(org: string, artifacts: Record<string, string>) {
+    const { rows } = await sql<{ id: string }>`
+      insert into runs (org_id, kind, status, summary, started_at, finished_at)
+      values (${org}, 'visual', 'failed', 'visual: 1 comparison(s), 1 failed', now(), now())
+      returning id`.execute(db);
+    await sql`insert into run_results (org_id, run_id, position, url, passed, result)
+      values (${org}, ${rows[0].id}, 0, '/', false, ${JSON.stringify({ device: 'desktop', artifacts })})`.execute(
+      db,
+    );
+    return rows[0].id;
+  }
+
+  beforeAll(async () => {
+    await admin(`CREATE DATABASE "${dbName}"`);
+    const u = new URL(ADMIN_URL!);
+    u.pathname = `/${dbName}`;
+    db = createPostgresDb(u.toString());
+    await migrateToLatest(db);
+    for (const org of ['org-a', 'org-b']) {
+      await sql`insert into organization (id, name, slug, "createdAt")
+        values (${org}, ${org}, ${org}, now())`.execute(db);
+    }
+    const s3 = new S3Client({
+      endpoint: S3.endpoint,
+      region: 'us-east-1',
+      forcePathStyle: true,
+      credentials,
+    });
+    for (let i = 1; ; i++) {
+      try {
+        await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+        break;
+      } catch (e) {
+        if (i >= 30) throw e;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+    s3.destroy();
+
+    // The run's own artifacts, then keys that do not belong to it: another org's
+    // object, and another run's diff (same org).
+    otherRunId = await visualRun('org-a', {});
+    const placeholder = await visualRun('org-a', {});
+    const own = keysOf(placeholder);
+    const foreign = runArtifactKey({
+      orgId: 'org-b',
+      projectId: 'p',
+      runId: 'r',
+      kind: 'diff',
+      name: 'x',
+    });
+    const otherRuns = keysOf(otherRunId).diff;
+    for (const [key, body] of [
+      [own.current, 'current png'],
+      [own.diff, 'diff png'],
+      [own.baseline, 'baseline png'],
+      [foreign, "org-b's png"],
+      [otherRuns, "another run's png"],
+    ])
+      await store.put(key, Buffer.from(body), 'image/png');
+    await sql`update run_results set result = ${JSON.stringify({
+      device: 'desktop',
+      artifacts: { ...own, stolen: foreign, borrowed: otherRuns },
+    })} where run_id = ${placeholder}`.execute(db);
+    runId = placeholder;
+
+    server = startServer(0, {
+      authenticate,
+      jobs: postgresJobs(db),
+      runs: postgresHistory(db),
+      artifacts: store,
+      artifactUrlTtlSeconds: 2,
+    });
+    bare = startServer(0, { authenticate, jobs: postgresJobs(db), runs: postgresHistory(db) });
+    await Promise.all([server, bare].map((s) => new Promise<void>((r) => s.once('listening', r))));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    bareBase = `http://127.0.0.1:${(bare.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await Promise.all([server, bare].map((s) => new Promise((r) => s?.close(() => r(null)))));
+    store.close();
+    await db?.destroy();
+    await admin(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
+  });
+
+  const detail = async (b: string, id: string, key = 'key-a') =>
+    (await fetch(`${b}/v1/runs/${id}`, { headers: { authorization: `Bearer ${key}` } })).json();
+
+  it("signs the run's own artifacts and its project's baseline, with an expiry", async () => {
+    const body = await detail(base, runId);
+    const artifacts = body.results[0].result.artifacts;
+    expect(Object.keys(artifacts).sort()).toEqual(['baseline', 'current', 'diff']);
+    for (const [kind, text] of [
+      ['current', 'current png'],
+      ['diff', 'diff png'],
+      ['baseline', 'baseline png'],
+    ]) {
+      const { url, expiresAt } = artifacts[kind];
+      expect(Date.parse(expiresAt)).toBeGreaterThan(Date.now());
+      const res = await fetch(url);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe(text);
+    }
+  });
+
+  it("never signs another org's object or another run's artifact", async () => {
+    const text = JSON.stringify(await detail(base, runId));
+    expect(text).not.toContain('org-b');
+    expect(text).not.toContain(otherRunId);
+  });
+
+  it('a signed URL edited to another org is refused, and every URL expires', async () => {
+    const { url } = (await detail(base, runId)).results[0].result.artifacts.diff;
+    const edited = new URL(url);
+    edited.pathname = edited.pathname.replace('/org/org-a/', '/org/org-b/');
+    expect((await fetch(edited)).status).toBe(403);
+    // It works now, and stops working once its 2 s are up. Polled rather than slept: the
+    // expiry is judged by SeaweedFS's clock (the Docker VM's), and WSL's clock steps (#190).
+    expect((await fetch(url)).status).toBe(200);
+    let status = 200;
+    for (let i = 0; i < 20 && status === 200; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      status = (await fetch(url)).status;
+    }
+    expect(status).toBe(403);
+  });
+
+  // A page slug can look like an API key (`iris_` + 16 alphanumerics); redaction must not
+  // rewrite the stored key before it is signed.
+  it('signs a key whose name looks like an API key, unmangled', async () => {
+    const id = await visualRun('org-a', {});
+    const key = runArtifactKey({
+      orgId: 'org-a',
+      projectId: 'shop',
+      runId: id,
+      kind: 'current',
+      name: 'iris_abcdefghijklmnopqrst',
+    });
+    await store.put(key, Buffer.from('lookalike png'), 'image/png');
+    await sql`update run_results set result = ${JSON.stringify({ artifacts: { current: key } })}
+      where run_id = ${id}`.execute(db);
+    const { url } = (await detail(base, id)).results[0].result.artifacts.current;
+    expect(await (await fetch(url)).text()).toBe('lookalike png');
+  });
+
+  it('another org cannot read the run at all', async () => {
+    const res = await fetch(`${base}/v1/runs/${runId}`, {
+      headers: { authorization: 'Bearer key-b' },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('without an artifact store, run detail carries no artifacts and no keys', async () => {
+    const body = await detail(bareBase, runId);
+    expect(body.results[0].result.artifacts).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('org/org-a/project');
   });
 });

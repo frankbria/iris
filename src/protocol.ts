@@ -1,6 +1,7 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import { createServer, IncomingMessage, STATUS_CODES } from 'http';
 import { handleJobsRequest, type RunReader } from './jobs-api';
+import type { ArtifactStore } from './artifact-store';
 import { randomUUID, timingSafeEqual } from 'crypto';
 import { z } from 'zod';
 import { translateSync, translate, Action, ActionSchema } from './translator';
@@ -416,6 +417,10 @@ export function startServer(
     jobs?: { forOrg(scope: TenantScope): OrgJobs };
     /** The results API (#269), `GET /v1/runs[/:id]`, served beside the job API. */
     runs?: RunReader;
+    /** Signs run-detail artifacts (#460); unset, run detail carries none. */
+    artifacts?: ArtifactStore;
+    /** Signed URL lifetime in seconds (default 300, at most 900). */
+    artifactUrlTtlSeconds?: number;
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
     limits?: Partial<ServerLimits>;
   },
@@ -477,6 +482,8 @@ export function startServer(
         authenticate: authenticate!,
         jobs: options.jobs,
         runs: options.runs,
+        artifacts: options.artifacts,
+        artifactUrlTtlSeconds: options.artifactUrlTtlSeconds,
         maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
         // REST verifications share the upgrades' `verifying` count, so a bad-key flood
         // cannot pile onto the auth pool. Only pending ones count here: idle sockets

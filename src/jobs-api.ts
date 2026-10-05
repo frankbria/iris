@@ -9,6 +9,7 @@ import {
 } from './history-store';
 import type { Authenticator, Principal } from './protocol';
 import { errMessage, log, redactStrings } from './log';
+import { signRunArtifacts, type ArtifactStore } from './artifact-store';
 
 /**
  * The hosted job REST API (#267, ADR 0001 §1): `POST /v1/a11y/jobs` queues a scan,
@@ -70,6 +71,10 @@ export interface JobsApiDeps {
   jobs: { forOrg(scope: TenantScope): OrgJobs };
   /** The results API (#269); without it `/v1/runs` is not served. */
   runs?: RunReader;
+  /** Signs the artifacts in run detail (#460); without it run detail carries none. */
+  artifacts?: ArtifactStore;
+  /** Lifetime of those URLs in seconds (default 5 minutes, at most 15). */
+  artifactUrlTtlSeconds?: number;
   /** Spends a request from the principal's key and org budgets; milliseconds to wait if refused, else 0. */
   charge(principal: Principal): number;
   /**
@@ -200,7 +205,28 @@ export async function handleJobsRequest(
       if (!run) return send(res, 404, { error: 'Not found' });
       // Every key of the org reads this. #254 stored the run without typed values or URL
       // userinfo; secret-looking query values (a reset link's token) are cut here too.
-      return send(res, 200, redactStrings(run));
+      // Artifact keys are taken out first (a key segment can look like an API key, which
+      // redaction would rewrite), and signed after: redaction would cut X-Amz-Signature.
+      const keysByResult = run.results.map((r) => {
+        const result = r.result && typeof r.result === 'object' ? r.result : {};
+        const { artifacts, ...rest } = result as Record<string, unknown>;
+        r.result = rest; // raw keys never leave; signed URLs replace them below
+        return artifacts;
+      });
+      const body = redactStrings(run) as typeof run;
+      for (const [i, artifacts] of keysByResult.entries()) {
+        if (artifacts === undefined || !deps.artifacts) continue;
+        const { signed, dropped } = await signRunArtifacts(
+          deps.artifacts,
+          { orgId: scope.orgId, runId: run.id },
+          artifacts,
+          deps.artifactUrlTtlSeconds,
+        );
+        body.results[i].result = { ...body.results[i].result, artifacts: signed };
+        if (dropped.length)
+          log('warn', 'run artifacts not signed', { orgId: scope.orgId, runId: run.id, dropped });
+      }
+      return send(res, 200, body);
     }
 
     const store = deps.jobs.forOrg(scope);

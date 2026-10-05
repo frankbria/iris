@@ -122,8 +122,9 @@ __tests__/
 ├── auth-config.test.ts            # Spawned Node loads src/auth/config via require(esm); Jest's sandbox can't (#247)
 ├── auth-org.test.ts               # Real Postgres: personal org on sign-in, invitations, roles, org A cannot read org B (#250)
 ├── auth-apikey.test.ts            # Real Postgres: org-owned keys hashed, roles, org A cannot touch org B's keys, verify, revoke (#340)
+├── artifact-store-config.test.ts  # resolveArtifactStore: unset is null, partial refused, secret via _FILE (#460)
 ├── artifact-store.test.ts         # Keys, filesystem store, S3 store on real SeaweedFS: unsigned/tampered/expired 403, 15 min cap (#257)
-├── api-runs.test.ts               # Results API over real sockets + Postgres: list, filters, cursors, detail, 404 cross-org (#269)
+├── api-runs.test.ts               # Results API over real sockets + Postgres: list, filters, cursors, detail, 404 cross-org (#269); signed artifact URLs on SeaweedFS (#460)
 ├── api-jobs.test.ts               # Job REST over real sockets: 401/503/400/413/404/405/429, org isolation, WS upgrade intact (#267)
 ├── hosted-a11y-job.test.ts        # Real Postgres + Chromium, IRIS_HOSTED=1: HTTP submit -> worker -> HTTP result, usage row, refusals (#267)
 ├── worker-cli.test.ts             # `iris worker` refuses outside hosted mode (exit 2) / without a database (3) (#267)
@@ -1154,7 +1155,17 @@ hosted `iris connect` passes the same `postgresHistory` it records into.
   keeps the last of a repeat), `limit` plain digits (`Number()` reads `0x10`, `1e1`).
 - Run detail is the stored run (sanitised when recorded, #254: no typed values, no URL
   userinfo) with `redactString()` (src/log.ts) over every string, so secret-looking query
-  values (`?token=`) do not reach every key of the org. Signed artifact URLs are #460.
+  values (`?token=`) do not reach every key of the org.
+- **Signed artifact URLs (#460)**: a result's `result.artifacts` holds object keys (the
+  hosted visual writer, #268, records them with the run's uuid as the key's run id). Run
+  detail redacts first, then `signRunArtifacts()` (src/artifact-store.ts) turns each key
+  into `{ url, expiresAt }`: only keys under the caller's org that are this run's artifact
+  or a baseline of the same org are signed; others are dropped and logged. Signing after
+  redaction is required: `redactStrings` would cut `X-Amz-Signature`. Raw keys never
+  leave: without a store (`IRIS_S3_ENDPOINT` unset) `artifacts` is omitted.
+  `resolveArtifactStore()` reads `IRIS_S3_ENDPOINT` / `_BUCKET` / `_REGION` /
+  `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY(_FILE)`; partial config makes hosted `iris
+  connect` exit 3. The variables are on the `jest.setup.ts` scrub list.
 
 ### Portal Runs Pages (issue #270)
 
