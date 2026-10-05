@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { z } from 'zod';
 import {
   InvalidCursorError,
+  RunQuotaExceededError,
   type A11yJobParams,
   type JobSpec,
   type VisualJobParams,
@@ -98,6 +99,8 @@ export interface JobsApiDeps {
   artifacts?: ArtifactStore;
   /** Lifetime of those URLs in seconds (default 5 minutes, at most 15). */
   artifactUrlTtlSeconds?: number;
+  /** The org's plan limits (#346); without it no monthly run limit applies. */
+  entitlements?: (orgId: string) => Promise<{ runsPerMonth: number }>;
   /** Spends a request from the principal's key and org budgets; milliseconds to wait if refused, else 0. */
   charge(principal: Principal): number;
   /**
@@ -326,7 +329,20 @@ export async function handleJobsRequest(
         ? { kind: 'visual', params: parsed.data as VisualJobParams }
         : { kind: 'a11y', params: parsed.data as A11yJobParams }
     ) as JobSpec;
-    const id = await store.enqueue(spec, { maxOutstanding: deps.maxQueuedJobsPerOrg });
+    const monthlyRunLimit = deps.entitlements
+      ? (await deps.entitlements(scope.orgId)).runsPerMonth
+      : undefined;
+    let id: string | null;
+    try {
+      id = await store.enqueue(spec, {
+        maxOutstanding: deps.maxQueuedJobsPerOrg,
+        monthlyRunLimit,
+      });
+    } catch (err) {
+      if (!(err instanceof RunQuotaExceededError)) throw err;
+      // 402: a plan limit, not a rate (#346). The org upgrades or waits for the month.
+      return send(res, 402, { error: err.message, limit: err.limit, used: err.used });
+    }
     if (id === null) return send(res, 429, { error: 'Too many queued jobs' });
     return send(res, 202, { id, status: 'queued' });
   } catch (err) {

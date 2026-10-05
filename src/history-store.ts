@@ -347,7 +347,10 @@ export interface OrgJobs {
    *   the same transaction as the insert, so concurrent calls cannot exceed it
    * @returns the new job's id (status `queued`), or `null` when the org is at the cap
    */
-  enqueue(job: JobSpec, options?: { maxOutstanding?: number }): Promise<string | null>;
+  enqueue(
+    job: JobSpec,
+    options?: { maxOutstanding?: number; monthlyRunLimit?: number },
+  ): Promise<string | null>;
   /** `null` for an id that is not this org's, or not a uuid. */
   get(id: string): Promise<StoredJob | null>;
   /**
@@ -397,6 +400,24 @@ export interface ReapResult {
   failed: number;
 }
 
+/** What a job counts against `runsPerMonth`: a visual job per comparison (owner, 2026-10-05). */
+export function jobQuantity(job: JobSpec): number {
+  return job.kind === 'visual'
+    ? Math.max(new Set(job.params.urls).size * new Set(job.params.devices).size, 1)
+    : 1;
+}
+
+/** The org's plan has no runs left this month (#346): the API answers 402. */
+export class RunQuotaExceededError extends Error {
+  constructor(
+    readonly limit: number,
+    readonly used: number,
+  ) {
+    super('Monthly run limit reached');
+    this.name = 'RunQuotaExceededError';
+  }
+}
+
 const JOB_ERROR_MAX = 500;
 
 export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
@@ -413,7 +434,7 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
           actor: { apiKeyId: apiKeyId ?? null },
         }),
 
-      async enqueue({ kind, params }, { maxOutstanding = Infinity } = {}) {
+      async enqueue({ kind, params }, { maxOutstanding = Infinity, monthlyRunLimit } = {}) {
         // One transaction under a per-org advisory lock: the count and the insert
         // cannot interleave with another enqueue of the same org.
         const attempt = (keyId: string | null) =>
@@ -424,6 +445,25 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
                 select count(*) as n from runs
                 where org_id = ${orgId} and status in ('queued', 'running')`.execute(tx);
               if (Number(rows[0].n) >= maxOutstanding) return null;
+            }
+            // The plan's runs this UTC month (#346), under the same lock, so parallel
+            // submits cannot all pass: what was billed, plus what is queued or running.
+            if (monthlyRunLimit !== undefined) {
+              const requested = jobQuantity({ kind, params } as JobSpec);
+              const { rows } = await sql<{ used: string }>`
+                select
+                  (select coalesce(sum(quantity), 0) from usage_events
+                     where org_id = ${orgId} and kind in ('a11y_job', 'visual_job')
+                       and created_at >= date_trunc('month', now() at time zone 'UTC') at time zone 'UTC')
+                  + (select coalesce(sum(case when kind = 'visual'
+                       then greatest(jsonb_array_length(params->'urls') * jsonb_array_length(params->'devices'), 1)
+                       else 1 end), 0)
+                     from runs where org_id = ${orgId} and status in ('queued', 'running')) as used`.execute(
+                tx,
+              );
+              const used = Number(rows[0].used);
+              if (used + requested > monthlyRunLimit)
+                throw new RunQuotaExceededError(monthlyRunLimit, used);
             }
             const { rows } = await sql<{ id: string }>`
               insert into runs (org_id, api_key_id, kind, status, params)
