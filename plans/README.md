@@ -153,7 +153,7 @@ code is the ordering key.
 | `P0.55` | [#460](https://github.com/frankbria/iris/issues/460) | Signed artifact URLs in run detail | P0.29 (#257) | DONE (PR #471) |
 | `P0.56` | [#463](https://github.com/frankbria/iris/issues/463) | Portal: visual diff images and baseline approval | P0.40 (#268), P0.55 (#460) | DONE (PR #474) |
 | `P0.57` | [#472](https://github.com/frankbria/iris/issues/472) | Purge visual artifacts from object storage | P0.40 (#268) | DONE (PR #477) |
-| `P0.58` | [#479](https://github.com/frankbria/iris/issues/479) | Managed AI credits: org AI mode, IRIS vendor key, credit balance | P0.37 (#346) | TODO |
+| `P0.58` | [#479](https://github.com/frankbria/iris/issues/479) | Managed AI credits: org AI mode, IRIS vendor key, credit balance | P0.37 (#346) | DONE (#483) |
 
 ### P1 — Pre-launch hardening
 

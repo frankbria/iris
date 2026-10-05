@@ -435,3 +435,10 @@ Write/Edit, not as a pre-push afterthought.
 - Anything deleted in a database transaction but stored outside it (object storage) needs a queue written in that same transaction, drained afterwards, with failed entries rotated so one bad entry cannot starve the rest.
 - A plan quota must be checked under the same per-org lock as the insert it guards, and must count outstanding work as well as billed usage, or parallel submits overshoot.
 - Pin new limits' effect on existing tests: the free plan's 1 session broke spawned tests that opened two; put those orgs on a bigger plan rather than weakening the limit.
+
+## 2026-10-05 — #479 / #281
+
+- **Sanitize by outcome, not by message prefix.** #479's first fix matched `AI translation error`; the provider clients say `Failed to translate:`. Codex caught it. A managed call that returns no actions is a failure, however a client words it.
+- **Drive the real client against a local vendor.** `OPENAI_BASE_URL` (operator routing, which injected credentials keep) points the real SDK at a local 401 server. That tests the real failure path, where mocking `translate` only proves what the mock returned.
+- **A throwing `process.exit` spy records the *first* code.** The throw lands in the CLI's own catch, which exits 3. Keeping the last code reads a real exit 5 as 3.
+- **A fail-closed test must assert why it failed.** "Analysis unavailable → breaking" stays green if a real 401 from a live vendor replaces the tripped breaker. Assert the breaker's reason, or the test hides live egress.
