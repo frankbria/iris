@@ -1265,6 +1265,8 @@ async function executeBrowserActions(
       // A tenant's AI translation is charged to, and gated by, its org's budget
       // (#255), and runs on its own credentials, never the operator's (#258).
       const principal = session.principal;
+      // Whose account a billed call is on, from the credential the resolver gave (#479).
+      let billingMode: 'byok' | 'managed' = 'byok';
       const translation = await translate(
         instruction,
         url ? { url } : undefined,
@@ -1277,14 +1279,17 @@ async function executeBrowserActions(
               onUsage: (call: SettledAICall) => {
                 const kind = usageKindOf(call.operation);
                 // Spend as a metric (#275): no org label; the ledger has the per-org split.
-                aiSpend.inc({ provider: call.provider, kind, billing_mode: 'byok' }, call.costUsd);
+                aiSpend.inc(
+                  { provider: call.provider, kind, billing_mode: billingMode },
+                  call.costUsd,
+                );
                 return tenant.usage?.record(principal.orgId, [
                   {
                     kind,
                     quantity: 1,
                     unitCostUsd: call.costUsd,
                     estimated: call.estimated,
-                    billingMode: 'byok',
+                    billingMode,
                     idempotencyKey: `${call.operation}:${call.callId}`,
                   },
                 ]);
@@ -1292,7 +1297,9 @@ async function executeBrowserActions(
               credentials: async () => {
                 if (!tenant.aiCredentials) return null;
                 try {
-                  return await tenant.aiCredentials(principal);
+                  const resolved = await tenant.aiCredentials(principal);
+                  billingMode = resolved?.billingMode ?? 'byok';
+                  return resolved;
                 } catch (err) {
                   log('error', 'AI credentials lookup failed; translating without AI', {
                     ...who(principal),

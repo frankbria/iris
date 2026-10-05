@@ -171,6 +171,9 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   // ADR 0001 §5 has hosted mode refuse to start without it.
   const { resolveKeyring } = await import('./byok/crypto');
   const keyring = resolveKeyring(env);
+  // IRIS's own vendor key for managed credits (#479): read once, here, never per request.
+  const { managedAiResolver, resolveManagedKey } = await import('./billing/managed-ai');
+  const managedKey = resolveManagedKey(env);
   // Loaded here, not at the top: BetterAuth is ESM-only (require(esm)), and this
   // module is itself only loaded in hosted mode.
   const { createPostgresDb, probeDatabase, resolveDatabaseUrl } = await import('./db/postgres');
@@ -208,7 +211,13 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
     ),
     history: postgresHistory(db),
     // BYOK (#344): a tenant's AI runs on the key its org stored, or not at all (#258).
-    aiCredentials: planAwareCredentials(entitlements, providerKeys),
+    // Managed credits or the org's own key, per ADR 0001 §6 (#479).
+    aiCredentials: managedAiResolver({
+      db: db as Kysely<unknown>,
+      entitlements,
+      providerKeys,
+      managedKey,
+    }),
     // Billable usage of tenant sessions and AI calls (#263).
     usage: usageLedger(db),
     // The job API (#267): `iris worker` runs what it queues.

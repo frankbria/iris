@@ -1097,6 +1097,27 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - Not enforced yet, no hosted surface: agent turns (CLI-only, #428), vision calls (hosted
   jobs run no AI), storage (#315).
 
+### Managed AI Credits (issue #479)
+
+`src/billing/managed-ai.ts`, migration 0013 (`org_ai_settings`), ADR 0001 §6.
+
+- **An org's AI mode** is `byok` (no row, the default) or `managed`, set by owners and admins
+  on `/provider-keys` (`setAiMode`, the `providerKey` create permission). Nobody is billed
+  for AI they did not choose.
+- **`managedAiResolver`** is hosted `iris connect`'s `aiCredentials`: a managed org with
+  credit left gets IRIS's key (`billingMode: 'managed'`); with none left, or no operator key
+  configured, it falls back to its own key if its plan allows BYOK (`byok`), else no AI. A
+  BYOK org never gets the managed key. Credit = plan `managedAiCreditUsdPerMonth` minus this
+  UTC month's `usage_events` with `billing_mode = managed` (quantity x unit cost).
+- **The RPC server records each settled call with the credential's `billingMode`**
+  (`AICredentials.billingMode`), no longer a hardcoded `byok`.
+- **IRIS's key** is operator config, read once at startup: `IRIS_MANAGED_AI_PROVIDER`
+  (`openai` | `anthropic`) + `IRIS_MANAGED_AI_KEY(_FILE)`; one without the other exits 3. On
+  the `jest.setup.ts` scrub list.
+- ponytail: a call is admitted while any credit is left, so concurrent calls can overshoot
+  by one call each; the operator's CostTracker budget still reserves per call (#244).
+  Stripe reporting of managed usage is #264.
+
 ### Hosted Job API (issue #267)
 
 `iris connect` (hosted) serves REST beside the WebSocket; `iris worker` runs what it

@@ -583,6 +583,48 @@ describe('hosted RPC history (#254)', () => {
     }
   });
 
+  // #479: a call made on IRIS's managed key is billed as managed, from the credential.
+  test('records the billing mode of the credential the call was made with', async () => {
+    const recorded: UsageEvent[] = [];
+    const usage = {
+      record: async (_o: string, events: UsageEvent[]) => void recorded.push(...events),
+    };
+    const translate = jest
+      .spyOn(translatorModule, 'translate')
+      .mockImplementation(async (_i, _c, scope) => {
+        // As the real translator does: credentials first, then the settled call.
+        const credentials = scope?.credentials;
+        if (typeof credentials === 'function') await credentials();
+        await scope?.onUsage?.({
+          callId: 'call-m',
+          operation: 'text',
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          costUsd: 0.003,
+          estimated: false,
+        });
+        return { actions: [], method: 'ai', confidence: 0, reasoning: 'stub' };
+      });
+    try {
+      const url = await serve({
+        usage,
+        aiCredentials: async () => ({
+          provider: 'openai',
+          apiKey: 'iris-managed',
+          billingMode: 'managed',
+        }),
+      });
+      const b = await open(url, as('key-b'));
+      await call(b, 'launchBrowser');
+      await call(b, 'executeBrowserAction', { instruction: 'check the order total' });
+      expect(recorded.filter((e) => e.kind === 'text_call')).toEqual([
+        expect.objectContaining({ billingMode: 'managed', unitCostUsd: 0.003 }),
+      ]);
+    } finally {
+      translate.mockRestore();
+    }
+  });
+
   test('local mode, with no principal, records nothing', async () => {
     const recorded: unknown[] = [];
     const history = {

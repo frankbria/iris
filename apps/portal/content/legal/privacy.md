@@ -1,6 +1,6 @@
 ---
 title: Privacy Policy
-version: 2026-10-05
+version: 2026-10-06
 draft: true
 ---
 
@@ -35,7 +35,7 @@ IRIS is provided by [company name, registered address] ("we", "us"). For the per
 
 ## 4. AI vendors
 
-When your organization has added its own OpenAI or Anthropic key, IRIS may send the AI vendor your instruction and the page URL to turn the instruction into browser actions. For visual comparisons it sends screenshots, an optional difference image and the page URL. These requests are made with your organization's key, on your organization's own account with that vendor, whose terms and privacy policy apply. Without a stored key, nothing is sent to an AI vendor. [When IRIS-provided AI credits launch, requests using them will be made on our account, and the vendor will be our subprocessor.]
+When your organization has added its own OpenAI or Anthropic key, IRIS may send the AI vendor your instruction and the page URL to turn the instruction into browser actions. For visual comparisons it sends screenshots, an optional difference image and the page URL. These requests are made with your organization's key, on your organization's own account with that vendor, whose terms and privacy policy apply. If your organization chooses IRIS credits instead, the same requests are made with IRIS's own key, on our account with the vendor, which is then our subprocessor; once this month's credits are used, your organization's own key is used, if it has one. Without IRIS credits or a stored key, nothing is sent to an AI vendor.
 
 ## 5. Who we share it with
 

@@ -1,6 +1,6 @@
 ---
 title: Subprocessors
-version: 2026-10-02
+version: 2026-10-06
 draft: true
 ---
 
@@ -12,14 +12,14 @@ These are the third parties that process personal data on IRIS's behalf. How we 
 |---|---|---|---|
 | [hosting provider] | Hosting the service: servers, storage and network | All service data, including accounts, results and backups | [location] |
 | [email delivery provider] | Sending verification, password-reset and invitation emails | Recipient email address, sign-in links, inviter and organization names | [location] |
-| OpenAI (only when IRIS-provided AI credits are used; not yet available) | AI instruction translation and visual comparison | Instructions, page URLs, screenshots | [location] |
-| Anthropic (only when IRIS-provided AI credits are used; not yet available) | AI instruction translation and visual comparison | Instructions, page URLs, screenshots | [location] |
+| OpenAI (only when your organization chooses IRIS credits) | AI instruction translation and visual comparison | Instructions, page URLs, screenshots | [location] |
+| Anthropic (only when your organization chooses IRIS credits) | AI instruction translation and visual comparison | Instructions, page URLs, screenshots | [location] |
 | Stripe (when billing launches) | Payments and invoicing | Billing contact, payment details, usage totals | [location] |
 | [backup storage provider] (if used) | Off-site copies of encrypted backups | Encrypted backups, which the provider cannot read | [location] |
 
 ## Your own AI provider key (not a subprocessor)
 
-Today IRIS contacts OpenAI or Anthropic only with your organization's own key ("bring your own key"). Those requests run on your organization's own account with the vendor, which processes the data under your organization's contract with it, not as our subprocessor. Nothing is sent to a vendor your organization has not added a key for. OpenAI and Anthropic appear in the table above only for IRIS-provided AI credits, which are not yet available.
+Unless your organization chooses IRIS credits, IRIS contacts OpenAI or Anthropic only with your organization's own key ("bring your own key"). Those requests run on your organization's own account with the vendor, which processes the data under your organization's contract with it, not as our subprocessor. Nothing is sent to a vendor your organization has not added a key for. OpenAI and Anthropic appear in the table above only for IRIS credits, which an organization's owners or admins choose on the AI provider keys page.
 
 ## Changes
 

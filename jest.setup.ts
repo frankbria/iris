@@ -108,6 +108,10 @@ for (const key of [
   'IRIS_S3_ACCESS_KEY_ID',
   'IRIS_S3_SECRET_ACCESS_KEY',
   'IRIS_S3_SECRET_ACCESS_KEY_FILE',
+  // IRIS's own vendor key for managed credits (#479).
+  'IRIS_MANAGED_AI_PROVIDER',
+  'IRIS_MANAGED_AI_KEY',
+  'IRIS_MANAGED_AI_KEY_FILE',
   // Added with #192, which taught `iris connect` to read these. Without them
   // here an exported IRIS_CONNECT_HOST=0.0.0.0 fails the connect-default test on
   // a developer's machine while CI stays green — #185 exactly, recurring the
