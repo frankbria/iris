@@ -25,6 +25,7 @@ import { createPostgresDb } from '../src/db/postgres';
 import { migrateToLatest } from '../src/db/migrate';
 import { resolveKeyring } from '../src/byok/crypto';
 import { providerKeyStore } from '../src/byok/store';
+import { orgEntitlements } from '../src/billing/plans';
 import { orgSuspensions } from '../src/org-suspension';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
@@ -276,6 +277,16 @@ const PASSWORD = 'correct-horse-battery-staple';
       { cwd: REPO_ROOT, env: { ...process.env, ...HOSTED_ENV, PROBE_URL: dbUrl } },
     );
     r = JSON.parse(stdout);
+    // Plan limits (#346) are not under test here: the free plan's one concurrent session
+    // would refuse these tests' second browser. Team allows four (the operator's two cap it).
+    {
+      const ent = createPostgresDb(dbUrl);
+      try {
+        for (const org of [r.A, r.B]) await orgEntitlements(ent).setPlan(org, 'team');
+      } finally {
+        await ent.destroy();
+      }
+    }
     // A stand-in OpenAI that records the key each request carried (#344).
     vendor = http.createServer((req, res) => {
       req.resume();

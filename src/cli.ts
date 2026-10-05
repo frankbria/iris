@@ -658,6 +658,7 @@ program
     let usage: ReturnType<typeof import('./billing/usage').usageLedger> | undefined;
     let jobs: import('./history-store').PostgresJobs | undefined;
     let artifacts: import('./artifact-store').ArtifactStore | null = null;
+    let entitlements: ((orgId: string) => Promise<{ runsPerMonth: number }>) | undefined;
     let aiCredentials:
       | ((
           p: import('./protocol').Principal,
@@ -673,7 +674,8 @@ program
       }
       try {
         const { hostedServices } = await import('./api-key-auth');
-        ({ authenticate, history, aiCredentials, usage, jobs } = await hostedServices());
+        ({ authenticate, history, aiCredentials, usage, jobs, entitlements } =
+          await hostedServices());
         // Signs run-detail artifacts (#460); unset IRIS_S3_ENDPOINT means none.
         artifacts = (await import('./artifact-store')).resolveArtifactStore();
       } catch (err) {
@@ -728,6 +730,7 @@ program
             history,
             runs: history,
             artifacts: artifacts ?? undefined,
+            entitlements,
             aiCredentials,
             usage,
             jobs,

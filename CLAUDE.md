@@ -1072,8 +1072,27 @@ are on the Stripe products (#261); enforcing them at the API is #346.
   first (`insert into org_plans ... 'pro'`), as `auth-apikey.test.ts` and portal
   `org.spec.ts` do.
 - **No browser-minute allowance** at launch: minutes are recorded (#263), and
-  `maxConcurrentSessions` caps them. The RPC server's `maxSessionsPerOrg` is still the
-  operator default until #346 sources it from the plan.
+  `maxConcurrentSessions` caps them.
+
+### Plan Enforcement (issue #346)
+
+Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §6).
+
+- **`runsPerMonth` on job submits**: `enqueue({ monthlyRunLimit })` counts, under the same
+  per-org advisory lock as the outstanding cap, this UTC month's `a11y_job` + `visual_job`
+  usage (`sum(quantity)`) plus queued and running jobs (a11y 1, visual urls x devices), so
+  parallel submits cannot overshoot. Over it, `RunQuotaExceededError` and the API answers
+  **402** `{ error: 'Monthly run limit reached', limit, used }`. `startServer({
+  entitlements })` supplies the limit; hosted `iris connect` passes `orgEntitlements(db)`.
+- **Sessions**: the hosted authenticator puts the plan's `maxConcurrentSessions` on the
+  principal (`Principal.maxSessions`); the RPC cap is `min(plan, operator
+  maxSessionsPerOrg)`, so the operator value stays the hard ceiling. A plan change applies to
+  new connections. Tests that open several sessions for one real org put it on `team`
+  (`api-key-auth.test.ts`).
+- **`byokAllowed`**: `planAwareCredentials()` (src/api-key-auth.ts) returns no stored key
+  for a plan without it.
+- Not enforced yet, no hosted surface: agent turns (CLI-only, #428), vision calls (hosted
+  jobs run no AI), storage (#315).
 
 ### Hosted Job API (issue #267)
 

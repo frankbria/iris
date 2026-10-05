@@ -46,7 +46,12 @@ export interface KeyStore {
  * A valid key of a suspended org (#348) is `'suspended'` on both paths, so the
  * server answers 403 and closes live connections at the next re-check.
  */
-export function apiKeyAuthenticator(auth: KeyVerifier, store: KeyStore): Authenticator {
+export function apiKeyAuthenticator(
+  auth: KeyVerifier,
+  store: KeyStore,
+  /** The org's concurrent-session limit from its plan (#346), carried on the principal. */
+  maxSessions?: (orgId: string) => Promise<number>,
+): Authenticator {
   return {
     async verify(authorization) {
       const key = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
@@ -55,7 +60,11 @@ export function apiKeyAuthenticator(auth: KeyVerifier, store: KeyStore): Authent
       if (result.valid && result.key) {
         const orgId = result.key.referenceId;
         if (await store.isSuspended(orgId)) return 'suspended';
-        return { orgId, keyId: result.key.id };
+        return {
+          orgId,
+          keyId: result.key.id,
+          ...(maxSessions && { maxSessions: await maxSessions(orgId) }),
+        };
       }
       if (await store.isUsable(key)) {
         throw new Error('API key verification failed for a usable key');
@@ -123,6 +132,20 @@ export function postgresKeyStore(db: Kysely<unknown>): KeyStore {
 }
 
 /**
+ * A tenant's AI credentials (#344, #346): the key its org stored, but only when its plan
+ * allows bring-your-own-key; otherwise none (pattern translation only, #258).
+ */
+export function planAwareCredentials(
+  entitlements: (orgId: string) => Promise<{ byokAllowed: boolean }>,
+  providerKeys: { credentialsFor(orgId: string): Promise<AICredentials | null> },
+): (principal: Principal) => Promise<AICredentials | null> {
+  return async (principal) =>
+    (await entitlements(principal.orgId)).byokAllowed
+      ? providerKeys.credentialsFor(principal.orgId)
+      : null;
+}
+
+/**
  * The hosted server's authenticator and run history, from the process environment (ADR 0001 §5: no
  * ambient config files). Needs the portal's `BETTER_AUTH_SECRET` (or `_FILE`) and
  * `BETTER_AUTH_URL`, and `DATABASE_URL` or `DATABASE_URL_FILE`.
@@ -136,6 +159,7 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   aiCredentials: (principal: Principal) => Promise<AICredentials | null>;
   usage: ReturnType<typeof import('./billing/usage').usageLedger>;
   jobs: PostgresJobs;
+  entitlements: (orgId: string) => Promise<import('./billing/plans').Entitlements>;
 }> {
   const secret = readSecretEnv('BETTER_AUTH_SECRET', env);
   const missing = [
@@ -174,14 +198,22 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   const { providerKeyStore } = await import('./byok/store');
   const providerKeys = providerKeyStore(db, keyring);
   const { usageLedger } = await import('./billing/usage');
+  const { orgEntitlements } = await import('./billing/plans');
+  const entitlements = (orgId: string) => orgEntitlements(db as Kysely<unknown>).get(orgId);
   return {
-    authenticate: apiKeyAuthenticator(auth, postgresKeyStore(db)),
+    authenticate: apiKeyAuthenticator(
+      auth,
+      postgresKeyStore(db),
+      async (orgId) => (await entitlements(orgId)).maxConcurrentSessions,
+    ),
     history: postgresHistory(db),
     // BYOK (#344): a tenant's AI runs on the key its org stored, or not at all (#258).
-    aiCredentials: (principal) => providerKeys.credentialsFor(principal.orgId),
+    aiCredentials: planAwareCredentials(entitlements, providerKeys),
     // Billable usage of tenant sessions and AI calls (#263).
     usage: usageLedger(db),
     // The job API (#267): `iris worker` runs what it queues.
     jobs: postgresJobs(db),
+    // Plan limits at the API boundary (#346).
+    entitlements,
   };
 }

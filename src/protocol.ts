@@ -112,6 +112,8 @@ export interface BrowserSession {
 export interface Principal {
   orgId: string;
   keyId: string;
+  /** The org plan's concurrent sessions (#346); the operator's `maxSessionsPerOrg` still caps it. */
+  maxSessions?: number;
 }
 
 /** Per-tenant authentication for hosted connections (#341). */
@@ -419,6 +421,8 @@ export function startServer(
     runs?: RunReader;
     /** Signs run-detail artifacts (#460); unset, run detail carries none. */
     artifacts?: ArtifactStore;
+    /** The org's plan limits for job submits (#346). */
+    entitlements?: (orgId: string) => Promise<{ runsPerMonth: number }>;
     /** Signed URL lifetime in seconds (default 300, at most 900). */
     artifactUrlTtlSeconds?: number;
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
@@ -484,6 +488,7 @@ export function startServer(
         runs: options.runs,
         artifacts: options.artifacts,
         artifactUrlTtlSeconds: options.artifactUrlTtlSeconds,
+        entitlements: options.entitlements,
         maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
         // REST verifications share the upgrades' `verifying` count, so a bad-key flood
         // cannot pile onto the auth pool. Only pending ones count here: idle sockets
@@ -873,14 +878,19 @@ export function startServer(
               // by every connection, and each connection has its own gate.
               // This connection's own session was cleaned up above, so a relaunch
               // is never counted against its org.
+              // The plan's limit, never above the operator's ceiling (#346).
+              const orgCap = Math.min(
+                limits.maxSessionsPerOrg,
+                principal?.maxSessions ?? Number.POSITIVE_INFINITY,
+              );
               if (
                 principal &&
                 [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId)
-                  .length >= limits.maxSessionsPerOrg
+                  .length >= orgCap
               ) {
                 throw {
                   code: -32000,
-                  message: `Organization session limit reached (${limits.maxSessionsPerOrg}); try again later`,
+                  message: `Organization session limit reached (${orgCap}); try again later`,
                   refused: true,
                 };
               }

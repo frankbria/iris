@@ -379,6 +379,31 @@ describe('per-org caps (#342)', () => {
     expect((await call(a, 'launchBrowser')).result.success).toBe(true);
   });
 
+  // #346: the org's plan sets its concurrent sessions; the operator's value still caps it.
+  test("the plan's session limit applies, under the operator's ceiling", async () => {
+    keys.set('key-a', { orgId: 'org-a', keyId: 'id-a', maxSessions: 1 });
+    keys.set('key-a2', { orgId: 'org-a', keyId: 'id-a2', maxSessions: 1 });
+    keys.set('key-b', { orgId: 'org-b', keyId: 'id-b', maxSessions: 9 });
+    const url = await serve({ limits: { maxSessions: 6, maxSessionsPerOrg: 2 } });
+    const a = await open(url, as('key-a'));
+    const a2 = await open(url, as('key-a2'));
+    expect((await call(a, 'launchBrowser')).result.success).toBe(true);
+    expect((await call(a2, 'launchBrowser')).error).toMatchObject({
+      message: 'Organization session limit reached (1); try again later',
+    });
+    // A plan above the operator's ceiling gets the ceiling (2), not 9.
+    const b = [
+      await open(url, as('key-b')),
+      await open(url, as('key-b')),
+      await open(url, as('key-b')),
+    ];
+    expect((await call(b[0], 'launchBrowser')).result.success).toBe(true);
+    expect((await call(b[1], 'launchBrowser')).result.success).toBe(true);
+    expect((await call(b[2], 'launchBrowser')).error).toMatchObject({
+      message: 'Organization session limit reached (2); try again later',
+    });
+  });
+
   test('one org cannot hold every connection: its next upgrade gets 429', async () => {
     const url = await serve({ limits: { maxConnectionsPerOrg: 1 } });
     const a = await open(url, as('key-a'));
