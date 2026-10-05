@@ -256,6 +256,93 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
     });
   });
 
+  // #286: focus order was a static selector scan that failed any negative tabindex (the
+  // roving-tabindex pattern) and never pressed Tab; Escape was tested after the trap test
+  // had already pressed Escape on every dialog.
+  describe('focus order from real Tab presses (#286)', () => {
+    it('passes a roving-tabindex toolbar', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="toolbar" aria-label="Format">
+          <button tabindex="0">Bold</button><button tabindex="-1">Italic</button>
+          <button tabindex="-1">Underline</button>
+        </div><a href="#next">Next</a></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testFocusOrder: true }).run(
+        page,
+        'roving',
+      );
+      expect(result.focusOrder.map((f) => f.element)).toEqual(['BUTTON', 'A']);
+      expect(result.passed).toBe(true);
+    });
+
+    it('fails a positive tabindex, and reports the order Tab really takes', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <button id="one">One</button><button id="jump" tabindex="2">Jumps the queue</button>
+        </body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testFocusOrder: true }).run(
+        page,
+        'positive',
+      );
+      expect(result.focusOrder.map((f) => f.element)).toEqual(['BUTTON#jump', 'BUTTON#one']);
+      expect(result.passed).toBe(false);
+    });
+
+    it('fails when Tab moves focus onto something invisible', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <a href="#a">Visible</a>
+        <a href="#b" id="ghost" style="opacity:0;position:absolute;width:0;height:0;overflow:hidden">Ghost</a>
+        </body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testFocusOrder: true }).run(
+        page,
+        'ghost',
+      );
+      expect(result.focusOrder.find((f) => f.element === 'A#ghost')?.visible).toBe(false);
+      expect(result.passed).toBe(false);
+    });
+  });
+
+  describe('Escape is tested on its own, after the trap test (#286)', () => {
+    const DIALOG = (closes: boolean) =>
+      `<!doctype html><html lang="en"><head><title>t</title></head><body>
+       <div role="dialog" aria-modal="true" id="d"><button>Ok</button></div>
+       ${
+         closes
+           ? `<script>document.addEventListener('keydown',(e)=>{
+                if(e.key==='Escape') document.getElementById('d').remove();});</script>`
+           : ''
+       }</body></html>`;
+
+    it('records Escape for a dialog the trap test already closed with Escape', async () => {
+      await load(page, DIALOG(true));
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'escape-after-trap');
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([expect.objectContaining({ target: 'DIV#d', success: true })]);
+    });
+
+    it('still fails a dialog that ignores Escape', async () => {
+      await load(page, DIALOG(false));
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'escape-ignored');
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([expect.objectContaining({ success: false })]);
+    });
+  });
+
   // #285: elements were addressed by `TAG#id` / `TAG.firstClass`. Radix ids contain colons,
   // Tailwind classes contain `:` and `[`, an id-less class-less element gave `UL.`: all
   // invalid selectors, so working widgets failed. An SVG <a> (className is not a string)

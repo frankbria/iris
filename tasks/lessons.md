@@ -442,3 +442,11 @@ Write/Edit, not as a pre-push afterthought.
 - **Drive the real client against a local vendor.** `OPENAI_BASE_URL` (operator routing, which injected credentials keep) points the real SDK at a local 401 server. That tests the real failure path, where mocking `translate` only proves what the mock returned.
 - **A throwing `process.exit` spy records the *first* code.** The throw lands in the CLI's own catch, which exits 3. Keeping the last code reads a real exit 5 as 3.
 - **A fail-closed test must assert why it failed.** "Analysis unavailable → breaking" stays green if a real 401 from a live vendor replaces the tripped breaker. Assert the breaker's reason, or the test hides live egress.
+
+## 2026-10-05 (#281–#287)
+
+- **A failure shaped like a verdict is a trap.** The AI classifier's fallback carried `severity: 'medium'`, and an unscannable a11y page carried an empty axe result. Each read as a judgement wherever the flag (`analysisFailed`, `error`) wasn't checked. Isolating a failure means auditing **every** consumer (MCP, CLI, history, HTML, JUnit) for the new silent pass, and removing each guard to prove it is load-bearing.
+- **Two reviewers can pull opposite ways on a heuristic.** Over eight review rounds on #489, fixing Codex's false pass (an inferred dialog identity after re-render) reopened GLM's false failure and back again. When each fix exposes its mirror, the heuristic is carrying semantics it can't: pick the realistic side, document the trade-off, and file the real semantics (#491) instead of iterating.
+- **Exit codes are a contract with CI.** "Couldn't scan" (3) must never mask "found violations" (4): a retry-on-flake policy would hide real regressions.
+- **A "failing" local full suite under load is not a verdict.** Hook timeouts (`beforeAll` > 30 s) and browser deadlines failed whole files that passed alone or serially. Check the failure *message* before blaming the diff, as #142 says, and run demos with `--runInBand`.
+- **GitHub Actions outages look like "cancelled after 15 min, no steps".** Check githubstatus.com before re-running, and never merge on an older commit's green build.

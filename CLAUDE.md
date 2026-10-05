@@ -259,6 +259,12 @@ plans/
   invalid for Radix ids (`radix-:r1:`), Tailwind classes and id-less elements, and ambiguous
   between look-alikes. Labels read `getAttribute('class')`: an SVG `<a>`'s `className` is
   an `SVGAnimatedString`, and `.split` on it aborted the whole a11y run
+- **Keyboard verdicts come from the keyboard (#286).** Focus order is the real Tab sequence
+  from the document start (blur, then Tab until focus leaves, repeats a stop, or 200 stops),
+  failing only a positive tabindex (manual order) or a stop that is invisible where focus
+  lands; `-1` is the roving-tabindex pattern and never fails. The Escape check reloads the
+  page first when the trap check pressed Escape, since that closed every Escape-dismissible
+  dialog before the Escape check could see it. Escape identity after a re-render is #491
 - **The a11y runner isolates pages (#287).** A page that fails (navigation, timeout, a check
   that throws on hostile markup) is that page's result with `error` and an empty axe
   result; the other pages still run. `summary.pagesErrored` counts them, and an errored page
@@ -1734,7 +1740,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 2183/2184 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 2209/2210 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

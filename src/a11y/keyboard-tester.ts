@@ -179,6 +179,12 @@ export class KeyboardTester {
 
       // Test 4: Escape key handling
       if (this.config.testEscapeHandling) {
+        // The trap test pressed Escape on every dialog it examined, so one that closes on
+        // Escape was gone by now and this test recorded nothing for it (#286). Start again
+        // from the page as loaded. The URL guard is per page, so the reload is guarded too.
+        if (trapTests.length > 0) {
+          await page.reload({ waitUntil: 'networkidle' });
+        }
         const escapeTests = await this.testEscapeHandling(page);
         interactions.push(...escapeTests);
         if (escapeTests.some((test) => !test.success)) {
@@ -210,63 +216,70 @@ export class KeyboardTester {
   }
 
   /**
-   * Test focus order by tabbing through all focusable elements
+   * Focus order as a keyboard user meets it: real Tab presses from the start of the
+   * document (#286). It used to be a static selector scan, in DOM order, that never pressed
+   * Tab. Stops when focus leaves the page, returns to a stop already seen (the order wrapped
+   * or a trap cycles), or after `MAX_TAB_STOPS`.
    */
   private async testFocusOrder(page: Page): Promise<FocusableElement[]> {
-    return await page.evaluate(() => {
-      const focusableSelectors = [
-        'a[href]',
-        'area[href]',
-        'input:not([disabled])',
-        'select:not([disabled])',
-        'textarea:not([disabled])',
-        'button:not([disabled])',
-        '[tabindex]:not([tabindex="-1"])',
-        '[contenteditable]',
-      ].join(',');
+    const MAX_TAB_STOPS = 200;
+    // Start from the document, not from wherever the page put focus.
+    await page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== document.body) HTMLElement.prototype.blur.call(active);
+    });
 
-      const elements = Array.from(document.querySelectorAll(focusableSelectors));
-
-      return elements.map((el) => {
-        const htmlEl = el as HTMLElement;
-        const rect = htmlEl.getBoundingClientRect();
-        const isVisible =
-          rect.width > 0 &&
-          rect.height > 0 &&
-          window.getComputedStyle(htmlEl).visibility !== 'hidden';
-
-        // A label, never a selector. `getAttribute('class')`, not `className`: on an SVG
-        // <a> that is an SVGAnimatedString, and `.split` threw and ended the run (#285).
-        // Through Element.prototype: a <form>'s named controls shadow its methods and
-        // properties (`<input name="setAttribute">`), which threw and ended the run.
+    const stops: FocusableElement[] = [];
+    const seen = new Set<string>();
+    for (let i = 0; i < MAX_TAB_STOPS; i++) {
+      await page.keyboard.press('Tab');
+      const stop = await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!el || el === document.body || el === document.documentElement) return null;
+        // Through the prototypes: a <form>'s named controls shadow its methods (#285).
         const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
+        const parts: string[] = [];
+        for (let n: Element | null = el; n && n.parentElement; n = n.parentElement) {
+          parts.unshift(
+            `${n.tagName}:${Array.prototype.indexOf.call(n.parentElement.children, n)}`,
+          );
+        }
+        const rect = Element.prototype.getBoundingClientRect.call(el);
+        const style = getComputedStyle(el);
         const id = attr('id');
         const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
+        const role = attr('role');
+        const ariaLabel = attr('aria-label');
         return {
-          element: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
-          tabIndex: htmlEl.tabIndex,
-          focusable: true,
-          visible: isVisible,
+          path: parts.join('>'),
           tagName: el.tagName,
-          role: attr('role') || undefined,
-          ariaLabel: attr('aria-label') || undefined,
+          ...(role && { role }),
+          ...(ariaLabel && { ariaLabel }),
+          element: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
+          tabIndex: Number.parseInt(attr('tabindex') ?? '0', 10) || 0,
+          visible:
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.visibility !== 'hidden' &&
+            Number(style.opacity) > 0,
         };
       });
-    });
+      if (!stop || seen.has(stop.path)) break;
+      seen.add(stop.path);
+      const { path: _path, ...element } = stop;
+      stops.push({ ...element, focusable: true });
+    }
+    return stops;
   }
 
   /**
-   * Validate that focus order is logical (left-to-right, top-to-bottom)
+   * The Tab order is acceptable when no stop is ordered by a positive tabindex (it
+   * overrides the document order, WCAG 2.4.3) and every stop is visible where focus lands
+   * on it (2.4.7). A negative tabindex is never a failure: it is how the roving-tabindex
+   * pattern keeps a widget's other items out of the Tab order, and Tab never reaches them.
    */
   private validateFocusOrder(focusOrder: FocusableElement[]): boolean {
-    // Check for negative tab indices on visible elements
-    const negativeTabIndices = focusOrder.filter((el) => el.visible && el.tabIndex < 0);
-
-    // Check for very high tab indices (potential manual ordering issues)
-    const highTabIndices = focusOrder.filter((el) => el.tabIndex > 0);
-
-    // If we have manual tab ordering, that's a potential issue
-    return negativeTabIndices.length === 0 && highTabIndices.length === 0;
+    return focusOrder.every((stop) => stop.tabIndex <= 0 && stop.visible);
   }
 
   /**
