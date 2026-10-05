@@ -90,6 +90,11 @@ export interface VisualTestResult {
       moderate?: number;
       minor?: number;
     };
+    /**
+     * Failed comparisons whose AI analysis did not happen (outage, budget breaker): their
+     * severity is the pixel estimate, not a verdict (#281). Absent when AI was not asked.
+     */
+    aiUnavailable?: number;
   };
   results: Array<{
     page: string;
@@ -194,7 +199,7 @@ export class VisualTestRunner {
   async run(): Promise<VisualTestResult> {
     const startTime = Date.now();
     const results: VisualTestResult['results'] = [];
-    const summary = {
+    const summary: VisualTestResult['summary'] = {
       totalComparisons: 0,
       passed: 0,
       failed: 0,
@@ -239,6 +244,9 @@ export class VisualTestRunner {
         } else {
           summary.failed++;
 
+          if (result.aiAnalysis?.analysisFailed) {
+            summary.aiUnavailable = (summary.aiUnavailable ?? 0) + 1;
+          }
           // Track severity counts
           if (result.severity) {
             summary.severityCounts[result.severity] =
@@ -523,8 +531,11 @@ export class VisualTestRunner {
           analysisFailed: analysis.analysisFailed,
         };
 
-        // Map AI severity to test severity
-        severity = this.mapAISeverity(analysis.severity);
+        // The classifier's fallback (outage, tripped budget breaker) carries 'medium', which
+        // is not a verdict: graded moderate, a regression passed `--fail-on breaking` (#281).
+        severity = analysis.analysisFailed
+          ? this.estimateSeverity(diffResult.similarity)
+          : this.mapAISeverity(analysis.severity);
       } else if (!diffResult.passed) {
         // Without AI, estimate severity from the share of pixels that differ
         // (`pixelDifference` is a count; `similarity` is 1 minus that share).

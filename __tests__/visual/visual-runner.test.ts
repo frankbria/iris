@@ -669,6 +669,12 @@ describe('VisualTestRunner', () => {
       const result = await visualRunner.run();
 
       expect(result.results[0].aiAnalysis?.analysisFailed).toBe(true);
+      // #281: the fallback's 'medium' is not a verdict. A 20% pixel change is breaking by
+      // the pixel estimate, and graded moderate it passed the default --fail-on breaking.
+      expect(result.results[0].severity).toBe('breaking');
+      // Both configured pages ('/', '/about') changed and neither was analysed.
+      expect(result.summary.severityCounts.breaking).toBe(2);
+      expect(result.summary.aiUnavailable).toBe(2);
     });
 
     it('defaults suggestions to an empty list when the classifier omits them', async () => {
