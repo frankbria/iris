@@ -302,8 +302,11 @@ export class KeyboardTester {
 
     // Tag candidates so each can be re-found after the DOM shifts (a dismissed
     // dialog may be removed outright, which would invalidate positional lookup).
+    // A per-run attribute name, as for the keyboard markers: a page's own data-iris-trap
+    // attribute is never matched, overwritten or removed.
+    const attr = `data-iris-trap-${randomBytes(4).toString('hex')}`;
     const candidates = await page.evaluate(
-      ({ containers, focusable }) => {
+      ({ containers, focusable, attr }) => {
         const isVisible = (el: Element) => {
           const style = getComputedStyle(el);
           // Not offsetParent: that is null for position:fixed modals even when shown.
@@ -323,7 +326,7 @@ export class KeyboardTester {
           .filter(isVisible)
           .map((container, index) => {
             // Through Element.prototype: a <form>'s named controls shadow its methods (#285).
-            Element.prototype.setAttribute.call(container, 'data-iris-trap', String(index));
+            Element.prototype.setAttribute.call(container, attr, String(index));
             const inside = Element.prototype.querySelectorAll.call(container, focusable);
             return {
               index,
@@ -334,7 +337,7 @@ export class KeyboardTester {
             };
           });
       },
-      { containers: CONTAINERS, focusable: FOCUSABLE },
+      { containers: CONTAINERS, focusable: FOCUSABLE, attr },
     );
 
     const traps: FocusTrap[] = [];
@@ -345,38 +348,44 @@ export class KeyboardTester {
         // Tab off the LAST focusable: a real trap wraps back to the first,
         // a leaky one lets focus escape to the document.
         await page.evaluate(
-          ({ index, focusable }) => {
-            const container = document.querySelector(`[data-iris-trap="${index}"]`);
+          ({ index, focusable, attr }) => {
+            const container = document.querySelector(`[${attr}="${index}"]`);
             const inside = container
               ? Element.prototype.querySelectorAll.call(container, focusable)
               : undefined;
             (inside?.[inside.length - 1] as HTMLElement | undefined)?.focus();
           },
-          { index: candidate.index, focusable: FOCUSABLE },
+          { index: candidate.index, focusable: FOCUSABLE, attr },
         );
         await page.keyboard.press('Tab');
 
-        const trapped = await page.evaluate((index) => {
-          const container = document.querySelector(`[data-iris-trap="${index}"]`);
-          return (
-            !!container &&
-            !!document.activeElement &&
-            Node.prototype.contains.call(container, document.activeElement)
-          );
-        }, candidate.index);
+        const trapped = await page.evaluate(
+          ({ index, attr }) => {
+            const container = document.querySelector(`[${attr}="${index}"]`);
+            return (
+              !!container &&
+              !!document.activeElement &&
+              Node.prototype.contains.call(container, document.activeElement)
+            );
+          },
+          { index: candidate.index, attr },
+        );
 
         await page.keyboard.press('Escape');
 
-        const escaped = await page.evaluate((index) => {
-          const el = document.querySelector(`[data-iris-trap="${index}"]`);
-          if (!el) return true; // removed from the DOM entirely
-          const style = getComputedStyle(el);
-          return (
-            style.display === 'none' ||
-            style.visibility === 'hidden' ||
-            el.getClientRects().length === 0
-          );
-        }, candidate.index);
+        const escaped = await page.evaluate(
+          ({ index, attr }) => {
+            const el = document.querySelector(`[${attr}="${index}"]`);
+            if (!el) return true; // removed from the DOM entirely
+            const style = getComputedStyle(el);
+            return (
+              style.display === 'none' ||
+              style.visibility === 'hidden' ||
+              el.getClientRects().length === 0
+            );
+          },
+          { index: candidate.index, attr },
+        );
 
         traps.push({
           container: candidate.container,
@@ -390,10 +399,12 @@ export class KeyboardTester {
     } finally {
       // Leave the page as we found it — the markers are ours, not the app's.
       try {
-        await page.evaluate(() =>
-          document
-            .querySelectorAll('[data-iris-trap]')
-            .forEach((el) => Element.prototype.removeAttribute.call(el, 'data-iris-trap')),
+        await page.evaluate(
+          (attr) =>
+            document
+              .querySelectorAll(`[${attr}]`)
+              .forEach((el) => Element.prototype.removeAttribute.call(el, attr)),
+          attr,
         );
       } catch {
         // Cleanup only: a page that navigated away took the markers with it.

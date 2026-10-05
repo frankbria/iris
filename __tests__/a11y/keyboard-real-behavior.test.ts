@@ -357,6 +357,25 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(escape[0].target).toBe('FORM#f.sheet');
     });
 
+    it("leaves the page's own data-iris-trap attribute alone and judges our container", async () => {
+      // A decoy ahead of the dialog with the value our first trap marker would have had.
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div data-iris-trap="0"><a href="#x">decoy</a></div>
+        <div role="dialog" aria-modal="true"><button id="only">Only</button></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key === 'Tab') { e.preventDefault(); document.getElementById('only').focus(); }
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testTrapDetection: true }).run(
+        page,
+        'trap-decoy',
+      );
+      expect(result.trapTests).toEqual([expect.objectContaining({ trapped: true })]);
+      expect(await page.locator('[data-iris-trap="0"]').count()).toBe(1);
+    });
+
     it("never mistakes the page's own data-iris-kbd attribute for a marker", async () => {
       // The page's element comes first in document order with the value our first marker
       // would have had without a per-run nonce; it ignores ArrowDown.
@@ -463,7 +482,14 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
         testTrapDetection: true,
       }).run(page, 'clobbered');
       expect(result.interactions.filter((i) => i.key === 'ArrowDown')).toHaveLength(1);
-      expect(await page.locator('[data-iris-trap]').count()).toBe(0);
+      // Our per-run trap marker (data-iris-trap-<nonce>) is gone again.
+      expect(
+        await page.evaluate(() =>
+          [...document.querySelectorAll('*')].some((el) =>
+            el.getAttributeNames().some((n) => n.startsWith('data-iris-trap')),
+          ),
+        ),
+      ).toBe(false);
     });
 
     it('does not crash on an SVG link', async () => {
