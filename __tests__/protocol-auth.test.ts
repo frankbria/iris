@@ -625,37 +625,42 @@ describe('hosted RPC history (#254)', () => {
     }
   });
 
-  // #479: a provider error on IRIS's own key describes IRIS's vendor account, not the tenant's.
+  // #479: a provider error on IRIS's own key describes IRIS's vendor account, not the
+  // tenant's. The real OpenAI client and translator, against a local server answering 401
+  // (OPENAI_BASE_URL is the operator's routing, which injected credentials keep).
   test.each([
-    ['managed', 'AI translation is unavailable right now'],
-    ['byok', 'AI translation error: 401 Incorrect API key provided: sk-...wxyz'],
+    ['managed', /^AI translation is unavailable right now$/],
+    ['byok', /Incorrect API key provided: sk-\.\.\.wxyz/],
   ] as const)('a %s provider error reaches the client as %p', async (billingMode, expected) => {
     const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-    // As the real translator: credentials are asked for before the provider call fails.
-    const translate = jest
-      .spyOn(translatorModule, 'translate')
-      .mockImplementation(async (_i, _c, opts: any) => {
-        await opts.credentials();
-        return {
-          actions: [],
-          method: 'ai',
-          confidence: 0,
-          reasoning: 'AI translation error: 401 Incorrect API key provided: sk-...wxyz',
-        };
-      });
+    const vendor = http.createServer((_req, res) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: { message: 'Incorrect API key provided: sk-...wxyz', code: 'invalid_api_key' },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => vendor.listen(0, '127.0.0.1', resolve));
+    const before = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = `http://127.0.0.1:${(vendor.address() as AddressInfo).port}/v1`;
     try {
       const url = await serve({
         aiCredentials: async () => ({ provider: 'openai', apiKey: 'sk-x', billingMode }),
       });
       const b = await open(url, as('key-b'));
       await call(b, 'launchBrowser');
-      const reply = await call(b, 'executeBrowserAction', { instruction: 'check the order total' });
-      expect(reply.result.translationResult.reasoning).toBe(expected);
+      const reply = await call(b, 'executeBrowserAction', {
+        instruction: 'make sure the cart looks right',
+      });
+      expect(reply.result.translationResult.reasoning).toMatch(expected);
       if (billingMode === 'managed') {
         expect(errors.mock.calls.flat().join(' ')).toMatch(/managed AI translation failed/);
       }
     } finally {
-      translate.mockRestore();
+      if (before === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = before;
+      await new Promise((resolve) => vendor.close(resolve));
       errors.mockRestore();
     }
   });

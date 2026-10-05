@@ -1318,12 +1318,11 @@ async function executeBrowserActions(
             }
           : {},
       );
-      // A provider error on IRIS's managed key would tell the tenant about IRIS's vendor
-      // account (a revoked key's last characters, quota) (#479): logged, not returned.
-      if (
-        billingMode === 'managed' &&
-        /^AI translation (error|failed)/.test(translation.reasoning ?? '')
-      ) {
+      // On IRIS's managed key, a translation with no actions is a failure whose reason
+      // (provider error, invalid reply) describes IRIS's vendor account: a key's last
+      // characters, quota (#479). Logged, not returned. Matched by outcome, not by message
+      // prefix: each client words its failures differently.
+      if (billingMode === 'managed' && translation.actions.length === 0) {
         log('error', 'managed AI translation failed', {
           ...(principal && who(principal)),
           err: translation.reasoning,

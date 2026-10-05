@@ -1111,7 +1111,7 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   UTC month's `usage_events` with `billing_mode = managed` (quantity x unit cost).
 - **The RPC server records each settled call with the credential's `billingMode`**
   (`TenantCredentials` in src/protocol.ts makes it required on the resolver), no longer a
-  hardcoded `byok`. A provider error on the managed key is logged and the tenant gets
+  hardcoded `byok`. A managed call that returns no actions (provider error, invalid reply) is logged and the tenant gets
   "AI translation is unavailable right now": it describes IRIS's vendor account. A BYOK
   error still reaches the org that owns the key.
 - **Offboarding deletes the org's `org_ai_settings` row**: the org row survives as a
