@@ -1,0 +1,18 @@
+# IRIS daily retention (issue #349, deploy/retention.sh): purges orgs past their
+# 30-day grace period, runs after 90 days, expired sessions and tokens, records after
+# 7 years, and purged orgs' AI ledger and cache rows, in the iris and worker containers.
+# Installed by the operator: docs/runbook-production.md, "Retention and offboarding".
+#
+# Runs as root (it drives docker), so the script is a reviewed copy in /usr/local/sbin
+# and its settings live in /etc/iris, outside the deploy user's tree.
+[Unit]
+Description=IRIS daily retention
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/iris-retention
+# Optional settings (RETENTION_COMPOSE_PROJECT, RETENTION_SERVICES): root:root 0600.
+EnvironmentFile=-/etc/iris/retention.env
+TimeoutStartSec=30min
+PrivateTmp=yes

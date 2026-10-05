@@ -1,0 +1,13 @@
+# Daily run of iris-retention.service (issue #349), after the backup (03:15 UTC), so a
+# purge never happens before that day's backup. Persistent: a run missed while the box
+# was down happens at the next boot.
+[Unit]
+Description=Daily IRIS retention
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

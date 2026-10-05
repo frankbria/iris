@@ -1,6 +1,6 @@
 ---
 title: Privacy Policy
-version: 2026-10-02
+version: 2026-10-04
 draft: true
 ---
 
@@ -52,7 +52,9 @@ We use service providers (subprocessors) to host the service, send email and, wh
 - AI vision results we cache to avoid repeat charges are kept for 30 days.
 - Service logs are rotated by size and overwritten as new logs are written.
 - Backups are encrypted. Daily backups older than 14 days are deleted, but the 7 most recent are always kept. [Retention of off-site backup copies.] Data deleted from the service remains in backups until they are deleted.
-- Accounts, organizations, run history, usage records and terms acceptances are kept while your account or organization exists. [Retention after account deletion or organization closure, and how to request deletion, to be set out here.]
+- Run history and results are kept for 90 days after the run finishes. Expired sessions and sign-in links are deleted daily.
+- Accounts and organizations are kept until you ask us to delete them at [privacy contact email]. A deleted organization is disabled at once and can be restored for 30 days; then its members, keys, runs and results are deleted. Its usage and billing records are kept for 7 years, no longer linked to its name or members, and then deleted.
+- When an account is deleted, the record of which terms it accepted, when and from which IP address is kept for 7 years under a one-way hash instead of the account, then deleted.
 
 ## 8. How we protect it
 
