@@ -95,12 +95,14 @@ const DISMISSIBLE_STATE = ({
     const byId = document.getElementById(id);
     same = !!byId && isVisible(byId);
   } else if (cls) {
-    same = all.some(
+    // Exact class list, so a sibling sharing its first class is not taken for it. No match
+    // (the re-render changed its classes) is unknown, not dismissed: the count decides.
+    const match = all.find(
       (el) =>
         el.tagName === tag &&
-        (Element.prototype.getAttribute.call(el, 'class') ?? '').trim() === cls &&
-        isVisible(el),
+        (Element.prototype.getAttribute.call(el, 'class') ?? '').trim() === cls,
     );
+    same = match ? isVisible(match) : null;
   }
   return {
     marked: marked ? isVisible(marked) : null,
