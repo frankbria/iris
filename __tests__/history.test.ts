@@ -81,6 +81,7 @@ const a11yRun: AccessibilityTestResult = {
     passed: false,
     violationsBySeverity: { critical: 1, serious: 1, moderate: 1, minor: 0 },
     pagesTested: 1,
+    pagesErrored: 0,
     keyboardTestsPassed: 0,
     keyboardTestsFailed: 1,
   },
@@ -249,6 +250,31 @@ describe('run history persistence (issue #77)', () => {
       } finally {
         db.close();
       }
+    });
+
+    // #287: a page the runner could not scan has no violations, which is not a pass.
+    it('records a page that could not be scanned as failed, with its reason', async () => {
+      const errored = {
+        ...a11yRun,
+        results: [
+          {
+            page: '/down',
+            error: 'net::ERR_CONNECTION_REFUSED',
+            axeResult: { ...a11yRun.results[0].axeResult, violations: [] },
+          },
+        ],
+      } as typeof a11yRun;
+      recordA11yRun(errored, new Date(), new Date());
+
+      const db = initializeDatabase(dbPath);
+      try {
+        expect(getA11yTestResults(db)[0].status).toBe('failed');
+      } finally {
+        db.close();
+      }
+      const store = sqliteHistoryStore(dbPath);
+      const [run] = await store.list();
+      expect((await store.get(run.id))!.results[0].passed).toBe(false);
     });
 
     it('scores each page on its own violations, not the run-wide score', () => {

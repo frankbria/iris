@@ -157,8 +157,10 @@ function resultsOf(run: RunInput): StoredRunResult[] {
         const counts = violationCounts(page);
         return {
           url: page.page,
-          passed: page.axeResult.violations.length === 0,
+          // A page that could not be scanned found nothing: not a pass (#287).
+          passed: page.error === undefined && page.axeResult.violations.length === 0,
           result: {
+            ...(page.error !== undefined && { error: boundedError(page.error) }),
             violations: counts,
             // Absent sub-tests mean "not run", which is not a failure to record.
             keyboardPassed: page.keyboardResult?.passed ?? true,
@@ -710,7 +712,7 @@ export function recordSqliteRun(db: Database.Database, run: RunInput): number {
         screenReaderPassed: result.screenReaderPassed as boolean,
         // Scored per page against its own violations.
         score: result.score as number,
-        status: page.axeResult.violations.length > 0 ? 'failed' : 'passed',
+        status: stored[i].passed ? 'passed' : 'failed',
         timestamp: run.finishedAt,
       });
     }

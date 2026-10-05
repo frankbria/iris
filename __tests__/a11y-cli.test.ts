@@ -246,6 +246,38 @@ describe('a11y CLI command', () => {
   });
 
   describe('exit codes', () => {
+    // #287: a page the runner could not scan is reported, not counted as clean; the run
+    // exits 3 as it did when that page's error ended the run.
+    it('lists pages that could not be scanned and exits 3', async () => {
+      jest.doMock('../src/a11y/a11y-runner', () => ({
+        AccessibilityRunner: jest.fn().mockImplementation(() => ({
+          run: jest.fn().mockResolvedValue({
+            ...passingResult,
+            summary: { ...passingResult.summary, passed: false, pagesErrored: 1 },
+            results: [
+              { page: '/ok', axeResult: { violations: [] } },
+              {
+                page: '/down',
+                error: 'net::ERR_CONNECTION_REFUSED',
+                axeResult: { violations: [] },
+              },
+            ],
+          }),
+        })),
+      }));
+
+      jest.resetModules();
+      const { runCli } = await import('../src/cli');
+      await expect(runCli(['node', 'iris', 'a11y', '--pages', '/ok,/down'])).rejects.toThrow(
+        'process.exit called',
+      );
+
+      expect(processExitSpy).toHaveBeenCalledWith(3);
+      const out = consoleLogSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(out).toMatch(/1 page\(s\) could not be scanned/);
+      expect(out).toMatch(/\/down: net::ERR_CONNECTION_REFUSED/);
+    });
+
     it('does not call process.exit when all tests pass (exit 0)', async () => {
       jest.doMock('../src/a11y/a11y-runner', () => ({
         AccessibilityRunner: jest.fn().mockImplementation(() => ({

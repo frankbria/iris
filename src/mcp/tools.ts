@@ -140,6 +140,15 @@ export function registerTools(server: McpServer): void {
         return toolError(`Accessibility scan failed for ${url}: ${describeError(error)}`);
       }
 
+      // The runner reports a page it could not scan instead of throwing (#287): that is a
+      // failed scan, never "no violations".
+      const pageError = result.results[0]?.error;
+      if (pageError !== undefined) {
+        return toolError(
+          `Accessibility scan failed for ${url}: ${describeError(new Error(pageError))}`,
+        );
+      }
+
       const axeResult = result.results[0]?.axeResult;
       if (!axeResult) {
         return toolError(`Accessibility scan returned no result for ${url}.`);

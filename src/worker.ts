@@ -49,7 +49,7 @@ export function axeTagsFor(level: A11yJobParams['wcagLevel']): string[] {
 /** Runs one job's scan. The defaults are `iris a11y`'s: axe plus keyboard tests, no report file. */
 async function runA11y(params: A11yJobParams) {
   const { AccessibilityRunner } = await import('./a11y/a11y-runner');
-  return new AccessibilityRunner({
+  const result = await new AccessibilityRunner({
     pages: params.urls,
     axe: {
       rules: {},
@@ -77,6 +77,12 @@ async function runA11y(params: A11yJobParams) {
     failOnHttpError: true,
     // No `output`: the result is stored, not written to the worker's disk.
   }).run();
+  // The runner keeps going past a page that fails (#287); a hosted job still fails as a
+  // whole, with that page's error and no results or usage (the egress proxy's 403 page
+  // must never be stored or billed as a scan).
+  const failed = result.results.find((r) => r.error !== undefined);
+  if (failed) throw new Error(failed.error);
+  return result;
 }
 
 /**

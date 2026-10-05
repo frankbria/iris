@@ -1383,6 +1383,18 @@ program
       console.log(`   Total violations: ${result.summary.totalViolations}`);
       console.log(`   Accessibility score: ${result.summary.score}/100`);
 
+      // Pages that could not be scanned (#287): reported, and the run exits 3 as it did
+      // when one of them ended the run, since nothing was measured there.
+      const errored = result.results.filter((r) => r.error !== undefined);
+      if (errored.length > 0) {
+        console.log(`\n⚠️  ${errored.length} page(s) could not be scanned:`);
+        for (const r of errored) console.log(`   ${r.page}: ${r.error}`);
+        if (options.format === 'html' && result.reportPath) {
+          console.log(`\n📋 Report generated: ${result.reportPath}`);
+        }
+        process.exit(3); // Environment/runtime error
+      }
+
       if (!result.summary.passed) {
         console.log(`\n❌ Accessibility violations found!`);
         console.log(`   Critical: ${result.summary.violationsBySeverity.critical || 0}`);

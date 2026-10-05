@@ -348,6 +348,7 @@ describe('a11y reports', () => {
     passed: false,
     violationsBySeverity: { critical: 1, serious: 0, moderate: 0, minor: 0 },
     pagesTested: 1,
+    pagesErrored: 0,
     keyboardTestsPassed: 0,
     keyboardTestsFailed: 0,
   };
