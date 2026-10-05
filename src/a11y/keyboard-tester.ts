@@ -215,8 +215,8 @@ export class KeyboardTester {
           focusable: true,
           visible: isVisible,
           tagName: el.tagName,
-          role: el.getAttribute('role') || undefined,
-          ariaLabel: el.getAttribute('aria-label') || undefined,
+          role: attr('role') || undefined,
+          ariaLabel: attr('aria-label') || undefined,
         };
       });
     });
@@ -286,13 +286,17 @@ export class KeyboardTester {
           );
         };
         const describe = (el: Element | undefined) =>
-          el ? el.tagName + (el.id ? `#${el.id}` : '') : '';
+          el
+            ? el.tagName +
+              ((id) => (id ? `#${id}` : ''))(Element.prototype.getAttribute.call(el, 'id'))
+            : '';
 
         return Array.from(document.querySelectorAll(containers))
           .filter(isVisible)
           .map((container, index) => {
-            container.setAttribute('data-iris-trap', String(index));
-            const inside = container.querySelectorAll(focusable);
+            // Through Element.prototype: a <form>'s named controls shadow its methods (#285).
+            Element.prototype.setAttribute.call(container, 'data-iris-trap', String(index));
+            const inside = Element.prototype.querySelectorAll.call(container, focusable);
             return {
               index,
               container: describe(container),
@@ -315,7 +319,9 @@ export class KeyboardTester {
         await page.evaluate(
           ({ index, focusable }) => {
             const container = document.querySelector(`[data-iris-trap="${index}"]`);
-            const inside = container?.querySelectorAll(focusable);
+            const inside = container
+              ? Element.prototype.querySelectorAll.call(container, focusable)
+              : undefined;
             (inside?.[inside.length - 1] as HTMLElement | undefined)?.focus();
           },
           { index: candidate.index, focusable: FOCUSABLE },
@@ -325,7 +331,9 @@ export class KeyboardTester {
         const trapped = await page.evaluate((index) => {
           const container = document.querySelector(`[data-iris-trap="${index}"]`);
           return (
-            !!container && !!document.activeElement && container.contains(document.activeElement)
+            !!container &&
+            !!document.activeElement &&
+            Node.prototype.contains.call(container, document.activeElement)
           );
         }, candidate.index);
 
@@ -357,7 +365,7 @@ export class KeyboardTester {
         await page.evaluate(() =>
           document
             .querySelectorAll('[data-iris-trap]')
-            .forEach((el) => el.removeAttribute('data-iris-trap')),
+            .forEach((el) => Element.prototype.removeAttribute.call(el, 'data-iris-trap')),
         );
       } catch {
         // Cleanup only: a page that navigated away took the markers with it.
@@ -394,7 +402,7 @@ export class KeyboardTester {
         return {
           selector: `[data-iris-kbd-${nonce}="arrow-${i}"]`,
           label: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
-          role: el.getAttribute('role'),
+          role: attr('role'),
         };
       });
     }, nonce);
@@ -421,9 +429,15 @@ export class KeyboardTester {
             if (!container) return;
 
             const active = document.activeElement;
-            if (active && active !== document.body && container.contains(active)) return;
+            if (
+              active &&
+              active !== document.body &&
+              Node.prototype.contains.call(container, active)
+            )
+              return;
 
-            const candidate = container.querySelector(
+            const candidate = Element.prototype.querySelector.call(
+              container,
               '[tabindex]:not([tabindex="-1"]), [tabindex="-1"], a[href], button:not([disabled]),' +
                 ' input:not([disabled]), [role="menuitem"], [role="option"], [role="tab"], [role="treeitem"]',
             );
@@ -525,6 +539,9 @@ export class KeyboardTester {
 
         try {
           const before = await page.evaluate(DISMISSIBLE_STATE, element.selector);
+          // Already dismissed by an earlier candidate's Escape (a .modal wrapper and its
+          // inner [role=dialog], stacked modals closed by one handler): nothing to test.
+          if (before.marked !== true) continue;
           await page.keyboard.press('Escape');
           const after = await page.evaluate(DISMISSIBLE_STATE, element.selector);
 

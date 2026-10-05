@@ -383,6 +383,44 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(await page.locator('[role=menu][data-iris-kbd="mine"]').count()).toBe(1);
     });
 
+    // One Escape closes a .modal wrapper and its inner [role=dialog] together: the inner
+    // candidate is gone before its own turn, which is not a failure.
+    it('does not fail a dialog that an earlier Escape already closed', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div class="modal" id="wrap"><div role="dialog" aria-modal="true"><button>Ok</button></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') document.getElementById('wrap')?.remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'nested',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => i.success)).toEqual([true]);
+      expect(result.passed).toBe(true);
+    });
+
+    it('does not abort on clobbered menus or trap containers, and cleans up', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <form role="menu"><input name="getAttribute"><input name="querySelector"><input name="contains"></form>
+        <form role="dialog" aria-modal="true">
+          <input name="removeAttribute"><input name="querySelectorAll"><button>Ok</button>
+        </form></body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testArrowKeyNavigation: true,
+        testTrapDetection: true,
+      }).run(page, 'clobbered');
+      expect(result.interactions.filter((i) => i.key === 'ArrowDown')).toHaveLength(1);
+      expect(await page.locator('[data-iris-trap]').count()).toBe(0);
+    });
+
     it('does not crash on an SVG link', async () => {
       await load(
         page,
