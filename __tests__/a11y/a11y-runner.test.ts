@@ -175,8 +175,29 @@ describe('AccessibilityRunner', () => {
     it('should close browser even if tests fail', async () => {
       mockAxeRunner.run.mockRejectedValueOnce(new Error('Test failed'));
 
-      await expect(accessibilityRunner.run()).rejects.toThrow();
+      // A page that throws is that page's errored result now, not the run's end (#287).
+      const result = await accessibilityRunner.run();
+      expect(result.results[0].error).toBe('Test failed');
+      expect(result.summary.passed).toBe(false);
 
+      expect(mockBrowser.close).toHaveBeenCalled();
+    });
+
+    // Codex: an empty reason was falsy, so the reports rendered the page as a pass.
+    it('never records an empty reason for a page that failed', async () => {
+      mockAxeRunner.run.mockRejectedValueOnce(new Error(''));
+      const result = await accessibilityRunner.run();
+      expect(result.results[0].error).toBe('Unknown error');
+      expect(result.summary).toMatchObject({ passed: false, pagesErrored: 1 });
+    });
+
+    it('should still close the browser when the run itself throws', async () => {
+      // The report write is outside the per-page isolation: a failure there still throws.
+      accessibilityRunner = new AccessibilityRunner({
+        ...defaultConfig,
+        output: { format: 'yaml' as never },
+      });
+      await expect(accessibilityRunner.run()).rejects.toThrow(/not yet implemented/);
       expect(mockBrowser.close).toHaveBeenCalled();
     });
 
@@ -773,7 +794,7 @@ describe('AccessibilityRunner', () => {
       await accessibilityRunner.run();
 
       // Root count must equal emitted testcases (2), never < failures.
-      expect(written).toContain('<testsuites name="iris-a11y" tests="2" failures="2">');
+      expect(written).toContain('<testsuites name="iris-a11y" tests="2" failures="2" errors="0">');
 
       fs.writeFileSync.mockRestore();
     });

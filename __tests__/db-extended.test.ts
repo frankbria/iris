@@ -102,8 +102,8 @@ describe('Database Extended Module - Visual and A11y Tests', () => {
         .prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1')
         .get();
       expect(versionRow).toBeDefined();
-      // 2: visual_test_results.error (#284).
-      expect(versionRow.version).toBe(2);
+      // 2: visual_test_results.error (#284); 3: a11y_test_results.error (#287).
+      expect(versionRow.version).toBe(3);
     });
 
     test('indexes are created for performance', () => {

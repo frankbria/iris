@@ -18,7 +18,7 @@ import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
 import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
-import { escapeHtml, escapeXml, safeHref } from '../report-encoding';
+import { escapeHtml, escapeXml, safeHref, stripUserinfo } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 
 export interface AccessibilityRunnerConfig {
@@ -74,12 +74,24 @@ export interface AccessibilityRunnerConfig {
    * scanned, recorded and billed as a success).
    */
   failOnHttpError?: boolean;
+  /**
+   * Stop at the first page that fails instead of scanning the rest (#287). The hosted
+   * worker sets it: its job fails as a whole anyway, so the other pages would be browser
+   * time spent on results that are thrown away.
+   */
+  failFast?: boolean;
 }
 
 export interface AccessibilityTestResult {
   summary: {
     totalViolations: number;
-    score: number; // 0-100 accessibility score
+    /** 0-100 over the pages that were scanned; null when none could be (#287). */
+    score: number | null;
+    /**
+     * Whether the pages that WERE scanned meet the failure threshold (#287). `passed` is
+     * false when any page errored too; this tells a violation from an unscanned page.
+     */
+    scannedPassed: boolean;
     passed: boolean;
     violationsBySeverity: {
       critical: number;
@@ -88,6 +100,8 @@ export interface AccessibilityTestResult {
       minor: number;
     };
     pagesTested: number;
+    /** Pages that could not be scanned (navigation, timeout): failures, not passes (#287). */
+    pagesErrored: number;
     keyboardTestsPassed: number;
     keyboardTestsFailed: number;
   };
@@ -96,6 +110,8 @@ export interface AccessibilityTestResult {
     axeResult: A11yResult;
     keyboardResult?: KeyboardTestResult;
     screenReaderResult?: ScreenReaderTestResult;
+    /** Why this page could not be scanned; its axe result is then empty (#287). */
+    error?: string;
   }>;
   reportPath?: string;
   duration: number;
@@ -104,6 +120,31 @@ export interface AccessibilityTestResult {
 /**
  * AccessibilityRunner orchestrates comprehensive accessibility testing
  */
+/** A page that could not be scanned: its reason, and an empty axe result (#287). */
+function erroredPage(page: string, error: unknown): AccessibilityTestResult['results'][0] {
+  const empty = { total: 0, violations: 0, passes: 0, incomplete: 0, inapplicable: 0 };
+  return {
+    page,
+    // Stripped here, once: the CLI prints it and every report and store carries it.
+    // Never empty: an empty reason must not read as no error anywhere it is shown.
+    error:
+      stripUserinfo(error instanceof Error ? error.message : String(error ?? '')) ||
+      'Unknown error',
+    axeResult: {
+      testName: page,
+      url: page,
+      timestamp: new Date(),
+      passed: false,
+      violations: [],
+      passes: [],
+      incomplete: [],
+      inapplicable: [],
+      summary: empty,
+      testRunner: { name: 'axe-core', version: '' },
+    },
+  };
+}
+
 /**
  * Weighted accessibility score (0-100) for a set of violation counts.
  *
@@ -162,8 +203,14 @@ export class AccessibilityRunner {
 
       // Test each page
       for (const pagePattern of this.config.pages) {
-        const result = await this.testPage(pagePattern);
+        // One page that fails (navigation, timeout, a check that throws on hostile markup)
+        // is that page's errored result; the others still run (#287). Hosted jobs, which
+        // fail as a whole, turn it back into a throw in the worker.
+        const result = await this.testPage(pagePattern).catch((error: unknown) =>
+          erroredPage(pagePattern, error),
+        );
         results.push(result);
+        if (result.error !== undefined && this.config.failFast) break;
 
         // Aggregate severity counts
         const severityCounts = this.axeRunner.getSeverityCounts(result.axeResult);
@@ -178,8 +225,15 @@ export class AccessibilityRunner {
         (sum, count) => sum + count,
         0,
       );
-      const score = this.calculateAccessibilityScore(violationsBySeverity, results.length);
-      const passed = this.checkOverallPass(results);
+      // Over scanned pages only: an unscanned page has no violations, and counting it would
+      // raise the score (one failing page and one unreachable one scored 88, not 75).
+      const scanned = results.filter((r) => r.error === undefined);
+      const score =
+        scanned.length > 0
+          ? this.calculateAccessibilityScore(violationsBySeverity, scanned.length)
+          : null;
+      const scannedPassed = this.checkOverallPass(scanned);
+      const passed = scannedPassed && scanned.length === results.length;
 
       // Count keyboard test results
       const keyboardResults = results.filter((r) => r.keyboardResult);
@@ -190,8 +244,10 @@ export class AccessibilityRunner {
         totalViolations,
         score,
         passed,
+        scannedPassed,
         violationsBySeverity,
         pagesTested: results.length,
+        pagesErrored: results.filter((r) => r.error !== undefined).length,
         keyboardTestsPassed,
         keyboardTestsFailed,
       };
@@ -522,6 +578,9 @@ export class AccessibilityRunner {
    */
   private checkOverallPass(results: AccessibilityTestResult['results']): boolean {
     for (const result of results) {
+      // A page that could not be scanned is not a pass (#287).
+      if (result.error !== undefined) return false;
+
       // Check axe results against threshold
       if (!this.axeRunner.checkThreshold(result.axeResult, this.config.failureThreshold)) {
         return false;
@@ -563,6 +622,9 @@ export class AccessibilityRunner {
     }
 
     const fs = await import('fs');
+    const path = await import('path');
+    // After a long scan, a missing directory must not lose the results (#287).
+    fs.mkdirSync(path.dirname(path.resolve(outputPath)), { recursive: true });
     fs.writeFileSync(outputPath, report);
     return outputPath;
   }
@@ -590,10 +652,13 @@ export class AccessibilityRunner {
         </div>`,
           )
           .join('');
+        // A page that could not be scanned found nothing, which is not "no violations".
         const body =
-          r.axeResult.violations.length === 0
-            ? '<p class="ok">No violations found.</p>'
-            : violations;
+          r.error !== undefined
+            ? `<p class="error">Could not be scanned: ${esc(r.error)}</p>`
+            : r.axeResult.violations.length === 0
+              ? '<p class="ok">No violations found.</p>'
+              : violations;
         return `
       <section class="page">
         <h3>${esc(r.page)} <small>${esc(r.axeResult.url)}</small></h3>
@@ -619,13 +684,14 @@ export class AccessibilityRunner {
     .violation.minor { border-color: #0366d6; }
     .impact { font-size: 0.75rem; text-transform: uppercase; background: #eee; padding: 2px 6px; border-radius: 4px; }
     .ok { color: #22863a; }
+    .error { color: #991b1b; }
     code { background: #f0f0f0; padding: 2px 4px; border-radius: 4px; }
   </style>
 </head>
 <body>
   <h1>Accessibility Report</h1>
   <div class="summary">
-    <div><strong>${summary.score}/100</strong><br>Score</div>
+    <div><strong>${summary.score === null ? '—' : `${summary.score}/100`}</strong><br>Score</div>
     <div><strong>${summary.passed ? 'PASS' : 'FAIL'}</strong><br>Result</div>
     <div><strong>${summary.totalViolations}</strong><br>Violations</div>
     <div><strong>${summary.pagesTested}</strong><br>Pages</div>
@@ -652,6 +718,14 @@ export class AccessibilityRunner {
     const suites = results
       .map((r) => {
         const violations = r.axeResult.violations;
+        if (r.error !== undefined) {
+          // JUnit's <error>: the test could not run, which a CI reader must not read as a pass.
+          return `  <testsuite name="${esc(r.page)}" tests="1" failures="0" errors="1">
+    <testcase name="${esc(r.page)} accessibility" classname="a11y">
+      <error message="${esc(r.error)}" type="PageError"/>
+    </testcase>
+  </testsuite>`;
+        }
         const cases =
           violations.length === 0
             ? `    <testcase name="${esc(r.page)} accessibility" classname="a11y"/>`
@@ -675,7 +749,7 @@ ${cases}
       .join('\n');
 
     return `<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="iris-a11y" tests="${totalTests}" failures="${summary.totalViolations}">
+<testsuites name="iris-a11y" tests="${totalTests}" failures="${summary.totalViolations}" errors="${summary.pagesErrored}">
 ${suites}
 </testsuites>`;
   }

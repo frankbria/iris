@@ -75,3 +75,7 @@ export function safeHref(url: string): string | null {
     return null;
   }
 }
+
+/** Every `scheme://user:password@` in free text, without the userinfo (#254, #287). */
+export const stripUserinfo = (text: string): string =>
+  text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');

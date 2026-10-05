@@ -166,7 +166,7 @@ code is the ordering key.
 | `P1.5` | [#284](https://github.com/frankbria/iris/issues/284) | Visual report and runner: broken image links, dropped errors, mangled URLs | P0.28 (#343) | DONE (#488) |
 | `P1.6` | [#285](https://github.com/frankbria/iris/issues/285) | Keyboard tester: invalid selectors and crash on SVG links | — | DONE |
 | `P1.7` | [#286](https://github.com/frankbria/iris/issues/286) | Keyboard tester verdicts: focus order, roving tabindex, Escape | P1.6 (#285) | TODO |
-| `P1.8` | [#287](https://github.com/frankbria/iris/issues/287) | a11y runner: per-page error isolation and report directory creation | — | TODO |
+| `P1.8` | [#287](https://github.com/frankbria/iris/issues/287) | a11y runner: per-page error isolation and report directory creation | — | DONE |
 | `P1.9` | [#288](https://github.com/frankbria/iris/issues/288) | a11y reports, JUnit and history agree with the CLI verdict | P1.8 (#287) | TODO |
 | `P1.10` | [#289](https://github.com/frankbria/iris/issues/289) | a11y CLI flags: validate --fail-on, allow disabling keyboard, fix --pages parsing | — | TODO |
 | `P1.11` | [#290](https://github.com/frankbria/iris/issues/290) | WCAG AA level must include WCAG 2.1/2.2 AA rules | — | TODO |
