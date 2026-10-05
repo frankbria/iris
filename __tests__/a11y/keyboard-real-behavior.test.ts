@@ -450,7 +450,9 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       await load(
         page,
         `<!doctype html><html lang="en"><head><title>t</title></head><body>
-        <div role="dialog" aria-modal="true" id="d"><button>Ok</button></div>
+        <div role="dialog" aria-modal="true" id="d">
+          <button style="display:none">Hidden</button><button>Ok</button>
+        </div>
         <script>document.getElementById('d').addEventListener('keydown', (e) => {
           if (e.key === 'Escape') e.currentTarget.remove();
         });</script></body></html>`,

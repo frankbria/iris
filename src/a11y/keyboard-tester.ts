@@ -727,16 +727,24 @@ export class KeyboardTester {
           await page.evaluate((selector) => {
             const dialog = document.querySelector(selector);
             if (!dialog) return;
-            const inside = Element.prototype.querySelector.call(
+            const inside = () =>
+              !!document.activeElement &&
+              Node.prototype.contains.call(dialog, document.activeElement);
+            if (inside()) return; // keep a control the page focused itself
+            // The first one that really takes focus: a hidden or inert one silently does not.
+            const candidates = Element.prototype.querySelectorAll.call(
               dialog,
               'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]),' +
                 ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
             );
-            const target = (inside ?? dialog) as HTMLElement;
-            if (!inside && !Element.prototype.hasAttribute.call(dialog, 'tabindex')) {
+            for (const candidate of Array.from(candidates)) {
+              HTMLElement.prototype.focus.call(candidate as HTMLElement);
+              if (inside()) return;
+            }
+            if (!Element.prototype.hasAttribute.call(dialog, 'tabindex')) {
               Element.prototype.setAttribute.call(dialog, 'tabindex', '-1');
             }
-            HTMLElement.prototype.focus.call(target);
+            HTMLElement.prototype.focus.call(dialog as HTMLElement);
           }, element.selector);
           await page.keyboard.press('Escape');
           const after = await page.evaluate(DISMISSIBLE_STATE, probe);
