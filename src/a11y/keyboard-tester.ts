@@ -261,19 +261,18 @@ export class KeyboardTester {
     const seen = new Set<string>();
     let lastPath = '';
     // Truncated means the press budget ran out before the walk finished: wraps and presses
-    // inside an opaque frame use presses without adding stops.
+    // inside an opaque frame or shadow root use presses without adding stops.
     let finished = false;
     for (let i = 0; i < MAX_TAB_STOPS; i++) {
       await page.keyboard.press('Tab');
       const stop = await page.evaluate(() => {
         // The element that really has focus: through shadow roots and same-origin iframes
         // (document.activeElement stays the host or the IFRAME while Tab moves inside).
-        // A cross-origin iframe is opaque: the IFRAME itself, marked so.
+        // A cross-origin iframe (or closed shadow root) is opaque: the host itself.
         const top = document.activeElement;
         if (!top || top === document.body || top === document.documentElement) return null;
         let el: Element = top;
         const path: string[] = [];
-        let opaque = false;
         // Within its own tree: an element in a shadow root has no parentElement at the top,
         // so its siblings are the root's children.
         const pathOf = (node: Element) => {
@@ -300,8 +299,7 @@ export class KeyboardTester {
               doc = null;
             }
             const active: Element | null | undefined = doc?.activeElement;
-            if (!doc) opaque = true;
-            else if (active && active !== doc.body && active !== doc.documentElement) {
+            if (doc && active && active !== doc.body && active !== doc.documentElement) {
               el = active;
               continue;
             }
@@ -344,7 +342,6 @@ export class KeyboardTester {
         const ariaLabel = attr('aria-label');
         return {
           path: path.join('|'),
-          opaque,
           tagName: el.tagName,
           ...(role && { role }),
           ...(ariaLabel && { ariaLabel }),
@@ -364,16 +361,17 @@ export class KeyboardTester {
         lastPath = '';
         continue;
       }
-      // Tab moving inside a cross-origin frame shows the same IFRAME each time: keep
-      // pressing until focus leaves it (bounded by the cap), it is not a cycle.
-      if (stop.opaque && stop.path === lastPath) continue;
+      // The same stop twice in a row is not a cycle (a cycle returns to an earlier stop):
+      // Tab is moving inside something the page cannot see into, a cross-origin frame or a
+      // closed shadow root. Keep pressing until focus moves on; the cap bounds the rest.
+      if (stop.path === lastPath) continue;
       if (seen.has(stop.path)) {
         finished = true;
         break;
       }
       seen.add(stop.path);
       lastPath = stop.path;
-      const { path: _path, opaque: _opaque, ...element } = stop;
+      const { path: _path, ...element } = stop;
       (wrapped ? after : before).push({ ...element, focusable: true });
     }
     const stops = [...after, ...before];
@@ -724,6 +722,22 @@ export class KeyboardTester {
           // changes an id-less dialog's markup before its turn is then not tested: proper
           // Escape semantics (topmost focused dialog) are #286, which has that fixture.
           if (!(before.marked ?? before.same ?? false)) continue;
+          // Escape goes to the focused element. After the reload nothing inside the dialog
+          // has focus, and a handler on the dialog itself never sees a key sent to <body>.
+          await page.evaluate((selector) => {
+            const dialog = document.querySelector(selector);
+            if (!dialog) return;
+            const inside = Element.prototype.querySelector.call(
+              dialog,
+              'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]),' +
+                ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            );
+            const target = (inside ?? dialog) as HTMLElement;
+            if (!inside && !Element.prototype.hasAttribute.call(dialog, 'tabindex')) {
+              Element.prototype.setAttribute.call(dialog, 'tabindex', '-1');
+            }
+            HTMLElement.prototype.focus.call(target);
+          }, element.selector);
           await page.keyboard.press('Escape');
           const after = await page.evaluate(DISMISSIBLE_STATE, probe);
 

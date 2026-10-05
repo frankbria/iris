@@ -267,7 +267,8 @@ plans/
   tabindex), so the walk blurs and, when focus wraps to the document part-way, puts the
   stops after the wrap first; it ends on a second wrap, a repeated stop, or 200 stops (an
   informational interaction says so). Stops are the deep active element (shadow roots,
-  same-origin iframes); a cross-origin iframe is pressed through. The Escape check reloads
+  same-origin iframes); the same stop twice in a row is pressed through (a cross-origin
+  frame or closed shadow root). The Escape check focuses inside each dialog before Escape. The Escape check reloads
   the page (`load`, failure tolerated) when the trap check pressed Escape, since that closed
   every Escape-dismissible dialog first. Escape identity after a re-render is #491
 - **The a11y runner isolates pages (#287).** A page that fails (navigation, timeout, a check

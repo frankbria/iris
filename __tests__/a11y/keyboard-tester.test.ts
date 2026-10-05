@@ -242,6 +242,7 @@ describe('KeyboardTester', () => {
         .mockResolvedValueOnce([{ selector: 'DIV.modal', visible: true }] as never)
         // State before and after Escape (#285): the marked modal was visible, then hidden.
         .mockResolvedValueOnce({ marked: true, visibleCount: 1 } as never)
+        .mockResolvedValueOnce(undefined as never) // focus inside the dialog (#286)
         .mockResolvedValueOnce({ marked: false, visibleCount: 0 } as never);
 
       const result = await keyboardTester.run(mockPage, 'escape-test');

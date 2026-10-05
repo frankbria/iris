@@ -403,6 +403,14 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.focusOrder.map((f) => f.element)).toEqual(['INPUT', 'BUTTON#b']);
     });
 
+    it('presses through a closed shadow root and goes on past it', async () => {
+      const result = await walk(`<div id="host"></div><a href="#after" id="after">after</a>
+        <script>const r = document.getElementById('host').attachShadow({ mode: 'closed' });
+          r.innerHTML = '<button>S1</button><button>S2</button>';</script>`);
+      // The page cannot see inside: the host once, then what follows it.
+      expect(result.focusOrder.map((f) => f.element)).toEqual(['DIV#host', 'A#after']);
+    });
+
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
       const result = await walk(links);
@@ -434,6 +442,24 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
         testTrapDetection: true,
         testEscapeHandling: true,
       }).run(page, 'escape-after-trap');
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([expect.objectContaining({ target: 'DIV#d', success: true })]);
+    });
+
+    it('passes a dialog whose own Escape handler needs focus inside it', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" aria-modal="true" id="d"><button>Ok</button></div>
+        <script>document.getElementById('d').addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') e.currentTarget.remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'dialog-handler');
       const escape = result.interactions.filter((i) => i.key === 'Escape');
       expect(escape).toEqual([expect.objectContaining({ target: 'DIV#d', success: true })]);
     });
