@@ -1,6 +1,6 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import { createServer, IncomingMessage, STATUS_CODES } from 'http';
-import { handleJobsRequest, type RunReader } from './jobs-api';
+import { handleJobsRequest, type ApiJobs, type RunReader } from './jobs-api';
 import type { ArtifactStore } from './artifact-store';
 import { randomUUID, timingSafeEqual } from 'crypto';
 import { z } from 'zod';
@@ -13,7 +13,7 @@ import {
 } from './executor';
 import { chromiumIsInstalled } from './browser';
 import { Page } from 'playwright';
-import type { HistoryStore, OrgJobs, TenantScope } from './history-store';
+import type { HistoryStore, TenantScope } from './history-store';
 import type { AICredentials } from './ai-client/credentials';
 import type { UsageEvent } from './billing/usage';
 import type { SettledAICall } from './ai-client/factory';
@@ -414,7 +414,7 @@ export function startServer(
      * /v1/a11y/jobs`, `GET /v1/jobs/:id`. Needs `authenticate`; it shares the key and
      * org request budgets with the RPC messages. Unset, plain HTTP gets 426 as before.
      */
-    jobs?: { forOrg(scope: TenantScope): OrgJobs };
+    jobs?: { forOrg(scope: TenantScope): ApiJobs };
     /** The results API (#269), `GET /v1/runs[/:id]`, served beside the job API. */
     runs?: RunReader;
     /** Signs run-detail artifacts (#460); unset, run detail carries none. */

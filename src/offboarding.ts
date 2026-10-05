@@ -78,6 +78,8 @@ export function offboarding(db: Kysely<unknown>) {
     await sql`delete from apikey where "referenceId" = ${orgId}`.execute(tx);
     await sql`delete from org_plans where org_id = ${orgId}`.execute(tx);
     await sql`delete from audit_log where org_id = ${orgId}`.execute(tx);
+    // Rows only: the images in object storage are #472's.
+    await sql`delete from visual_baselines where org_id = ${orgId}`.execute(tx);
     await sql`delete from member where "organizationId" = ${orgId}`.execute(tx);
     await sql`delete from invitation where "organizationId" = ${orgId}`.execute(tx);
     await sql`update session set "activeOrganizationId" = null

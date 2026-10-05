@@ -133,6 +133,14 @@ export interface VisualTestResult {
     screenshotPath: string;
     baselinePath?: string;
     diffPath?: string;
+    /** Hosted visual jobs (#268): the project whose baseline this compared against. */
+    project?: string;
+    /** Hosted: no baseline existed, so this screenshot became it. */
+    newBaseline?: boolean;
+    /** Why the comparison could not be made (e.g. the page's height changed). */
+    error?: string;
+    /** Hosted: object keys of this comparison's images (signed in run detail, #460). */
+    artifacts?: { current?: string; diff?: string; baseline?: string };
   }>;
   reportPath?: string;
   duration: number;

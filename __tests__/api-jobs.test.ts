@@ -1,7 +1,8 @@
 import { AddressInfo } from 'net';
 import WebSocket from 'ws';
 import { startServer, Authenticator, Principal } from '../src/protocol';
-import type { OrgJobs, StoredJob, TenantScope } from '../src/history-store';
+import type { StoredJob, TenantScope } from '../src/history-store';
+import type { ApiJobs } from '../src/jobs-api';
 
 /**
  * The job REST API (#267) over real sockets: authentication, validation, limits,
@@ -31,7 +32,7 @@ const authenticate: Authenticator = {
 
 let stored: Map<string, StoredJob & { orgId: string; params: unknown; keyId?: string }>;
 const jobs = {
-  forOrg({ orgId, apiKeyId }: TenantScope): OrgJobs {
+  forOrg({ orgId, apiKeyId }: TenantScope): ApiJobs {
     return {
       async enqueue({ kind, params }, { maxOutstanding = Infinity } = {}) {
         const outstanding = [...stored.values()].filter(

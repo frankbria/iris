@@ -1,5 +1,6 @@
 import * as fs from 'fs';
-import type { A11yJobParams, ClaimedJob, PostgresJobs } from './history-store';
+import type { ArtifactStore } from './artifact-store';
+import type { A11yJobParams, ClaimedJob, JobKind, PostgresJobs } from './history-store';
 import { errMessage, log } from './log';
 import { metrics } from './metrics';
 
@@ -24,7 +25,7 @@ export type WorkerJobs = Pick<
   PostgresJobs,
   'claim' | 'finish' | 'fail' | 'heartbeat' | 'reapStuck'
 > &
-  Partial<Pick<PostgresJobs, 'queueDepth'>>;
+  Partial<Pick<PostgresJobs, 'queueDepth' | 'baselines'>>;
 
 // Worker metrics (#275), served by `iris worker --metrics-port`. Outcome: `finished` (a
 // verdict was stored, pass or fail), `error` (the job could not run or be stored, and is
@@ -79,17 +80,60 @@ async function runA11y(params: A11yJobParams) {
 }
 
 /**
- * Claims and runs one job. While it runs, a timer (every `heartbeatMs`) tells the
+ * Claims and runs one a11y job; see `processNextJob`.
+ */
+export function processNextA11yJob(
+  jobs: WorkerJobs,
+  options: { heartbeatMs?: number } = {},
+): Promise<ClaimedJob | null> {
+  return processNextJob(jobs, 'a11y', (job) => runA11y(job.params as A11yJobParams), options);
+}
+
+/**
+ * Claims and runs one visual-diff job (#268). Its images go to `artifacts` (scoped to the
+ * job's org here); its baselines are the job's org's.
+ */
+export function processNextVisualJob(
+  jobs: WorkerJobs,
+  { artifacts, heartbeatMs }: { artifacts: ArtifactStore; heartbeatMs?: number },
+): Promise<ClaimedJob | null> {
+  if (!jobs.baselines) throw new Error("Visual jobs need the job store's baselines");
+  const baselines = jobs.baselines;
+  return processNextJob(
+    jobs,
+    'visual',
+    async (job) => {
+      if (job.kind !== 'visual') throw new Error(`Not a visual job: ${job.kind}`);
+      const [{ runVisualJob }, { orgArtifacts }] = await Promise.all([
+        import('./visual/hosted-job'),
+        import('./artifact-store'),
+      ]);
+      return runVisualJob(job.params, {
+        artifacts: orgArtifacts(artifacts, job.orgId),
+        baselines: baselines(job.orgId),
+        orgId: job.orgId,
+        runId: job.id,
+        attempt: job.claimToken,
+      });
+    },
+    { heartbeatMs },
+  );
+}
+
+/**
+ * Claims and runs one job of a kind. While it runs, a timer (every `heartbeatMs`) tells the
  * database the claim is alive; a job whose heartbeat stops is reaped (#435). A failed
  * heartbeat write is logged and never stops the job.
  * @returns the job, or `null` when the queue was empty
  * @throws only when the database cannot be written; a job that cannot run is recorded as failed
  */
-export async function processNextA11yJob(
+async function processNextJob(
   jobs: WorkerJobs,
+  kind: JobKind,
+  run: (job: ClaimedJob) => Promise<Parameters<WorkerJobs['finish']>[1]>,
   { heartbeatMs = 30_000 }: { heartbeatMs?: number } = {},
 ): Promise<ClaimedJob | null> {
-  const job = await jobs.claim('a11y');
+  const job = await jobs.claim(kind);
   if (!job) return null;
   const t0 = performance.now();
   const fields = { jobId: job.id, orgId: job.orgId, kind: job.kind, attempts: job.attempts };
@@ -141,7 +185,7 @@ export async function processNextA11yJob(
   try {
     let result;
     try {
-      result = await runA11y(job.params);
+      result = await run(job);
     } catch (err) {
       writing = true;
       const message = (err as Error).message || 'Job failed';
@@ -201,6 +245,8 @@ export async function runWorker(options: {
   staleMs?: number;
   /** Claims a job gets before a reap fails it instead of requeueing it. */
   maxAttempts?: number;
+  /** Where visual jobs' images go (#268); without it visual jobs are not claimed. */
+  artifacts?: ArtifactStore;
 }): Promise<void> {
   const {
     jobs,
@@ -210,7 +256,11 @@ export async function runWorker(options: {
     heartbeatMs = 30_000,
     staleMs = DEFAULT_STALE_MS,
     maxAttempts,
+    artifacts,
   } = options;
+  if (artifacts && !jobs.baselines)
+    throw new Error('Visual jobs (artifacts) need a job store with baselines');
+  let tick = 0;
   // A live job beats every heartbeatMs; the reaper must not mistake one late beat for death.
   if (heartbeatMs * 2 >= staleMs) {
     throw new Error(`heartbeatMs (${heartbeatMs}) must be under half of staleMs (${staleMs})`);
@@ -247,12 +297,21 @@ export async function runWorker(options: {
       }
       if (jobs.queueDepth) {
         try {
-          depth = await jobs.queueDepth('a11y');
+          depth =
+            (await jobs.queueDepth('a11y')) + (artifacts ? await jobs.queueDepth('visual') : 0);
         } catch (err) {
           log('error', 'worker queue depth query failed', { err: errMessage(err) });
         }
       }
-      ran = (await processNextA11yJob(jobs, { heartbeatMs })) !== null;
+      // One job per tick, the first kind alternating so neither starves the other; visual
+      // jobs only when there is somewhere to put their images (the API refuses them
+      // without a store, #268).
+      const kinds: Array<() => Promise<ClaimedJob | null>> = [
+        () => processNextA11yJob(jobs, { heartbeatMs }),
+        ...(artifacts ? [() => processNextVisualJob(jobs, { artifacts, heartbeatMs })] : []),
+      ];
+      if (tick++ % 2) kinds.reverse();
+      for (const next of kinds) if ((ran = (await next()) !== null)) break;
     } catch (err) {
       log('error', 'worker error', { err: errMessage(err) });
     } finally {

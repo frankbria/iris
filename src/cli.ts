@@ -810,7 +810,11 @@ program
     const { postgresJobs } = await import('./history-store');
     const { runWorker } = await import('./worker');
     let db: ReturnType<typeof createPostgresDb> | undefined;
+    let artifacts: import('./artifact-store').ArtifactStore | null = null;
     try {
+      // Visual jobs (#268) need somewhere to put images; without IRIS_S3_* the worker
+      // runs a11y jobs only (and the API refuses visual ones). Partial config: exit 3.
+      artifacts = (await import('./artifact-store')).resolveArtifactStore();
       db = createPostgresDb(resolveDatabaseUrl(), { queryTimeoutMs: 5_000 });
       // Like hosted connect: a worker that cannot reach its queue must not look started.
       await probeDatabase(db);
@@ -833,7 +837,7 @@ program
     };
     process.on('SIGINT', onSignal);
     process.on('SIGTERM', onSignal);
-    console.log('iris worker: waiting for jobs');
+    console.log(`iris worker: waiting for jobs (${artifacts ? 'a11y, visual' : 'a11y only'})`);
     try {
       await runWorker({
         jobs: postgresJobs(db),
@@ -841,6 +845,7 @@ program
         pollMs: options.pollMs,
         // Compose's liveness check reads its age (#273).
         heartbeatFile: process.env.IRIS_WORKER_HEARTBEAT_FILE || undefined,
+        artifacts: artifacts ?? undefined,
       });
     } finally {
       await db.destroy();

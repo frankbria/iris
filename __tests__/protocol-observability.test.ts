@@ -8,7 +8,7 @@ import * as translatorModule from '../src/translator';
 import { startServer, JsonRpcResponse, Principal, Authenticator } from '../src/protocol';
 import { serveMetrics } from '../src/metrics';
 import { hostedEgressProxy } from '../src/egress-proxy';
-import type { OrgJobs } from '../src/history-store';
+import type { ApiJobs } from '../src/jobs-api';
 
 /**
  * Request logs and metrics of the hosted server (#275), over real sockets.
@@ -36,7 +36,7 @@ const authenticate: Authenticator = {
   },
 };
 const jobs = {
-  forOrg: (): OrgJobs => ({
+  forOrg: (): ApiJobs => ({
     enqueue: async () => '00000000-0000-4000-8000-000000000001',
     get: async () => null,
   }),

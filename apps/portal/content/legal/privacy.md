@@ -1,6 +1,6 @@
 ---
 title: Privacy Policy
-version: 2026-10-04
+version: 2026-10-05
 draft: true
 ---
 
@@ -16,7 +16,7 @@ IRIS is provided by [company name, registered address] ("we", "us"). For the per
 - **Organization data**: the organizations you create or join, your role in each, and invitations, including the invited email address and who sent it.
 - **API key metadata**: the name, the first characters and a one-way hash of each API key, the organization it belongs to and when it was last used. We do not keep the key itself after showing it to you once.
 - **AI provider keys**: if your organization adds its own OpenAI or Anthropic key, we store it encrypted and use it only to make AI requests for your organization.
-- **Test inputs and page content**: the URLs you ask IRIS to test, your plain-language instructions, and the pages IRIS opens to do it. Page content and screenshots are processed in our browser while a test runs.
+- **Test inputs and page content**: the URLs you ask IRIS to test, your plain-language instructions, and the pages IRIS opens to do it. Page content and screenshots are processed in our browser while a test runs. For visual tests, the screenshots, the images showing what changed, and each project's approved baseline screenshots are stored.
 - **Results**: run history and test results, such as the pages tested, pass or fail, accessibility violation counts and a description of each browser action. We never store what a "fill" action typed.
 - **Usage and billing data**: what your organization used (browser minutes, AI calls, jobs) and its cost. [Billing contact and payment details once paid plans launch.]
 - **Logs and security data**: service logs with organization, API key and request identifiers and error messages; our web server's access logs, which include IP addresses; and the IP address recorded when you accept the Terms.
@@ -52,7 +52,7 @@ We use service providers (subprocessors) to host the service, send email and, wh
 - AI vision results we cache to avoid repeat charges are kept for 30 days.
 - Service logs are rotated by size and overwritten as new logs are written.
 - Backups are encrypted. Daily backups older than 14 days are deleted, but the 7 most recent are always kept. [Retention of off-site backup copies.] Data deleted from the service remains in backups until they are deleted.
-- Run history and results are kept for 90 days after the run finishes. Expired sessions and sign-in links are deleted daily.
+- Run history and results, including a visual test's screenshots, are kept for 90 days after the run finishes. A project's approved baseline screenshots are kept until they are replaced or the organization is deleted. Expired sessions and sign-in links are deleted daily.
 - Accounts and organizations are kept until you ask us to delete them at [privacy contact email]. A deleted organization is disabled at once and can be restored for 30 days; then its members, keys, runs and results are deleted. Its usage and billing records are kept for 7 years, no longer linked to its name or members, and then deleted.
 - When an account is deleted, the record of which terms it accepted, when and from which IP address is kept for 7 years under a one-way hash instead of the account, then deleted.
 
