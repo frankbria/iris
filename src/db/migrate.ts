@@ -8,6 +8,7 @@ import * as jobClaims from './migrations/0005_job_claims';
 import * as terms from './migrations/0006_terms_acceptances';
 import * as suspensions from './migrations/0007_org_suspensions';
 import * as runsFinished from './migrations/0008_runs_finished_idx';
+import * as orgPlans from './migrations/0009_org_plans';
 import { createPostgresDb, resolveDatabaseUrl } from './postgres';
 
 /**
@@ -24,6 +25,7 @@ export const MIGRATIONS = {
   '0006_terms_acceptances': terms,
   '0007_org_suspensions': suspensions,
   '0008_runs_finished_idx': runsFinished,
+  '0009_org_plans': orgPlans,
 };
 
 /**

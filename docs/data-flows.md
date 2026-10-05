@@ -96,6 +96,16 @@ is processed in Chromium's memory for the duration of the job.
 | Access | Operators; the org's own usage view (#271, pending). |
 | Retention | **Undecided (#349)**; it is a billing record, so the period also depends on tax and accounting rules. |
 
+### Org plans
+
+| | |
+|---|---|
+| Data | `org_plans`: org, plan id (`free`/`pro`/`team`), per-org overrides of plan limits, last update. No personal data. An org with no row is on free. |
+| Purpose | Entitlements (#260): which limits apply to the org; enforcement is #346. |
+| Where | Postgres, `0009`; `src/billing/plans.ts`. |
+| Access | Operators; Stripe webhooks will set it (#261). |
+| Retention | With the org (#349). |
+
 ### Terms acceptances
 
 | | |

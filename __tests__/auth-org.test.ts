@@ -115,6 +115,35 @@ const PASSWORD = 'correct-horse-battery-staple';
   r.deleteA = await attempt(() =>
     auth.api.deleteOrganization({ headers: alice, body: { organizationId: A } }));
 
+  // One free org per user (#260). Bob owns his free personal org, so a second is refused.
+  const newOrg = (headers, name) =>
+    auth.api.createOrganization({ headers, body: { name, slug: name + '-' + Date.now() } });
+  r.secondFreeOrg = await attempt(() => newOrg(bob, 'side'));
+  // Paid orgs are uncapped: once B is on pro, he may make another...
+  await pool.query("insert into org_plans (org_id, plan) values ($1, 'pro')", [B]);
+  r.secondOrgWhenPaid = await attempt(() => newOrg(bob, 'second'));
+  // ...which starts on free, so a third is refused again.
+  r.thirdOrg = await attempt(() => newOrg(bob, 'third'));
+  // Carol is a member of A, not its owner: only her own free org counts, and she has one.
+  r.memberOfAnother = await attempt(() => newOrg(carol, 'carols'));
+  // BetterAuth keeps several roles as one string: an owner who is also admin is an owner.
+  const frank = await user('frank');
+  await pool.query('update member set role = $2 where "organizationId" = $1', [await active(frank), 'admin,owner']);
+  r.commaRole = await attempt(() => newOrg(frank, 'franks'));
+  // A plan id the code does not know is free for entitlements, so it is free for the cap.
+  const hana = await user('hana');
+  await pool.query("insert into org_plans (org_id, plan) values ($1, 'legacy-gold')", [await active(hana)]);
+  r.unknownPlan = await attempt(() => newOrg(hana, 'hanas'));
+  // A user with no free org (hers is paid) may make one. Parallel creates all pass the
+  // before-check; the locked after-check keeps exactly one of them.
+  const grace = await user('grace');
+  const G = await active(grace);
+  await pool.query("insert into org_plans (org_id, plan) values ($1, 'pro')", [G]);
+  r.race = await Promise.all([1, 2, 3, 4].map((i) => attempt(() => newOrg(grace, 'race' + i))));
+  r.raceOrgs = await orgs(grace);
+  r.raceRows = (await pool.query("select count(*)::int as n from organization where name like 'race%'")).rows[0].n;
+  r.G = G;
+
   r.A = A;
   r.B = B;
   await pool.end();
@@ -190,6 +219,28 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect(r.carol.role).toBe('member');
     // Accepting switches the session to the org just joined.
     expect(r.carol.active).toBe(r.A);
+  });
+
+  it('allows one free org per user; a paid org lifts the cap for another (#260)', () => {
+    expect(r.secondFreeOrg).toBe('ORGANIZATION_LIMIT_REACHED');
+    expect(r.secondOrgWhenPaid).toBe('ok');
+    expect(r.thirdOrg).toBe('ORGANIZATION_LIMIT_REACHED');
+    expect(r.memberOfAnother).toBe('ORGANIZATION_LIMIT_REACHED');
+    expect(r.commaRole).toBe('ORGANIZATION_LIMIT_REACHED');
+    expect(r.unknownPlan).toBe('ORGANIZATION_LIMIT_REACHED');
+    // The personal org at first sign-in is not refused (see the first test).
+  });
+
+  it('keeps exactly one free org out of several parallel creates', () => {
+    expect([...r.race].sort()).toEqual([
+      'ORGANIZATION_LIMIT_REACHED',
+      'ORGANIZATION_LIMIT_REACHED',
+      'ORGANIZATION_LIMIT_REACHED',
+      'ok',
+    ]);
+    expect(r.raceOrgs).toHaveLength(2); // her paid org and the one that survived
+    expect(r.raceOrgs).toContain(r.G);
+    expect(r.raceRows).toBe(1);
   });
 
   it('lets owners and admins invite, and not members', () => {
