@@ -466,6 +466,53 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(escape).toEqual([expect.objectContaining({ target: 'DIV#d', success: true })]);
     });
 
+    it('focuses past an SVG link at the start of the dialog', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" aria-modal="true" id="d">
+          <svg width="40" height="20"><a href="#icon"><text y="15">i</text></a></svg><button>Ok</button>
+        </div>
+        <script>document.getElementById('d').addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') e.currentTarget.remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'svg-first');
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([expect.objectContaining({ target: 'DIV#d', success: true })]);
+    });
+
+    // A dialog opened by script after load is not brought back by the reload: say so,
+    // never pass it silently.
+    it('reports a dialog the reload could not bring back', async () => {
+      await load(
+        page,
+        '<!doctype html><html lang="en"><head><title>t</title></head><body></body></html>',
+      );
+      await page.evaluate(() => {
+        document.body.insertAdjacentHTML(
+          'beforeend',
+          '<div role="dialog" aria-modal="true" id="late"><button>Ok</button></div>',
+        );
+      });
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'late-dialog');
+      expect(result.interactions).toContainEqual(
+        expect.objectContaining({
+          success: false,
+          actualBehavior: 'Reloading brought back 0 of 1 dialog(s); the rest could not be tested',
+        }),
+      );
+      expect(result.passed).toBe(false);
+    });
+
     it('still fails a dialog that ignores Escape', async () => {
       await load(page, DIALOG(false));
       const result = await new KeyboardTester({

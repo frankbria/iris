@@ -114,6 +114,9 @@ const DISMISSIBLE_STATE = ({
   };
 };
 
+/** A probe that matches no marker: DISMISSIBLE_STATE then only counts visible dialogs. */
+const NO_PROBE = { selector: '[data-iris-none]', id: null, tag: '', cls: '' };
+
 /**
  * KeyboardTester handles keyboard navigation and accessibility testing
  */
@@ -125,7 +128,12 @@ export class KeyboardTester {
   }
 
   /**
-   * Run comprehensive keyboard navigation tests
+   * Run comprehensive keyboard navigation tests.
+   *
+   * Expects the page as loaded from its URL (the a11y runner navigates right before): the
+   * Escape check reloads it after the trap check (#286), which reproduces that state but
+   * not one opened by script afterwards. A reload that brings back fewer dialogs than the
+   * trap check saw is reported as a failed check, never a silent pass.
    */
   async run(page: Page, testName: string): Promise<KeyboardTestResult> {
     const interactions: KeyboardInteraction[] = [];
@@ -161,6 +169,13 @@ export class KeyboardTester {
           });
         }
       }
+
+      // Dialogs showing before the trap check closes any: the Escape check's reload must
+      // bring them back (#286).
+      const dialogsBefore =
+        this.config.testTrapDetection && this.config.testEscapeHandling
+          ? (await page.evaluate(DISMISSIBLE_STATE, NO_PROBE)).visibleCount
+          : 0;
 
       // Test 2: Focus trap detection
       if (this.config.testTrapDetection) {
@@ -201,6 +216,18 @@ export class KeyboardTester {
             await page.reload({ waitUntil: 'load' });
           } catch {
             // Fall back to the current DOM.
+          }
+          const dialogsNow = (await page.evaluate(DISMISSIBLE_STATE, NO_PROBE)).visibleCount;
+          if (dialogsNow < dialogsBefore) {
+            passed = false;
+            interactions.push({
+              key: 'Escape',
+              target: 'page',
+              expectedBehavior: 'Each dialog tested with Escape',
+              actualBehavior: `Reloading brought back ${dialogsNow} of ${dialogsBefore} dialog(s); the rest could not be tested`,
+              success: false,
+              timestamp: new Date(),
+            });
           }
         }
         const escapeTests = await this.testEscapeHandling(page);
@@ -738,7 +765,14 @@ export class KeyboardTester {
                 ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
             );
             for (const candidate of Array.from(candidates)) {
-              HTMLElement.prototype.focus.call(candidate as HTMLElement);
+              // An SVG <a> is not an HTMLElement: its focus() is SVGElement's.
+              try {
+                (candidate instanceof SVGElement ? SVGElement : HTMLElement).prototype.focus.call(
+                  candidate as HTMLElement & SVGElement,
+                );
+              } catch {
+                continue; // not focusable this way: try the next one
+              }
               if (inside()) return;
             }
             if (!Element.prototype.hasAttribute.call(dialog, 'tabindex')) {
