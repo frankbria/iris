@@ -122,6 +122,9 @@ function violationCounts(page: AccessibilityTestResult['results'][number]) {
   return counts;
 }
 
+/** A comparison's error as stored: URL userinfo stripped, at most 500 characters. */
+const boundedError = (error: string): string => [...stripUserinfo(error)].slice(0, 500).join('');
+
 /**
  * One result per page, comparison or action. An RPC action is stored as
  * `describeAction()`, which never includes what a `fill` typed (#81): history is
@@ -146,7 +149,7 @@ function resultsOf(run: RunInput): StoredRunResult[] {
           // The page grew or shrank (#282): numbers only.
           ...(c.layoutChange && { layoutChange: c.layoutChange }),
           // Why a comparison could not be made; page-influenced text, so bounded.
-          ...(c.error && { error: [...stripUserinfo(c.error)].slice(0, 500).join('') }),
+          ...(c.error && { error: boundedError(c.error) }),
         },
       }));
     case 'a11y':
@@ -687,6 +690,8 @@ export function recordSqliteRun(db: Database.Database, run: RunInput): number {
         severity: toStoredSeverity(c.severity),
         status: c.passed ? 'passed' : 'failed',
         timestamp: run.finishedAt,
+        // Why it could not be made (#284); page-influenced text, so bounded, as hosted.
+        error: c.error ? boundedError(c.error) : null,
       });
     }
   } else if (run.kind === 'a11y') {
@@ -779,6 +784,7 @@ export function sqliteHistoryStore(dbPath: string): HistoryStore {
                   device: v.device,
                   diffPercentage: v.diffPercentage,
                   ...(v.severity && { severity: v.severity }),
+                  ...(v.error && { error: v.error }),
                 },
               }))
             : run.kind === 'a11y'

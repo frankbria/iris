@@ -158,6 +158,61 @@ describe('run history persistence (issue #77)', () => {
       }
     });
 
+    // #284: a comparison that could not be made (navigation, capture) kept no reason here.
+    it('keeps why a comparison could not be made, bounded and without URL userinfo', async () => {
+      const broken = {
+        page: '/checkout',
+        device: 'desktop',
+        passed: false,
+        similarity: 0,
+        pixelDifference: 1,
+        threshold: 0.1,
+        severity: 'breaking' as const,
+        screenshotPath: '',
+        error:
+          'net::ERR_CONNECTION_REFUSED at https://ops:hunter2@shop.test/checkout ' +
+          'x'.repeat(600),
+      };
+      recordVisualRun({ ...visualRun, results: [broken] }, new Date(), new Date());
+
+      const db = initializeDatabase(dbPath);
+      let stored: string | null | undefined;
+      try {
+        stored = getVisualTestResults(db)[0].error;
+      } finally {
+        db.close();
+      }
+      expect(stored).toMatch(/^net::ERR_CONNECTION_REFUSED at https:\/\/shop\.test\/checkout/);
+      expect(stored).not.toContain('hunter2');
+      expect([...stored!].length).toBeLessThanOrEqual(500);
+
+      const store = sqliteHistoryStore(dbPath);
+      const [run] = await store.list();
+      expect((await store.get(run.id))!.results[0].result).toMatchObject({ error: stored });
+    });
+
+    it('adds the error column to a database made before it existed', () => {
+      // A version-1 database: no `error` column, schema_version 1.
+      const old = initializeDatabase(dbPath);
+      old.exec(
+        'ALTER TABLE visual_test_results DROP COLUMN error; DELETE FROM schema_version WHERE version > 1',
+      );
+      old.close();
+
+      recordVisualRun(visualRun, new Date(), new Date());
+
+      const db = initializeDatabase(dbPath);
+      try {
+        expect(getVisualTestResults(db)).toHaveLength(2);
+        const cols = db.prepare('PRAGMA table_info(visual_test_results)').all() as {
+          name: string;
+        }[];
+        expect(cols.map((c) => c.name)).toContain('error');
+      } finally {
+        db.close();
+      }
+    });
+
     it('stores a passing comparison with no diff, severity or analysis', () => {
       recordVisualRun(visualRun, new Date(), new Date());
 

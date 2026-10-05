@@ -47,6 +47,8 @@ export interface ReportArtifacts {
  * VisualReporter generates multi-format reports for visual regression tests
  */
 export class VisualReporter {
+  /** Where the report being generated is written; image links are relative to it. */
+  private reportPath?: string;
   private config: ReportConfig;
 
   constructor(config: Partial<ReportConfig> = {}) {
@@ -67,6 +69,7 @@ export class VisualReporter {
   async generateReport(results: VisualTestResult): Promise<ReportArtifacts> {
     // Determine output path
     const outputPath = this.config.outputPath || this.getDefaultOutputPath();
+    this.reportPath = outputPath;
 
     // Ensure output directory exists
     const outputDir = path.dirname(outputPath);
@@ -277,6 +280,11 @@ export class VisualReporter {
             </div>
           </div>
 
+          ${
+            result.error
+              ? `<div class="test-error" role="alert">Comparison failed: ${escapeHtml(result.error)}</div>`
+              : ''
+          }
           <div class="test-metrics">
             <div class="metric">
               <span class="metric-label">Similarity</span>
@@ -474,7 +482,7 @@ ${suiteTests
     return `    <testcase name="${escapeXml(testName)}" classname="${escapeXml(suiteName)}" time="${testTime}">
 ${
   !test.passed
-    ? `      <failure message="Visual regression detected" type="VisualDiff">
+    ? `      <failure message="${escapeXml(test.error ? `Comparison failed: ${test.error}` : 'Visual regression detected')}" type="VisualDiff">
 Similarity: ${(test.similarity * 100).toFixed(2)}%
 Pixel Difference: ${differingShare(test)}
 Threshold: ${(test.threshold * 100).toFixed(2)}%
@@ -558,6 +566,9 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
       const statusEmoji = result.passed ? '✅' : '❌';
       markdown += `### ${statusEmoji} ${escapeMarkdown(result.page)} [${escapeMarkdown(result.device)}]\n\n`;
       markdown += `- **Status:** ${result.passed ? 'PASSED' : 'FAILED'}\n`;
+      if (result.error) {
+        markdown += `- **Error:** ${escapeMarkdown(result.error)}\n`;
+      }
       if (result.severity) {
         markdown += `- **Severity:** ${escapeMarkdown(result.severity.toUpperCase())}\n`;
       }
@@ -665,7 +676,12 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
     if (!this.config.relativePaths) {
       return absolutePath;
     }
-    return path.relative(path.dirname(this.config.outputPath || ''), absolutePath);
+    // From the report actually written: without --output that is the default path under
+    // .iris/reports/, not the working directory (#284).
+    return path.relative(
+      path.dirname(this.reportPath ?? this.config.outputPath ?? ''),
+      absolutePath,
+    );
   }
 
   /**
@@ -911,6 +927,17 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
       .severity-badge.minor {
         background: #dbeafe;
         color: #1e40af;
+      }
+
+      .test-error {
+        margin: 0.5rem 1rem;
+        padding: 0.5rem 0.75rem;
+        border-left: 4px solid #dc2626;
+        background: #fef2f2;
+        color: #991b1b;
+        font-family: monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
       }
 
       .test-metrics {

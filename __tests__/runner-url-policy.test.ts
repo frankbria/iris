@@ -196,6 +196,15 @@ describe('runner URL policy', () => {
       expect(result.results).toHaveLength(1);
     });
 
+    // #284: the visual CLI captures data: pages too (the URL used to get the base prepended).
+    it('visual captures a data: page locally', async () => {
+      const result = await new visual.VisualTestRunner(
+        visualConfig('data:text/html,' + encodeURIComponent('<h1>hi</h1>')),
+      ).run();
+      expect((result.results[0] as { error?: string }).error).toBeUndefined();
+      expect(result.summary.newBaselines).toBe(1);
+    });
+
     it('a11y applies an explicit strict policy to data: (the MCP tool passes {})', async () => {
       await expect(
         new a11y.AccessibilityRunner({
@@ -221,6 +230,12 @@ describe('runner URL policy', () => {
         /blocked by navigation policy: .*private\/loopback/,
       );
       expect(hits).toEqual([]);
+    });
+
+    it('visual refuses data: although local runs may open it', async () => {
+      expect(await visualError(visual, 'data:text/html,hi')).toMatch(
+        /blocked by navigation policy/,
+      );
     });
 
     it('a11y refuses data: even though the unset default allows it locally', async () => {

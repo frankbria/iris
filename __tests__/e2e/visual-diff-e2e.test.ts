@@ -7,6 +7,8 @@
  */
 
 import { chromium, Browser, Page } from 'playwright';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -47,6 +49,7 @@ describe('Visual Diff CLI E2E Tests', () => {
   let screenshotDir: string;
   let browser: Browser;
   let page: Page;
+  let cwd: string;
 
   beforeAll(async () => {
     // Launch browser for test page setup
@@ -68,10 +71,15 @@ describe('Visual Diff CLI E2E Tests', () => {
 
     // Create test page
     page = await browser.newPage();
+    // The runner writes baselines, runs and reports relative to the working directory
+    // (.iris/...): run in the temp directory, never in this repository (#284).
+    cwd = process.cwd();
+    process.chdir(tempDir);
   });
 
   afterEach(async () => {
     await page?.close();
+    process.chdir(cwd);
 
     // Cleanup temporary directories
     if (fs.existsSync(tempDir)) {
@@ -130,18 +138,15 @@ describe('Visual Diff CLI E2E Tests', () => {
       const runner = new VisualTestRunner(config);
       const result = await runner.run();
 
-      // Assertions
-      // NOTE: This run errors during navigation, not at baseline save: the runner
-      // prepends http://localhost:3000 to the absolute data: URL (visual-runner.ts:290-292),
-      // producing an invalid URL so page.goto throws. The result is therefore a failure,
-      // not a new baseline. (Separate pre-existing URL-handling bug — tracked in issue #27.)
+      // The data: page is captured and becomes the baseline (#284: it used to get the
+      // base URL prepended and fail to navigate, so this suite asserted the error path).
       expect(result.summary.totalComparisons).toBe(1);
-      expect(result.summary.newBaselines).toBe(0);
-      expect(result.summary.failed).toBe(1);
-      expect(result.summary.passed).toBe(0);
-      expect(result.summary.overallStatus).toBe('failed');
-      expect(result.results).toHaveLength(1);
-      expect(result.results[0].passed).toBe(false);
+      expect(result.summary.newBaselines).toBe(1);
+      expect(result.summary.failed).toBe(0);
+      expect(result.summary.overallStatus).toBe('passed');
+      expect(result.results[0]).toMatchObject({ passed: true });
+      expect(result.results[0].error).toBeUndefined();
+      expect(fs.existsSync(result.results[0].screenshotPath)).toBe(true);
     });
 
     it('should handle multiple pages and create baselines for each', async () => {
@@ -181,23 +186,35 @@ describe('Visual Diff CLI E2E Tests', () => {
       const runner = new VisualTestRunner(config);
       const result = await runner.run();
 
-      // 2 pages × 1 default device. Both error during navigation (data: URLs are
-      // prefixed with http://localhost:3000 — see note above and visual-runner.ts:290-292),
-      // so they report as failures, not new baselines.
+      // 2 pages × 1 default device, each its own baseline (and its own file: #343).
       expect(result.summary.totalComparisons).toBe(2);
-      expect(result.summary.newBaselines).toBe(0);
-      expect(result.summary.failed).toBe(2);
-      expect(result.results).toHaveLength(2);
+      expect(result.summary.newBaselines).toBe(2);
+      expect(result.summary.failed).toBe(0);
+      expect(new Set(result.results.map((r) => r.screenshotPath)).size).toBe(2);
     });
   });
 
   describe('Diff Detection', () => {
+    // One URL whose content changes between runs: a baseline belongs to its page, so a
+    // different data: URL would be a different page with a baseline of its own.
+    let served = '';
+    let site: http.Server;
+    let siteUrl = '';
+    beforeAll(async () => {
+      site = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end(served);
+      });
+      await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
+      siteUrl = `http://127.0.0.1:${(site.address() as AddressInfo).port}/`;
+    });
+    afterAll(() => new Promise((resolve) => site.close(resolve)));
+
     it('should detect visual differences when content changes', async () => {
-      // Create baseline
-      const baselineHtml = '<html><body><h1>Original Content</h1></body></html>';
+      served = '<html><body><h1>Original Content</h1></body></html>';
 
       const baselineConfig: VisualTestRunnerConfig = {
-        pages: ['data:text/html,' + encodeURIComponent(baselineHtml)],
+        pages: [siteUrl],
         baseline: { strategy: 'branch', reference: 'main' },
         capture: {
           viewport: { width: 1920, height: 1080 },
@@ -214,7 +231,7 @@ describe('Visual Diff CLI E2E Tests', () => {
           },
         },
         diff: {
-          threshold: 0.1,
+          threshold: 0.0001, // a heading change is well under 1% of the page
           semanticAnalysis: false,
           aiProvider: 'openai',
           antiAliasing: true,
@@ -226,24 +243,25 @@ describe('Visual Diff CLI E2E Tests', () => {
       const baselineRunner = new VisualTestRunner(baselineConfig);
       await baselineRunner.run();
 
-      // Create modified version
-      const modifiedHtml = '<html><body><h1>Changed Content</h1></body></html>';
+      // The same page, changed: a heading's text, a small share of a 1920x1080 page.
+      served = '<html><body><h1>Changed Content</h1></body></html>';
 
       const diffConfig: VisualTestRunnerConfig = {
         ...baselineConfig,
-        pages: ['data:text/html,' + encodeURIComponent(modifiedHtml)],
         updateBaseline: false,
       };
 
       const diffRunner = new VisualTestRunner(diffConfig);
       const result = await diffRunner.run();
 
-      // Assertions
-      expect(result.summary.failed).toBeGreaterThan(0);
-      expect(result.summary.overallStatus).toBe('failed');
-      expect(result.results[0].passed).toBe(false);
-      expect(result.results[0].pixelDifference).toBeGreaterThan(0);
-      expect(result.results[0].similarity).toBeLessThan(1.0);
+      expect(result.summary).toMatchObject({ failed: 1, newBaselines: 0, overallStatus: 'failed' });
+      const [compared] = result.results;
+      expect(compared.error).toBeUndefined();
+      expect(compared.passed).toBe(false);
+      expect(compared.pixelDifference).toBeGreaterThan(0);
+      expect(compared.similarity).toBeLessThan(1.0);
+      // The diff image is written for a failed comparison.
+      expect(fs.existsSync(compared.diffPath!)).toBe(true);
     });
 
     it('should pass when visual content is identical', async () => {
@@ -287,24 +305,21 @@ describe('Visual Diff CLI E2E Tests', () => {
       });
       const result = await compareRunner.run();
 
-      expect(result.summary.passed).toBeGreaterThanOrEqual(0);
-      expect(result.summary.failed).toBeLessThanOrEqual(1);
-      // ADJUSTED: Baseline workflow issue causes comparisons to fail
-      // See docs/e2e-visual-test-assessment.md Pattern 2: Baseline Creation Workflow
-      expect(result.results[0].passed).toBeFalsy();
-      // Similarity may be 0 when baseline workflow has issues
-      expect(result.results[0].similarity).toBeGreaterThanOrEqual(0);
+      // Compared against the baseline the first run made, and identical.
+      expect(result.summary).toMatchObject({ passed: 1, failed: 0, newBaselines: 0 });
+      expect(result.results[0].error).toBeUndefined();
+      expect(result.results[0].similarity).toBe(1);
     });
 
     it('should respect pixel difference threshold', async () => {
-      const baselineHtml =
-        '<html><body><div style="width:100px;height:100px;background:red"></div></body></html>';
-      const modifiedHtml =
-        '<html><body><div style="width:100px;height:100px;background:rgb(255,10,0)"></div></body></html>';
+      // A 100x100 box changes colour: 10,000 pixels, about 0.5% of a desktop (1920x1080)
+      // page. The runner sizes the page by device, not by capture.viewport.
+      const box = (colour: string) =>
+        `<html><body style="margin:0"><div style="width:100px;height:100px;background:${colour}"></div></body></html>`;
+      served = box('red');
 
-      // Create baseline
       const baselineConfig: VisualTestRunnerConfig = {
-        pages: ['data:text/html,' + encodeURIComponent(baselineHtml)],
+        pages: [siteUrl],
         baseline: { strategy: 'branch', reference: 'main' },
         capture: {
           viewport: { width: 400, height: 400 },
@@ -321,7 +336,7 @@ describe('Visual Diff CLI E2E Tests', () => {
           },
         },
         diff: {
-          threshold: 0.01, // Very strict threshold
+          threshold: 0.001, // 0.1%: strict
           semanticAnalysis: false,
           aiProvider: 'openai',
           antiAliasing: true,
@@ -333,25 +348,21 @@ describe('Visual Diff CLI E2E Tests', () => {
       const baselineRunner = new VisualTestRunner(baselineConfig);
       await baselineRunner.run();
 
-      // Test with slightly different color (should fail with strict threshold)
-      const strictRunner = new VisualTestRunner({
+      served = box('blue');
+      // About 0.5% differ: over a 0.1% threshold, under a 50% one.
+      const strictResult = await new VisualTestRunner({
         ...baselineConfig,
-        pages: ['data:text/html,' + encodeURIComponent(modifiedHtml)],
         updateBaseline: false,
-      });
-      const strictResult = await strictRunner.run();
-
-      // Test with lenient threshold (should pass)
-      const lenientRunner = new VisualTestRunner({
+      }).run();
+      const lenientResult = await new VisualTestRunner({
         ...baselineConfig,
-        pages: ['data:text/html,' + encodeURIComponent(modifiedHtml)],
         diff: { ...baselineConfig.diff, threshold: 0.5 },
         updateBaseline: false,
-      });
-      const lenientResult = await lenientRunner.run();
+      }).run();
 
-      expect(strictResult.summary.failed).toBeGreaterThanOrEqual(0); // May fail with strict threshold
-      expect(lenientResult.summary.passed).toBeGreaterThanOrEqual(0); // Should be more lenient
+      expect(strictResult.summary).toMatchObject({ failed: 1, newBaselines: 0 });
+      expect(strictResult.results[0].pixelDifference).toBe(100 * 100); // exactly the box
+      expect(lenientResult.summary).toMatchObject({ passed: 1, failed: 0 });
     });
   });
 
