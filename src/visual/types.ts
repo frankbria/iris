@@ -156,8 +156,18 @@ export interface BaselineCleanupResult {
 export interface DiffOptions {
   /** Maximum allowed fraction of differing pixels (0-1); default 0.1 = 10% may differ before failing */
   threshold: number;
+  /**
+   * pixelmatch's `includeAA`: true counts anti-aliased pixels as differences (AA
+   * detection off). "Tolerate anti-aliasing" is therefore `false` (#283).
+   */
   includeAA: boolean;
+  /** pixelmatch's `alpha`: opacity of unchanged pixels in the diff image (0-1). */
   alpha: number;
+  /**
+   * pixelmatch's per-pixel `threshold`: how different two colours must be to count
+   * (0-1, default 0.1, pixelmatch's own). It used to be fed `alpha` (#283).
+   */
+  pixelThreshold?: number;
   diffMask: boolean;
   diffColor: [number, number, number];
 }
@@ -190,16 +200,6 @@ export interface DiffResult {
   ssim?: number;
   /** Mean contrast similarity, companion to `ssim`. Same presence rules. */
   mcs?: number;
-  /**
-   * True when the comparison short-circuited on a sampled subset instead of
-   * running the full pixel diff, which large and obviously-different images do.
-   * `diffBuffer` is empty in that case — no mask is generated.
-   *
-   * Declared here rather than cast through `as any` at the return site (#142):
-   * it is the observable that says the early-exit path ran, and a test asserting
-   * on it is the load-independent replacement for timing the comparison.
-   */
-  earlyExit?: boolean;
   error?: string;
 }
 

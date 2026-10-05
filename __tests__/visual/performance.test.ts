@@ -122,92 +122,47 @@ describe('Performance Optimizations', () => {
     });
   });
 
-  describe('VisualDiffEngine - Early Exit', () => {
-    it('should exit early for obviously different large images', async () => {
-      const diffEngine = new VisualDiffEngine();
-
-      // Create large very different images (> Full HD)
-      const baselineBuffer = await sharp({
+  // #283: large images (> 1080p) used to be judged on a random 10% sample with a fixed 0.7
+  // cut that ignored the run's threshold: non-deterministic near the line, and an empty diff
+  // image. The sampling is gone; every comparison is the full pixel diff.
+  describe('VisualDiffEngine - large images', () => {
+    const solid = (v: number) =>
+      sharp({
         create: {
           width: 2000,
           height: 1200,
           channels: 4,
-          background: { r: 255, g: 255, b: 255, alpha: 1 },
+          background: { r: v, g: v, b: v, alpha: 1 },
         },
       })
         .png()
         .toBuffer();
+    const options = {
+      threshold: 0.1,
+      includeAA: false,
+      alpha: 0.1,
+      diffMask: true,
+      diffColor: [255, 0, 0] as [number, number, number],
+    };
 
-      const currentBuffer = await sharp({
-        create: {
-          width: 2000,
-          height: 1200,
-          channels: 4,
-          background: { r: 0, g: 0, b: 0, alpha: 1 },
-        },
-      })
-        .png()
-        .toBuffer();
+    it('diffs every pixel of a very different pair and returns the diff image', async () => {
+      const [white, black] = await Promise.all([solid(255), solid(0)]);
 
-      const result = await diffEngine.compare(baselineBuffer, currentBuffer, {
-        threshold: 0.9,
-        includeAA: false,
-        alpha: 0.1,
-        diffMask: true,
-        diffColor: [255, 0, 0],
-      });
+      const result = await new VisualDiffEngine().compare(white, black, options);
 
       expect(result.passed).toBe(false);
-      expect(result.similarity).toBeLessThan(0.7);
-
-      // Issue #142. This asserted `duration < 1000` and its own comment
-      // pre-registered "switch to a relative early-vs-full comparison if this
-      // ever flakes again". A relative comparison would still be timing, and
-      // it turns out nothing timing-based is needed: the early-exit branch
-      // reports itself. `earlyExit` is the property the wall-clock bound was
-      // only ever a proxy for, and an empty diffBuffer corroborates it —
-      // skipping the full pixel diff is exactly why no mask gets generated.
-      expect(result.earlyExit).toBe(true);
-      expect(result.diffBuffer?.length).toBe(0);
+      expect(result.pixelDifference).toBe(2000 * 1200); // counted, not estimated
+      expect(result).not.toHaveProperty('earlyExit');
+      const diff = await sharp(result.diffBuffer!).metadata();
+      expect([diff.width, diff.height]).toEqual([2000, 1200]);
     });
 
-    it('should not early exit for similar large images', async () => {
-      const diffEngine = new VisualDiffEngine();
-
-      // Create large similar images
-      const baselineBuffer = await sharp({
-        create: {
-          width: 2000,
-          height: 1200,
-          channels: 4,
-          background: { r: 100, g: 100, b: 100, alpha: 1 },
-        },
-      })
-        .png()
-        .toBuffer();
-
-      const currentBuffer = await sharp({
-        create: {
-          width: 2000,
-          height: 1200,
-          channels: 4,
-          background: { r: 105, g: 105, b: 105, alpha: 1 },
-        },
-      })
-        .png()
-        .toBuffer();
-
-      const result = await diffEngine.compare(baselineBuffer, currentBuffer, {
-        threshold: 0.9,
-        includeAA: false,
-        alpha: 0.1,
-        diffMask: true,
-        diffColor: [255, 0, 0],
-      });
-
-      // Should complete full comparison
-      expect(result.success).toBe(true);
-      expect(result.similarity).toBeGreaterThan(0.9);
+    it('gives the same answer every time', async () => {
+      const [white, black] = await Promise.all([solid(255), solid(0)]);
+      const runs = await Promise.all(
+        [1, 2, 3].map(() => new VisualDiffEngine().compare(white, black, options)),
+      );
+      expect(new Set(runs.map((r) => r.pixelDifference)).size).toBe(1);
     });
   });
 

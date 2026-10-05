@@ -240,6 +240,11 @@ plans/
   `MAX_DECODED_PIXELS` (1920 x 16384) is checked from the header before any pixel is
   allocated, and the padded canvas too; sharp's `limitInputPixels` is the backstop, but it
   also applies to `metadata()`, so the header is read by an unlimited instance
+- **pixelmatch options are pixelmatch's (#283).** `DiffOptions.pixelThreshold` is its
+  per-pixel `threshold` (default 0.1); `alpha` is only the diff image's opacity (it used to
+  feed the threshold too). `includeAA: true` means "count anti-aliased pixels", so the
+  runner passes `!antiAliasing`. There is no sampled early exit any more: every comparison
+  is the full diff (deterministic, always a diff image), bounded by `MAX_DECODED_PIXELS`
 - **A failed analysis is not a verdict (#281).** The classifier answers an outage or a tripped
   breaker with a fallback (`analysisFailed: true`, `severity: 'medium'`). The visual runner
   grades such a comparison by its pixels (`estimateSeverity`), counts it in
@@ -1702,7 +1707,7 @@ This assessment provides an objective view of project status and helps identify 
 ### Testing Requirements
 
 - **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 2160/2161 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
+- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 2171/2172 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
 - **Test Types Required**:
   - Unit tests for all business logic and core modules
   - Integration tests for browser automation

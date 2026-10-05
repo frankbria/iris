@@ -76,48 +76,7 @@ export class VisualDiffEngine {
       // Create diff buffer
       const diffBuffer = Buffer.alloc(baseline.width * baseline.height * 4);
 
-      // Early exit optimization: sample a subset of pixels first for large images
       const totalPixels = baseline.width * baseline.height;
-      const isLargeImage = totalPixels > 1920 * 1080; // > Full HD
-
-      if (isLargeImage) {
-        // Sample 10% of pixels for quick check
-        const sampleSize = Math.floor(totalPixels * 0.1);
-        let sampleDiff = 0;
-
-        for (let i = 0; i < sampleSize; i++) {
-          const pixelIndex = Math.floor(Math.random() * totalPixels);
-          const bufferIndex = pixelIndex * 4;
-
-          // Simple RGB difference check
-          const rDiff = Math.abs(baseline.buffer[bufferIndex] - current.buffer[bufferIndex]);
-          const gDiff = Math.abs(
-            baseline.buffer[bufferIndex + 1] - current.buffer[bufferIndex + 1],
-          );
-          const bDiff = Math.abs(
-            baseline.buffer[bufferIndex + 2] - current.buffer[bufferIndex + 2],
-          );
-
-          if (rDiff > 10 || gDiff > 10 || bDiff > 10) {
-            sampleDiff++;
-          }
-        }
-
-        const sampleSimilarity = (sampleSize - sampleDiff) / sampleSize;
-
-        // If sample shows large difference, exit early
-        if (sampleSimilarity < 0.7) {
-          return {
-            success: true,
-            passed: false,
-            similarity: sampleSimilarity,
-            pixelDifference: Math.floor((1 - sampleSimilarity) * totalPixels),
-            threshold: options.threshold,
-            diffBuffer: Buffer.alloc(0), // Don't generate diff for obviously different images
-            earlyExit: true,
-          };
-        }
-      }
 
       // Perform pixel comparison
       const pixelDifference = pixelmatch(
@@ -127,7 +86,7 @@ export class VisualDiffEngine {
         baseline.width,
         baseline.height,
         {
-          threshold: options.alpha,
+          threshold: options.pixelThreshold ?? 0.1,
           includeAA: options.includeAA,
           alpha: options.alpha,
           aaColor: options.diffColor,
@@ -398,7 +357,7 @@ export class VisualDiffEngine {
       overlapW,
       overlapH,
       {
-        threshold: options.alpha,
+        threshold: options.pixelThreshold ?? 0.1,
         includeAA: options.includeAA,
         alpha: options.alpha,
         aaColor: options.diffColor,
