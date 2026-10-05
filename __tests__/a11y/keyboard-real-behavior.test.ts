@@ -472,28 +472,28 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       ]);
     });
 
-    // Codex: A closes on Escape and B is re-rendered with a new class before B's turn, so its
-    // identity is lost; it is still showing, so it is tested rather than skipped.
-    it('tests a dialog whose identity an earlier re-render lost while it stays open', async () => {
+    // GLM: a .modal wrapper and its id-less inner panel close together beside a persistent
+    // dialog that ignores Escape. The panel is gone before its turn and must not be blamed:
+    // only the chat dialog fails.
+    it('does not blame a dialog that closed with its wrapper while another stays open', async () => {
       await load(
         page,
         `<!doctype html><html lang="en"><head><title>t</title></head><body>
-        <div role="dialog" class="a" id="a"><button>A</button></div>
-        <div id="host"><div role="dialog" class="sheet"><button>B</button></div></div>
-        <script>let n = 0; document.addEventListener('keydown', (e) => {
-          if (e.key !== 'Escape') return;
-          document.getElementById('a')?.remove();
-          document.getElementById('host').innerHTML =
-            '<div role="dialog" class="sheet shaking-' + (n++) + '"><button>B</button></div>';
+        <div class="modal" id="wrap"><div role="dialog" class="panel"><button>Ok</button></div></div>
+        <div role="dialog" id="chat"><button>Chat</button></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') document.getElementById('wrap')?.remove();
         });</script></body></html>`,
       );
       const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
         page,
-        'lost-identity',
+        'wrapper-and-chat',
       );
       const escape = result.interactions.filter((i) => i.key === 'Escape');
-      expect(escape.map((i) => i.success)).toEqual([true, false]);
-      expect(result.passed).toBe(false);
+      expect(escape.map((i) => [i.target.split('.')[0], i.success])).toEqual([
+        ['DIV#wrap', true],
+        ['DIV#chat', false],
+      ]);
     });
 
     // Codex: the open dialog is re-rendered with other classes and a hidden template keeps
