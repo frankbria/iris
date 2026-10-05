@@ -10,6 +10,8 @@
  */
 
 import { chromium, Browser, Page } from 'playwright';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import { KeyboardTester } from '../../src/a11y/keyboard-tester';
 import { AccessibilityRunner } from '../../src/a11y/a11y-runner';
 
@@ -411,6 +413,14 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.focusOrder.map((f) => f.element)).toEqual(['DIV#host', 'A#after']);
     });
 
+    it('does not abort when the page focused an SVG link on load', async () => {
+      const result =
+        await walk(`<svg width="40" height="20"><a href="#i" id="icon"><text y="15">i</text></a></svg>
+        <a href="#next" id="next">next</a>
+        <script>document.getElementById('icon').focus();</script>`);
+      expect(result.focusOrder.map((f) => f.element.toUpperCase())).toEqual(['A#ICON', 'A#NEXT']);
+    });
+
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
       const result = await walk(links);
@@ -511,6 +521,61 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
         }),
       );
       expect(result.passed).toBe(false);
+    });
+
+    // GLM: the dialog count is taken on the page as loaded, before the Tab walk, which may
+    // itself open a dialog (one shown on focus).
+    it('does not count a dialog the Tab walk opened as lost by the reload', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <input id="search" aria-label="Search">
+        <script>document.getElementById('search').addEventListener('focus', () => {
+          if (!document.getElementById('panel')) document.body.insertAdjacentHTML('beforeend',
+            '<div role="dialog" id="panel"><button>Close</button></div>');
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testFocusOrder: true,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'focus-opens-dialog');
+      expect(result.interactions.map((i) => i.actualBehavior)).not.toContainEqual(
+        expect.stringMatching(/Reloading brought back/),
+      );
+    });
+
+    // GLM: a dialog that mounts after a fetch is counted on the settled page; the reload
+    // must settle too before it is compared.
+    it('waits for a dialog that mounts after a fetch before comparing', async () => {
+      const server = http.createServer((req, res) => {
+        if (req.url === '/data') {
+          setTimeout(() => res.end('{}'), 300);
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end(`<!doctype html><html lang="en"><head><title>t</title></head><body>
+          <script>fetch('/data').then(() => document.body.insertAdjacentHTML('beforeend',
+            '<div role="dialog" id="late"><button>Ok</button></div>'));</script></body></html>`);
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      try {
+        await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`, {
+          waitUntil: 'networkidle',
+        });
+        const result = await new KeyboardTester({
+          ...config,
+          testTrapDetection: true,
+          testEscapeHandling: true,
+        }).run(page, 'fetch-dialog');
+        expect(result.interactions.map((i) => i.actualBehavior)).not.toContainEqual(
+          expect.stringMatching(/Reloading brought back/),
+        );
+        expect(result.interactions.filter((i) => i.key === 'Escape')).toHaveLength(1);
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
     });
 
     it('still fails a dialog that ignores Escape', async () => {

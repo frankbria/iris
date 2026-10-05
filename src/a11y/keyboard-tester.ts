@@ -142,6 +142,14 @@ export class KeyboardTester {
     let passed = true;
 
     try {
+      // Dialogs showing on the page as loaded, before any check presses a key (the Tab walk
+      // can open one, the trap check closes them): the Escape check's reload must bring
+      // them back (#286).
+      const dialogsBefore =
+        this.config.testTrapDetection && this.config.testEscapeHandling
+          ? (await page.evaluate(DISMISSIBLE_STATE, NO_PROBE)).visibleCount
+          : 0;
+
       // Test 1: Focus order
       if (this.config.testFocusOrder) {
         const walked = await this.testFocusOrder(page);
@@ -169,13 +177,6 @@ export class KeyboardTester {
           });
         }
       }
-
-      // Dialogs showing before the trap check closes any: the Escape check's reload must
-      // bring them back (#286).
-      const dialogsBefore =
-        this.config.testTrapDetection && this.config.testEscapeHandling
-          ? (await page.evaluate(DISMISSIBLE_STATE, NO_PROBE)).visibleCount
-          : 0;
 
       // Test 2: Focus trap detection
       if (this.config.testTrapDetection) {
@@ -214,6 +215,9 @@ export class KeyboardTester {
           // cost every result collected so far.
           try {
             await page.reload({ waitUntil: 'load' });
+            // Settle as the runner does before the checks (dialogs mounted after a fetch),
+            // but bounded: a page with a socket never goes idle.
+            await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
           } catch {
             // Fall back to the current DOM.
           }
@@ -277,7 +281,16 @@ export class KeyboardTester {
     // to the document part-way, the stops after the wrap come first (see below).
     await page.evaluate(() => {
       const active = document.activeElement;
-      if (active && active !== document.body) HTMLElement.prototype.blur.call(active);
+      if (active && active !== document.body) {
+        // An SVG element's blur() is SVGElement's: HTMLElement's throws on it (GLM).
+        try {
+          (active instanceof SVGElement ? SVGElement : HTMLElement).prototype.blur.call(
+            active as HTMLElement & SVGElement,
+          );
+        } catch {
+          // Not blurrable this way: the walk still starts from wherever focus is.
+        }
+      }
     });
 
     // Stops before focus first wraps to the document, and after. If the walk began mid-page
