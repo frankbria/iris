@@ -60,6 +60,8 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     await sql`insert into provider_keys (org_id, provider, ciphertext)
       values (${id}, 'openai', '\\x00')`.execute(db);
     await sql`insert into org_plans (org_id, plan) values (${id}, 'pro')`.execute(db);
+    await sql`insert into visual_baselines (org_id, project, name, page, device, object_key, approved_by)
+      values (${id}, 'shop', 'home', '/', 'desktop', 'k', 'first-run')`.execute(db);
     // An old run with billed usage, and a recent one.
     for (const [name, daysAgo] of [
       ['old', 120],
@@ -148,7 +150,7 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
 
     const report = await off.runRetention({ now: at(now, 31) });
     expect(report.orgsPurged).toEqual(['org-p']);
-    for (const table of ['runs', 'provider_keys', 'org_plans', 'audit_log']) {
+    for (const table of ['runs', 'provider_keys', 'org_plans', 'audit_log', 'visual_baselines']) {
       expect(await count(table, "org_id = 'org-p'")).toBe(0);
     }
     expect(await count('apikey', `"referenceId" = 'org-p'`)).toBe(0);

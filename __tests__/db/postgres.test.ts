@@ -192,6 +192,7 @@ describe('migrate process against a server that never answers', () => {
       ['0008_runs_finished_idx', 'Success'],
       ['0009_org_plans', 'Success'],
       ['0010_offboarding', 'Success'],
+      ['0011_visual_baselines', 'Success'],
     ]);
 
     const tables = await sql<{ table_name: string }>`
@@ -208,6 +209,7 @@ describe('migrate process against a server that never answers', () => {
         'org_suspensions',
         'org_plans',
         'org_deletions',
+        'visual_baselines',
       ]),
     );
   });
@@ -217,17 +219,19 @@ describe('migrate process against a server that never answers', () => {
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('10');
+    expect(applied.rows[0].n).toBe('11');
   });
 
   // A rollback deploys an older image (#273): its catalog lacks what a newer release applied.
   it('an older release on a newer schema applies nothing and succeeds', async () => {
     const older: Record<string, unknown> = { ...MIGRATIONS };
-    delete older['0010_offboarding'];
+    delete older['0011_visual_baselines'];
     const log = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
       expect(await migrateToLatest(db, older as typeof MIGRATIONS)).toEqual([]);
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/schema is ahead.*0010_offboarding/));
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(/schema is ahead.*0011_visual_baselines/),
+      );
     } finally {
       log.mockRestore();
     }
@@ -235,17 +239,17 @@ describe('migrate process against a server that never answers', () => {
 
   it('refuses a release with pending migrations on a schema with newer ones', async () => {
     const branched: Record<string, unknown> = { ...MIGRATIONS };
-    delete branched['0010_offboarding'];
+    delete branched['0011_visual_baselines'];
     const up = jest.fn();
     branched['0003b_branch'] = { up };
     await expect(migrateToLatest(db, branched as typeof MIGRATIONS)).rejects.toThrow(
-      /does not know \(0010_offboarding\).*unapplied ones \(0003b_branch\).*branched off/,
+      /does not know \(0011_visual_baselines\).*unapplied ones \(0003b_branch\).*branched off/,
     );
     expect(up).not.toHaveBeenCalled();
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('10');
+    expect(applied.rows[0].n).toBe('11');
   });
 
   it('gives every IRIS table org_id NOT NULL and an index that leads with it', async () => {

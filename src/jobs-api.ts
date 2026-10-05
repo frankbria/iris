@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   InvalidCursorError,
   type A11yJobParams,
+  type JobSpec,
+  type VisualJobParams,
   type OrgJobs,
   type PostgresHistory,
   type TenantScope,
@@ -22,24 +24,41 @@ export const MAX_BODY_BYTES = 64 * 1024;
 
 const Impact = z.enum(['critical', 'serious', 'moderate', 'minor']);
 
+const JobUrls = z
+  .array(
+    z
+      .string()
+      .max(2048)
+      .refine((u) => /^https?:\/\//i.test(u) && URL.canParse(u), 'must be an http(s) URL')
+      // Params and results are stored and readable by the whole org.
+      .refine((u) => {
+        const url = URL.parse(u);
+        return !url || (!url.username && !url.password);
+      }, 'must not contain credentials'),
+  )
+  .min(1)
+  .max(20);
+
 const A11yJobBody = z
   .object({
-    urls: z
-      .array(
-        z
-          .string()
-          .max(2048)
-          .refine((u) => /^https?:\/\//i.test(u) && URL.canParse(u), 'must be an http(s) URL')
-          // Params and results are stored and readable by the whole org.
-          .refine((u) => {
-            const url = URL.parse(u);
-            return !url || (!url.username && !url.password);
-          }, 'must not contain credentials'),
-      )
-      .min(1)
-      .max(20),
+    urls: JobUrls,
     wcagLevel: z.enum(['A', 'AA', 'AAA']).default('AA'),
     failOn: z.array(Impact).min(1).default(['critical', 'serious']),
+  })
+  .strict();
+
+/** `POST /v1/visual/jobs` (#268). The project names the baselines; it is a key segment. */
+const VisualJobBody = z
+  .object({
+    project: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, 'must be 1-64 of A-Z a-z 0-9 _ -'),
+    urls: JobUrls,
+    devices: z
+      .array(z.enum(['desktop', 'laptop', 'tablet', 'mobile']))
+      .min(1)
+      .max(4)
+      .default(['desktop'])
+      .transform((d) => [...new Set(d)]),
+    threshold: z.number().min(0).max(1).default(0.01),
   })
   .strict();
 
@@ -66,9 +85,13 @@ export type RunReader = {
   forOrg(scope: TenantScope): Pick<ReturnType<PostgresHistory['forOrg']>, 'listPage' | 'get'>;
 };
 
+/** What the API needs of a tenant's jobs; approval only when visual jobs exist (#268). */
+export type ApiJobs = Pick<OrgJobs, 'enqueue' | 'get'> &
+  Partial<Pick<OrgJobs, 'approveVisualResult'>>;
+
 export interface JobsApiDeps {
   authenticate: Authenticator;
-  jobs: { forOrg(scope: TenantScope): OrgJobs };
+  jobs: { forOrg(scope: TenantScope): ApiJobs };
   /** The results API (#269); without it `/v1/runs` is not served. */
   runs?: RunReader;
   /** Signs the artifacts in run detail (#460); without it run detail carries none. */
@@ -122,6 +145,7 @@ function readBody(req: IncomingMessage): Promise<string | null> {
 
 const JOB_PATH = /^\/v1\/jobs\/([^/]+)$/;
 const RUN_PATH = /^\/v1\/runs\/([^/]+)$/;
+const APPROVE_PATH = /^\/v1\/runs\/([^/]+)\/results\/(\d{1,4})\/approve$/;
 
 /** Answers one non-upgrade HTTP request. Never throws: a failure is a 500 with no detail. */
 export async function handleJobsRequest(
@@ -131,12 +155,16 @@ export async function handleJobsRequest(
 ): Promise<void> {
   try {
     const [path, search = ''] = (req.url ?? '').split('?');
-    const isSubmit = path === '/v1/a11y/jobs';
+    const submitKind =
+      path === '/v1/a11y/jobs' ? 'a11y' : path === '/v1/visual/jobs' ? 'visual' : null;
+    const isSubmit = submitKind !== null;
     const read = JOB_PATH.exec(path);
     const listRuns = deps.runs !== undefined && path === '/v1/runs';
     const readRun = deps.runs === undefined ? null : RUN_PATH.exec(path);
-    if (!isSubmit && !read && !listRuns && !readRun) return send(res, 404, { error: 'Not found' });
-    const method = isSubmit ? 'POST' : 'GET';
+    const approve = APPROVE_PATH.exec(path);
+    if (!isSubmit && !read && !listRuns && !readRun && !approve)
+      return send(res, 404, { error: 'Not found' });
+    const method = isSubmit || approve ? 'POST' : 'GET';
     if (req.method !== method) {
       return send(res, 405, { error: 'Method not allowed' }, { allow: method });
     }
@@ -231,6 +259,28 @@ export async function handleJobsRequest(
 
     const store = deps.jobs.forOrg(scope);
 
+    if (approve) {
+      // Approval writes a baseline image: without a store there is nothing to approve.
+      if (!deps.artifacts || !store.approveVisualResult)
+        return send(res, 503, { error: 'Visual baselines are not configured' });
+      let runId: string;
+      try {
+        runId = decodeURIComponent(approve[1]);
+      } catch {
+        return send(res, 404, { error: 'Not found' });
+      }
+      const outcome = await store.approveVisualResult(runId, Number(approve[2]), deps.artifacts);
+      if (outcome.status === 'not-found') return send(res, 404, { error: 'Not found' });
+      if (outcome.status === 'conflict') return send(res, 409, { error: outcome.reason });
+      const b = outcome.baseline;
+      return send(res, 200, {
+        project: b.project,
+        page: b.page,
+        device: b.device,
+        approvedAt: b.updatedAt,
+      });
+    }
+
     if (read) {
       let id: string;
       try {
@@ -261,18 +311,22 @@ export async function handleJobsRequest(
     } catch {
       return send(res, 400, { error: 'Body is not valid JSON' });
     }
-    const parsed = A11yJobBody.safeParse(json);
+    // A visual job's images need a store; refuse it rather than queue it forever.
+    if (submitKind === 'visual' && !deps.artifacts)
+      return send(res, 503, { error: 'Visual jobs are not configured' });
+    const parsed = (submitKind === 'visual' ? VisualJobBody : A11yJobBody).safeParse(json);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
       return send(res, 400, {
         error: `Invalid request: ${[...issue.path, issue.message].join(': ')}`,
       });
     }
-    const params: A11yJobParams = parsed.data;
-    const id = await store.enqueue(
-      { kind: 'a11y', params },
-      { maxOutstanding: deps.maxQueuedJobsPerOrg },
-    );
+    const spec = (
+      submitKind === 'visual'
+        ? { kind: 'visual', params: parsed.data as VisualJobParams }
+        : { kind: 'a11y', params: parsed.data as A11yJobParams }
+    ) as JobSpec;
+    const id = await store.enqueue(spec, { maxOutstanding: deps.maxQueuedJobsPerOrg });
     if (id === null) return send(res, 429, { error: 'Too many queued jobs' });
     return send(res, 202, { id, status: 'queued' });
   } catch (err) {

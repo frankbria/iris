@@ -15,6 +15,8 @@ import {
 import type { ExecutionResult } from './executor';
 import { insertUsage, type UsageEvent } from './billing/usage';
 import type { VisualTestResult as VisualRunResult } from './visual/visual-runner';
+import { baselineKey, orgArtifacts, type ArtifactStore } from './artifact-store';
+import { artifactName } from './visual/artifacts';
 import { suspendedSql } from './org-suspension';
 import {
   InvalidCursorError,
@@ -130,6 +132,11 @@ function resultsOf(run: RunInput): StoredRunResult[] {
           // A fraction: `pixelDifference` is a raw pixel count.
           diffPercentage: 1 - c.similarity,
           ...(c.severity && { severity: c.severity }),
+          // Hosted visual jobs (#268): the baseline's project, and the object keys run
+          // detail signs (#460). Never a local path.
+          ...(c.project !== undefined && { project: c.project }),
+          ...(c.newBaseline && { newBaseline: true }),
+          ...(c.artifacts && { artifacts: c.artifacts }),
         },
       }));
     case 'a11y':
@@ -277,6 +284,23 @@ export interface A11yJobParams {
   failOn: Array<'critical' | 'serious' | 'moderate' | 'minor'>;
 }
 
+export type VisualDevice = 'desktop' | 'laptop' | 'tablet' | 'mobile';
+
+/** A hosted visual-diff job (#268): screenshots compared with the project's baselines. */
+export interface VisualJobParams {
+  project: string;
+  urls: string[];
+  devices: VisualDevice[];
+  /** Share of pixels that may differ before a comparison fails (0-1). */
+  threshold: number;
+}
+
+export type JobKind = 'a11y' | 'visual';
+
+/** A job's kind and params, as queued. */
+export type JobSpec =
+  { kind: 'a11y'; params: A11yJobParams } | { kind: 'visual'; params: VisualJobParams };
+
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
 /** A job as its org reads it: any status, results once finished. */
@@ -293,12 +317,12 @@ export interface StoredJob {
 }
 
 /** A claimed job: what the worker needs to run it and to write its outcome. */
-export interface ClaimedJob {
+export type ClaimedJob = JobSpec & ClaimedJobBase;
+
+interface ClaimedJobBase {
   id: string;
   orgId: string;
   apiKeyId: string | null;
-  kind: 'a11y';
-  params: A11yJobParams;
   startedAt: Date;
   /** Which claim this is: only its holder may write the outcome (#435). */
   claimToken: string;
@@ -308,6 +332,32 @@ export interface ClaimedJob {
   orgSuspended: boolean;
 }
 
+/** A project's approved screenshot of one page on one device (#268). */
+export interface VisualBaseline {
+  project: string;
+  /** `artifactName(page, device)`. */
+  name: string;
+  page: string;
+  device: string;
+  objectKey: string;
+  /** The run the image came from; null once that run is pruned. */
+  runId: string | null;
+  /** The approving API key's id, or `first-run`. */
+  approvedBy: string;
+  updatedAt: Date;
+}
+
+/** One org's baselines: the worker reads and seeds them, approval replaces them. */
+export interface OrgBaselines {
+  get(project: string, name: string): Promise<VisualBaseline | null>;
+  set(b: Omit<VisualBaseline, 'updatedAt'>): Promise<void>;
+}
+
+export type ApproveResult =
+  | { status: 'approved'; baseline: VisualBaseline }
+  | { status: 'not-found' }
+  | { status: 'conflict'; reason: string };
+
 /** The org-scoped half: what the API does for a tenant. */
 export interface OrgJobs {
   /**
@@ -315,25 +365,36 @@ export interface OrgJobs {
    *   the same transaction as the insert, so concurrent calls cannot exceed it
    * @returns the new job's id (status `queued`), or `null` when the org is at the cap
    */
-  enqueue(
-    job: { kind: 'a11y'; params: A11yJobParams },
-    options?: { maxOutstanding?: number },
-  ): Promise<string | null>;
+  enqueue(job: JobSpec, options?: { maxOutstanding?: number }): Promise<string | null>;
   /** `null` for an id that is not this org's, or not a uuid. */
   get(id: string): Promise<StoredJob | null>;
+  /**
+   * Makes one visual result's screenshot its project's baseline (#268): the image is
+   * copied to the baseline key and the row replaced, recording who approved it.
+   * `not-found` for another org's run, an unknown run or position; `conflict` for a
+   * result that is not a hosted visual comparison with a screenshot.
+   */
+  approveVisualResult(
+    runId: string,
+    position: number,
+    artifacts: ArtifactStore,
+  ): Promise<ApproveResult>;
+  baselines: OrgBaselines;
 }
 
 /** The hosted job queue: `forOrg` for the API, the rest for workers (cross-tenant). */
 export interface PostgresJobs {
   forOrg(scope: TenantScope): OrgJobs;
+  /** A claimed job's org's baselines (the worker acts for the job's org). */
+  baselines(orgId: string): OrgBaselines;
   /** The oldest queued job of a kind, now `running`; `null` when none. Safe to call concurrently. */
-  claim(kind: 'a11y'): Promise<ClaimedJob | null>;
+  claim(kind: JobKind): Promise<ClaimedJob | null>;
   /**
    * Writes the outcome of a claimed job: its results, its status (the run's verdict) and
    * its `a11y_job` usage, in one transaction. `status` stays `running` until this commits.
    * @returns `false`, having written nothing, when the claim was lost (the job was reaped, #435)
    */
-  finish(job: ClaimedJob, result: AccessibilityTestResult): Promise<boolean>;
+  finish(job: ClaimedJob, result: AccessibilityTestResult | VisualRunResult): Promise<boolean>;
   /** The job could not run. No usage: nothing was delivered. `false` when the claim was lost. */
   fail(job: ClaimedJob, message: string): Promise<boolean>;
   /** Says the claim is alive. `false` when it was lost. */
@@ -346,7 +407,7 @@ export interface PostgresJobs {
    */
   reapStuck(options?: { staleMs?: number; maxAttempts?: number }): Promise<ReapResult>;
   /** Queued jobs of a kind, across orgs: the worker's queue-depth metric (#275). */
-  queueDepth(kind: 'a11y'): Promise<number>;
+  queueDepth(kind: JobKind): Promise<number>;
 }
 
 export interface ReapResult {
@@ -356,9 +417,97 @@ export interface ReapResult {
 
 const JOB_ERROR_MAX = 500;
 
+function orgBaselines(db: Kysely<unknown>, orgId: string): OrgBaselines {
+  return {
+    async get(project, name) {
+      const { rows } = await sql<{
+        project: string;
+        name: string;
+        page: string;
+        device: string;
+        object_key: string;
+        run_id: string | null;
+        approved_by: string;
+        updated_at: Date;
+      }>`select project, name, page, device, object_key, run_id, approved_by, updated_at
+         from visual_baselines where org_id = ${orgId} and project = ${project} and name = ${name}`.execute(
+        db,
+      );
+      const r = rows[0];
+      return r
+        ? {
+            project: r.project,
+            name: r.name,
+            page: r.page,
+            device: r.device,
+            objectKey: r.object_key,
+            runId: r.run_id,
+            approvedBy: r.approved_by,
+            updatedAt: r.updated_at,
+          }
+        : null;
+    },
+    async set(b) {
+      await sql`insert into visual_baselines
+          (org_id, project, name, page, device, object_key, run_id, approved_by)
+        values (${orgId}, ${b.project}, ${b.name}, ${b.page}, ${b.device}, ${b.objectKey},
+          ${b.runId}, ${b.approvedBy})
+        on conflict (org_id, project, name) do update set page = excluded.page,
+          device = excluded.device, object_key = excluded.object_key, run_id = excluded.run_id,
+          approved_by = excluded.approved_by, updated_at = now()`.execute(db);
+    },
+  };
+}
+
 export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
   return {
+    baselines: (orgId) => orgBaselines(db, orgId),
     forOrg: ({ orgId, apiKeyId }) => ({
+      baselines: orgBaselines(db, orgId),
+
+      async approveVisualResult(runId, position, artifacts) {
+        if (!UUID.test(runId) || !Number.isSafeInteger(position) || position < 0)
+          return { status: 'not-found' };
+        const { rows } = await sql<{
+          kind: string;
+          url: string | null;
+          result: Record<string, unknown>;
+        }>`
+          select r.kind, x.url, x.result from runs r
+          join run_results x on x.org_id = r.org_id and x.run_id = r.id
+          where r.org_id = ${orgId} and r.id = ${runId} and x.position = ${position}`.execute(db);
+        const row = rows[0];
+        if (!row) return { status: 'not-found' };
+        const result = row.result ?? {};
+        const current = (result.artifacts as { current?: unknown } | undefined)?.current;
+        const project = result.project;
+        const device = result.device;
+        if (
+          row.kind !== 'visual' ||
+          typeof current !== 'string' ||
+          typeof project !== 'string' ||
+          typeof device !== 'string' ||
+          !row.url
+        )
+          return { status: 'conflict', reason: 'Not a visual comparison with a screenshot' };
+        const name = artifactName(row.url, device);
+        const objectKey = baselineKey({ orgId, projectId: project, name });
+        const image = await orgArtifacts(artifacts, orgId).get(current);
+        if (!image) return { status: 'conflict', reason: 'The screenshot is no longer stored' };
+        await orgArtifacts(artifacts, orgId).put(objectKey, image, 'image/png');
+        const baselines = orgBaselines(db, orgId);
+        await baselines.set({
+          project,
+          name,
+          page: row.url,
+          device,
+          objectKey,
+          runId,
+          approvedBy: apiKeyId ?? 'unknown',
+        });
+        return { status: 'approved', baseline: (await baselines.get(project, name))! };
+      },
+
       async enqueue({ kind, params }, { maxOutstanding = Infinity } = {}) {
         // One transaction under a per-org advisory lock: the count and the insert
         // cannot interleave with another enqueue of the same org.
@@ -426,7 +575,7 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
         id: string;
         org_id: string;
         api_key_id: string | null;
-        params: A11yJobParams;
+        params: A11yJobParams & VisualJobParams;
         started_at: Date;
         claim_token: string;
         attempts: number;
@@ -440,7 +589,7 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
                   ${suspendedSql(sql.ref('runs.org_id'))} as org_suspended`.execute(db);
       const row = rows[0];
       return row
-        ? {
+        ? ({
             id: row.id,
             orgId: row.org_id,
             apiKeyId: row.api_key_id,
@@ -450,13 +599,18 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
             claimToken: row.claim_token,
             attempts: row.attempts,
             orgSuspended: row.org_suspended,
-          }
+          } as ClaimedJob)
         : null;
     },
 
     async finish(job, result) {
       const finishedAt = new Date();
-      const run: RunInput = { kind: 'a11y', result, startedAt: job.startedAt, finishedAt };
+      const run = {
+        kind: job.kind,
+        result,
+        startedAt: job.startedAt,
+        finishedAt,
+      } as RunInput;
       const { summary, passed } = summarize(run);
       const results = resultsOf(run);
       return db.transaction().execute(async (tx) => {
@@ -476,7 +630,12 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
             values ${sql.join(values)}`.execute(tx);
         }
         await insertUsage(tx, job.orgId, [
-          { kind: 'a11y_job', quantity: 1, idempotencyKey: `job:${job.id}`, runId: job.id },
+          {
+            kind: job.kind === 'visual' ? 'visual_job' : 'a11y_job',
+            quantity: 1,
+            idempotencyKey: `job:${job.id}`,
+            runId: job.id,
+          },
         ]);
         return true;
       });
