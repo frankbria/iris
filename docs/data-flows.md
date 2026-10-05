@@ -52,7 +52,7 @@ Sign-in rate limits are counted per client IP in the portal process's memory (Be
 | Where | Postgres, `0001_initial.ts`; plugin options in `src/auth/config.ts`. |
 | Access | Members of the org (roles owner/admin/member). Operators. |
 | Encryption | As above. |
-| Retention | Invitation: expires after 48 hours (BetterAuth default, not overridden); the row stays. Tenants cannot delete an org themselves (`disableOrganizationDeletion`); the operator does it on request (`iris admin delete-org`): suspended at once, restorable for **30 days** (`restore-org`), then purged. Members, invitations, keys, provider keys, plans and runs are deleted; the org row stays as a tombstone (name "Deleted organization", a random `deleted-<uuid>` slug) holding only its billing records, for 7 years. |
+| Retention | Invitation: expires after 48 hours (BetterAuth default, not overridden); the row stays. Tenants cannot delete an org themselves (`disableOrganizationDeletion`); the operator does it on request (`iris admin delete-org`): suspended at once, restorable for **30 days** (`restore-org`), then purged. Members, invitations, keys, provider keys, plans, the AI setting (`org_ai_settings`, which names the user who set it) and runs are deleted; the org row stays as a tombstone (name "Deleted organization", a random `deleted-<uuid>` slug) holding only its billing records, for 7 years. |
 
 ### API keys
 
@@ -105,7 +105,7 @@ is processed in Chromium's memory for the duration of the job.
 | | |
 |---|---|
 | Data | `org_plans`: org, plan id (`free`/`pro`/`team`), per-org overrides of plan limits, last update. No personal data. An org with no row is on free. |
-| Purpose | Entitlements (#260): which limits apply to the org; enforcement is #346. |
+| Purpose | Entitlements (#260): which limits apply to the org, enforced at the API (#346). |
 | Where | Postgres, `0009`; `src/billing/plans.ts`. |
 | Access | Operators; Stripe webhooks will set it (#261). |
 | Retention | Deleted when the org is purged. |
@@ -218,9 +218,12 @@ contacted unless the org opts into fallback, and with BYOK only the org's vendor
   title and an accessibility snapshot of the page text, capped at 4,000 characters
   (`src/agent-loop.ts`).
 
-**Managed credits** (IRIS's own vendor keys, billed to the customer) are not live (#346);
-when they launch, OpenAI and Anthropic become IRIS's subprocessors for those requests.
-Each vendor's own retention applies to what it receives.
+**Managed credits** (#479): an org whose owners choose IRIS credits (`org_ai_settings.mode
+= managed`) sends the same data on IRIS's own vendor key (`IRIS_MANAGED_AI_PROVIDER` /
+`IRIS_MANAGED_AI_KEY`, operator configuration) until its plan's monthly credit is spent,
+then on its own key if it has one (`src/billing/managed-ai.ts`). For those requests the
+vendor is IRIS's subprocessor. The ledger row carries `billing_mode = managed`. Each
+vendor's own retention applies to what it receives.
 
 ### Email (SMTP provider)
 

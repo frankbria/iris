@@ -13,7 +13,6 @@ import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
 import { resolveKeyring } from '../../src/byok/crypto';
 import { providerKeyStore } from '../../src/byok/store';
-import { orgEntitlements } from '../../src/billing/plans';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 if (!ADMIN_URL) {
@@ -147,18 +146,5 @@ const ANTHROPIC_KEY = ['sk', 'ant', 'api03', randomBytes(24).toString('hex')].jo
     ['ollama', 'sk-whatever-long-enough-to-pass-length'],
   ])('refuses provider %p with a malformed key', async (provider, key) => {
     await expect(store().set('org-b', provider as never, key)).rejects.toThrow(/provider key/i);
-  });
-
-  // #346: the stored key is used only while the org's plan allows bring-your-own-key.
-  it('gives no stored key to an org whose plan does not allow BYOK', async () => {
-    // Loaded here: api-key-auth pulls BetterAuth (ESM) only where used, not at import.
-    const { planAwareCredentials } = await import('../../src/api-key-auth');
-    await store().set('org-a', 'openai', OPENAI_KEY);
-    const credentials = planAwareCredentials((o) => orgEntitlements(db).get(o), store());
-    const principal = { orgId: 'org-a', keyId: 'k' };
-    expect(await credentials(principal)).toMatchObject({ provider: 'openai' });
-    await orgEntitlements(db).setPlan('org-a', 'free', { byokAllowed: false });
-    expect(await credentials(principal)).toBeNull();
-    await orgEntitlements(db).setPlan('org-a', 'free');
   });
 });

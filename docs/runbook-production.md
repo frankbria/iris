@@ -626,6 +626,22 @@ A partial configuration stops `iris connect` (exit 3) rather than serving withou
 artifacts. The production vendor is not chosen yet (#273); the compose file does not pass
 these until it is. Nothing writes artifacts until hosted visual jobs (#268).
 
+## Managed AI credits (issue #479)
+
+Orgs that choose **IRIS credits** on `/provider-keys` make AI calls on IRIS's own vendor
+key, up to their plan's monthly credit; then their own key, if they stored one. Set on the
+`iris` service (and the worker, once hosted jobs make AI calls):
+
+| Variable | Value |
+| --- | --- |
+| `IRIS_MANAGED_AI_PROVIDER` | `openai` or `anthropic` |
+| `IRIS_MANAGED_AI_KEY_FILE` | a secret file holding IRIS's key for that vendor |
+
+Unset, managed mode falls through to each org's own key. One without the other stops
+`iris connect` (exit 3). The vendor is then IRIS's subprocessor for those orgs (the
+subprocessor page says so). Managed spend is `usage_events` with `billing_mode = managed`;
+Stripe reporting is #264.
+
 ## Retention and offboarding (issue #349)
 
 Periods (owner decisions, 2026-10-03; the 7 years await counsel's confirmation, #450):

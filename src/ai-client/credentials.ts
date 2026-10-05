@@ -11,6 +11,8 @@ export interface AICredentials {
   apiKey?: string;
   endpoint?: string;
   model?: string;
+  /** Whose account pays (#479): the org's own key, or IRIS's managed credit. */
+  billingMode?: 'byok' | 'managed';
 }
 
 /**

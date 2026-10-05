@@ -12,6 +12,7 @@ import * as orgPlans from './migrations/0009_org_plans';
 import * as offboarding from './migrations/0010_offboarding';
 import * as visualBaselines from './migrations/0011_visual_baselines';
 import * as artifactPurges from './migrations/0012_artifact_purges';
+import * as orgAiSettings from './migrations/0013_org_ai_settings';
 import { createPostgresDb, resolveDatabaseUrl } from './postgres';
 
 /**
@@ -32,6 +33,7 @@ export const MIGRATIONS = {
   '0010_offboarding': offboarding,
   '0011_visual_baselines': visualBaselines,
   '0012_artifact_purges': artifactPurges,
+  '0013_org_ai_settings': orgAiSettings,
 };
 
 /**

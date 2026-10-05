@@ -662,7 +662,7 @@ program
     let aiCredentials:
       | ((
           p: import('./protocol').Principal,
-        ) => Promise<import('./ai-client/credentials').AICredentials | null>)
+        ) => Promise<import('./protocol').TenantCredentials | null>)
       | undefined;
     if (isHostedMode()) {
       if (tokenFile || process.env.IRIS_CONNECT_TOKEN) {

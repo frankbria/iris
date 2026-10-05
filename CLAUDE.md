@@ -1092,10 +1092,36 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - **`runsPerMonth` is a job-API quota**: RPC `executeBrowserAction` runs are recorded but not
   counted; RPC use is bounded by concurrent sessions and metered as browser minutes. Tests that open several sessions for one real org put it on `team`
   (`api-key-auth.test.ts`).
-- **`byokAllowed`**: `planAwareCredentials()` (src/api-key-auth.ts) returns no stored key
+- **`byokAllowed`**: `managedAiResolver()` (src/billing/managed-ai.ts, #479) returns no stored key
   for a plan without it.
 - Not enforced yet, no hosted surface: agent turns (CLI-only, #428), vision calls (hosted
   jobs run no AI), storage (#315).
+
+### Managed AI Credits (issue #479)
+
+`src/billing/managed-ai.ts`, migration 0013 (`org_ai_settings`), ADR 0001 §6.
+
+- **An org's AI mode** is `byok` (no row, the default) or `managed`, set by owners and admins
+  on `/provider-keys` (`setAiMode`, the `providerKey` create permission). Nobody is billed
+  for AI they did not choose.
+- **`managedAiResolver`** is hosted `iris connect`'s `aiCredentials`: a managed org with
+  credit left gets IRIS's key (`billingMode: 'managed'`); with none left, or no operator key
+  configured, it falls back to its own key if its plan allows BYOK (`byok`), else no AI. A
+  BYOK org never gets the managed key. Credit = plan `managedAiCreditUsdPerMonth` minus this
+  UTC month's `usage_events` with `billing_mode = managed` (quantity x unit cost).
+- **The RPC server records each settled call with the credential's `billingMode`**
+  (`TenantCredentials` in src/protocol.ts makes it required on the resolver), no longer a
+  hardcoded `byok`. A managed call that returns no actions (provider error, invalid reply) is logged and the tenant gets
+  "AI translation is unavailable right now": it describes IRIS's vendor account. A BYOK
+  error still reaches the org that owns the key.
+- **Offboarding deletes the org's `org_ai_settings` row**: the org row survives as a
+  tombstone, so its cascade never fires, and `updated_by` is a user id.
+- **IRIS's key** is operator config, read once at startup: `IRIS_MANAGED_AI_PROVIDER`
+  (`openai` | `anthropic`) + `IRIS_MANAGED_AI_KEY(_FILE)`; one without the other exits 3. On
+  the `jest.setup.ts` scrub list.
+- ponytail: a call is admitted while any credit is left, so the overshoot is the cost of
+  the org's calls in flight; the operator's CostTracker budget still reserves per call (#244).
+  Stripe reporting of managed usage is #264.
 
 ### Hosted Job API (issue #267)
 

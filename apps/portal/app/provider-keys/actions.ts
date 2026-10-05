@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache"
 import { headers } from "next/headers"
 
 import { ProviderKeyError } from "../../../../src/byok/store"
-import { getAuth } from "@/lib/auth"
+import { orgAiSettings } from "../../../../src/billing/managed-ai"
+import { getAuth, getDb } from "@/lib/auth"
 import { orgIsSuspended } from "@/lib/org"
 import { getProviderKeys } from "@/lib/provider-keys"
 
@@ -88,4 +89,33 @@ export async function removeProviderKey(
   await getProviderKeys().remove(organizationId, vendor)
   revalidatePath("/provider-keys")
   return { done: "Removed." }
+}
+
+/**
+ * The org's AI mode (#479, ADR 0001 §6): its own keys, or IRIS's credits. Owners and
+ * admins (the same `providerKey` permission as the keys), for the org the form names.
+ */
+export async function setAiMode(
+  _previous: ProviderKeyState,
+  form: FormData
+): Promise<ProviderKeyState> {
+  const organizationId = String(form.get("organizationId") ?? "")
+  const mode = String(form.get("mode") ?? "")
+  if (mode !== "byok" && mode !== "managed")
+    return { error: "Choose how to pay for AI." }
+  if (!(await allowed(organizationId, "create")))
+    return { error: "Only owners and admins can change how AI is paid for." }
+  if (await orgIsSuspended(organizationId)) return { error: SUSPENDED }
+  const session = await getAuth().api.getSession({ headers: await headers() })
+  if (!session) return { error: "Sign in again to change this." }
+  await orgAiSettings(getDb()).set(
+    organizationId,
+    mode,
+    `user:${session.user.id}`
+  )
+  revalidatePath("/provider-keys")
+  return {
+    done:
+      mode === "managed" ? "IRIS credits are on." : "Your own keys are used.",
+  }
 }

@@ -205,8 +205,8 @@ test("an owner cannot save a key into another org", async ({
   await owner(page, context, "Mal")
   await page.goto("/provider-keys")
   const openai = page.getByRole("region", { name: "OpenAI" })
-  // The page's own form, pointed at the other org.
-  await page
+  // The page's own OpenAI form, pointed at the other org.
+  await openai
     .locator("input[name=organizationId]")
     .first()
     .evaluate(
@@ -221,4 +221,82 @@ test("an owner cannot save a key into another org", async ({
   expect(
     await sql("select 1 from provider_keys where org_id = $1", [victimOrg])
   ).toEqual([])
+})
+
+// #479: how the org pays for AI. Owners and admins switch it; a member's forged post of
+// the owner's form changes nothing (with a positive control from the owner's session).
+test("an owner switches to IRIS credits; a member cannot", async ({
+  page,
+  context,
+  browser,
+}) => {
+  const email = await owner(page, context, "Ava")
+  const orgId = await orgOf(email)
+  await sql("insert into org_plans (org_id, plan) values ($1, 'pro')", [orgId])
+  await page.goto("/provider-keys")
+  const usage = page.getByRole("region", { name: "AI usage" })
+  await expect(
+    usage.getByText("Your organization's own keys are used.")
+  ).toBeVisible()
+  await usage.getByLabel(/IRIS credits/).check()
+  await usage.getByRole("button", { name: "Save AI setting" }).click()
+  await expect(usage.getByText("IRIS credits are on.")).toBeVisible()
+  await page.reload()
+  await expect(
+    usage.getByText("IRIS credits: $10.00 of $10.00 left this month.")
+  ).toBeVisible()
+  const mode = async () =>
+    (
+      await sql<{ mode: string }>(
+        "select mode from org_ai_settings where org_id = $1",
+        [orgId]
+      )
+    )[0]?.mode
+
+  // A member: sees the setting, has no form, and a forged post is refused.
+  const memberEmail = unique()
+  const invited = await context.request.post(
+    "/api/auth/organization/invite-member",
+    {
+      headers: { origin: baseURL },
+      data: { email: memberEmail, role: "member" },
+    }
+  )
+  const theirs = await browser.newContext()
+  await ownRateLimitBucket(theirs)
+  await signUpVerified(theirs.request, memberEmail, "Moe")
+  await theirs.request.post("/api/auth/sign-in/email", {
+    data: { email: memberEmail, password: PASSWORD },
+  })
+  await theirs.request.post("/api/auth/organization/accept-invitation", {
+    headers: { origin: baseURL },
+    data: { invitationId: (await invited.json()).id },
+  })
+  const them = await theirs.newPage()
+  await them.goto("/provider-keys")
+  await expect(them.getByText(/IRIS credits: \$/)).toBeVisible()
+  await expect(
+    them.getByRole("button", { name: "Save AI setting" })
+  ).toHaveCount(0)
+
+  const html = await (await context.request.get("/provider-keys")).text()
+  const ssrForm = [...html.matchAll(/<form[^>]*>[\s\S]*?<\/form>/g)]
+    .map((m) => m[0])
+    .find((f) => f.includes('name="mode"'))!
+  const fields: Record<string, string> = {}
+  for (const [, name, value] of ssrForm.matchAll(
+    /<input type="hidden" name="([^"]+)"(?: value="([^"]*)")?\/>/g
+  ))
+    fields[name] = (value ?? "").replaceAll("&quot;", '"')
+  const post = (ctx: BrowserContext, to: string) =>
+    ctx.request.post("/provider-keys", {
+      headers: { origin: baseURL },
+      multipart: { ...fields, mode: to },
+    })
+  await post(theirs, "byok")
+  expect(await mode()).toBe("managed")
+  // Positive control: the same post from the owner's session goes through.
+  expect((await post(context, "byok")).ok()).toBe(true)
+  expect(await mode()).toBe("byok")
+  await theirs.close()
 })

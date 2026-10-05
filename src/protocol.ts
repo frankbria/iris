@@ -109,6 +109,13 @@ export interface BrowserSession {
 }
 
 /** Who a connection acts for: the org that owns its API key, and the key (#341). */
+/**
+ * A tenant's AI credential for one request (#258) with whose account pays for it (#479).
+ * The mode is required: a managed key recorded as `byok` would never count against the
+ * org's credit.
+ */
+export type TenantCredentials = AICredentials & { billingMode: 'byok' | 'managed' };
+
 export interface Principal {
   orgId: string;
   keyId: string;
@@ -399,7 +406,7 @@ export function startServer(
      * translation only, and the process-wide `*_API_KEY` is never used for it
      * (ADR 0001 §5). Local (token) connections keep the process configuration.
      */
-    aiCredentials?: (principal: Principal) => Promise<AICredentials | null>;
+    aiCredentials?: (principal: Principal) => Promise<TenantCredentials | null>;
     /**
      * The usage ledger (#263): a tenant session's browser minutes when it ends, and
      * each AI call its translations make. Local connections record nothing.
@@ -1242,7 +1249,7 @@ async function executeBrowserActions(
   url: string | undefined,
   maxActions: number,
   tenant: {
-    aiCredentials?: (principal: Principal) => Promise<AICredentials | null>;
+    aiCredentials?: (principal: Principal) => Promise<TenantCredentials | null>;
     usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
   } = {},
 ): Promise<{
@@ -1265,6 +1272,8 @@ async function executeBrowserActions(
       // A tenant's AI translation is charged to, and gated by, its org's budget
       // (#255), and runs on its own credentials, never the operator's (#258).
       const principal = session.principal;
+      // Whose account a billed call is on, from the credential the resolver gave (#479).
+      let billingMode = 'byok' as 'byok' | 'managed';
       const translation = await translate(
         instruction,
         url ? { url } : undefined,
@@ -1277,14 +1286,17 @@ async function executeBrowserActions(
               onUsage: (call: SettledAICall) => {
                 const kind = usageKindOf(call.operation);
                 // Spend as a metric (#275): no org label; the ledger has the per-org split.
-                aiSpend.inc({ provider: call.provider, kind, billing_mode: 'byok' }, call.costUsd);
+                aiSpend.inc(
+                  { provider: call.provider, kind, billing_mode: billingMode },
+                  call.costUsd,
+                );
                 return tenant.usage?.record(principal.orgId, [
                   {
                     kind,
                     quantity: 1,
                     unitCostUsd: call.costUsd,
                     estimated: call.estimated,
-                    billingMode: 'byok',
+                    billingMode,
                     idempotencyKey: `${call.operation}:${call.callId}`,
                   },
                 ]);
@@ -1292,7 +1304,9 @@ async function executeBrowserActions(
               credentials: async () => {
                 if (!tenant.aiCredentials) return null;
                 try {
-                  return await tenant.aiCredentials(principal);
+                  const resolved = await tenant.aiCredentials(principal);
+                  if (resolved) billingMode = resolved.billingMode;
+                  return resolved;
                 } catch (err) {
                   log('error', 'AI credentials lookup failed; translating without AI', {
                     ...who(principal),
@@ -1304,6 +1318,17 @@ async function executeBrowserActions(
             }
           : {},
       );
+      // On IRIS's managed key, a translation with no actions is a failure whose reason
+      // (provider error, invalid reply) describes IRIS's vendor account: a key's last
+      // characters, quota (#479). Logged, not returned. Matched by outcome, not by message
+      // prefix: each client words its failures differently.
+      if (billingMode === 'managed' && translation.actions.length === 0) {
+        log('error', 'managed AI translation failed', {
+          ...(principal && who(principal)),
+          err: translation.reasoning,
+        });
+        translation.reasoning = 'AI translation is unavailable right now';
+      }
       translationResult = translation;
       actionsToExecute = translation.actions;
     } else if (actions) {

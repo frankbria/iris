@@ -583,6 +583,88 @@ describe('hosted RPC history (#254)', () => {
     }
   });
 
+  // #479: a call made on IRIS's managed key is billed as managed, from the credential.
+  test('records the billing mode of the credential the call was made with', async () => {
+    const recorded: UsageEvent[] = [];
+    const usage = {
+      record: async (_o: string, events: UsageEvent[]) => void recorded.push(...events),
+    };
+    const translate = jest
+      .spyOn(translatorModule, 'translate')
+      .mockImplementation(async (_i, _c, scope) => {
+        // As the real translator does: credentials first, then the settled call.
+        const credentials = scope?.credentials;
+        if (typeof credentials === 'function') await credentials();
+        await scope?.onUsage?.({
+          callId: 'call-m',
+          operation: 'text',
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          costUsd: 0.003,
+          estimated: false,
+        });
+        return { actions: [], method: 'ai', confidence: 0, reasoning: 'stub' };
+      });
+    try {
+      const url = await serve({
+        usage,
+        aiCredentials: async () => ({
+          provider: 'openai',
+          apiKey: 'iris-managed',
+          billingMode: 'managed',
+        }),
+      });
+      const b = await open(url, as('key-b'));
+      await call(b, 'launchBrowser');
+      await call(b, 'executeBrowserAction', { instruction: 'check the order total' });
+      expect(recorded.filter((e) => e.kind === 'text_call')).toEqual([
+        expect.objectContaining({ billingMode: 'managed', unitCostUsd: 0.003 }),
+      ]);
+    } finally {
+      translate.mockRestore();
+    }
+  });
+
+  // #479: a provider error on IRIS's own key describes IRIS's vendor account, not the
+  // tenant's. The real OpenAI client and translator, against a local server answering 401
+  // (OPENAI_BASE_URL is the operator's routing, which injected credentials keep).
+  test.each([
+    ['managed', /^AI translation is unavailable right now$/],
+    ['byok', /Incorrect API key provided: sk-\.\.\.wxyz/],
+  ] as const)('a %s provider error reaches the client as %p', async (billingMode, expected) => {
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const vendor = http.createServer((_req, res) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: { message: 'Incorrect API key provided: sk-...wxyz', code: 'invalid_api_key' },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => vendor.listen(0, '127.0.0.1', resolve));
+    const before = process.env.OPENAI_BASE_URL;
+    process.env.OPENAI_BASE_URL = `http://127.0.0.1:${(vendor.address() as AddressInfo).port}/v1`;
+    try {
+      const url = await serve({
+        aiCredentials: async () => ({ provider: 'openai', apiKey: 'sk-x', billingMode }),
+      });
+      const b = await open(url, as('key-b'));
+      await call(b, 'launchBrowser');
+      const reply = await call(b, 'executeBrowserAction', {
+        instruction: 'make sure the cart looks right',
+      });
+      expect(reply.result.translationResult.reasoning).toMatch(expected);
+      if (billingMode === 'managed') {
+        expect(errors.mock.calls.flat().join(' ')).toMatch(/managed AI translation failed/);
+      }
+    } finally {
+      if (before === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = before;
+      await new Promise((resolve) => vendor.close(resolve));
+      errors.mockRestore();
+    }
+  });
+
   test('local mode, with no principal, records nothing', async () => {
     const recorded: unknown[] = [];
     const history = {
@@ -657,7 +739,9 @@ describe('AI spend is charged to the org (#255)', () => {
       const url = await serve({
         aiCredentials: async (principal) => {
           asked.push(principal);
-          return principal.orgId === 'org-a' ? { provider: 'openai', apiKey: 'sk-org-a' } : null;
+          return principal.orgId === 'org-a'
+            ? { provider: 'openai', apiKey: 'sk-org-a', billingMode: 'byok' }
+            : null;
         },
       });
       const a = await open(url, as('key-a'));
@@ -670,7 +754,11 @@ describe('AI spend is charged to the org (#255)', () => {
       expect(asked).toEqual([]);
       const [first, second] = translate.mock.calls.map((c) => c[2] as any);
       expect(first.orgId).toBe('org-a');
-      expect(await first.credentials()).toEqual({ provider: 'openai', apiKey: 'sk-org-a' });
+      expect(await first.credentials()).toEqual({
+        provider: 'openai',
+        apiKey: 'sk-org-a',
+        billingMode: 'byok',
+      });
       expect(second.orgId).toBe('org-b');
       expect(await second.credentials()).toBeNull();
       expect(asked.map((p) => p.orgId)).toEqual(['org-a', 'org-b']);
