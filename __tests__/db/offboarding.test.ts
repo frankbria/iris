@@ -355,10 +355,9 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
         const [{ id }] = (
           await sql<{
             id: string;
-          }>`insert into runs (org_id, kind, status, summary, started_at, finished_at)
-            values ('org-img', 'visual', 'succeeded', 'v', ${finished}, ${finished}) returning id`.execute(
-            db,
-          )
+          }>`insert into runs (org_id, kind, status, summary, started_at, finished_at, params)
+            values ('org-img', 'visual', 'succeeded', 'v', ${finished}, ${finished},
+              '{"project": "shop"}') returning id`.execute(db)
         ).rows;
         const key = runArtifactKey({
           orgId: 'org-img',
@@ -375,6 +374,22 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
         return key;
       };
       const oldImage = await visual(120);
+      // A job that failed after uploading: no result rows, its images go all the same.
+      const [{ id: failedRun }] = (
+        await sql<{
+          id: string;
+        }>`insert into runs (org_id, kind, status, error, started_at, finished_at, params)
+          values ('org-img', 'visual', 'failed', 'x', ${at(now, -120)}, ${at(now, -120)},
+            '{"project": "shop"}') returning id`.execute(db)
+      ).rows;
+      const failedImage = runArtifactKey({
+        orgId: 'org-img',
+        projectId: 'shop',
+        runId: failedRun,
+        kind: 'current',
+        name: 'home',
+      });
+      await store.put(failedImage, Buffer.from('png'), 'image/png');
       const newImage = await visual(5);
       const baseline = baselineKey({ orgId: 'org-img', projectId: 'shop', name: 'home' });
       await store.put(baseline, Buffer.from('png'), 'image/png');
@@ -384,14 +399,19 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
       fs.chmodSync(project, 0o500);
       const failed = await offboarding(db).runRetention({ now, artifacts: store });
       expect(failed.failures.some((f) => f.startsWith('artifacts '))).toBe(true);
-      expect(await count('artifact_purges', "org_id = 'org-img'")).toBe(1);
+      expect(await count('artifact_purges', "org_id = 'org-img'")).toBe(2);
+      // Failed entries went behind (attempted_at), so untried ones come first next time.
+      expect(
+        await count('artifact_purges', "org_id = 'org-img' and attempted_at is not null"),
+      ).toBe(2);
       fs.chmodSync(project, 0o700);
 
       // Next pass: the expired run's images go; the recent run and the baseline stay.
       const ok = await offboarding(db).runRetention({ now, artifacts: store });
       expect(ok.failures).toEqual([]);
-      expect(ok.artifactPrefixesPurged).toBe(1);
+      expect(ok.artifactPrefixesPurged).toBe(2);
       expect(await store.get(oldImage)).toBeNull();
+      expect(await store.get(failedImage)).toBeNull();
       expect(await store.get(newImage)).not.toBeNull();
       expect(await store.get(baseline)).not.toBeNull();
       expect(await count('artifact_purges', "org_id = 'org-img'")).toBe(0);
@@ -424,8 +444,7 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
           db,
         )
       ).rows;
-      await sql`insert into run_results (org_id, run_id, position, url, passed, result)
-        values ('org-odd', ${id}, 0, '/', true, '{"project": null}')`.execute(db);
+      await sql`update runs set params = '{"project": null}' where id = ${id}`.execute(db);
       await sql`insert into artifact_purges (org_id, prefix) values ('org-odd', 'org/org-odd/../')`.execute(
         db,
       );

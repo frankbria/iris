@@ -291,12 +291,13 @@ export function offboarding(db: Kysely<unknown>) {
           const cutoff = sql`${now}::timestamptz - make_interval(days => ${RUN_RETENTION_DAYS})`;
           // A visual run's images go with it (#472). Baselines stay: they belong to the
           // project, and run detail of later runs links them.
+          // The prefix comes from the job's own params, not its results: a job that failed
+          // after uploading has no result rows but its images still go.
           await sql`insert into artifact_purges (org_id, prefix)
-            select distinct x.org_id,
-              'org/' || x.org_id || '/project/' || (x.result->>'project') || '/run/' || x.run_id || '/'
-            from run_results x join runs r on r.org_id = x.org_id and r.id = x.run_id
-            where r.kind = 'visual' and r.finished_at is not null and r.finished_at < ${cutoff}
-              and jsonb_typeof(x.result->'project') = 'string'`.execute(tx);
+            select org_id, 'org/' || org_id || '/project/' || (params->>'project') || '/run/' || id || '/'
+            from runs
+            where kind = 'visual' and finished_at is not null and finished_at < ${cutoff}
+              and jsonb_typeof(params->'project') = 'string'`.execute(tx);
           await sql`update usage_events u set run_id = null from runs r
             where u.org_id = r.org_id and u.run_id = r.id
               and r.finished_at is not null and r.finished_at < ${cutoff}`.execute(tx);
@@ -325,7 +326,8 @@ export function offboarding(db: Kysely<unknown>) {
       const artifactPrefixesPurged = artifacts
         ? await step('artifacts', 0, async () => {
             const { rows } = await sql<{ id: string; org_id: string; prefix: string }>`
-              select id, org_id, prefix from artifact_purges order by id limit 500`.execute(db);
+              select id, org_id, prefix from artifact_purges
+              order by attempted_at nulls first, id limit 500`.execute(db);
             let done = 0;
             for (const row of rows) {
               try {
@@ -343,6 +345,10 @@ export function offboarding(db: Kysely<unknown>) {
                 }
                 // One bad prefix must not stop the rest; it stays queued for the next pass.
                 failures.push(`artifacts ${row.prefix}`);
+                // Behind the entries not yet tried, so a stuck one cannot starve the rest.
+                await sql`update artifact_purges set attempted_at = now() where id = ${row.id}`.execute(
+                  db,
+                );
                 log('error', 'artifact purge failed', {
                   orgId: row.org_id,
                   err: (err as Error).message,

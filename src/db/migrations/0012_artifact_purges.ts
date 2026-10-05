@@ -12,7 +12,9 @@ const STATEMENTS = [
      id bigserial primary key,
      org_id text not null,
      prefix text not null,
-     created_at timestamptz not null default now()
+     created_at timestamptz not null default now(),
+     -- The last failed attempt: failed entries go behind untried ones.
+     attempted_at timestamptz
    )`,
   `create index artifact_purges_org_idx on artifact_purges (org_id, id)`,
 ];
