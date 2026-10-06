@@ -1055,14 +1055,18 @@ unchanged. The same `--base-url` flag and `IRIS_BASE_URL` env var apply to
 iris a11y [options]
 
 Options:
-  --pages <patterns>        Page patterns (comma-separated, default: /)
+  --pages <pattern>         Page to test; repeat for several (default: /). A scheme-less
+                            value may list paths with commas (/,/about); a URL
+                            (data:, https:) is always one page
   --rules <rules>           Specific axe rules (comma-separated)
   --tags <tags>             Rule tags: wcag2a,wcag2aa,wcag21aa (default: wcag2a,wcag2aa)
   --exclude <selectors>     CSS selectors to exclude from the scan (comma-separated)
-  --fail-on <impacts>       Impact levels: critical,serious,moderate,minor (default: critical,serious)
+  --fail-on <impacts>       Impact levels: critical,serious,moderate,minor, any case
+                            (default: critical,serious); anything else exits 2
   --format <type>           Output: html|json|junit (default: html)
   --output <path>           Output file path
   --include-keyboard        Include keyboard navigation tests (default: true)
+  --no-include-keyboard     Skip keyboard navigation tests
   --include-screenreader    Include screen reader simulation
   --base-url <url>          Origin for relative --pages (default: http://localhost:3000)
 ```
