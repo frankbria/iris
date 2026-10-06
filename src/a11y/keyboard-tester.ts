@@ -399,13 +399,16 @@ export class KeyboardTester {
           'a[href], area[href], img, button, input, select, textarea, iframe, summary, [tabindex], [contenteditable]',
         );
         let visible = !canTakeFocus || (rect.width > 0 && rect.height > 0);
+        // `visibility` is inherited and a descendant may override it, so within one document
+        // only the focused element's computed value counts. Inheritance stops at a frame
+        // boundary, though: an <iframe> with visibility: hidden hides its content whatever the
+        // content computes, so each frame element crossed is checked too.
+        let visibilityCounts = true; // the focused element, or a frame element just reached
         for (let n: Element | null = shown; n && visible;) {
           const style = getComputedStyle(n);
-          // `visibility` is inherited and a descendant may override it, so only the focused
-          // element's computed value counts; display and opacity hide everything below.
           if (
             style.display === 'none' ||
-            (n === shown && style.visibility === 'hidden') ||
+            (visibilityCounts && style.visibility === 'hidden') ||
             Number(style.opacity) === 0
           ) {
             visible = false;
@@ -414,11 +417,12 @@ export class KeyboardTester {
           // document, its <iframe> in the outer page: hidden there hides everything inside.
           // A shadow root is detected by shape, not instanceof (each frame has its own realm).
           const root = Node.prototype.getRootNode.call(n) as Node & { host?: Element };
-          n =
-            (parentElementOf.call(n) as Element | null) ??
-            (root.nodeType === 11 && root.host
-              ? root.host
-              : (n.ownerDocument?.defaultView?.frameElement ?? null));
+          const up = parentElementOf.call(n) as Element | null;
+          const host: Element | null = root.nodeType === 11 && root.host ? root.host : null;
+          const frame: Element | null =
+            up || host ? null : (n.ownerDocument?.defaultView?.frameElement ?? null);
+          n = up ?? host ?? frame;
+          visibilityCounts = frame !== null;
         }
 
         // Through the prototypes: a <form>'s named controls shadow its methods (#285).

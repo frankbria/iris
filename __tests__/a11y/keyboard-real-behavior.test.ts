@@ -486,6 +486,24 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       ]);
     });
 
+    // Codex: visibility does not inherit across documents. A Tab handler moves focus into a
+    // visibility:hidden iframe (native Tab would skip it), and the control there computes
+    // as visible on its own.
+    it('treats a control inside a visibility:hidden iframe as invisible', async () => {
+      const result = await walk(`<button id="out">Out</button>
+        <iframe style="visibility:hidden" srcdoc="<button id=in>In</button>"></iframe>
+        <script>document.getElementById('out').addEventListener('keydown', (e) => {
+          if (e.key !== 'Tab') return;
+          e.preventDefault();
+          document.querySelector('iframe').contentDocument.getElementById('in').focus();
+        });</script>`);
+      expect(result.focusOrder.map((f) => [f.element, f.visible])).toEqual([
+        ['BUTTON#out', true],
+        ['BUTTON#in', false],
+      ]);
+      expect(result.passed).toBe(false);
+    });
+
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
       const result = await walk(links);
