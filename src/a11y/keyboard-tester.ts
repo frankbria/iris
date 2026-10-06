@@ -333,10 +333,16 @@ export class KeyboardTester {
           }
           return parts.join('>');
         };
+        // A positive tabindex on a frame or shadow host orders its whole focus scope ahead
+        // of ordinary controls: carried down, so the stop inside is judged by it.
+        let hostTabIndex = 0;
+        const tabIndexOf = (e: Element) =>
+          Number.parseInt(Element.prototype.getAttribute.call(e, 'tabindex') ?? '0', 10) || 0;
         for (;;) {
           path.push(pathOf(el));
           const inner: Element | null | undefined = el.shadowRoot?.activeElement;
           if (inner) {
+            hostTabIndex = Math.max(hostTabIndex, tabIndexOf(el));
             el = inner;
             continue;
           }
@@ -349,6 +355,7 @@ export class KeyboardTester {
             }
             const active: Element | null | undefined = doc?.activeElement;
             if (doc && active && active !== doc.body && active !== doc.documentElement) {
+              hostTabIndex = Math.max(hostTabIndex, tabIndexOf(el));
               el = active;
               continue;
             }
@@ -395,7 +402,10 @@ export class KeyboardTester {
           ...(role && { role }),
           ...(ariaLabel && { ariaLabel }),
           element: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
-          tabIndex: Number.parseInt(attr('tabindex') ?? '0', 10) || 0,
+          tabIndex:
+            Math.max(tabIndexOf(el), hostTabIndex) > 0
+              ? Math.max(tabIndexOf(el), hostTabIndex)
+              : tabIndexOf(el),
           visible,
         };
       });

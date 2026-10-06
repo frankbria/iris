@@ -448,6 +448,14 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.interactions.filter((i) => i.key === 'ArrowDown')).toHaveLength(1);
     }, 30_000);
 
+    it("judges a stop inside a host by the host's positive tabindex", async () => {
+      const result = await walk(`<a href="#a" id="a">a</a>
+        <iframe tabindex="3" srcdoc="<button id=in>In</button>"></iframe>`);
+      await page.waitForTimeout(0);
+      expect(result.focusOrder.find((f) => f.element === 'BUTTON#in')?.tabIndex).toBe(3);
+      expect(result.passed).toBe(false);
+    });
+
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
       const result = await walk(links);
