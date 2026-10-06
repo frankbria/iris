@@ -141,6 +141,26 @@ describe('a11y CLI command', () => {
       },
     );
 
+    // The old comma form with full URLs: https://a.com/,https://b.com/ parses as ONE valid URL
+    // (path "/,https://b.com/"), whose page could load and pass. Refused, not guessed at.
+    it.each([['https://a.com/,https://b.com/'], ['http://a.com/x, https://b.com']])(
+      'refuses several URLs in one --pages value (%p)',
+      async (value) => {
+        // commander reports option errors on stderr directly, not through console.error
+        const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        const config = await configFor(['--pages', value]);
+        expect(config).toBeUndefined();
+        expect(processExitSpy).toHaveBeenCalledWith(1);
+        expect(stderr.mock.calls.flat().join(' ')).toMatch(/repeat --pages/);
+        stderr.mockRestore();
+      },
+    );
+
+    it('keeps a data: page whose markup holds ",https://" as one page', async () => {
+      const data = 'data:text/html,<a href="x,https://b.com">l</a>';
+      expect((await configFor(['--pages', data])).pages).toEqual([data]);
+    });
+
     it('accepts --fail-on in any case', async () => {
       const config = await configFor(['--fail-on', 'Critical, SERIOUS']);
       expect(config.failureThreshold).toEqual({ critical: true, serious: true });

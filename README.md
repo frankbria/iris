@@ -994,7 +994,8 @@ iris visual-diff [options]
 Options:
   --pages <pattern>        Page to test; repeat for several (default: /). A scheme-less
                            value may list paths with commas (/,/about); a URL
-                           (data:, https:) is always one page; empty exits 1
+                           (data:, https:) is one page (several URLs in one value exit 1:
+                           repeat --pages); empty exits 1
   --baseline <reference>   Baseline branch/commit (default: main)
   --baseline-strategy <s>  Interpret --baseline as branch|commit|tag (default: branch)
   --semantic              Enable AI semantic analysis
@@ -1059,7 +1060,8 @@ iris a11y [options]
 Options:
   --pages <pattern>         Page to test; repeat for several (default: /). A scheme-less
                             value may list paths with commas (/,/about); a URL
-                            (data:, https:) is always one page; empty exits 1
+                            (data:, https:) is one page (several URLs in one value exit 1:
+                            repeat --pages); empty exits 1
   --rules <rules>           Specific axe rules (comma-separated)
   --tags <tags>             Rule tags: wcag2a,wcag2aa,wcag21aa (default: wcag2a,wcag2aa)
   --exclude <selectors>     CSS selectors to exclude from the scan (comma-separated)

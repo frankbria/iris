@@ -15,6 +15,12 @@ import { describeAction } from './actions';
  * paths with commas (`/,/about`), the old form.
  */
 function collectPages(value: string, previous: string[] | undefined): string[] {
+  // The pre-#289 form `https://a.com/,https://b.com/` is ONE valid URL (path "/,https://b.com/")
+  // whose page may load and pass. A data: page's markup may hold ",https://", so only a
+  // network URL is checked; it is refused rather than split by guesswork.
+  if (/^\s*(https?|file):/i.test(value) && /,\s*[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    throw new InvalidArgumentError(`"${value}" looks like several URLs; repeat --pages per URL.`);
+  }
   const pages = /^[a-z][a-z0-9+.-]*:/i.test(value.trim())
     ? [value.trim()]
     : value
