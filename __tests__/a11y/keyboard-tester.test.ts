@@ -28,6 +28,10 @@ describe('KeyboardTester', () => {
         press: jest.fn(),
       },
       waitForTimeout: jest.fn(),
+      // The page under test: the Escape check returns to it after the trap check (#286).
+      url: jest.fn().mockReturnValue('https://example.test/'),
+      reload: jest.fn(),
+      waitForLoadState: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     keyboardTester = new KeyboardTester(defaultConfig);
@@ -39,27 +43,21 @@ describe('KeyboardTester', () => {
 
   describe('run', () => {
     it('should run all keyboard navigation tests when configured', async () => {
-      // Mock focus order elements
+      const stops = [
+        {
+          path: 'a',
+          element: 'BUTTON#submit',
+          tagName: 'BUTTON',
+          role: 'button',
+          tabIndex: 0,
+          visible: true,
+        },
+        { path: 'b', element: 'INPUT#email', tagName: 'INPUT', tabIndex: 0, visible: true },
+      ];
       mockPage.evaluate.mockImplementation((fn: any) => {
-        // First call: testFocusOrder
-        if (fn.toString().includes('focusableSelectors')) {
-          return Promise.resolve([
-            {
-              element: 'BUTTON#submit',
-              tabIndex: 0,
-              focusable: true,
-              visible: true,
-              tagName: 'BUTTON',
-              role: 'button',
-            },
-            {
-              element: 'INPUT#email',
-              tabIndex: 0,
-              focusable: true,
-              visible: true,
-              tagName: 'INPUT',
-            },
-          ]);
+        // testFocusOrder: one evaluate per Tab press, each the focused stop, then null (#286).
+        if (fn.toString().includes('getBoundingClientRect')) {
+          return Promise.resolve(stops.shift() ?? null);
         }
         // Second call: testFocusTraps
         if (fn.toString().includes('focus trap')) {
@@ -95,16 +93,18 @@ describe('KeyboardTester', () => {
       };
       keyboardTester = new KeyboardTester(configWithFocusTest);
 
-      // Mock invalid focus order (negative tab index on visible element)
-      mockPage.evaluate.mockResolvedValue([
-        {
+      // Tab reaches a stop ordered by a positive tabindex (#286: a negative one is the
+      // roving-tabindex pattern, never a failure). Blur, one stop, then focus leaves.
+      mockPage.evaluate
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce({
+          path: 'a',
           element: 'BUTTON',
-          tabIndex: -1,
-          focusable: true,
-          visible: true,
           tagName: 'BUTTON',
-        },
-      ]);
+          tabIndex: 3,
+          visible: true,
+        })
+        .mockResolvedValue(null);
 
       const result = await keyboardTester.run(mockPage, 'invalid-focus');
 
@@ -246,6 +246,7 @@ describe('KeyboardTester', () => {
         .mockResolvedValueOnce([{ selector: 'DIV.modal', visible: true }] as never)
         // State before and after Escape (#285): the marked modal was visible, then hidden.
         .mockResolvedValueOnce({ marked: true, visibleCount: 1 } as never)
+        .mockResolvedValueOnce(undefined as never) // focus inside the dialog (#286)
         .mockResolvedValueOnce({ marked: false, visibleCount: 0 } as never);
 
       const result = await keyboardTester.run(mockPage, 'escape-test');
@@ -290,68 +291,9 @@ describe('KeyboardTester', () => {
     });
   });
 
-  describe('focus order validation', () => {
-    it('should pass for natural tab order (no manual tabindex)', async () => {
-      const configWithFocusOnly = {
-        testFocusOrder: true,
-        testTrapDetection: false,
-        testArrowKeyNavigation: false,
-        testEscapeHandling: false,
-        customSequences: [],
-      };
-      keyboardTester = new KeyboardTester(configWithFocusOnly);
-
-      mockPage.evaluate.mockResolvedValue([
-        { element: 'BUTTON', tabIndex: 0, focusable: true, visible: true, tagName: 'BUTTON' },
-        { element: 'INPUT', tabIndex: 0, focusable: true, visible: true, tagName: 'INPUT' },
-        { element: 'A', tabIndex: 0, focusable: true, visible: true, tagName: 'A' },
-      ]);
-
-      const result = await keyboardTester.run(mockPage, 'natural-order');
-
-      expect(result.passed).toBe(true);
-    });
-
-    it('should fail for elements with negative tabindex', async () => {
-      const configWithFocusOnly = {
-        testFocusOrder: true,
-        testTrapDetection: false,
-        testArrowKeyNavigation: false,
-        testEscapeHandling: false,
-        customSequences: [],
-      };
-      keyboardTester = new KeyboardTester(configWithFocusOnly);
-
-      mockPage.evaluate.mockResolvedValue([
-        { element: 'BUTTON', tabIndex: 0, focusable: true, visible: true, tagName: 'BUTTON' },
-        { element: 'INPUT', tabIndex: -1, focusable: true, visible: true, tagName: 'INPUT' },
-      ]);
-
-      const result = await keyboardTester.run(mockPage, 'negative-tabindex');
-
-      expect(result.passed).toBe(false);
-    });
-
-    it('should fail for elements with high manual tabindex', async () => {
-      const configWithFocusOnly = {
-        testFocusOrder: true,
-        testTrapDetection: false,
-        testArrowKeyNavigation: false,
-        testEscapeHandling: false,
-        customSequences: [],
-      };
-      keyboardTester = new KeyboardTester(configWithFocusOnly);
-
-      mockPage.evaluate.mockResolvedValue([
-        { element: 'BUTTON', tabIndex: 1, focusable: true, visible: true, tagName: 'BUTTON' },
-        { element: 'INPUT', tabIndex: 5, focusable: true, visible: true, tagName: 'INPUT' },
-      ]);
-
-      const result = await keyboardTester.run(mockPage, 'manual-tabindex');
-
-      expect(result.passed).toBe(false);
-    });
-  });
+  // Focus order verdicts (roving tabindex passes, a positive tabindex or an invisible stop
+  // fails, the order is the real Tab order) are tested against real Chromium in
+  // keyboard-real-behavior.test.ts (#286). The mocked versions modelled the old static scan.
 
   describe('focus trap detection', () => {
     it('should identify modals as focus traps', async () => {

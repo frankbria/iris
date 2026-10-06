@@ -10,6 +10,8 @@
  */
 
 import { chromium, Browser, Page } from 'playwright';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import { KeyboardTester } from '../../src/a11y/keyboard-tester';
 import { AccessibilityRunner } from '../../src/a11y/a11y-runner';
 
@@ -253,6 +255,491 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(escape).toHaveLength(1);
       expect(escape[0].success).toBe(true);
       expect(result.passed).toBe(true);
+    });
+  });
+
+  // #286: focus order was a static selector scan that failed any negative tabindex (the
+  // roving-tabindex pattern) and never pressed Tab; Escape was tested after the trap test
+  // had already pressed Escape on every dialog.
+  describe('focus order from real Tab presses (#286)', () => {
+    it('passes a roving-tabindex toolbar', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="toolbar" aria-label="Format">
+          <button tabindex="0">Bold</button><button tabindex="-1">Italic</button>
+          <button tabindex="-1">Underline</button>
+        </div><a href="#next">Next</a></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testFocusOrder: true }).run(
+        page,
+        'roving',
+      );
+      expect(result.focusOrder.map((f) => f.element)).toEqual(['BUTTON', 'A']);
+      expect(result.passed).toBe(true);
+    });
+
+    it('fails a positive tabindex, and reports the order Tab really takes', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <button id="one">One</button><button id="jump" tabindex="2">Jumps the queue</button>
+        </body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testFocusOrder: true }).run(
+        page,
+        'positive',
+      );
+      expect(result.focusOrder.map((f) => f.element)).toEqual(['BUTTON#jump', 'BUTTON#one']);
+      expect(result.passed).toBe(false);
+    });
+
+    it('fails when Tab moves focus onto something invisible', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <a href="#a">Visible</a>
+        <a href="#b" id="ghost" style="opacity:0;position:absolute;width:0;height:0;overflow:hidden">Ghost</a>
+        </body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testFocusOrder: true }).run(
+        page,
+        'ghost',
+      );
+      expect(result.focusOrder.find((f) => f.element === 'A#ghost')?.visible).toBe(false);
+      expect(result.passed).toBe(false);
+    });
+  });
+
+  // Review of #286: where the walk starts and what it can see inside.
+  describe('Tab walk boundaries (#286 review)', () => {
+    const walk = async (html: string) => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>${html}</body></html>`,
+      );
+      return new KeyboardTester({ ...config, testFocusOrder: true }).run(page, 'walk');
+    };
+
+    it('starts at the document start even when the page autofocused a later control', async () => {
+      const result = await walk(
+        '<a href="#1" id="first">1</a><a href="#2" id="second">2</a><input id="last" autofocus>',
+      );
+      expect(result.focusOrder.map((f) => f.element)).toEqual([
+        'A#first',
+        'A#second',
+        'INPUT#last',
+      ]);
+    });
+
+    it('reports the order from the top when the page autofocused a control mid-page', async () => {
+      const result = await walk(
+        '<a href="#1" id="a1">1</a><input id="mid" autofocus><a href="#3" id="a3">3</a><button tabindex="1" id="pos">P</button>',
+      );
+      // Positive tabindex first, then tree order, whatever the page focused at load.
+      expect(result.focusOrder.map((f) => f.element)).toEqual([
+        'BUTTON#pos',
+        'A#a1',
+        'INPUT#mid',
+        'A#a3',
+      ]);
+      expect(result.passed).toBe(false); // the positive tabindex
+    });
+
+    it('records stops inside a shadow root and goes on past it', async () => {
+      const result = await walk(`<div id="host"></div><a href="#after" id="after">after</a>
+        <script>const r = document.getElementById('host').attachShadow({ mode: 'open' });
+          r.innerHTML = '<button id="s1">S1</button><button id="s2">S2</button>';</script>`);
+      expect(result.focusOrder.map((f) => f.element)).toEqual([
+        'BUTTON#s1',
+        'BUTTON#s2',
+        'A#after',
+      ]);
+    });
+
+    it('records stops inside a same-origin iframe and goes on past it', async () => {
+      const result =
+        await walk(`<iframe srcdoc="<button id=f1>F1</button><button id=f2>F2</button>"></iframe>
+        <a href="#after" id="after">after</a>`);
+      await page.waitForTimeout(0);
+      expect(result.focusOrder.map((f) => f.element)).toEqual([
+        'BUTTON#f1',
+        'BUTTON#f2',
+        'A#after',
+      ]);
+    });
+
+    it('treats a stop inside an invisible parent as invisible', async () => {
+      const result = await walk(
+        '<div style="opacity:0"><a href="#x" id="hidden-by-parent">x</a></div>',
+      );
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'A#hidden-by-parent', visible: false }),
+      ]);
+      expect(result.passed).toBe(false);
+    });
+
+    it('treats a control inside an invisible iframe as invisible', async () => {
+      const result = await walk(
+        `<iframe style="opacity:0" srcdoc="<button id=in>In</button>"></iframe>`,
+      );
+      await page.waitForTimeout(0);
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'BUTTON#in', visible: false }),
+      ]);
+      expect(result.passed).toBe(false);
+    });
+
+    it('accepts a visible control inside a visibility:hidden container', async () => {
+      const result = await walk(
+        '<div style="visibility:hidden"><button id="shown" style="visibility:visible">Shown</button></div>',
+      );
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'BUTTON#shown', visible: true }),
+      ]);
+      expect(result.passed).toBe(true);
+    });
+
+    it('does not abort on a form that shadows getRootNode', async () => {
+      const result = await walk('<form><input name="getRootNode"><button id="b">B</button></form>');
+      expect(result.focusOrder.map((f) => f.element)).toEqual(['INPUT', 'BUTTON#b']);
+    });
+
+    it('presses through a closed shadow root and goes on past it', async () => {
+      const result = await walk(`<div id="host"></div><a href="#after" id="after">after</a>
+        <script>const r = document.getElementById('host').attachShadow({ mode: 'closed' });
+          r.innerHTML = '<button>S1</button><button>S2</button>';</script>`);
+      // The page cannot see inside: the host once, then what follows it.
+      expect(result.focusOrder.map((f) => f.element)).toEqual(['DIV#host', 'A#after']);
+    });
+
+    it('does not abort when the page focused an SVG link on load', async () => {
+      const result =
+        await walk(`<svg width="40" height="20"><a href="#i" id="icon"><text y="15">i</text></a></svg>
+        <a href="#next" id="next">next</a>
+        <script>document.getElementById('icon').focus();</script>`);
+      expect(result.focusOrder.map((f) => f.element.toUpperCase())).toEqual(['A#ICON', 'A#NEXT']);
+    });
+
+    it('tells apart controls of a form that shadows children and parentNode', async () => {
+      const result =
+        await walk(`<form><input name="children" id="c"><input name="parentElement" id="p">
+        <input id="ghost" style="opacity:0"></form>`);
+      expect(result.focusOrder.map((f) => f.element)).toEqual([
+        'INPUT#c',
+        'INPUT#p',
+        'INPUT#ghost',
+      ]);
+      expect(result.passed).toBe(false); // the invisible one is reached and judged
+    });
+
+    // Codex P1: read directly, parentElement on such a form cycled input -> form -> input.
+    it('does not hang the arrow check on a menu inside a form that shadows parentElement', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <form><input name="parentElement"><ul role="menu"><li role="menuitem" tabindex="0">One</li>
+        <li role="menuitem" tabindex="-1">Two</li></ul></form></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testArrowKeyNavigation: true }).run(
+        page,
+        'arrow-clobber',
+      );
+      expect(result.interactions.filter((i) => i.key === 'ArrowDown')).toHaveLength(1);
+    }, 30_000);
+
+    it("judges a stop inside a host by the host's positive tabindex", async () => {
+      const result = await walk(`<a href="#a" id="a">a</a>
+        <iframe tabindex="3" srcdoc="<button id=in>In</button>"></iframe>`);
+      await page.waitForTimeout(0);
+      expect(result.focusOrder.find((f) => f.element === 'BUTTON#in')?.tabIndex).toBe(3);
+      expect(result.passed).toBe(false);
+    });
+
+    it('does not fail a closed shadow host with display: contents', async () => {
+      const result = await walk(`<div id="host" style="display:contents"></div>
+        <script>const r = document.getElementById('host').attachShadow({ mode: 'closed' });
+          r.innerHTML = '<button>Inside</button>';</script>`);
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'DIV#host', visible: true }),
+      ]);
+      expect(result.passed).toBe(true);
+    });
+
+    it('accepts an image-map area, which has no box of its own', async () => {
+      const result =
+        await walk(`<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="100" height="50"
+        usemap="#m" alt="map"><map name="m"><area href="#x" id="spot" shape="rect" coords="0,0,50,50" alt="Spot"></map>`);
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'AREA#spot', visible: true }),
+      ]);
+      expect(result.passed).toBe(true);
+    });
+
+    it("finds an image-map area's image inside a same-origin iframe", async () => {
+      const inner =
+        '<img src=&quot;data:image/gif;base64,R0lGODlhAQABAAAAACw=&quot; width=100 height=50 usemap=#m alt=m><map name=m><area href=#x id=spot shape=rect coords=0,0,50,50 alt=Spot></map>';
+      const result = await walk(`<iframe srcdoc="${inner}"></iframe>`);
+      await page.waitForTimeout(0);
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'AREA#spot', visible: true }),
+      ]);
+    });
+
+    // Codex: visibility does not inherit across documents. A Tab handler moves focus into a
+    // visibility:hidden iframe (native Tab would skip it), and the control there computes
+    // as visible on its own.
+    it('treats a control inside a visibility:hidden iframe as invisible', async () => {
+      const result = await walk(`<button id="out">Out</button>
+        <iframe style="visibility:hidden" srcdoc="<button id=in>In</button>"></iframe>
+        <script>document.getElementById('out').addEventListener('keydown', (e) => {
+          if (e.key !== 'Tab') return;
+          e.preventDefault();
+          document.querySelector('iframe').contentDocument.getElementById('in').focus();
+        });</script>`);
+      expect(result.focusOrder.map((f) => [f.element, f.visible])).toEqual([
+        ['BUTTON#out', true],
+        ['BUTTON#in', false],
+      ]);
+      expect(result.passed).toBe(false);
+    });
+
+    it('says so when the Tab order is longer than it walks', async () => {
+      const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
+      const result = await walk(links);
+      expect(result.focusOrder).toHaveLength(200);
+      expect(result.interactions).toEqual([
+        expect.objectContaining({
+          actualBehavior: 'Stopped after 200 stops: the walk did not finish',
+          success: true,
+        }),
+      ]);
+    }, 60_000);
+  });
+
+  describe('Escape is tested on its own, after the trap test (#286)', () => {
+    const DIALOG = (closes: boolean) =>
+      `<!doctype html><html lang="en"><head><title>t</title></head><body>
+       <div role="dialog" aria-modal="true" id="d"><button>Ok</button></div>
+       ${
+         closes
+           ? `<script>document.addEventListener('keydown',(e)=>{
+                if(e.key==='Escape') document.getElementById('d').remove();});</script>`
+           : ''
+       }</body></html>`;
+
+    it('records Escape for a dialog the trap test already closed with Escape', async () => {
+      await load(page, DIALOG(true));
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'escape-after-trap');
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([expect.objectContaining({ target: 'DIV#d', success: true })]);
+    });
+
+    it('passes a dialog whose own Escape handler needs focus inside it', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" aria-modal="true" id="d">
+          <button style="display:none">Hidden</button><button>Ok</button>
+        </div>
+        <script>document.getElementById('d').addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') e.currentTarget.remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'dialog-handler');
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([expect.objectContaining({ target: 'DIV#d', success: true })]);
+    });
+
+    it('focuses past an SVG link at the start of the dialog', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" aria-modal="true" id="d">
+          <svg width="40" height="20"><a href="#icon"><text y="15">i</text></a></svg><button>Ok</button>
+        </div>
+        <script>document.getElementById('d').addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') e.currentTarget.remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'svg-first');
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([expect.objectContaining({ target: 'DIV#d', success: true })]);
+    });
+
+    // A dialog opened by script after load is not brought back by the reload: say so,
+    // never pass it silently.
+    it('reports a dialog the reload could not bring back', async () => {
+      await load(
+        page,
+        '<!doctype html><html lang="en"><head><title>t</title></head><body></body></html>',
+      );
+      await page.evaluate(() => {
+        document.body.insertAdjacentHTML(
+          'beforeend',
+          '<div role="dialog" aria-modal="true" id="late"><button>Ok</button></div>',
+        );
+      });
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'late-dialog');
+      expect(result.interactions).toContainEqual(
+        expect.objectContaining({
+          success: false,
+          actualBehavior: 'Reloading brought back 0 of 1 dialog(s); the rest could not be tested',
+        }),
+      );
+      expect(result.passed).toBe(false);
+    });
+
+    // GLM: the dialog count is taken on the page as loaded, before the Tab walk, which may
+    // itself open a dialog (one shown on focus).
+    it('does not count a dialog the Tab walk opened as lost by the reload', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <input id="search" aria-label="Search">
+        <script>document.getElementById('search').addEventListener('focus', () => {
+          if (!document.getElementById('panel')) document.body.insertAdjacentHTML('beforeend',
+            '<div role="dialog" id="panel"><button>Close</button></div>');
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testFocusOrder: true,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'focus-opens-dialog');
+      expect(result.interactions.map((i) => i.actualBehavior)).not.toContainEqual(
+        expect.stringMatching(/Reloading brought back/),
+      );
+    });
+
+    // GLM: a dialog that mounts after a fetch is counted on the settled page; the reload
+    // must settle too before it is compared.
+    it('waits for a dialog that mounts after a fetch before comparing', async () => {
+      const server = http.createServer((req, res) => {
+        if (req.url === '/data') {
+          setTimeout(() => res.end('{}'), 300);
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end(`<!doctype html><html lang="en"><head><title>t</title></head><body>
+          <script>fetch('/data').then(() => document.body.insertAdjacentHTML('beforeend',
+            '<div role="dialog" id="late"><button>Ok</button></div>'));</script></body></html>`);
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      try {
+        await page.goto(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`, {
+          waitUntil: 'networkidle',
+        });
+        const result = await new KeyboardTester({
+          ...config,
+          testTrapDetection: true,
+          testEscapeHandling: true,
+        }).run(page, 'fetch-dialog');
+        expect(result.interactions.map((i) => i.actualBehavior)).not.toContainEqual(
+          expect.stringMatching(/Reloading brought back/),
+        );
+        expect(result.interactions.filter((i) => i.key === 'Escape')).toHaveLength(1);
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
+    });
+
+    it('focuses an SVG dialog with nothing focusable inside', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <svg role="dialog" aria-modal="true" id="d" width="60" height="30"><text y="20">Hi</text></svg>
+        <script>document.getElementById('d').addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') e.currentTarget.remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'svg-dialog',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([expect.objectContaining({ success: true })]);
+    });
+
+    // GLM: a dialog whose Escape handler navigates left the trap check on another page, and
+    // the reload then reloaded that page instead of the one under test.
+    it('returns to the page under test when the trap check navigated away', async () => {
+      const html = `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" aria-modal="true" id="d"><button>Ok</button></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') location.href = 'about:blank';
+        });</script></body></html>`;
+      await load(page, html);
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'navigating-escape');
+      expect(result.interactions.map((i) => i.actualBehavior)).not.toContainEqual(
+        expect.stringMatching(/Reloading brought back/),
+      );
+      expect(result.interactions.filter((i) => i.key === 'Escape')).toEqual([
+        expect.objectContaining({ target: 'DIV#d', success: true }),
+      ]);
+    });
+
+    it('does not lose the page to a form dialog that shadows getClientRects', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <form role="dialog" aria-modal="true" id="f"><input name="getClientRects"><button>Ok</button></form>
+        </body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'clobber-rects');
+      expect(result.trapTests).toHaveLength(1);
+      expect(result.interactions.filter((i) => i.key === 'Escape')).toHaveLength(1);
+    });
+
+    it('does not lose the page to a trap whose last control is a form that shadows focus', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" aria-modal="true"><button>First</button>
+          <form tabindex="0"><select name="focus"><option>x</option></select></form></div>
+        </body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testTrapDetection: true }).run(
+        page,
+        'trap-focus-clobber',
+      );
+      expect(result.trapTests).toHaveLength(1);
+    });
+
+    it('still fails a dialog that ignores Escape', async () => {
+      await load(page, DIALOG(false));
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'escape-ignored');
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([expect.objectContaining({ success: false })]);
     });
   });
 
