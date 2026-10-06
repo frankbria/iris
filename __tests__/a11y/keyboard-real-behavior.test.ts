@@ -682,6 +682,22 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       ]);
     });
 
+    it('does not lose the page to a form dialog that shadows getClientRects', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <form role="dialog" aria-modal="true" id="f"><input name="getClientRects"><button>Ok</button></form>
+        </body></html>`,
+      );
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'clobber-rects');
+      expect(result.trapTests).toHaveLength(1);
+      expect(result.interactions.filter((i) => i.key === 'Escape')).toHaveLength(1);
+    });
+
     it('still fails a dialog that ignores Escape', async () => {
       await load(page, DIALOG(false));
       const result = await new KeyboardTester({

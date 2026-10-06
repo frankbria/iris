@@ -537,7 +537,7 @@ export class KeyboardTester {
           return (
             style.display !== 'none' &&
             style.visibility !== 'hidden' &&
-            el.getClientRects().length > 0
+            Element.prototype.getClientRects.call(el).length > 0
           );
         };
         const describe = (el: Element | undefined) =>
@@ -607,7 +607,7 @@ export class KeyboardTester {
               return (
                 style.display === 'none' ||
                 style.visibility === 'hidden' ||
-                el.getClientRects().length === 0
+                Element.prototype.getClientRects.call(el).length === 0
               );
             },
             { index: candidate.index, attr },
@@ -782,7 +782,7 @@ export class KeyboardTester {
         return (
           style.display !== 'none' &&
           style.visibility !== 'hidden' &&
-          el.getClientRects().length > 0
+          Element.prototype.getClientRects.call(el).length > 0
         );
       };
 
