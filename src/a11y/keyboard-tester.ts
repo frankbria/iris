@@ -366,7 +366,15 @@ export class KeyboardTester {
         // Visible where focus landed: its own box, and nothing above it hidden (opacity is
         // not inherited by getComputedStyle, so ancestors are walked, across shadow roots).
         const rect = Element.prototype.getBoundingClientRect.call(el);
-        let visible = rect.width > 0 && rect.height > 0;
+        // The box counts when the element itself can take focus. One that cannot (a host
+        // focused through a closed shadow root, standing in for a control the page cannot
+        // see) may have no box of its own (display: contents) while its content shows:
+        // inconclusive, so only the styles below decide.
+        const canTakeFocus = Element.prototype.matches.call(
+          el,
+          'a[href], area[href], button, input, select, textarea, iframe, summary, [tabindex], [contenteditable]',
+        );
+        let visible = !canTakeFocus || (rect.width > 0 && rect.height > 0);
         for (let n: Element | null = el; n && visible;) {
           const style = getComputedStyle(n);
           // `visibility` is inherited and a descendant may override it, so only the focused

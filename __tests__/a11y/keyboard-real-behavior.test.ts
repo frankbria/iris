@@ -456,6 +456,16 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.passed).toBe(false);
     });
 
+    it('does not fail a closed shadow host with display: contents', async () => {
+      const result = await walk(`<div id="host" style="display:contents"></div>
+        <script>const r = document.getElementById('host').attachShadow({ mode: 'closed' });
+          r.innerHTML = '<button>Inside</button>';</script>`);
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'DIV#host', visible: true }),
+      ]);
+      expect(result.passed).toBe(true);
+    });
+
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
       const result = await walk(links);
