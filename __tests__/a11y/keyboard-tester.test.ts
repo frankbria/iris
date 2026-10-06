@@ -28,6 +28,10 @@ describe('KeyboardTester', () => {
         press: jest.fn(),
       },
       waitForTimeout: jest.fn(),
+      // The page under test: the Escape check returns to it after the trap check (#286).
+      url: jest.fn().mockReturnValue('https://example.test/'),
+      reload: jest.fn(),
+      waitForLoadState: jest.fn().mockResolvedValue(undefined),
     } as any;
 
     keyboardTester = new KeyboardTester(defaultConfig);

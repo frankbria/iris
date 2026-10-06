@@ -114,6 +114,13 @@ const DISMISSIBLE_STATE = ({
   };
 };
 
+/**
+ * An evaluate that died because the page navigated (a dialog whose Escape handler sends
+ * the user elsewhere): that dialog was dismissed, not a failure of the check (#286).
+ */
+const destroyedByNavigation = (error: unknown): boolean =>
+  error instanceof Error && /Execution context was destroyed|navigat/i.test(error.message);
+
 /** A probe that matches no marker: DISMISSIBLE_STATE then only counts visible dialogs. */
 const NO_PROBE = { selector: '[data-iris-none]', id: null, tag: '', cls: '' };
 
@@ -145,6 +152,9 @@ export class KeyboardTester {
       // Dialogs showing on the page as loaded, before any check presses a key (the Tab walk
       // can open one, the trap check closes them): the Escape check's reload must bring
       // them back (#286).
+      // The page under test, so the Escape check returns to it even if a key sent it
+      // elsewhere (a dialog whose Escape handler navigates).
+      const startUrl = page.url();
       const dialogsBefore =
         this.config.testTrapDetection && this.config.testEscapeHandling
           ? (await page.evaluate(DISMISSIBLE_STATE, NO_PROBE)).visibleCount
@@ -214,7 +224,8 @@ export class KeyboardTester {
           // A reload that fails leaves the page as it is: the check still runs, it does not
           // cost every result collected so far.
           try {
-            await page.reload({ waitUntil: 'load' });
+            if (page.url() === startUrl) await page.reload({ waitUntil: 'load' });
+            else await page.goto(startUrl, { waitUntil: 'load' });
             // Settle as the runner does before the checks (dialogs mounted after a fetch),
             // but bounded: a page with a socket never goes idle.
             await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
@@ -573,19 +584,26 @@ export class KeyboardTester {
 
         await page.keyboard.press('Escape');
 
-        const escaped = await page.evaluate(
-          ({ index, attr }) => {
-            const el = document.querySelector(`[${attr}="${index}"]`);
-            if (!el) return true; // removed from the DOM entirely
-            const style = getComputedStyle(el);
-            return (
-              style.display === 'none' ||
-              style.visibility === 'hidden' ||
-              el.getClientRects().length === 0
-            );
-          },
-          { index: candidate.index, attr },
-        );
+        let navigated = false;
+        const escaped = await page
+          .evaluate(
+            ({ index, attr }) => {
+              const el = document.querySelector(`[${attr}="${index}"]`);
+              if (!el) return true; // removed from the DOM entirely
+              const style = getComputedStyle(el);
+              return (
+                style.display === 'none' ||
+                style.visibility === 'hidden' ||
+                el.getClientRects().length === 0
+              );
+            },
+            { index: candidate.index, attr },
+          )
+          .catch((error: unknown) => {
+            if (!destroyedByNavigation(error)) throw error;
+            navigated = true; // Escape left the page: dismissed
+            return true;
+          });
 
         traps.push({
           container: candidate.container,
@@ -595,6 +613,8 @@ export class KeyboardTester {
           firstElement: candidate.firstElement,
           lastElement: candidate.lastElement,
         });
+        // The other candidates were on the page it left; the Escape check returns to it.
+        if (navigated) break;
       }
     } finally {
       // Leave the page as we found it — the markers are ours, not the app's.
@@ -832,14 +852,28 @@ export class KeyboardTester {
             );
           }, element.selector);
           await page.keyboard.press('Escape');
-          const after = await page.evaluate(DISMISSIBLE_STATE, probe);
+          const after = await page.evaluate(DISMISSIBLE_STATE, probe).catch((error: unknown) => {
+            if (!destroyedByNavigation(error)) throw error;
+            return null; // Escape left the page: dismissed
+          });
+          if (after === null) {
+            interactions.push({
+              key: 'Escape',
+              target: element.label,
+              expectedBehavior: 'Modal/dialog closes on Escape',
+              actualBehavior: 'Closed (the page navigated)',
+              success: true,
+              timestamp: new Date(),
+            });
+            break; // the remaining candidates were on the page it left
+          }
 
           // Our marked element still there: its own visibility decides. Gone (a handler
           // that replaced the node, as a framework re-render does): an element with its
           // id decides, as the id lookup did before markers; with no id, dismissed only if
           // fewer dismissible elements are visible now. A bare null check read a
           // replaced-but-open dialog as closed. ponytail: the count is a heuristic for
-          // id-less re-renders; Escape semantics proper are #286.
+          // id-less re-renders; Escape semantics proper are #491.
           const stillVisible =
             after.marked !== null
               ? after.marked

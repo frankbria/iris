@@ -640,6 +640,28 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(escape).toEqual([expect.objectContaining({ success: true })]);
     });
 
+    // GLM: a dialog whose Escape handler navigates left the trap check on another page, and
+    // the reload then reloaded that page instead of the one under test.
+    it('returns to the page under test when the trap check navigated away', async () => {
+      const html = `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" aria-modal="true" id="d"><button>Ok</button></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') location.href = 'about:blank';
+        });</script></body></html>`;
+      await load(page, html);
+      const result = await new KeyboardTester({
+        ...config,
+        testTrapDetection: true,
+        testEscapeHandling: true,
+      }).run(page, 'navigating-escape');
+      expect(result.interactions.map((i) => i.actualBehavior)).not.toContainEqual(
+        expect.stringMatching(/Reloading brought back/),
+      );
+      expect(result.interactions.filter((i) => i.key === 'Escape')).toEqual([
+        expect.objectContaining({ target: 'DIV#d', success: true }),
+      ]);
+    });
+
     it('still fails a dialog that ignores Escape', async () => {
       await load(page, DIALOG(false));
       const result = await new KeyboardTester({
