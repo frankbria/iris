@@ -226,9 +226,11 @@ export class KeyboardTester {
           try {
             if (page.url() === startUrl) await page.reload({ waitUntil: 'load' });
             else await page.goto(startUrl, { waitUntil: 'load' });
-            // Settle as the runner does before the checks (dialogs mounted after a fetch),
-            // but bounded: a page with a socket never goes idle.
-            await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
+            // Settle as the runner did before the checks (networkidle, Playwright's default
+            // 30 s): the baseline count was taken on a page settled that way, and any page
+            // that reached these checks went idle within it. A shorter bound judged a dialog
+            // mounting from a slower fetch as lost (GLM).
+            await page.waitForLoadState('networkidle').catch(() => undefined);
           } catch {
             // Fall back to the current DOM.
           }
