@@ -476,6 +476,16 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.passed).toBe(true);
     });
 
+    it("finds an image-map area's image inside a same-origin iframe", async () => {
+      const inner =
+        '<img src=&quot;data:image/gif;base64,R0lGODlhAQABAAAAACw=&quot; width=100 height=50 usemap=#m alt=m><map name=m><area href=#x id=spot shape=rect coords=0,0,50,50 alt=Spot></map>';
+      const result = await walk(`<iframe srcdoc="${inner}"></iframe>`);
+      await page.waitForTimeout(0);
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'AREA#spot', visible: true }),
+      ]);
+    });
+
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
       const result = await walk(links);

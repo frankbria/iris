@@ -382,7 +382,9 @@ export class KeyboardTester {
         if (el.tagName === 'AREA') {
           const map = Element.prototype.closest.call(el, 'map');
           const name = map ? Element.prototype.getAttribute.call(map, 'name') : null;
-          const image = name ? document.querySelector(`img[usemap="#${CSS.escape(name)}"]`) : null;
+          const image = name
+            ? (el.ownerDocument ?? document).querySelector(`img[usemap="#${CSS.escape(name)}"]`)
+            : null;
           if (image) shown = image;
         }
         const rect = Element.prototype.getBoundingClientRect.call(shown);
