@@ -637,7 +637,7 @@ export class AccessibilityRunner {
     } else if (format === 'html') {
       report = this.generateHtmlReport(results, summary);
     } else if (format === 'junit') {
-      report = this.generateJUnitReport(results, summary);
+      report = this.generateJUnitReport(results);
     } else {
       throw new Error(`Report format '${format}' not yet implemented`);
     }
@@ -736,10 +736,7 @@ export class AccessibilityRunner {
   /**
    * Generate a JUnit XML report (one testsuite per page, one testcase per axe rule violation).
    */
-  private generateJUnitReport(
-    results: AccessibilityTestResult['results'],
-    summary: AccessibilityTestResult['summary'],
-  ): string {
+  private generateJUnitReport(results: AccessibilityTestResult['results']): string {
     const esc = escapeXml;
     // Per page, one testcase per check that ran, failing exactly as the page's verdict
     // does (#288): axe fails only on violations at the threshold (the rest are listed as
