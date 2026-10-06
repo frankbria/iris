@@ -466,6 +466,16 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.passed).toBe(true);
     });
 
+    it('accepts an image-map area, which has no box of its own', async () => {
+      const result =
+        await walk(`<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="100" height="50"
+        usemap="#m" alt="map"><map name="m"><area href="#x" id="spot" shape="rect" coords="0,0,50,50" alt="Spot"></map>`);
+      expect(result.focusOrder).toEqual([
+        expect.objectContaining({ element: 'AREA#spot', visible: true }),
+      ]);
+      expect(result.passed).toBe(true);
+    });
+
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
       const result = await walk(links);

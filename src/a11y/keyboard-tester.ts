@@ -376,23 +376,32 @@ export class KeyboardTester {
 
         // Visible where focus landed: its own box, and nothing above it hidden (opacity is
         // not inherited by getComputedStyle, so ancestors are walked, across shadow roots).
-        const rect = Element.prototype.getBoundingClientRect.call(el);
+        // An image map's <area> has no box (the UA stylesheet makes it display: none): it is
+        // as visible as the <img> that uses its <map>.
+        let shown: Element = el;
+        if (el.tagName === 'AREA') {
+          const map = Element.prototype.closest.call(el, 'map');
+          const name = map ? Element.prototype.getAttribute.call(map, 'name') : null;
+          const image = name ? document.querySelector(`img[usemap="#${CSS.escape(name)}"]`) : null;
+          if (image) shown = image;
+        }
+        const rect = Element.prototype.getBoundingClientRect.call(shown);
         // The box counts when the element itself can take focus. One that cannot (a host
         // focused through a closed shadow root, standing in for a control the page cannot
         // see) may have no box of its own (display: contents) while its content shows:
         // inconclusive, so only the styles below decide.
         const canTakeFocus = Element.prototype.matches.call(
-          el,
-          'a[href], area[href], button, input, select, textarea, iframe, summary, [tabindex], [contenteditable]',
+          shown,
+          'a[href], area[href], img, button, input, select, textarea, iframe, summary, [tabindex], [contenteditable]',
         );
         let visible = !canTakeFocus || (rect.width > 0 && rect.height > 0);
-        for (let n: Element | null = el; n && visible;) {
+        for (let n: Element | null = shown; n && visible;) {
           const style = getComputedStyle(n);
           // `visibility` is inherited and a descendant may override it, so only the focused
           // element's computed value counts; display and opacity hide everything below.
           if (
             style.display === 'none' ||
-            (n === el && style.visibility === 'hidden') ||
+            (n === shown && style.visibility === 'hidden') ||
             Number(style.opacity) === 0
           ) {
             visible = false;
