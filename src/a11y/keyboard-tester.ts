@@ -317,9 +317,10 @@ export class KeyboardTester {
         // through Node.prototype's getters: a <form>'s named controls shadow `children`,
         // `parentNode` and `parentElement` (an input named "children" gave every sibling the
         // same path, and the walk read them as one repeated stop).
-        const getter = (name: 'parentNode' | 'childNodes') =>
+        const getter = (name: 'parentNode' | 'parentElement' | 'childNodes') =>
           Object.getOwnPropertyDescriptor(Node.prototype, name)!.get!;
         const parentOf = getter('parentNode');
+        const parentElementOf = getter('parentElement');
         const childNodesOf = getter('childNodes');
         const pathOf = (node: Element) => {
           const parts: string[] = [];
@@ -375,7 +376,7 @@ export class KeyboardTester {
           // A shadow root is detected by shape, not instanceof (each frame has its own realm).
           const root = Node.prototype.getRootNode.call(n) as Node & { host?: Element };
           n =
-            n.parentElement ??
+            (parentElementOf.call(n) as Element | null) ??
             (root.nodeType === 11 && root.host
               ? root.host
               : (n.ownerDocument?.defaultView?.frameElement ?? null));
@@ -449,12 +450,20 @@ export class KeyboardTester {
       const active = document.activeElement;
       if (!active || active === document.body) return null;
 
+      // Through Node.prototype's getters: a <form>'s named controls shadow `parentElement`
+      // and `children`, and reading them directly looped input -> form -> input forever.
+      const parentElementOf = Object.getOwnPropertyDescriptor(
+        Node.prototype,
+        'parentElement',
+      )!.get!;
+      const childNodesOf = Object.getOwnPropertyDescriptor(Node.prototype, 'childNodes')!.get!;
       const parts: string[] = [];
       let node: Element | null = active;
-      while (node && node.parentElement) {
-        const index = Array.prototype.indexOf.call(node.parentElement.children, node);
+      for (let parent = parentElementOf.call(node) as Element | null; node && parent;) {
+        const index = Array.prototype.indexOf.call(childNodesOf.call(parent), node);
         parts.unshift(`${node.tagName}:${index}`);
-        node = node.parentElement;
+        node = parent;
+        parent = parentElementOf.call(node) as Element | null;
       }
       return parts.join('>');
     });

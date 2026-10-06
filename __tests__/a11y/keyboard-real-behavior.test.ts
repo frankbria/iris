@@ -423,7 +423,7 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
 
     it('tells apart controls of a form that shadows children and parentNode', async () => {
       const result =
-        await walk(`<form><input name="children" id="c"><input name="parentNode" id="p">
+        await walk(`<form><input name="children" id="c"><input name="parentElement" id="p">
         <input id="ghost" style="opacity:0"></form>`);
       expect(result.focusOrder.map((f) => f.element)).toEqual([
         'INPUT#c',
@@ -432,6 +432,21 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       ]);
       expect(result.passed).toBe(false); // the invisible one is reached and judged
     });
+
+    // Codex P1: read directly, parentElement on such a form cycled input -> form -> input.
+    it('does not hang the arrow check on a menu inside a form that shadows parentElement', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <form><input name="parentElement"><ul role="menu"><li role="menuitem" tabindex="0">One</li>
+        <li role="menuitem" tabindex="-1">Two</li></ul></form></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testArrowKeyNavigation: true }).run(
+        page,
+        'arrow-clobber',
+      );
+      expect(result.interactions.filter((i) => i.key === 'ArrowDown')).toHaveLength(1);
+    }, 30_000);
 
     it('says so when the Tab order is longer than it walks', async () => {
       const links = Array.from({ length: 205 }, (_, i) => `<a href="#l${i}">${i}</a>`).join('');
