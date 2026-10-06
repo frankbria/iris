@@ -260,13 +260,66 @@ describe('AccessibilityRunner', () => {
       expect(result.summary.violationsBySeverity.minor).toBe(2);
     });
 
-    it('should mark overall test as failed when axe violations exceed threshold', async () => {
-      mockAxeRunner.checkThreshold.mockReturnValue(false);
+    // #288: the verdict reads the violations against the threshold itself (it no longer asks
+    // checkThreshold), so the test supplies real violations at and below it.
+    it.each([
+      ['critical', false],
+      ['minor', true],
+    ] as const)(
+      'a %s violation under failOn critical makes the page pass=%p',
+      async (impact, passed) => {
+        mockKeyboardTester.run.mockResolvedValue({
+          testName: 'k',
+          passed: true,
+          interactions: [],
+          focusOrder: [],
+          trapTests: [],
+        });
+        // Axe alone: keyboard and screen-reader checks off, so only the threshold decides.
+        accessibilityRunner = new AccessibilityRunner({
+          ...defaultConfig,
+          pages: ['/'],
+          failureThreshold: { critical: true },
+          keyboard: {
+            ...defaultConfig.keyboard,
+            testFocusOrder: false,
+            testTrapDetection: false,
+            testArrowKeyNavigation: false,
+            testEscapeHandling: false,
+            customSequences: [],
+          },
+          screenReader: {
+            testAriaLabels: false,
+            testLandmarkNavigation: false,
+            testImageAltText: false,
+            testHeadingStructure: false,
+            simulateScreenReader: false,
+          },
+        });
+        mockAxeRunner.run.mockResolvedValue({
+          testName: 't',
+          url: 'https://example.com',
+          timestamp: new Date(),
+          passed: false,
+          violations: [
+            { id: 'rule', impact, tags: [], description: 'd', help: 'h', helpUrl: 'u', nodes: [] },
+          ],
+          passes: [],
+          incomplete: [],
+          inapplicable: [],
+          summary: { total: 1, violations: 1, passes: 0, incomplete: 0, inapplicable: 0 },
+          testRunner: { name: 'axe-core', version: '4.8.0' },
+        } as any);
 
-      const result = await accessibilityRunner.run();
+        const result = await accessibilityRunner.run();
 
-      expect(result.summary.passed).toBe(false);
-    });
+        expect(result.results[0].passed).toBe(passed);
+        expect(result.summary.passed).toBe(passed);
+        expect(result.results[0].failureReasons).toEqual(
+          passed ? [] : [expect.stringMatching(/^axe: 1 violation/)],
+        );
+      },
+    );
 
     it('should mark overall test as failed when keyboard tests fail', async () => {
       mockKeyboardTester.run.mockResolvedValue({
