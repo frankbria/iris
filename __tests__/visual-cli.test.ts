@@ -156,6 +156,53 @@ describe('visual-diff CLI command', () => {
       expect(mockRun).toHaveBeenCalled();
     });
 
+    // #289: --pages is repeatable and a URL is one page, as for a11y. A single value used to
+    // reach the runner as a string after the a11y change, iterated character by character.
+    it.each([
+      [['--pages', '/about'], ['/about']],
+      [
+        ['--pages', '/', '--pages', 'data:text/html,<p>a,b</p>'],
+        ['/', 'data:text/html,<p>a,b</p>'],
+      ],
+      [[], ['/']],
+    ])('passes %j to the runner as %j', async (args, pages) => {
+      const mockRun = jest.fn().mockResolvedValue({
+        summary: {
+          totalComparisons: 1,
+          passed: 1,
+          failed: 0,
+          newBaselines: 0,
+          overallStatus: 'passed',
+          severityCounts: {},
+        },
+        results: [],
+        duration: 1,
+      });
+      let seen: unknown;
+      jest.doMock('../src/visual/visual-runner', () => ({
+        VisualTestRunner: jest.fn().mockImplementation((config) => {
+          seen = config.pages;
+          return { run: mockRun };
+        }),
+      }));
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+      await freshRunCli(['node', 'iris', 'visual-diff', ...args]);
+      expect(seen).toEqual(pages);
+    });
+
+    it('refuses an empty --pages instead of comparing nothing', async () => {
+      const VisualTestRunner = jest.fn();
+      jest.doMock('../src/visual/visual-runner', () => ({ VisualTestRunner }));
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+      await expect(freshRunCli(['node', 'iris', 'visual-diff', '--pages', ','])).rejects.toThrow(
+        'process.exit called',
+      );
+      expect(processExitSpy).toHaveBeenCalledWith(1);
+      expect(VisualTestRunner).not.toHaveBeenCalled();
+    });
+
     it('should handle baseline option', async () => {
       const mockRun = jest.fn().mockResolvedValue({
         summary: {

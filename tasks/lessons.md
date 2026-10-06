@@ -450,3 +450,11 @@ Write/Edit, not as a pre-push afterthought.
 - **Exit codes are a contract with CI.** "Couldn't scan" (3) must never mask "found violations" (4): a retry-on-flake policy would hide real regressions.
 - **A "failing" local full suite under load is not a verdict.** Hook timeouts (`beforeAll` > 30 s) and browser deadlines failed whole files that passed alone or serially. Check the failure *message* before blaming the diff, as #142 says, and run demos with `--runInBand`.
 - **GitHub Actions outages look like "cancelled after 15 min, no steps".** Check githubstatus.com before re-running, and never merge on an older commit's green build.
+
+## 2026-10-05 — #289
+
+- **A changed parsing rule needs its old inputs replayed.** Keeping a scheme value whole fixed `data:` URLs, but the old multi-URL value `https://a.com/,https://b.com/` became one *valid* URL (path `/,https://b.com/`) whose page could load and pass. "It fails loudly" was checked on `https://a.com,https://b.com` (invalid host) only. Before calling a migration break loud, run the realistic old inputs, trailing slashes included, through `new URL`.
+- **An empty collector result is not "unset".** `[] ?? ['/']` keeps `[]`, and zero pages pass. Any default that relies on `??` needs a test with an empty value (an unset `"$PAGES"`).
+- **Mutation checks: revert with a saved copy, not `git checkout`.** `git checkout -- file` after a mutation also discards that file's uncommitted fix. Commit first, or restore from a copy.
+- **A cross-family reviewer runs commands in the live checkout.** It saw our mutation runs as "concurrent mutations" and left `a11y-report-*.html` in the repo root. Don't run mutation checks while it reviews, tell it to write reports under `/tmp`, and check `git status` afterwards.
+- **commander writes option errors with `process.stderr.write`,** not `console.error`. Assert an `InvalidArgumentError` message through a stderr spy restored in `finally`.

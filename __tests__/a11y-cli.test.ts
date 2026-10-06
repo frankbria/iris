@@ -94,6 +94,98 @@ describe('a11y CLI command', () => {
       expect(mockRun).toHaveBeenCalled();
     });
 
+    // #289: the runner config a11y builds from the given flags.
+    async function configFor(args: string[]): Promise<any> {
+      let captured: any;
+      jest.doMock('../src/a11y/a11y-runner', () => ({
+        AccessibilityRunner: jest.fn().mockImplementation((config) => {
+          captured = config;
+          return { run: jest.fn().mockResolvedValue(passingResult) };
+        }),
+      }));
+      jest.resetModules();
+      const { runCli } = await import('../src/cli');
+      try {
+        await runCli(['node', 'iris', 'a11y', ...args]);
+      } catch {
+        // process.exit is mocked to throw
+      }
+      return captured;
+    }
+
+    it('takes repeated --pages, and keeps a data: URL with commas whole', async () => {
+      const data = 'data:text/html,<p>a,b</p>';
+      const config = await configFor([
+        '--pages',
+        '/',
+        '--pages',
+        data,
+        '--pages',
+        '/about,/contact',
+      ]);
+      expect(config.pages).toEqual(['/', data, '/about', '/contact']);
+    });
+
+    it('defaults --pages to / only when none is given', async () => {
+      expect((await configFor([])).pages).toEqual(['/']);
+      expect((await configFor(['--pages', '/x'])).pages).toEqual(['/x']);
+    });
+
+    // An empty value (an unset "$PAGES" in CI) must not become zero pages, which pass.
+    it.each([[''], [','], [' ']])(
+      'refuses --pages %p instead of scanning nothing',
+      async (value) => {
+        const config = await configFor(['--pages', value]);
+        expect(config).toBeUndefined(); // no scan ran
+        expect(processExitSpy).toHaveBeenCalledWith(1);
+      },
+    );
+
+    // The old comma form with full URLs: https://a.com/,https://b.com/ parses as ONE valid URL
+    // (path "/,https://b.com/"), whose page could load and pass. Refused, not guessed at.
+    it.each([['https://a.com/,https://b.com/'], ['http://a.com/x, https://b.com']])(
+      'refuses several URLs in one --pages value (%p)',
+      async (value) => {
+        // commander reports option errors on stderr directly, not through console.error
+        const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        try {
+          const config = await configFor(['--pages', value]);
+          expect(config).toBeUndefined();
+          expect(processExitSpy).toHaveBeenCalledWith(1);
+          expect(stderr.mock.calls.flat().join(' ')).toMatch(/repeat --pages.*%2C/);
+        } finally {
+          stderr.mockRestore();
+        }
+      },
+    );
+
+    it('keeps a data: page whose markup holds ",https://" as one page', async () => {
+      const data = 'data:text/html,<a href="x,https://b.com">l</a>';
+      expect((await configFor(['--pages', data])).pages).toEqual([data]);
+    });
+
+    it('accepts --fail-on in any case', async () => {
+      const config = await configFor(['--fail-on', 'Critical, SERIOUS']);
+      expect(config.failureThreshold).toEqual({ critical: true, serious: true });
+    });
+
+    it.each([['critcal'], ['critical,bogus'], [' , ']])(
+      'refuses --fail-on %p instead of silently passing (exit 2)',
+      async (value) => {
+        const config = await configFor(['--fail-on', value]);
+        expect(config).toBeUndefined(); // no scan ran
+        expect(processExitSpy).toHaveBeenCalledWith(2);
+        expect(consoleErrorSpy.mock.calls.flat().join(' ')).toMatch(/--fail-on/);
+      },
+    );
+
+    it('turns keyboard testing off with --no-include-keyboard', async () => {
+      const off = await configFor(['--no-include-keyboard']);
+      expect(off.keyboard).toMatchObject({ testFocusOrder: false, testArrowKeyNavigation: false });
+      const on = await configFor([]);
+      expect(on.keyboard).toMatchObject({ testFocusOrder: true, testArrowKeyNavigation: true });
+    });
+
     // Issue #72: --rules was declared on the command but never read, so a scoped
     // scan silently ran as a full default-tag scan.
     it('parses --rules into runOnlyRules', async () => {

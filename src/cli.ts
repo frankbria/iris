@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { resolveDbPath } from './data-dir';
 import { once } from 'events';
 import { loadDotenv, loadConfig } from './config';
@@ -8,6 +8,46 @@ import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-o
 import type { AIProvider } from './visual/ai-classifier';
 import type { TranslationResult } from './translator';
 import { describeAction } from './actions';
+
+/**
+ * `--pages` collector (#289): repeatable. Within one value, a URL with a scheme (`data:`,
+ * `https:`) is a single page, since it may well contain commas; a scheme-less value may list
+ * paths with commas (`/,/about`), the old form.
+ */
+function collectPages(value: string, previous: string[] | undefined): string[] {
+  // The pre-#289 form `https://a.com/,https://b.com/` is ONE valid URL (path "/,https://b.com/")
+  // whose page may load and pass. A data: page's markup may hold ",https://", so only a
+  // network URL is checked; it is refused rather than split by guesswork.
+  if (/^\s*(https?|file):/i.test(value) && /,\s*[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    throw new InvalidArgumentError(
+      `"${value}" looks like several URLs; repeat --pages per URL (a comma inside one URL: write it as %2C).`,
+    );
+  }
+  const pages = /^[a-z][a-z0-9+.-]*:/i.test(value.trim())
+    ? [value.trim()]
+    : value
+        .split(',')
+        .map((p) => p.trim())
+        .filter(Boolean);
+  // An empty value (an unset "$PAGES") would leave no pages, and no pages pass.
+  if (pages.length === 0) throw new InvalidArgumentError('--pages needs a page (got none).');
+  return [...(previous ?? []), ...pages];
+}
+
+const IMPACTS = ['critical', 'serious', 'moderate', 'minor'] as const;
+
+/** `--fail-on` as a threshold map, or the error message when it is not a valid list (#289). */
+function parseFailOn(value: string): Record<string, boolean> | string {
+  const impacts = value
+    .split(',')
+    .map((i) => i.trim().toLowerCase())
+    .filter(Boolean);
+  const unknown = impacts.filter((i) => !(IMPACTS as readonly string[]).includes(i));
+  if (impacts.length === 0 || unknown.length > 0) {
+    return `Invalid --fail-on "${value}"; expected a comma list of ${IMPACTS.join(', ')}.`;
+  }
+  return Object.fromEntries(impacts.map((i) => [i, true]));
+}
 
 const program = new Command();
 program.name('iris').description('Interface Recognition & Interaction Suite').version('0.0.1');
@@ -1111,7 +1151,12 @@ function detectProvider(config: IrisConfig): IrisConfig['ai']['provider'] {
 program
   .command('visual-diff')
   .description('Run visual regression testing')
-  .option('--pages <patterns>', 'Page patterns to test (comma-separated)', '/')
+  .option(
+    '--pages <pattern>',
+    'Page to test; repeat for several. A scheme-less value may list paths with commas ' +
+      '(/,/about); a URL (data:, https:, ...) is always one page. Default: /',
+    collectPages,
+  )
   .option('--baseline <reference>', 'Baseline branch or commit', 'main')
   .option(
     '--baseline-strategy <strategy>',
@@ -1177,7 +1222,7 @@ program
       const { VisualTestRunner } = await import('./visual/visual-runner');
 
       const runner = new VisualTestRunner({
-        pages: options.pages.split(',').map((p: string) => p.trim()),
+        pages: options.pages ?? ['/'],
         baseline: {
           strategy: options.baselineStrategy,
           reference: options.baseline,
@@ -1293,7 +1338,12 @@ program
 program
   .command('a11y')
   .description('Run accessibility testing')
-  .option('--pages <patterns>', 'Page patterns to test (comma-separated)', '/')
+  .option(
+    '--pages <pattern>',
+    'Page to test; repeat for several. A scheme-less value may list paths with commas ' +
+      '(/,/about); a URL (data:, https:, ...) is always one page. Default: /',
+    collectPages,
+  )
   .option('--rules <rules>', 'Specific axe rules to run (comma-separated)')
   .option('--tags <tags>', 'Axe rule tags (wcag2a,wcag2aa,wcag21aa)', 'wcag2a,wcag2aa')
   .option('--exclude <selectors>', 'CSS selectors to exclude from the scan (comma-separated)')
@@ -1304,7 +1354,8 @@ program
   )
   .option('--format <type>', 'Output format (html|json|junit)', 'html')
   .option('--output <path>', 'Output file path')
-  .option('--include-keyboard', 'Include keyboard navigation testing', true)
+  .option('--include-keyboard', 'Include keyboard navigation testing (the default)', true)
+  .option('--no-include-keyboard', 'Skip keyboard navigation testing')
   .option('--include-screenreader', 'Include screen reader simulation', false)
   .option(
     '--base-url <url>',
@@ -1316,10 +1367,20 @@ program
     try {
       console.log('♿ Starting accessibility testing...');
 
+      // --fail-on decides the exit code: a typo used to fail on nothing, so a failing page
+      // passed silently (#289). Case-insensitive; unknown or empty is invalid usage.
+      // --include-keyboard defaults to true; only --no-include-keyboard turns it off.
+      const includeKeyboard = options.includeKeyboard !== false;
+      const failureThreshold = parseFailOn(options.failOn);
+      if (typeof failureThreshold === 'string') {
+        console.error(`\n❌ ${failureThreshold}`);
+        process.exit(2); // Invalid usage
+      }
+
       const { AccessibilityRunner } = await import('./a11y/a11y-runner');
 
       const runner = new AccessibilityRunner({
-        pages: options.pages.split(',').map((p: string) => p.trim()),
+        pages: options.pages ?? ['/'],
         axe: {
           rules: {},
           tags: options.tags.split(',').map((t: string) => t.trim()),
@@ -1346,10 +1407,10 @@ program
           timeout: 30000,
         },
         keyboard: {
-          testFocusOrder: options.includeKeyboard,
-          testTrapDetection: options.includeKeyboard,
-          testArrowKeyNavigation: options.includeKeyboard,
-          testEscapeHandling: options.includeKeyboard,
+          testFocusOrder: includeKeyboard,
+          testTrapDetection: includeKeyboard,
+          testArrowKeyNavigation: includeKeyboard,
+          testEscapeHandling: includeKeyboard,
           customSequences: [],
         },
         screenReader: {
@@ -1359,12 +1420,7 @@ program
           testHeadingStructure: options.includeScreenreader,
           simulateScreenReader: options.includeScreenreader,
         },
-        failureThreshold: options.failOn
-          .split(',')
-          .reduce((acc: Record<string, boolean>, impact: string) => {
-            acc[impact.trim()] = true;
-            return acc;
-          }, {}),
+        failureThreshold,
         output: {
           format: options.format,
           path: options.output,
