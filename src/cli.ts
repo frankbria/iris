@@ -19,7 +19,9 @@ function collectPages(value: string, previous: string[] | undefined): string[] {
   // whose page may load and pass. A data: page's markup may hold ",https://", so only a
   // network URL is checked; it is refused rather than split by guesswork.
   if (/^\s*(https?|file):/i.test(value) && /,\s*[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
-    throw new InvalidArgumentError(`"${value}" looks like several URLs; repeat --pages per URL.`);
+    throw new InvalidArgumentError(
+      `"${value}" looks like several URLs; repeat --pages per URL (a comma inside one URL: write it as %2C).`,
+    );
   }
   const pages = /^[a-z][a-z0-9+.-]*:/i.test(value.trim())
     ? [value.trim()]

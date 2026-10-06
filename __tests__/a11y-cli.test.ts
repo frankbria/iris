@@ -148,11 +148,14 @@ describe('a11y CLI command', () => {
       async (value) => {
         // commander reports option errors on stderr directly, not through console.error
         const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
-        const config = await configFor(['--pages', value]);
-        expect(config).toBeUndefined();
-        expect(processExitSpy).toHaveBeenCalledWith(1);
-        expect(stderr.mock.calls.flat().join(' ')).toMatch(/repeat --pages/);
-        stderr.mockRestore();
+        try {
+          const config = await configFor(['--pages', value]);
+          expect(config).toBeUndefined();
+          expect(processExitSpy).toHaveBeenCalledWith(1);
+          expect(stderr.mock.calls.flat().join(' ')).toMatch(/repeat --pages.*%2C/);
+        } finally {
+          stderr.mockRestore();
+        }
       },
     );
 
