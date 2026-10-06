@@ -577,7 +577,17 @@ export class KeyboardTester {
             const inside = container
               ? Element.prototype.querySelectorAll.call(container, focusable)
               : undefined;
-            (inside?.[inside.length - 1] as HTMLElement | undefined)?.focus();
+            // Through the prototype (SVG-aware): a <form>'s control named `focus` shadows it.
+            const last = inside?.[inside.length - 1];
+            if (last) {
+              try {
+                (last instanceof SVGElement ? SVGElement : HTMLElement).prototype.focus.call(
+                  last as HTMLElement & SVGElement,
+                );
+              } catch {
+                // Not focusable this way: the Tab press below then starts elsewhere.
+              }
+            }
           },
           { index: candidate.index, focusable: FOCUSABLE, attr },
         );
@@ -713,7 +723,16 @@ export class KeyboardTester {
               '[tabindex]:not([tabindex="-1"]), [tabindex="-1"], a[href], button:not([disabled]),' +
                 ' input:not([disabled]), [role="menuitem"], [role="option"], [role="tab"], [role="treeitem"]',
             );
-            (candidate as HTMLElement | null)?.focus();
+            if (candidate) {
+              // Through the prototype (SVG-aware), as above.
+              try {
+                (candidate instanceof SVGElement ? SVGElement : HTMLElement).prototype.focus.call(
+                  candidate as HTMLElement & SVGElement,
+                );
+              } catch {
+                // Not focusable this way: focus stays where it was.
+              }
+            }
           }, element.selector);
 
           const before = await this.activeElementPath(page);

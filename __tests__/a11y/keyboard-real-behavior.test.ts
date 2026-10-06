@@ -698,6 +698,21 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(result.interactions.filter((i) => i.key === 'Escape')).toHaveLength(1);
     });
 
+    it('does not lose the page to a trap whose last control is a form that shadows focus', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" aria-modal="true"><button>First</button>
+          <form tabindex="0"><select name="focus"><option>x</option></select></form></div>
+        </body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testTrapDetection: true }).run(
+        page,
+        'trap-focus-clobber',
+      );
+      expect(result.trapTests).toHaveLength(1);
+    });
+
     it('still fails a dialog that ignores Escape', async () => {
       await load(page, DIALOG(false));
       const result = await new KeyboardTester({
