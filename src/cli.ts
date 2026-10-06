@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { resolveDbPath } from './data-dir';
 import { once } from 'events';
 import { loadDotenv, loadConfig } from './config';
@@ -21,6 +21,8 @@ function collectPages(value: string, previous: string[] | undefined): string[] {
         .split(',')
         .map((p) => p.trim())
         .filter(Boolean);
+  // An empty value (an unset "$PAGES") would leave no pages, and no pages pass.
+  if (pages.length === 0) throw new InvalidArgumentError('--pages needs a page (got none).');
   return [...(previous ?? []), ...pages];
 }
 
@@ -1359,8 +1361,7 @@ program
 
       // --fail-on decides the exit code: a typo used to fail on nothing, so a failing page
       // passed silently (#289). Case-insensitive; unknown or empty is invalid usage.
-      // With both --include-keyboard and --no-include-keyboard declared, commander leaves
-      // the value undefined unless one is given: only an explicit "no" turns it off.
+      // --include-keyboard defaults to true; only --no-include-keyboard turns it off.
       const includeKeyboard = options.includeKeyboard !== false;
       const failureThreshold = parseFailOn(options.failOn);
       if (typeof failureThreshold === 'string') {

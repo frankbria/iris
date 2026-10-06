@@ -131,6 +131,16 @@ describe('a11y CLI command', () => {
       expect((await configFor(['--pages', '/x'])).pages).toEqual(['/x']);
     });
 
+    // An empty value (an unset "$PAGES" in CI) must not become zero pages, which pass.
+    it.each([[''], [','], [' ']])(
+      'refuses --pages %p instead of scanning nothing',
+      async (value) => {
+        const config = await configFor(['--pages', value]);
+        expect(config).toBeUndefined(); // no scan ran
+        expect(processExitSpy).toHaveBeenCalledWith(1);
+      },
+    );
+
     it('accepts --fail-on in any case', async () => {
       const config = await configFor(['--fail-on', 'Critical, SERIOUS']);
       expect(config.failureThreshold).toEqual({ critical: true, serious: true });

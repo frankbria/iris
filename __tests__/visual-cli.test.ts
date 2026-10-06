@@ -191,6 +191,18 @@ describe('visual-diff CLI command', () => {
       expect(seen).toEqual(pages);
     });
 
+    it('refuses an empty --pages instead of comparing nothing', async () => {
+      const VisualTestRunner = jest.fn();
+      jest.doMock('../src/visual/visual-runner', () => ({ VisualTestRunner }));
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+      await expect(freshRunCli(['node', 'iris', 'visual-diff', '--pages', ','])).rejects.toThrow(
+        'process.exit called',
+      );
+      expect(processExitSpy).toHaveBeenCalledWith(1);
+      expect(VisualTestRunner).not.toHaveBeenCalled();
+    });
+
     it('should handle baseline option', async () => {
       const mockRun = jest.fn().mockResolvedValue({
         summary: {
