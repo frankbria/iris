@@ -112,6 +112,13 @@ export interface AccessibilityTestResult {
     screenReaderResult?: ScreenReaderTestResult;
     /** Why this page could not be scanned; its axe result is then empty (#287). */
     error?: string;
+    /**
+     * This page's verdict: the one the exit code, both reports and history read (#288).
+     * False for an error, axe violations at the failure threshold, or a failed keyboard or
+     * screen-reader check; `failureReasons` says which.
+     */
+    passed: boolean;
+    failureReasons: string[];
   }>;
   reportPath?: string;
   duration: number;
@@ -130,6 +137,8 @@ function erroredPage(page: string, error: unknown): AccessibilityTestResult['res
     error:
       stripUserinfo(error instanceof Error ? error.message : String(error ?? '')) ||
       'Unknown error',
+    passed: false,
+    failureReasons: ['could not be scanned'],
     axeResult: {
       testName: page,
       url: page,
@@ -334,12 +343,12 @@ export class AccessibilityRunner {
         screenReaderResult = await this.runScreenReaderTests(page, testName);
       }
 
-      return {
+      return this.withVerdict({
         page: pagePattern,
         axeResult,
         keyboardResult,
         screenReaderResult,
-      };
+      });
     } finally {
       await context.close();
     }
@@ -577,27 +586,39 @@ export class AccessibilityRunner {
    * Check if overall test passed based on failure threshold
    */
   private checkOverallPass(results: AccessibilityTestResult['results']): boolean {
-    for (const result of results) {
-      // A page that could not be scanned is not a pass (#287).
-      if (result.error !== undefined) return false;
+    return results.every((result) => result.passed);
+  }
 
-      // Check axe results against threshold
-      if (!this.axeRunner.checkThreshold(result.axeResult, this.config.failureThreshold)) {
-        return false;
-      }
+  /** The axe violations of a page that meet the failure threshold (`--fail-on`). */
+  private violationsAtThreshold(result: AccessibilityTestResult['results'][0]) {
+    return result.axeResult.violations.filter(
+      (v) => this.config.failureThreshold?.[v.impact || 'moderate'] === true,
+    );
+  }
 
-      // Check keyboard results
-      if (result.keyboardResult && !result.keyboardResult.passed) {
-        return false;
-      }
-
-      // Check screen reader results
-      if (result.screenReaderResult && !result.screenReaderResult.passed) {
-        return false;
-      }
+  /**
+   * The one per-page verdict (#288): exit code, HTML, JUnit and history all read it. They
+   * used to decide on their own: the reports from axe alone (keyboard and screen-reader
+   * failures dropped, JUnit failing every violation whatever `--fail-on` said) and
+   * history from "any violation".
+   */
+  private withVerdict(
+    result: Omit<AccessibilityTestResult['results'][0], 'passed' | 'failureReasons'>,
+  ): AccessibilityTestResult['results'][0] {
+    const failureReasons: string[] = [];
+    const page = { ...result, passed: true, failureReasons };
+    const breaching = this.violationsAtThreshold(page).length;
+    if (breaching > 0)
+      failureReasons.push(`axe: ${breaching} violation(s) at the failure threshold`);
+    if (result.keyboardResult && !result.keyboardResult.passed) {
+      const failed = result.keyboardResult.interactions.filter((i) => !i.success).length;
+      failureReasons.push(`keyboard: ${failed || 'some'} check(s) failed`);
     }
-
-    return true;
+    if (result.screenReaderResult && !result.screenReaderResult.passed) {
+      failureReasons.push('screen reader: checks failed');
+    }
+    page.passed = failureReasons.length === 0;
+    return page;
   }
 
   /**
@@ -659,9 +680,16 @@ export class AccessibilityRunner {
             : r.axeResult.violations.length === 0
               ? '<p class="ok">No violations found.</p>'
               : violations;
+        // The page's verdict, the one the CLI exits on (#288), and why.
+        const verdict = r.passed ? 'PASSED' : 'FAILED';
+        const reasons = r.failureReasons.length
+          ? `<ul class="reasons">${r.failureReasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`
+          : '';
         return `
-      <section class="page">
-        <h3>${esc(r.page)} <small>${esc(r.axeResult.url)}</small></h3>
+      <section class="page ${r.passed ? 'passed' : 'failed'}">
+        <h3>${esc(r.page)} <small>${esc(r.axeResult.url)}</small>
+          <span class="verdict">${verdict}</span></h3>
+        ${reasons}
         ${body}
       </section>`;
       })
@@ -685,6 +713,9 @@ export class AccessibilityRunner {
     .impact { font-size: 0.75rem; text-transform: uppercase; background: #eee; padding: 2px 6px; border-radius: 4px; }
     .ok { color: #22863a; }
     .error { color: #991b1b; }
+    .verdict { font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; margin-left: 0.5rem; }
+    .passed .verdict { background: #dcfce7; color: #166534; }
+    .failed .verdict { background: #fee2e2; color: #991b1b; }
     code { background: #f0f0f0; padding: 2px 4px; border-radius: 4px; }
   </style>
 </head>
@@ -710,47 +741,89 @@ export class AccessibilityRunner {
     summary: AccessibilityTestResult['summary'],
   ): string {
     const esc = escapeXml;
-    // One testcase per violation, or a single passing testcase when a page is clean.
-    const totalTests = results.reduce(
-      (sum, r) => sum + Math.max(r.axeResult.violations.length, 1),
-      0,
-    );
-    const suites = results
-      .map((r) => {
-        const violations = r.axeResult.violations;
-        if (r.error !== undefined) {
-          // JUnit's <error>: the test could not run, which a CI reader must not read as a pass.
-          return `  <testsuite name="${esc(r.page)}" tests="1" failures="0" errors="1">
+    // Per page, one testcase per check that ran, failing exactly as the page's verdict
+    // does (#288): axe fails only on violations at the threshold (the rest are listed as
+    // output), and keyboard and screen-reader checks are cases of their own.
+    const suites = results.map((r) => {
+      if (r.error !== undefined) {
+        // JUnit's <error>: the test could not run, which a CI reader must not read as a pass.
+        return {
+          tests: 1,
+          failures: 0,
+          errors: 1,
+          xml: `  <testsuite name="${esc(r.page)}" tests="1" failures="0" errors="1">
     <testcase name="${esc(r.page)} accessibility" classname="a11y">
       <error message="${esc(r.error)}" type="PageError"/>
     </testcase>
-  </testsuite>`;
-        }
-        const cases =
-          violations.length === 0
-            ? `    <testcase name="${esc(r.page)} accessibility" classname="a11y"/>`
-            : violations
-                .map((v) => {
-                  const detail = `${v.description}\n${v.help}\n${v.helpUrl}\n${v.nodes
-                    .map((n) => `${n.target.join(', ')}: ${n.html}`)
-                    .join('\n')}`;
-                  return `    <testcase name="${esc(v.id)}" classname="${esc(r.page)}">
-      <failure message="${esc(v.help)}" type="${esc(v.impact)}">${esc(detail)}</failure>
-    </testcase>`;
-                })
-                .join('\n');
-        return `  <testsuite name="${esc(r.page)}" tests="${Math.max(
-          violations.length,
-          1,
-        )}" failures="${violations.length}">
-${cases}
-  </testsuite>`;
-      })
-      .join('\n');
+  </testsuite>`,
+        };
+      }
+      const describe = (v: AccessibilityTestResult['results'][0]['axeResult']['violations'][0]) =>
+        `${v.id} [${v.impact}]: ${v.help}\n${v.helpUrl}\n${v.nodes
+          .map((n) => `${n.target.join(', ')}: ${n.html}`)
+          .join('\n')}`;
+      const breaching = this.violationsAtThreshold(r);
+      const below = r.axeResult.violations.filter((v) => !breaching.includes(v));
+      const cases: Array<{ name: string; failure?: string; detail?: string; out?: string }> = [
+        {
+          name: 'axe',
+          ...(breaching.length > 0 && {
+            failure: `${breaching.length} violation(s) at the failure threshold`,
+            detail: breaching.map(describe).join('\n\n'),
+          }),
+          ...(below.length > 0 && {
+            out: `Below the failure threshold:\n${below.map(describe).join('\n\n')}`,
+          }),
+        },
+      ];
+      if (r.keyboardResult) {
+        const failed = r.keyboardResult.interactions.filter((i) => !i.success);
+        cases.push({
+          name: 'keyboard',
+          ...(!r.keyboardResult.passed && {
+            failure: 'keyboard checks failed',
+            detail: failed.map((i) => `${i.key} on ${i.target}: ${i.actualBehavior}`).join('\n'),
+          }),
+        });
+      }
+      if (r.screenReaderResult) {
+        cases.push({
+          name: 'screen reader',
+          ...(!r.screenReaderResult.passed && { failure: 'screen-reader checks failed' }),
+        });
+      }
+      const failures = cases.filter((c) => c.failure).length;
+      const body = cases
+        .map(
+          (c) => `    <testcase name="${esc(c.name)}" classname="${esc(r.page)}">${
+            c.failure
+              ? `
+      <failure message="${esc(c.failure)}" type="${esc(c.name)}">${esc(c.detail ?? '')}</failure>`
+              : ''
+          }${
+            c.out
+              ? `
+      <system-out>${esc(c.out)}</system-out>`
+              : ''
+          }
+    </testcase>`,
+        )
+        .join('\n');
+      return {
+        tests: cases.length,
+        failures,
+        errors: 0,
+        xml: `  <testsuite name="${esc(r.page)}" tests="${cases.length}" failures="${failures}">
+${body}
+  </testsuite>`,
+      };
+    });
+    const total = (key: 'tests' | 'failures' | 'errors') =>
+      suites.reduce((sum, suite) => sum + suite[key], 0);
 
     return `<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="iris-a11y" tests="${totalTests}" failures="${summary.totalViolations}" errors="${summary.pagesErrored}">
-${suites}
+<testsuites name="iris-a11y" tests="${total('tests')}" failures="${total('failures')}" errors="${total('errors')}">
+${suites.map((suite) => suite.xml).join('\n')}
 </testsuites>`;
   }
 }

@@ -158,8 +158,10 @@ function resultsOf(run: RunInput): StoredRunResult[] {
         const counts = violationCounts(page);
         return {
           url: page.page,
-          // A page that could not be scanned found nothing: not a pass (#287).
-          passed: page.error === undefined && page.axeResult.violations.length === 0,
+          // The runner's per-page verdict (#288), the one the CLI exits on: `--fail-on`,
+          // keyboard and screen-reader checks, and an unscanned page (#287). "Any violation"
+          // failed pages the threshold passed.
+          passed: page.passed,
           result: {
             ...(page.error !== undefined && { error: boundedError(page.error) }),
             violations: counts,

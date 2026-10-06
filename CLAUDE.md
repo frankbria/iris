@@ -283,6 +283,14 @@ plans/
   (`stripUserinfo`, src/report-encoding.ts). The report directory is created before
   writing. The hosted worker sets `failFast` (no browser time on pages whose results
   would be thrown away) and throws the page error itself, keeping fail-the-job semantics
+- **One a11y verdict per page (#288).** The runner sets `passed` and `failureReasons` on
+  every result (`withVerdict`: axe violations at `--fail-on`, a failed keyboard or
+  screen-reader check, or an error), and everything reads it: `summary.passed` (the exit
+  code), the HTML page heading (PASSED/FAILED plus reasons), JUnit (per page one testcase
+  per check: `axe` fails only at the threshold and lists the rest as `<system-out>`,
+  `keyboard`, `screen reader`; root counts are the emitted cases) and history (local and
+  hosted `passed`). They used to decide separately, so CI could read `failures="0"` while
+  the CLI exited 4
 - **A failed analysis is not a verdict (#281).** The classifier answers an outage or a tripped
   breaker with a fallback (`analysisFailed: true`, `severity: 'medium'`). The visual runner
   grades such a comparison by its pixels (`estimateSeverity`), counts it in

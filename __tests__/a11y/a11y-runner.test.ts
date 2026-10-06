@@ -793,8 +793,12 @@ describe('AccessibilityRunner', () => {
       });
       await accessibilityRunner.run();
 
-      // Root count must equal emitted testcases (2), never < failures.
-      expect(written).toContain('<testsuites name="iris-a11y" tests="2" failures="2" errors="0">');
+      // The root counts are the emitted testcases and failures (#288: one testcase per check
+      // per page, axe failing only at the threshold), never fewer tests than failures.
+      const root = written.match(/<testsuites [^>]*tests="(\d+)" failures="(\d+)"/)!;
+      expect(Number(root[1])).toBe((written.match(/<testcase /g) ?? []).length);
+      expect(Number(root[2])).toBe((written.match(/<failure /g) ?? []).length);
+      expect(Number(root[2])).toBeGreaterThanOrEqual(1); // the two critical violations
 
       fs.writeFileSync.mockRestore();
     });
