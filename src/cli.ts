@@ -1141,7 +1141,12 @@ function detectProvider(config: IrisConfig): IrisConfig['ai']['provider'] {
 program
   .command('visual-diff')
   .description('Run visual regression testing')
-  .option('--pages <patterns>', 'Page patterns to test (comma-separated)', '/')
+  .option(
+    '--pages <pattern>',
+    'Page to test; repeat for several. A scheme-less value may list paths with commas ' +
+      '(/,/about); a URL (data:, https:, ...) is always one page. Default: /',
+    collectPages,
+  )
   .option('--baseline <reference>', 'Baseline branch or commit', 'main')
   .option(
     '--baseline-strategy <strategy>',
