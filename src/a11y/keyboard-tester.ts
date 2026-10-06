@@ -826,7 +826,10 @@ export class KeyboardTester {
             if (!Element.prototype.hasAttribute.call(dialog, 'tabindex')) {
               Element.prototype.setAttribute.call(dialog, 'tabindex', '-1');
             }
-            HTMLElement.prototype.focus.call(dialog as HTMLElement);
+            // An SVG dialog's focus() is SVGElement's, as for the candidates above.
+            (dialog instanceof SVGElement ? SVGElement : HTMLElement).prototype.focus.call(
+              dialog as HTMLElement & SVGElement,
+            );
           }, element.selector);
           await page.keyboard.press('Escape');
           const after = await page.evaluate(DISMISSIBLE_STATE, probe);

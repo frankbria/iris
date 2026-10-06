@@ -623,6 +623,23 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       }
     });
 
+    it('focuses an SVG dialog with nothing focusable inside', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <svg role="dialog" aria-modal="true" id="d" width="60" height="30"><text y="20">Hi</text></svg>
+        <script>document.getElementById('d').addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') e.currentTarget.remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'svg-dialog',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([expect.objectContaining({ success: true })]);
+    });
+
     it('still fails a dialog that ignores Escape', async () => {
       await load(page, DIALOG(false));
       const result = await new KeyboardTester({
