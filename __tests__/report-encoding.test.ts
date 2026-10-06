@@ -339,6 +339,9 @@ describe('a11y reports', () => {
         summary: { total: 1, violations: 1, passes: 0, incomplete: 0, inapplicable: 0 },
         testRunner: { name: 'axe-core', version: '4.8.0' },
       } as AccessibilityTestResult['results'][0]['axeResult'],
+      // The verdict's reasons are rendered too (#288): hostile text there as well.
+      passed: false,
+      failureReasons: [s],
     },
   ];
 

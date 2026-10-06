@@ -104,6 +104,12 @@ const a11yRun: AccessibilityTestResult = {
       } as any,
 
       keyboardResult: { testName: 'home', passed: false } as any,
+      // The runner's verdict (#288): what history stores.
+      passed: false,
+      failureReasons: [
+        'axe: 1 violation(s) at the failure threshold',
+        'keyboard: some check(s) failed',
+      ],
     },
   ],
   duration: 3000,
@@ -262,6 +268,8 @@ describe('run history persistence (issue #77)', () => {
             page: '/down',
             error: 'net::ERR_CONNECTION_REFUSED',
             axeResult: { ...a11yRun.results[0].axeResult, violations: [] },
+            passed: false,
+            failureReasons: ['could not be scanned'],
           },
         ],
       } as typeof a11yRun;

@@ -80,6 +80,9 @@ const a11yRun = {
         page: '/checkout',
         axeResult: { violations: [{ impact: 'critical' }, { impact: 'minor' }] },
         keyboardResult: { passed: true },
+        // The runner's verdict (#288): what the stores record.
+        passed: false,
+        failureReasons: ['axe: 1 violation(s) at the failure threshold'],
       },
     ],
   } as unknown as AccessibilityTestResult,
