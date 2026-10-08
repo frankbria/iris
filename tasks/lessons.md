@@ -458,3 +458,11 @@ Write/Edit, not as a pre-push afterthought.
 - **Mutation checks: revert with a saved copy, not `git checkout`.** `git checkout -- file` after a mutation also discards that file's uncommitted fix. Commit first, or restore from a copy.
 - **A cross-family reviewer runs commands in the live checkout.** It saw our mutation runs as "concurrent mutations" and left `a11y-report-*.html` in the repo root. Don't run mutation checks while it reviews, tell it to write reports under `/tmp`, and check `git status` afterwards.
 - **commander writes option errors with `process.stderr.write`,** not `console.error`. Assert an `InvalidArgumentError` message through a stderr spy restored in `finally`.
+
+## 2026-10-07 — #350
+
+- **A page-driven library may run in the page's own JS world.** `@axe-core/playwright` used `page.evaluate`, so a page that pinned `window.axe` wrote its own verdict. For anything that judges a page, run in a CDP isolated world (`Page.createIsolatedWorld` + `Runtime.callFunctionOn`); pass arguments as CDP values, never spliced into source. Probe the threat on real Chromium before choosing a fix: tripwires (version checks) are fakeable, isolation is not.
+- **`jest.mock('<package>')` of a removed dependency passes locally and fails in CI.** The package is still in the local `node_modules`, while CI's `npm ci` doesn't install it. Grep tests for the package name when dropping a dependency.
+- **Another session in the same checkout:** when `git status` shows edits you didn't make, work in `git worktree add` with a `node_modules` symlink (exclude it via `info/exclude`: the ignore rule matches directories only) and change dependencies with `--package-lock-only`, so the shared `node_modules` is untouched.
+- **Local SeaweedFS fills with leaked test buckets** (`api-runs`, `hosted-visual-job` never delete theirs). Every S3 test then fails with `InternalError` ("failed to find writable volumes" in the container log). Clean up with `weed shell` `collection.delete`, not by recreating the container.
+- **opencode can stall** (no stream bytes for 180 s). Fall back to `codex review` at once and record which reviewer ran.
