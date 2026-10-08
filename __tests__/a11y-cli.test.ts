@@ -103,7 +103,9 @@ describe('a11y CLI command', () => {
         failureReasons: [],
         axeResult: { violations: [], incomplete: Array.from({ length: incomplete }, () => ({})) },
       });
-      const mockRun = jest.fn().mockResolvedValue({ ...passingResult, results: [page(2), page(1)] });
+      const mockRun = jest
+        .fn()
+        .mockResolvedValue({ ...passingResult, results: [page(2), page(1)] });
       jest.doMock('../src/a11y/a11y-runner', () => ({
         AccessibilityRunner: jest.fn().mockImplementation(() => ({ run: mockRun })),
       }));

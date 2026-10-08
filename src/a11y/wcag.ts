@@ -7,15 +7,12 @@
  * skipped `autocomplete-valid`, `target-size` and the rest (#290). axe has no rules at
  * 2.1/2.2 AAA, and a tag that selects nothing is a silent no-op, so none are listed.
  */
-const LEVELS = {
-  A: ['wcag2a', 'wcag21a'],
-  AA: ['wcag2aa', 'wcag21aa', 'wcag22aa'],
-  AAA: ['wcag2aaa'],
-} as const;
+const A = ['wcag2a', 'wcag21a'];
+const AA = [...A, 'wcag2aa', 'wcag21aa', 'wcag22aa'];
+const TAGS = { A, AA, AAA: [...AA, 'wcag2aaa'] };
 
-export type WcagLevel = keyof typeof LEVELS;
+export type WcagLevel = keyof typeof TAGS;
 
 export function wcagTags(level: WcagLevel): string[] {
-  const order: WcagLevel[] = ['A', 'AA', 'AAA'];
-  return order.slice(0, order.indexOf(level) + 1).flatMap((l) => LEVELS[l]);
+  return [...TAGS[level]];
 }
