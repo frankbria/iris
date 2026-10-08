@@ -609,11 +609,14 @@ iris run --agent --url http://localhost:3000 --max-turns 6 \
 
 A failed action does **not** by itself make the run a failure here: recovering from
 one is the entire point of re-planning. The verdict is whether the goal held at the
-end — so a run can legitimately report `terminationReason: "max_turns"` alongside
-`goalMet: true, status: "success"`, which happens when a model keeps acting instead
-of stopping at a bare confirming assert. `consecutive_failures` and `error` stay
-failures regardless, since `goalMet` there may be a stale verdict from an earlier
-turn.
+end: `goalMet` is the outcome of the checks made **after the agent's last action**.
+A check describes the page as it was when it ran, so once the agent acts again (a
+failed action too, which may still have been dispatched) the verdict is cleared to
+`null` until it checks again; an action the policy refused never ran and clears
+nothing. A run can therefore report `terminationReason: "max_turns"` alongside
+`goalMet: true, status: "success"` when its last turn acted and then checked, but
+never on the strength of a check made before later actions. `consecutive_failures`
+and `error` stay failures regardless.
 
 **Bounds.** Every exit is bounded, because an agent that cannot tell it is stuck
 will happily burn an API budget forever. The loop stops on: the goal being met, two
