@@ -65,7 +65,9 @@ async function call(
     returnByValue: byValue,
   });
   if (reply.exceptionDetails) {
-    throw new Error(reply.exceptionDetails.exception?.description ?? reply.exceptionDetails.text);
+    // The description is the whole stack; history and reports keep one line.
+    const detail = reply.exceptionDetails.exception?.description ?? reply.exceptionDetails.text;
+    throw new Error(detail.split('\n')[0]);
   }
   return byValue ? reply.result.value : reply.result.objectId;
 }

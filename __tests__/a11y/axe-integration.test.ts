@@ -205,6 +205,24 @@ describe('AxeRunner', () => {
       </main></html>`);
       expect(targets(result)).toEqual(['image-alt:["iframe","#in"]']);
     });
+
+    // finishRun maps partials to frames by position: own partial first, then each child's
+    // subtree depth first. A misplaced entry attributes a violation to the wrong frame.
+    it('attributes violations in nested frames and their siblings to the right frame', async () => {
+      const inner = `<html lang=en><title>i</title><img src=x.png id=deep></html>`;
+      const outer = `<html lang=en><title>o</title><img src=x.png id=mid><iframe title=inner srcdoc='${inner}'></iframe></html>`;
+      const result = await scan(`<html lang="en"><title>t</title><main>
+        <iframe title="outer" srcdoc="${outer}"></iframe>
+        <iframe title="sibling" srcdoc="<html lang=en><title>s</title><img src=x.png id=side></html>"></iframe>
+        <img src="x.png" id="top">
+      </main></html>`);
+      expect(targets(result)).toEqual([
+        'image-alt:["#top"]',
+        'image-alt:["iframe[title=\\"outer\\"]","#mid"]',
+        'image-alt:["iframe[title=\\"outer\\"]","iframe","#deep"]',
+        'image-alt:["iframe[title=\\"sibling\\"]","#side"]',
+      ]);
+    });
   });
 
   describe('configuration', () => {
@@ -253,6 +271,13 @@ describe('AxeRunner', () => {
     const SPLIT = `<html lang="en"><title>t</title><main>
       <div id="a"><img src="a.png" id="ia"></div>
       <div id="b"><img src="b.png" id="ib"></div></main></html>`;
+
+    it('reports an axe error as one line, not a stack', async () => {
+      const failure = scan(TWO_VIOLATIONS, { runOnlyRules: ['no-such-rule'] });
+      await expect(failure).rejects.toThrow(/unknown rule/i);
+      const message = await failure.catch((e: Error) => e.message);
+      expect(message).not.toContain('\n');
+    });
 
     it('applies include selectors', async () => {
       expect(targets(await scan(SPLIT, { include: ['#a'] }))).toEqual(['image-alt:["#ia"]']);
