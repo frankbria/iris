@@ -130,8 +130,10 @@ async function runIsolated(
       const session = await browserContext.newCDPSession(frame).catch(() => null);
       if (!session) continue;
       sessions.push(session);
-      const { frameTree } = await session.send('Page.getFrameTree');
-      oopifSessions.set(frameTree.frame.id, session);
+      // A frame removed after attaching has no tree: leave it out (it becomes a null
+      // partial in framePartials) rather than failing the whole scan.
+      const tree = await session.send('Page.getFrameTree').catch(() => null);
+      if (tree) oopifSessions.set(tree.frameTree.frame.id, session);
     }
     const { frameTree } = await top.send('Page.getFrameTree');
     const world = await openWorld(top, frameTree.frame.id);
