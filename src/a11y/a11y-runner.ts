@@ -680,6 +680,15 @@ export class AccessibilityRunner {
             : r.axeResult.violations.length === 0
               ? '<p class="ok">No violations found.</p>'
               : violations;
+        // axe's `incomplete`: not violations, but not passes either; a person decides (#290).
+        const review = r.axeResult.incomplete.length
+          ? `<div class="review"><h4>Needs manual review</h4><ul>${r.axeResult.incomplete
+              .map(
+                (i) =>
+                  `<li><strong>${esc(i.id)}</strong>: ${esc(i.description)} (${i.nodes.length} element(s))</li>`,
+              )
+              .join('')}</ul></div>`
+          : '';
         // The page's verdict, the one the CLI exits on (#288), and why.
         const verdict = r.passed ? 'PASSED' : 'FAILED';
         const reasons = r.failureReasons.length
@@ -691,6 +700,7 @@ export class AccessibilityRunner {
           <span class="verdict">${verdict}</span></h3>
         ${reasons}
         ${body}
+        ${review}
       </section>`;
       })
       .join('');
@@ -761,6 +771,19 @@ export class AccessibilityRunner {
           .join('\n')}`;
       const breaching = this.violationsAtThreshold(r);
       const below = r.axeResult.violations.filter((v) => !breaching.includes(v));
+      // axe's `incomplete` (#290): never a failure, but a CI reader must see it.
+      const output = [
+        ...(below.length > 0
+          ? [`Below the failure threshold:\n${below.map(describe).join('\n\n')}`]
+          : []),
+        ...(r.axeResult.incomplete.length > 0
+          ? [
+              `Needs manual review:\n${r.axeResult.incomplete
+                .map((i) => `${i.id}: ${i.description} (${i.nodes.length} element(s))`)
+                .join('\n')}`,
+            ]
+          : []),
+      ].join('\n\n');
       const cases: Array<{ name: string; failure?: string; detail?: string; out?: string }> = [
         {
           name: 'axe',
@@ -768,9 +791,7 @@ export class AccessibilityRunner {
             failure: `${breaching.length} violation(s) at the failure threshold`,
             detail: breaching.map(describe).join('\n\n'),
           }),
-          ...(below.length > 0 && {
-            out: `Below the failure threshold:\n${below.map(describe).join('\n\n')}`,
-          }),
+          ...(output && { out: output }),
         },
       ];
       if (r.keyboardResult) {

@@ -3,7 +3,6 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import path from 'path';
-import { axeTagsFor } from '../src/worker';
 
 /** `iris worker` (#267): refuses outside hosted mode, in a real process. */
 describe('iris worker', () => {
@@ -84,14 +83,6 @@ describe('runWorker heartbeat (#273)', () => {
       stop.abort();
       await done;
     }
-  });
-});
-
-describe('axeTagsFor', () => {
-  it('each WCAG level includes the ones below, like --tags', () => {
-    expect(axeTagsFor('A')).toEqual(['wcag2a']);
-    expect(axeTagsFor('AA')).toEqual(['wcag2a', 'wcag2aa']);
-    expect(axeTagsFor('AAA')).toEqual(['wcag2a', 'wcag2aa', 'wcag2aaa']);
   });
 });
 

@@ -114,7 +114,6 @@ jobs:
         run: |
           npm start a11y \
             --pages "/,/products,/about" \
-            --tags "wcag2a,wcag2aa,wcag21aa" \
             --fail-on "critical,serious" \
             --include-keyboard \
             --format junit \
@@ -259,7 +258,6 @@ accessibility:
     - |
       npm start a11y \
         --pages "/,/products,/about" \
-        --tags "wcag2a,wcag2aa" \
         --fail-on "critical,serious" \
         --format junit \
         --output ./test-results/a11y-junit.xml
@@ -345,7 +343,6 @@ pipeline {
                 sh '''
                     npm start a11y \
                       --pages "/,/products,/about" \
-                      --tags "wcag2a,wcag2aa" \
                       --fail-on "critical,serious" \
                       --format junit \
                       --output ./test-results/a11y-junit.xml
@@ -435,7 +432,6 @@ jobs:
           command: |
             npm start a11y \
               --pages "/,/products" \
-              --tags "wcag2a,wcag2aa" \
               --fail-on "critical,serious" \
               --format junit \
               --output ./test-results/a11y-junit.xml

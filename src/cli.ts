@@ -8,6 +8,7 @@ import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-o
 import type { AIProvider } from './visual/ai-classifier';
 import type { TranslationResult } from './translator';
 import { describeAction } from './actions';
+import { wcagTags } from './a11y/wcag';
 
 /**
  * `--pages` collector (#289): repeatable. Within one value, a URL with a scheme (`data:`,
@@ -1345,7 +1346,11 @@ program
     collectPages,
   )
   .option('--rules <rules>', 'Specific axe rules to run (comma-separated)')
-  .option('--tags <tags>', 'Axe rule tags (wcag2a,wcag2aa,wcag21aa)', 'wcag2a,wcag2aa')
+  .option(
+    '--tags <tags>',
+    'Axe rule tags, comma-separated. Default: WCAG 2.2 AA (2.0, 2.1 and 2.2 A/AA rules)',
+    wcagTags('AA').join(','),
+  )
   .option('--exclude <selectors>', 'CSS selectors to exclude from the scan (comma-separated)')
   .option(
     '--fail-on <impacts>',
@@ -1440,6 +1445,11 @@ program
       console.log(
         `   Accessibility score: ${result.summary.score === null ? 'n/a (no page scanned)' : `${result.summary.score}/100`}`,
       );
+      // axe's `incomplete`: rules it could not decide, which a person must check (#290).
+      const needsReview = result.results.reduce((n, r) => n + r.axeResult.incomplete.length, 0);
+      if (needsReview > 0) {
+        console.log(`   Needs manual review: ${needsReview} rule(s) axe could not decide`);
+      }
 
       // Pages that could not be scanned (#287) are listed. A violation on the pages that
       // were scanned is still a finding (exit 4); only a run whose sole problem is pages it

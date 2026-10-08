@@ -12,14 +12,9 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AccessibilityRunner } from '../a11y/a11y-runner';
 import { assertNavigationAllowed } from '../url-policy';
+import { wcagTags } from '../a11y/wcag';
 
 export const RUN_ACCESSIBILITY_TEST = 'run_accessibility_test';
-
-/** axe tag sets per WCAG conformance level. AAA is additive over AA. */
-const WCAG_TAGS = {
-  AA: ['wcag2a', 'wcag2aa'],
-  AAA: ['wcag2a', 'wcag2aa', 'wcag2aaa'],
-} as const;
 
 const inputSchema = {
   url: z
@@ -28,7 +23,9 @@ const inputSchema = {
   wcagLevel: z
     .enum(['AA', 'AAA'])
     .optional()
-    .describe('WCAG conformance level to check against. Defaults to AA.'),
+    .describe(
+      'WCAG 2.2 conformance level to check against (2.0 and 2.1 criteria included). Defaults to AA.',
+    ),
 };
 
 const outputSchema = {
@@ -48,6 +45,18 @@ const outputSchema = {
       }),
     )
     .describe('One entry per violated axe rule. Empty when the page passes.'),
+  needsReview: z
+    .array(
+      z.object({
+        id: z.string().describe('axe rule id, e.g. "color-contrast".'),
+        description: z.string(),
+        nodes: z.number().describe('How many elements axe could not decide for this rule.'),
+      }),
+    )
+    .describe(
+      'Rules axe could not decide automatically (its "incomplete" results): a person must ' +
+        'check these elements. They do not fail the scan.',
+    ),
 };
 
 /** Shape of a failed tool call: a message the assistant can act on, never a throw. */
@@ -80,7 +89,7 @@ function scanConfig(url: string, wcagLevel: 'AA' | 'AAA') {
     pages: [url],
     axe: {
       rules: {},
-      tags: [...WCAG_TAGS[wcagLevel]],
+      tags: wcagTags(wcagLevel),
       include: [],
       exclude: [],
       disableRules: [],
@@ -116,8 +125,9 @@ export function registerTools(server: McpServer): void {
       title: 'Run accessibility test',
       description:
         'Scan a web page with axe-core and report WCAG violations. Runs a real headless browser, ' +
-        'so the URL must be reachable from this machine. Returns axe-core violations only — it does ' +
-        'not test keyboard navigation or screen-reader behaviour.',
+        'so the URL must be reachable from this machine. Returns axe-core violations, plus the ' +
+        'rules axe could not decide (needsReview) — it does not test keyboard navigation or ' +
+        'screen-reader behaviour.',
       inputSchema,
       outputSchema,
       annotations: { readOnlyHint: true, openWorldHint: true },
@@ -168,17 +178,31 @@ export function registerTools(server: McpServer): void {
       const scannedUrl = axeResult.url || url;
       const redirectNote = scannedUrl === url ? '' : ` (redirected from ${url})`;
 
+      // axe's `incomplete`: rules it could not decide (contrast over an image, ...). Dropping
+      // them made such a page read as clean (#290).
+      const needsReview = axeResult.incomplete.map((item) => ({
+        id: item.id,
+        description: item.description,
+        nodes: item.nodes.length,
+      }));
+
       const structuredContent = {
         url: scannedUrl,
         passed: violations.length === 0,
         violationCount: violations.length,
         violations,
+        needsReview,
       };
 
-      const summary = structuredContent.passed
-        ? `No WCAG ${wcagLevel ?? 'AA'} violations found on ${scannedUrl}${redirectNote}.`
-        : `${violations.length} WCAG ${wcagLevel ?? 'AA'} violation(s) on ${scannedUrl}${redirectNote}:\n` +
-          violations.map((v) => `- [${v.impact}] ${v.id}: ${v.description}`).join('\n');
+      const summary =
+        (structuredContent.passed
+          ? `No WCAG ${wcagLevel ?? 'AA'} violations found on ${scannedUrl}${redirectNote}.`
+          : `${violations.length} WCAG ${wcagLevel ?? 'AA'} violation(s) on ${scannedUrl}${redirectNote}:\n` +
+            violations.map((v) => `- [${v.impact}] ${v.id}: ${v.description}`).join('\n')) +
+        (needsReview.length === 0
+          ? ''
+          : `\n${needsReview.length} rule(s) need manual review:\n` +
+            needsReview.map((r) => `- ${r.id}: ${r.description}`).join('\n'));
 
       return {
         content: [{ type: 'text' as const, text: summary }],

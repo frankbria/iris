@@ -584,10 +584,9 @@ SERVER_PID=$!
 # Wait for server to be ready
 sleep 2
 
-echo "🔍 Running WCAG 2.1 AA compliance tests..."
+echo "🔍 Running WCAG 2.2 AA compliance tests (the default level)..."
 iris a11y \
   --pages "http://localhost:8080/homepage.html" \
-  --tags wcag2a,wcag2aa \
   --fail-on critical,serious \
   --format html \
   --output .iris/reports/a11y-report.html \
@@ -765,7 +764,7 @@ cd tests
 ==============================
 
 📡 Starting local server...
-🔍 Running WCAG 2.1 AA compliance tests...
+🔍 Running WCAG 2.2 AA compliance tests (the default level)...
 
 Accessibility Score: 95/100
 ✅ 0 critical violations
@@ -786,7 +785,6 @@ python3 -m http.server 8080 --directory pages &
 # Run accessibility scan
 iris a11y \
   --pages "http://localhost:8080/homepage.html" \
-  --tags wcag2a,wcag2aa,wcag21aa \
   --include-keyboard \
   --include-screenreader \
   --format html
@@ -975,7 +973,6 @@ jobs:
         run: |
           iris a11y \
             --pages "http://localhost:8080/homepage.html" \
-            --tags wcag2a,wcag2aa \
             --format junit \
             --output test-results/a11y-results.xml
 
