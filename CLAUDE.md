@@ -18,7 +18,7 @@ npm run test
 # Quality gates (also enforced in CI)
 npm run typecheck      # tsc --noEmit
 npm run lint           # eslint (flat config, eslint.config.js)
-npm run format:check   # prettier --check (non-blocking)
+npm run format:check   # prettier --check (blocks CI: run prettier --write first)
 npm run verify         # typecheck + lint + test in one step
 
 # Start development server (ts-node)
@@ -37,18 +37,6 @@ npm run build -w @iris/portal   # next build also type-checks
 ```
 
 ## Architecture
-
-### Core Modules
-
-**CLI Layer (`src/cli.ts`)**
-- Entry point with commander.js-based CLI
-- Three main commands: `run`, `watch`, `connect`
-- Currently scaffolded with placeholder implementations
-
-**Browser Automation (`src/browser.ts`)**
-- Playwright wrapper for browser control
-- Provides basic functions: `launchBrowser`, `navigate`, `click`, `typeText`, `takeScreenshot`
-- Used for UI interaction and visual testing
 
 ### Project Structure
 
@@ -192,28 +180,6 @@ plans/
 ```
 
 ## Development Guidelines
-
-### Current Phase: Phase 2 - Visual Regression & Accessibility (50% Complete)
-
-**Completed: Sub-Phase 2A - AI Vision Foundation (Week 1-4)**
-1. ✅ Multimodal AI client architecture (text + vision capabilities)
-2. ✅ Vision provider integrations (OpenAI GPT-4o, Anthropic Claude Sonnet 5, Ollama llava)
-3. ✅ Image preprocessing pipeline (resize, optimize, hash for caching)
-4. ✅ AI vision result caching (LRU memory + SQLite persistence, 30-day TTL)
-5. ✅ Cost tracking with budget management (daily/monthly limits, circuit breaker)
-6. ✅ Smart client: configured provider first; cross-vendor fallback only on opt-in (`ai.fallback`, #245)
-
-**Completed: Sub-Phase 2B - Visual Classification Integration (Week 5-6)**
-1. ✅ AIVisualClassifier refactored to use Phase 2A infrastructure
-2. ✅ Backward-compatible adapter pattern implementation
-3. ✅ Test suite imports the real AIVisualClassifier + provider clients (issue #62; earlier "45 tests" exercised an in-file stub)
-4. ✅ Response mapping (AIVisionResponse → AIAnalysisResponse)
-5. ✅ Dynamic p-limit import for Jest compatibility
-
-**In Progress: Sub-Phase 2C - Parallel Execution & Performance (Week 8-10)**
-- Diff engine integration with AI classifier
-- Parallel execution architecture
-- Smart caching and incremental testing
 
 ### AI Client Architecture (Phase 2A)
 
@@ -1116,13 +1082,13 @@ They apply only to connections with a principal; local mode is untouched.
   (Chromium is held either way), and are clamped at 0 against a backward clock.
   `BrowserSession.onEnd` runs on the first cleanup only, which matters when
   `closeBrowser` and the socket's `close` race. A settled AI call maps to its kind
-  explicitly (`usageKindOf`), keyed `<operation>:<callId>`. A translation is `byok`
-  until managed credits (#346).
+  explicitly (`usageKindOf`), keyed `<operation>:<callId>`. Billing mode comes
+  from the credential (#479).
 - **Constraints**: `billing_mode` null iff platform kind; an AI row must carry
   `unit_cost_usd` (`usage_events_ai_cost_check`). A key already recorded is skipped and
   logged (`returning`), so a reused key cannot hide an event silently.
-- **Writers not yet wired**: vision calls and jobs come with #268/#267 (the hooks
-  exist); agent turns come with #428 (the agent loop is CLI-only).
+- **Writers not yet wired**: vision calls (hosted visual jobs run no AI) and agent
+  turns (#428, the agent loop is CLI-only).
 
 ### Plans and Entitlements (issue #260)
 
@@ -1277,7 +1243,7 @@ and change only through approval; git-branch baselines stay local.
 - **A project is a caller-chosen id** (`[A-Za-z0-9_-]{1,64}`), no table of its own:
   `visual_baselines` (migration 0011) is keyed `(org_id, project, name)` with
   `name = artifactName(page, device)`; `(org_id, run_id) -> runs` sets null when the run
-  is pruned. Org purge deletes the rows (#349); deleting the objects is #472.
+  is pruned. Org purge deletes the rows and objects (#349, #472).
 - **A project's first screenshot of a page becomes its baseline** (`approved_by =
   'first-run'`, result `newBaseline: true`, passes), seeded **insert-only**
   (`insertIfAbsent`): of two racing jobs one seeds and the other compares with it, and a
@@ -1303,8 +1269,7 @@ and change only through approval; git-branch baselines stay local.
   made stores its `error`. `runWorker`
   alternates which kind it claims first, so neither starves.
 - **Without `IRIS_S3_*`** the API answers 503 to visual submits and approvals, and the
-  worker claims a11y only; a partial config makes either exit 3. `runWorker` claims a11y
-  first, then visual, one job per tick.
+  worker claims a11y only; a partial config makes either exit 3.
 - **Billed per comparison** (owner decision, 2026-10-05): the `visual_job` usage row's
   quantity is the job's comparisons (pages x devices), so `runsPerMonth` limits screenshots,
   not jobs; enforcement (#346) sums `quantity`. An a11y job is quantity 1.
@@ -1387,8 +1352,8 @@ hosted `iris connect` passes the same `postgresHistory` it records into.
 ### Artifact Store (issue #257)
 
 `src/artifact-store.ts`: `ArtifactStore { put, get, signedUrl }` with
-`FilesystemArtifactStore` (local) and `S3ArtifactStore` (hosted). Nothing hosted writes to
-it yet; #268 (visual jobs), #460 (URLs in run detail) and #349 (purge) build on it.
+`FilesystemArtifactStore` (local) and `S3ArtifactStore` (hosted), used by visual jobs
+(#268), signed run-detail URLs (#460) and purge (#349/#472).
 
 - **SeaweedFS, not MinIO** (owner decision, 2026-10-03): MinIO's community images and
   binaries are gone (pull denied, download 410). The code speaks only the S3 API
@@ -1506,8 +1471,7 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   fallback on, no other vendor is contacted.
 - **Hosted RPC**: `startServer({ aiCredentials: (principal) => … })` resolves a tenant's
   credentials per request, lazily; a lookup that throws is logged and becomes no AI, so
-  its message never reaches the client. Hosted `iris connect` passes none yet, so tenants get pattern
-  translation only until BYOK (#344) and managed credits (#346) supply the resolver.
+  its message never reaches the client. Hosted `iris connect` passes `managedAiResolver` (#344, #479).
 
 ### Tenant-Scoped Ledger and Vision Cache (issue #255)
 
@@ -1694,39 +1658,6 @@ credentials; an explicit `ai.provider` in the file outranks auto-detection
 var applies only while that provider is active; and an unparseable config file
 degrades to "no file layer" rather than also discarding the environment.
 
-### Phase 1 - Foundations (Complete)
-1. ✅ CLI command scaffolding with commander.js
-2. ✅ Browser automation with Playwright integration
-3. ✅ Natural language translation to browser actions
-4. ✅ JSON-RPC/WebSocket protocol layer
-5. ✅ Local SQLite persistence for test results
-
-### Testing Strategy
-- Jest with ts-jest preset for TypeScript support
-- Browser tests use data URLs for isolated testing
-- CLI tests mock console output for verification
-- Tests are located in `__tests__/` directory
-
-### Build Configuration
-- TypeScript compilation from `src/` to `dist/`
-- CommonJS modules targeting ES2020
-- Strict TypeScript configuration
-- Node.js >=20.9.0 required
-
-## Key Dependencies
-
-- **commander**: CLI framework for command parsing
-- **playwright**: Browser automation and testing
-- **jest + ts-jest**: Testing framework with TypeScript support
-
-## Future Phases
-
-See `docs/dev_plan.md` for complete roadmap:
-- Phase 2: Visual regression testing and accessibility validation
-- Phase 3: Performance monitoring and AI enhancements
-
-Refer to `AGENT_INSTRUCTIONS.md` for detailed AI agent development guidance.
-
 ## Project Assessment Process
 
 You will occasionally be asked to assess the current state of the development project. This involves a comprehensive review to understand where the project stands relative to its specifications and development plan.
@@ -1763,124 +1694,20 @@ Create a status report in `plans/status_YYYYMMDDHHMM.md` with the following form
 
 This assessment provides an objective view of project status and helps identify where development claims may not match reality.
 
-## Feature Development Quality Standards
+## Quality Standards
 
-**CRITICAL**: All new features MUST meet the following mandatory requirements before being considered complete.
+Global TDD/coverage/no-mock rules apply. IRIS-specific:
 
-### Testing Requirements
-
-- **Minimum Coverage**: 85% code coverage target for all new code (current repo-wide actual: ~93% statements / ~82% branch — new code should not lower it)
-- **Test Pass Rate**: 100% of non-skipped tests must pass (current: 2209/2210 passing, 1 skipped, 0 failing on CI — identical with and without a repo-root `.env`; on WSL the egress-proxy "502 when the vetted address refuses" test times out, see #382)
-- **Test Types Required**:
-  - Unit tests for all business logic and core modules
-  - Integration tests for browser automation
-  - End-to-end tests for CLI commands
-- **Coverage Validation**: Run coverage reports before marking features complete:
-  ```bash
-  # Jest with coverage
-  npm run test -- --coverage
-  ```
-- **Test Quality**: Tests must validate behavior, not just achieve coverage metrics
-- **Test Documentation**: Complex test scenarios must include comments explaining the test strategy
-- **Browser Testing**: Use data URLs for isolated browser testing
-
-### Git Workflow Requirements
-
-Before moving to the next feature, ALL changes must be:
-
-1. **Committed with Clear Messages**:
-   ```bash
-   git add .
-   git commit -m "feat(module): descriptive message following conventional commits"
-   ```
-   - Use conventional commit format: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, etc.
-   - Include scope when applicable: `feat(cli):`, `fix(browser):`, `test(automation):`
-   - Write descriptive messages that explain WHAT changed and WHY
-
-2. **Pushed to Remote Repository**:
-   ```bash
-   git push origin <branch-name>
-   ```
-   - Never leave completed features uncommitted
-   - Push regularly to maintain backup and enable collaboration
-   - Ensure CI/CD pipelines pass before considering feature complete
-
-3. **Branch Hygiene**:
-   - Work on feature branches, never directly on `main`
-   - Branch naming convention: `feature/<feature-name>`, `fix/<issue-name>`, `docs/<doc-update>`
-   - Create pull requests for all significant changes
-
-4. **Phase Alignment**:
-   - Ensure features align with current development phase
-   - Update development plan when phase goals are completed
-   - Reference phase objectives in implementation decisions
-
-### Documentation Requirements
-
-**ALL implementation documentation MUST remain synchronized with the codebase**:
-
-1. **Code Documentation**:
-   - TypeScript: JSDoc comments for all public functions, classes, and interfaces
-   - Update inline comments when implementation changes
-   - Remove outdated comments immediately
-
-2. **Implementation Documentation**:
-   - Update relevant sections in this CLAUDE.md file
-   - Keep technical specifications current (`docs/tech_specs.md`)
-   - Update development roadmap (`docs/dev_plan.md`)
-   - Update configuration examples when defaults change
-   - Document breaking changes prominently
-
-3. **README Updates**:
-   - Keep feature lists current
-   - Update setup instructions when dependencies change
-   - Maintain accurate command examples
-   - Update version compatibility information
-
-4. **Project Status Documentation**:
-   - Update status reports in `/plan` directory
-   - Keep user stories current (`docs/user_stories.md`)
-   - Document new CLI commands and options
-   - Update architecture diagrams when structure changes
-
-5. **AGENT_INSTRUCTIONS.md Maintenance**:
-   - Keep AI agent guidance current with new patterns
-   - Document new testing approaches
-   - Update development guidelines
-
-### Feature Completion Checklist
-
-Before marking ANY feature as complete, verify:
-
-- [ ] All tests pass (`npm run test`)
-- [ ] Code coverage meets 85% minimum threshold
-- [ ] Coverage report reviewed for meaningful test quality
-- [ ] TypeScript compilation succeeds (`npm run build`)
-- [ ] Code formatted according to project standards
-- [ ] All changes committed with conventional commit messages
-- [ ] All commits pushed to remote repository
-- [ ] Implementation documentation updated
-- [ ] Inline code comments updated or added
-- [ ] CLAUDE.md updated (if new patterns introduced)
-- [ ] Breaking changes documented
-- [ ] CLI functionality manually tested
-- [ ] Browser automation tested with real scenarios
-- [ ] Phase objectives updated (if completed)
-- [ ] Status assessment conducted (if major milestone)
-- [ ] CI/CD pipeline passes
-
-### Rationale
-
-These standards ensure:
-- **Quality**: High test coverage and pass rates prevent regressions in automation tools
-- **Traceability**: Git commits provide clear history of changes during development
-- **Maintainability**: Current documentation reduces onboarding time and prevents knowledge loss
-- **Collaboration**: Pushed changes enable team visibility and code review
-- **Reliability**: Consistent quality gates maintain stability of automation framework
-- **Alignment**: Features stay aligned with development phases and project goals
-- **Assessment**: Regular status checks ensure development claims match reality
-
-**Enforcement**: AI agents should automatically apply these standards to all feature development tasks without requiring explicit instruction for each task.
+- **Coverage**: >=85% for new code (repo-wide actual: ~93% statements / ~82% branch; new
+  code should not lower it). Check with `npm run test -- --coverage`.
+- **Pass rate**: 100% of non-skipped tests (current: 2209/2210 passing, 1 skipped, 0
+  failing on CI, identical with and without a repo-root `.env`; on WSL the egress-proxy
+  "502 when the vetted address refuses" test times out, see #382).
+- **Commits**: conventional with scope (`feat(cli):`, `fix(a11y):`); branches
+  `feature/…`, `fix/…`, `docs/…`; PR to main, CI green before done.
+- **Docs in the same PR**: this file (new patterns/gotchas), `docs/data-flows.md`
+  (stores, retention, transmissions), README command examples, JSDoc on public APIs.
+  See `AGENT_INSTRUCTIONS.md` for agent guidance.
 
 ## Issue Tracking
 

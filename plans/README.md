@@ -169,7 +169,7 @@ code is the ordering key.
 | `P1.8` | [#287](https://github.com/frankbria/iris/issues/287) | a11y runner: per-page error isolation and report directory creation | — | DONE (#490) |
 | `P1.9` | [#288](https://github.com/frankbria/iris/issues/288) | a11y reports, JUnit and history agree with the CLI verdict | P1.8 (#287) | DONE (#494) |
 | `P1.10` | [#289](https://github.com/frankbria/iris/issues/289) | a11y CLI flags: validate --fail-on, allow disabling keyboard, fix --pages parsing | — | DONE (#495) |
-| `P1.11` | [#290](https://github.com/frankbria/iris/issues/290) | WCAG AA level must include WCAG 2.1/2.2 AA rules | — | TODO |
+| `P1.11` | [#290](https://github.com/frankbria/iris/issues/290) | WCAG AA level must include WCAG 2.1/2.2 AA rules | — | DONE (#497) |
 | `P1.12` | [#350](https://github.com/frankbria/iris/issues/350) | a11y: axe execution context | — | DONE (#501) |
 | `P1.13` | [#351](https://github.com/frankbria/iris/issues/351) | Agent loop: verdict evaluation | — | TODO |
 | `P1.14` | [#293](https://github.com/frankbria/iris/issues/293) | Agent loop error surfacing: provider failure and page-controlled hangs | — | TODO |

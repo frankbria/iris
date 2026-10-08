@@ -466,3 +466,10 @@ Write/Edit, not as a pre-push afterthought.
 - **Another session in the same checkout:** when `git status` shows edits you didn't make, work in `git worktree add` with a `node_modules` symlink (exclude it via `info/exclude`: the ignore rule matches directories only) and change dependencies with `--package-lock-only`, so the shared `node_modules` is untouched.
 - **Local SeaweedFS fills with leaked test buckets** (`api-runs`, `hosted-visual-job` never delete theirs). Every S3 test then fails with `InternalError` ("failed to find writable volumes" in the container log). Clean up with `weed shell` `collection.delete`, not by recreating the container.
 - **opencode can stall** (no stream bytes for 180 s). Fall back to `codex review` at once and record which reviewer ran.
+
+## 2026-10-08 — #290
+
+- **Rebasing onto a fix PR force-pushes the feature branch.** When `main` gains a fix the open PR needs (here the audit-gate deps fix, #499), merge `main` into the branch instead; the issue-lifecycle workflow forbids force-pushing a feature branch (#497 broke this with `--force-with-lease`).
+- **`pkill -f <pattern>` from the Bash tool kills its own shell** when the pattern appears in the command line (exit 144). Kill by PID (from `ss -ltnp` or `pgrep`, filtered) instead.
+- **The full suite under `--coverage` on a 4-core WSL box times out ~12 browser/Postgres suites** (load avg 6-7, the suite's own workers). Re-run the failed files alone before reading them as regressions (#142); do it before opening a PR so the PR body can state it.
+- **The audit gate fails every PR when an advisory lands on `main`'s tree.** Check `npm audit --omit=dev --audit-level=high` before pushing a feature branch; patch it in its own PR first, picking the first patched release, not the newest.
