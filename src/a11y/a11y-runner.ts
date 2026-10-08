@@ -680,6 +680,15 @@ export class AccessibilityRunner {
             : r.axeResult.violations.length === 0
               ? '<p class="ok">No violations found.</p>'
               : violations;
+        // axe's `incomplete`: not violations, but not passes either; a person decides (#290).
+        const review = r.axeResult.incomplete.length
+          ? `<div class="review"><h4>Needs manual review</h4><ul>${r.axeResult.incomplete
+              .map(
+                (i) =>
+                  `<li><strong>${esc(i.id)}</strong>: ${esc(i.description)} (${i.nodes.length} element(s))</li>`,
+              )
+              .join('')}</ul></div>`
+          : '';
         // The page's verdict, the one the CLI exits on (#288), and why.
         const verdict = r.passed ? 'PASSED' : 'FAILED';
         const reasons = r.failureReasons.length
@@ -691,6 +700,7 @@ export class AccessibilityRunner {
           <span class="verdict">${verdict}</span></h3>
         ${reasons}
         ${body}
+        ${review}
       </section>`;
       })
       .join('');

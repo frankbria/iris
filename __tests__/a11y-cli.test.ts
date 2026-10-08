@@ -49,7 +49,8 @@ describe('a11y CLI command', () => {
         AccessibilityRunner: jest.fn().mockImplementation((config) => {
           // Defaults from the command definition.
           expect(config.pages).toEqual(['/']);
-          expect(config.axe.tags).toEqual(['wcag2a', 'wcag2aa']);
+          // WCAG 2.2 AA, the level hosted jobs and the MCP tool call AA (#290).
+          expect(config.axe.tags).toEqual(['wcag2a', 'wcag21a', 'wcag2aa', 'wcag21aa', 'wcag22aa']);
           expect(config.failureThreshold).toEqual({ critical: true, serious: true });
           expect(config.output.format).toBe('html');
           expect(config.output.path).toBeUndefined();
@@ -92,6 +93,27 @@ describe('a11y CLI command', () => {
       ]);
 
       expect(mockRun).toHaveBeenCalled();
+    });
+
+    // #290: axe's `incomplete` results are counted on the console, not dropped.
+    it('prints how many rules need manual review', async () => {
+      const page = (incomplete: number) => ({
+        page: '/',
+        passed: true,
+        failureReasons: [],
+        axeResult: { violations: [], incomplete: Array.from({ length: incomplete }, () => ({})) },
+      });
+      const mockRun = jest.fn().mockResolvedValue({ ...passingResult, results: [page(2), page(1)] });
+      jest.doMock('../src/a11y/a11y-runner', () => ({
+        AccessibilityRunner: jest.fn().mockImplementation(() => ({ run: mockRun })),
+      }));
+
+      jest.resetModules();
+      const { runCli } = await import('../src/cli');
+      await runCli(['node', 'iris', 'a11y']);
+
+      const out = consoleLogSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(out).toContain('Needs manual review: 3 rule(s) axe could not decide');
     });
 
     // #289: the runner config a11y builds from the given flags.
@@ -360,11 +382,11 @@ describe('a11y CLI command', () => {
               violationsBySeverity: { critical: 1, serious: 0, moderate: 0, minor: 0 },
             },
             results: [
-              { page: '/bad', axeResult: { violations: [{}] } },
+              { page: '/bad', axeResult: { violations: [{}], incomplete: [] } },
               {
                 page: '/down',
                 error: 'net::ERR_CONNECTION_REFUSED',
-                axeResult: { violations: [] },
+                axeResult: { violations: [], incomplete: [] },
               },
             ],
           }),
@@ -391,11 +413,11 @@ describe('a11y CLI command', () => {
             ...passingResult,
             summary: { ...passingResult.summary, passed: false, pagesErrored: 1 },
             results: [
-              { page: '/ok', axeResult: { violations: [] } },
+              { page: '/ok', axeResult: { violations: [], incomplete: [] } },
               {
                 page: '/down',
                 error: 'net::ERR_CONNECTION_REFUSED',
-                axeResult: { violations: [] },
+                axeResult: { violations: [], incomplete: [] },
               },
             ],
           }),

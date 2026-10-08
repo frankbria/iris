@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import type { ArtifactStore } from './artifact-store';
 import type { A11yJobParams, ClaimedJob, JobKind, PostgresJobs } from './history-store';
+import { wcagTags } from './a11y/wcag';
 import { errMessage, log } from './log';
 import { metrics } from './metrics';
 
@@ -41,11 +42,6 @@ const jobsReaped = metrics.counter(
   'Stuck jobs taken back by the reaper, by result (requeued, failed)',
 );
 
-/** The axe tags of a WCAG level: each level includes the ones below, like `--tags`. */
-export function axeTagsFor(level: A11yJobParams['wcagLevel']): string[] {
-  return ['wcag2a', 'wcag2aa', 'wcag2aaa'].slice(0, { A: 1, AA: 2, AAA: 3 }[level]);
-}
-
 /** Runs one job's scan. The defaults are `iris a11y`'s: axe plus keyboard tests, no report file. */
 async function runA11y(params: A11yJobParams) {
   const { AccessibilityRunner } = await import('./a11y/a11y-runner');
@@ -53,7 +49,7 @@ async function runA11y(params: A11yJobParams) {
     pages: params.urls,
     axe: {
       rules: {},
-      tags: axeTagsFor(params.wcagLevel),
+      tags: wcagTags(params.wcagLevel),
       include: [],
       exclude: [],
       disableRules: [],

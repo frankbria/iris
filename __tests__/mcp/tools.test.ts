@@ -61,6 +61,37 @@ const CLEAN_HTML = `<!DOCTYPE html>
   </body>
 </html>`;
 
+/**
+ * Clean under WCAG 2.0, but the autocomplete token is invalid: axe's
+ * `autocomplete-valid` carries only the `wcag21aa` tag (#290), so a 2.0-only AA scan
+ * passes this page.
+ */
+const WCAG21_ONLY_HTML = `<!DOCTYPE html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>WCAG 2.1 fixture</title></head>
+  <body>
+    <main><h1>WCAG 2.1 fixture</h1>
+      <label>Name <input type="text" autocomplete="banana" /></label>
+    </main>
+  </body>
+</html>`;
+
+/**
+ * No violations, but text over a background image: axe cannot compute the contrast
+ * and reports `color-contrast` as incomplete, which must reach the caller (#290).
+ */
+const NEEDS_REVIEW_HTML = `<!DOCTYPE html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Needs review fixture</title></head>
+  <body>
+    <main><h1>Needs review fixture</h1>
+      <p style="color: #777; background-image: url('data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==')">
+        Text whose contrast depends on an image
+      </p>
+    </main>
+  </body>
+</html>`;
+
 interface A11yStructuredContent {
   url: string;
   passed: boolean;
@@ -72,6 +103,7 @@ interface A11yStructuredContent {
     helpUrl: string;
     nodes: number;
   }>;
+  needsReview: Array<{ id: string; description: string; nodes: number }>;
 }
 
 interface CallResult {
@@ -88,6 +120,8 @@ describe('run_accessibility_test tool', () => {
   let subresourceRedirectURL: string;
   let redirectBlockedURL: string;
   let redirectOkURL: string;
+  let wcag21URL: string;
+  let needsReviewURL: string;
   let client: Client;
   let server: McpServer;
 
@@ -121,7 +155,12 @@ describe('run_accessibility_test tool', () => {
         return;
       }
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(req.url === '/clean' ? CLEAN_HTML : FAILING_HTML);
+      const pages: Record<string, string> = {
+        '/clean': CLEAN_HTML,
+        '/wcag21': WCAG21_ONLY_HTML,
+        '/needs-review': NEEDS_REVIEW_HTML,
+      };
+      res.end(pages[req.url ?? ''] ?? FAILING_HTML);
     });
     await new Promise<void>((resolve) => fixtureServer.listen(0, resolve));
     const origin = `http://localhost:${(fixtureServer.address() as AddressInfo).port}`;
@@ -131,6 +170,8 @@ describe('run_accessibility_test tool', () => {
     subresourceRedirectURL = `${origin}/subresource-redirect`;
     redirectBlockedURL = `${origin}/redirect-to-metadata`;
     redirectOkURL = `${origin}/redirect-ok`;
+    wcag21URL = `${origin}/wcag21`;
+    needsReviewURL = `${origin}/needs-review`;
   });
 
   afterAll(async () => {
@@ -326,8 +367,33 @@ describe('run_accessibility_test tool', () => {
         passed: true,
         violationCount: 0,
         violations: [],
+        needsReview: [],
       });
       expect(result.content?.[0]?.text).toMatch(/No WCAG AA violations found/);
+    }, 120_000);
+
+    // #290: "AA" used to mean WCAG 2.0 AA only, and the page passed.
+    it('AA includes WCAG 2.1 rules: reports a 2.1-only violation', async () => {
+      const result = await callTool({ url: wcag21URL });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent!.passed).toBe(false);
+      expect(result.structuredContent!.violations.map((v) => v.id)).toEqual(['autocomplete-valid']);
+    }, 120_000);
+
+    // #290: axe's `incomplete` results were dropped, so this read as a clean pass.
+    it('returns axe incomplete results as needs-review, and says so in the text', async () => {
+      const result = await callTool({ url: needsReviewURL });
+
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent!;
+      expect(structured.passed).toBe(true);
+      const contrast = structured.needsReview.find((r) => r.id === 'color-contrast');
+      expect(contrast).toBeDefined();
+      expect(contrast!.nodes).toBeGreaterThan(0);
+      const text = result.content?.[0]?.text ?? '';
+      expect(text).toMatch(/need manual review/);
+      expect(text).toContain('color-contrast');
     }, 120_000);
   });
 
