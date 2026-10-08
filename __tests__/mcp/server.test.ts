@@ -237,7 +237,7 @@ describe('MCP stdio server', () => {
     }
   }, 120_000);
 
-  it('reports only axe violations — never keyboard or screen-reader results', async () => {
+  it('reports only axe results — never keyboard or screen-reader results', async () => {
     // #72/#73: keyboard and screen-reader sub-checks hardcode success, so the
     // tool must not surface them. Guard the honest scoping against regression.
     await client.handshake();
@@ -250,7 +250,9 @@ describe('MCP stdio server', () => {
     // Assert the exact key set rather than grepping the payload for "keyboard":
     // axe rule descriptions are Deque's prose and could legitimately mention a
     // screen reader, which would make a substring scan false-fail on a reword.
+    // needsReview is axe's own `incomplete` results (#290), not a keyboard or SR check.
     expect(Object.keys(result.structuredContent!).sort()).toEqual([
+      'needsReview',
       'passed',
       'url',
       'violationCount',
