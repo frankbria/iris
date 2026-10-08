@@ -1,11 +1,17 @@
 /**
  * Axe-core Integration Module
  *
- * Provides integration with axe-core for WCAG 2.1 compliance testing
+ * Runs axe-core in a CDP isolated world of every frame it scans (#350). An isolated world
+ * shares the page's DOM but none of its JavaScript: the page cannot replace `window.axe`,
+ * poison the builtins axe uses, or answer in axe's place. `@axe-core/playwright` ran axe in
+ * the page's main world, where a page that pinned `window.axe` wrote its own verdict and
+ * IRIS reported it as axe-core's.
  */
 
-import { Page } from 'playwright';
-import AxeBuilder from '@axe-core/playwright';
+import type { CDPSession, Page } from 'playwright';
+import { source as axeSource } from 'axe-core';
+import type { ContextObject, PartialResult, RunOptions } from 'axe-core';
+import { z } from 'zod';
 import type { A11yResult, A11yViolation } from './types';
 
 export interface AxeConfig {
@@ -22,6 +28,208 @@ export interface AxeConfig {
   timeout: number;
 }
 
+const WORLD_NAME = 'iris-axe';
+
+/** One frame's isolated world, with axe-core injected. */
+interface AxeWorld {
+  cdp: CDPSession;
+  contextId: number;
+}
+
+async function openWorld(cdp: CDPSession, frameId: string): Promise<AxeWorld> {
+  const { executionContextId } = await cdp.send('Page.createIsolatedWorld', {
+    frameId,
+    worldName: WORLD_NAME,
+  });
+  const world = { cdp, contextId: executionContextId };
+  await call(world, 'function (source) { (0, eval)(source); }', [axeSource]);
+  return world;
+}
+
+/**
+ * Call `fn` in the world with JSON arguments. Arguments travel as CDP values, never spliced
+ * into source, since they include page-controlled strings (frame selectors, partials).
+ * With `byValue: false` the result is a remote object id (a DOM element).
+ */
+async function call(
+  world: AxeWorld,
+  fn: string,
+  args: unknown[],
+  byValue = true,
+): Promise<unknown> {
+  const reply = await world.cdp.send('Runtime.callFunctionOn', {
+    functionDeclaration: fn,
+    executionContextId: world.contextId,
+    arguments: args.map((value) => ({ value })),
+    awaitPromise: true,
+    returnByValue: byValue,
+  });
+  if (reply.exceptionDetails) {
+    throw new Error(reply.exceptionDetails.exception?.description ?? reply.exceptionDetails.text);
+  }
+  return byValue ? reply.result.value : reply.result.objectId;
+}
+
+/**
+ * `runPartial` in this frame and, depth first, in every frame axe finds inside it: the
+ * order `finishRun` expects (what `@axe-core/playwright` built). A child frame that cannot
+ * be scanned is `null` with its subtree; the top frame's failure throws.
+ */
+async function framePartials(
+  world: AxeWorld,
+  context: ContextObject,
+  options: RunOptions,
+  oopifSessions: Map<string, CDPSession>,
+): Promise<(PartialResult | null)[]> {
+  const frames = (await call(world, 'function (c) { return axe.utils.getFrameContexts(c); }', [
+    context,
+  ])) as { frameSelector: unknown; frameContext: ContextObject }[];
+  const own = (await call(world, 'function (c, o) { return axe.runPartial(c, o); }', [
+    context,
+    options,
+  ])) as PartialResult;
+
+  const partials: (PartialResult | null)[] = [own];
+  for (const { frameSelector, frameContext } of frames) {
+    try {
+      const objectId = (await call(
+        world,
+        'function (s) { return axe.utils.shadowSelect(s); }',
+        [frameSelector],
+        false,
+      )) as string;
+      const { node } = await world.cdp.send('DOM.describeNode', { objectId });
+      if (!node.frameId) throw new Error('frame has no document');
+      // An out-of-process frame is its own target, reachable only through its own session.
+      const child = await openWorld(oopifSessions.get(node.frameId) ?? world.cdp, node.frameId);
+      partials.push(...(await framePartials(child, frameContext, options, oopifSessions)));
+    } catch {
+      partials.push(null);
+    }
+  }
+  return partials;
+}
+
+/** axe over every frame of the page, each in its own isolated world. */
+async function runIsolated(
+  page: Page,
+  context: ContextObject,
+  options: RunOptions,
+): Promise<unknown> {
+  const browserContext = page.context();
+  const sessions: CDPSession[] = [];
+  try {
+    const top = await browserContext.newCDPSession(page);
+    sessions.push(top);
+    // newCDPSession(frame) succeeds only for an out-of-process frame: map each by its id.
+    const oopifSessions = new Map<string, CDPSession>();
+    for (const frame of page.frames()) {
+      if (frame === page.mainFrame()) continue;
+      const session = await browserContext.newCDPSession(frame).catch(() => null);
+      if (!session) continue;
+      sessions.push(session);
+      const { frameTree } = await session.send('Page.getFrameTree');
+      oopifSessions.set(frameTree.frame.id, session);
+    }
+    const { frameTree } = await top.send('Page.getFrameTree');
+    const world = await openWorld(top, frameTree.frame.id);
+    const partials = await framePartials(world, context, options, oopifSessions);
+    return await call(world, 'function (p, o) { return axe.finishRun(p, o); }', [
+      partials,
+      options,
+    ]);
+  } finally {
+    await Promise.all(sessions.map((s) => s.detach().catch(() => {})));
+  }
+}
+
+// What IRIS reads from an axe result. axe's own output, but checked anyway: every report
+// writer calls .map/.join on these fields, and a shape that slipped through used to throw
+// there and lose the whole report (#350, the #393 comment).
+const Target = z.array(z.union([z.string(), z.array(z.string())]));
+const RuleNode = z.object({ target: Target, html: z.string() });
+const RawRule = z.object({ id: z.string(), description: z.string(), nodes: z.array(RuleNode) });
+const RawAxeResult = z.object({
+  violations: z.array(
+    RawRule.extend({
+      impact: z.enum(['minor', 'moderate', 'serious', 'critical']).nullish(),
+      tags: z.array(z.string()),
+      help: z.string(),
+      helpUrl: z.string(),
+      nodes: z.array(RuleNode.extend({ failureSummary: z.string().optional() })),
+    }),
+  ),
+  passes: z.array(RawRule),
+  incomplete: z.array(RawRule),
+  inapplicable: z.array(z.object({ id: z.string(), description: z.string() })),
+  testEngine: z.object({ name: z.string(), version: z.string() }).partial().optional(),
+});
+
+/**
+ * An axe result as IRIS's `A11yResult`, after checking its shape. Throws
+ * "axe returned a malformed result" for anything else, which the runner records as a page
+ * error (never a pass, #287).
+ */
+export function toA11yResult(raw: unknown, testName: string, url: string): A11yResult {
+  const parsed = RawAxeResult.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new Error(
+      `axe returned a malformed result (${issue?.path.join('.') || 'result'}: ${issue?.message})`,
+    );
+  }
+  const r = parsed.data;
+  // Targets keep axe's form: a shadow-DOM element's target is itself an array.
+  type Targets = string[];
+  const violations: A11yViolation[] = r.violations.map((v) => ({
+    id: v.id,
+    impact: v.impact ?? 'moderate',
+    tags: v.tags,
+    description: v.description,
+    help: v.help,
+    helpUrl: v.helpUrl,
+    nodes: v.nodes.map((n) => ({
+      target: n.target as Targets,
+      html: n.html,
+      failureSummary: n.failureSummary,
+      element: n.target[0] as string | undefined,
+    })),
+  }));
+  const rules = (list: z.infer<typeof RawRule>[]) =>
+    list.map((p) => ({
+      id: p.id,
+      description: p.description,
+      nodes: p.nodes.map((n) => ({ target: n.target as Targets, html: n.html })),
+    }));
+  const passes = rules(r.passes);
+  const incomplete = rules(r.incomplete);
+  const inapplicable = r.inapplicable.map((i) => ({ id: i.id, description: i.description }));
+
+  return {
+    testName,
+    url,
+    timestamp: new Date(),
+    passed: violations.length === 0,
+    violations,
+    passes,
+    incomplete,
+    inapplicable,
+    summary: {
+      total: violations.length + passes.length + incomplete.length + inapplicable.length,
+      violations: violations.length,
+      passes: passes.length,
+      incomplete: incomplete.length,
+      inapplicable: inapplicable.length,
+    },
+    testRunner: {
+      name: r.testEngine?.name || 'axe-core',
+      // 'unknown' rather than a pinned number: a stale version stated with confidence is
+      // worse than admitting axe did not report one (issue #81).
+      version: r.testEngine?.version ?? 'unknown',
+    },
+  };
+}
+
 /**
  * AxeRunner handles axe-core execution and result processing
  */
@@ -33,47 +241,33 @@ export class AxeRunner {
   }
 
   /**
-   * Build a configured AxeBuilder from this runner's config.
+   * The axe context and run options for this runner's config.
    *
-   * Call order is load-bearing. AxeBuilder.options() assigns `this.option`
-   * wholesale, so it must run BEFORE withTags/withRules — those merge into
-   * `this.option.runOnly`, and doing it the other way round silently erases the
-   * runOnly filter and quietly widens the scan back to everything.
-   *
-   * disableRules() is deliberately not used: it assigns `this.option.rules = {}`
-   * before filling, which would discard `config.rules`. The two rule sources are
-   * merged here instead and issued as one options() call.
+   * One rules map merges `rules` and `disableRules`. An explicit rule list (`runOnlyRules`)
+   * is the narrower, more deliberate request, so it wins over the tag filter: axe takes a
+   * single runOnly.
    *
    * @param forcedInclude Restrict to a single selector (used by runOnElement),
    *                      overriding `config.include`.
    */
-  private buildAxe(page: Page, forcedInclude?: string): AxeBuilder {
-    let axeBuilder = new AxeBuilder({ page });
-
+  private axeArgs(forcedInclude?: string): { context: ContextObject; options: RunOptions } {
     const rules: Record<string, { enabled: boolean }> = { ...this.config.rules };
     for (const ruleId of this.config.disableRules) {
       rules[ruleId] = { enabled: false };
     }
-    if (Object.keys(rules).length > 0) {
-      axeBuilder = axeBuilder.options({ rules });
-    }
-
-    // axe supports a single runOnly. An explicit rule list is the narrower,
-    // more deliberate request, so it wins over tag filtering.
+    const options: RunOptions = {};
+    if (Object.keys(rules).length > 0) options.rules = rules;
     if (this.config.runOnlyRules && this.config.runOnlyRules.length > 0) {
-      axeBuilder = axeBuilder.withRules(this.config.runOnlyRules);
+      options.runOnly = { type: 'rule', values: this.config.runOnlyRules };
     } else if (this.config.tags.length > 0) {
-      axeBuilder = axeBuilder.withTags(this.config.tags);
+      options.runOnly = { type: 'tag', values: this.config.tags };
     }
-
-    for (const selector of forcedInclude ? [forcedInclude] : this.config.include) {
-      axeBuilder = axeBuilder.include(selector);
-    }
-    for (const selector of this.config.exclude) {
-      axeBuilder = axeBuilder.exclude(selector);
-    }
-
-    return axeBuilder;
+    // The context shape @axe-core/playwright built: an empty include is the whole page.
+    const context = {
+      include: forcedInclude ? [forcedInclude] : this.config.include,
+      exclude: this.config.exclude,
+    } as ContextObject;
+    return { context, options };
   }
 
   /**
@@ -81,18 +275,18 @@ export class AxeRunner {
    * (RunOptions has only the iframe-specific frameWaitTime/pingWaitTime), so the
    * bound is applied here — otherwise a hung scan blocks the run indefinitely.
    */
-  private async analyzeWithTimeout(
-    axeBuilder: AxeBuilder,
-  ): Promise<Awaited<ReturnType<AxeBuilder['analyze']>>> {
+  private async analyzeWithTimeout(page: Page, forcedInclude?: string): Promise<unknown> {
+    const { context, options } = this.axeArgs(forcedInclude);
+    const scan = runIsolated(page, context, options);
     const { timeout } = this.config;
     if (!timeout || timeout <= 0) {
-      return axeBuilder.analyze();
+      return scan;
     }
 
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
-        axeBuilder.analyze(),
+        scan,
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () => reject(new Error(`Axe analysis timed out after ${timeout}ms`)),
@@ -111,88 +305,7 @@ export class AxeRunner {
    */
   async run(page: Page, testName: string, url: string): Promise<A11yResult> {
     try {
-      const axeResults = await this.analyzeWithTimeout(this.buildAxe(page));
-
-      // Transform violations to our format
-      const violations: A11yViolation[] = axeResults.violations.map(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (violation: any) => ({
-          id: violation.id,
-          impact: violation.impact || 'moderate',
-          tags: violation.tags || [],
-          description: violation.description || '',
-          help: violation.help || '',
-          helpUrl: violation.helpUrl || '',
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          nodes: violation.nodes.map((node: any) => ({
-            target: node.target || [],
-            html: node.html || '',
-            failureSummary: node.failureSummary,
-            element: node.target?.[0],
-          })),
-        }),
-      );
-
-      // Transform passes
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const passes = axeResults.passes.map((pass: any) => ({
-        id: pass.id,
-        description: pass.description || '',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        nodes: pass.nodes.map((node: any) => ({
-          target: node.target || [],
-          html: node.html || '',
-        })),
-      }));
-
-      // Transform incomplete
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const incomplete = axeResults.incomplete.map((inc: any) => ({
-        id: inc.id,
-        description: inc.description || '',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        nodes: inc.nodes.map((node: any) => ({
-          target: node.target || [],
-          html: node.html || '',
-        })),
-      }));
-
-      // Transform inapplicable
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const inapplicable = axeResults.inapplicable.map((inap: any) => ({
-        id: inap.id,
-        description: inap.description || '',
-      }));
-
-      // Create summary
-      const summary = {
-        total: violations.length + passes.length + incomplete.length + inapplicable.length,
-        violations: violations.length,
-        passes: passes.length,
-        incomplete: incomplete.length,
-        inapplicable: inapplicable.length,
-      };
-
-      // Get test runner info
-      const testRunner = {
-        name: axeResults.testEngine?.name || 'axe-core',
-        // 'unknown' rather than a pinned number: a stale version stated with
-        // confidence is worse than admitting axe did not report one (issue #81).
-        version: axeResults.testEngine?.version ?? 'unknown',
-      };
-
-      return {
-        testName,
-        url,
-        timestamp: new Date(),
-        passed: violations.length === 0,
-        violations,
-        passes,
-        incomplete,
-        inapplicable,
-        summary,
-        testRunner,
-      };
+      return toA11yResult(await this.analyzeWithTimeout(page), testName, url);
     } catch (error) {
       throw new Error(
         `Axe-core execution failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -216,51 +329,23 @@ export class AxeRunner {
     url: string,
   ): Promise<A11yResult> {
     try {
-      const axeResults = await this.analyzeWithTimeout(this.buildAxe(page, selector));
-
-      // Transform results similar to run() method
-      const violations: A11yViolation[] = axeResults.violations.map(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (violation: any) => ({
-          id: violation.id,
-          impact: violation.impact || 'moderate',
-          tags: violation.tags || [],
-          description: violation.description || '',
-          help: violation.help || '',
-          helpUrl: violation.helpUrl || '',
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          nodes: violation.nodes.map((node: any) => ({
-            target: node.target || [],
-            html: node.html || '',
-            failureSummary: node.failureSummary,
-            element: node.target?.[0],
-          })),
-        }),
-      );
-
-      return {
-        testName: `${testName}_${selector}`,
+      const result = toA11yResult(
+        await this.analyzeWithTimeout(page, selector),
+        `${testName}_${selector}`,
         url,
-        timestamp: new Date(),
-        passed: violations.length === 0,
-        violations,
+      );
+      // An element scan reports its violations only, as it always has.
+      return {
+        ...result,
         passes: [],
         incomplete: [],
         inapplicable: [],
         summary: {
-          total: violations.length,
-          violations: violations.length,
+          total: result.violations.length,
+          violations: result.violations.length,
           passes: 0,
           incomplete: 0,
           inapplicable: 0,
-        },
-        testRunner: {
-          // Derived from the engine that actually ran. This used to be a
-          // hardcoded '4.8.0' while the installed axe-core was 4.10.3, so every
-          // element-scan report attributed its findings to a version that never
-          // produced them (issue #81).
-          name: axeResults.testEngine?.name || 'axe-core',
-          version: axeResults.testEngine?.version ?? 'unknown',
         },
       };
     } catch (error) {

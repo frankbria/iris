@@ -1,483 +1,352 @@
 /**
  * Axe Integration Tests
  *
- * Comprehensive test suite for axe-core integration module
+ * Real Chromium and the real axe-core (no AxeBuilder mocks). axe runs in a CDP isolated
+ * world (#350): the page's own JavaScript shares the DOM with it but nothing else, so a page
+ * that pins `window.axe` or poisons builtins cannot write its own verdict. The tests below
+ * check that, that iframes (same-process and cross-site, also out of process) are still
+ * scanned, and that every configuration knob behaves as it did through AxeBuilder.
  */
 
-import { Page } from 'playwright';
-import { AxeRunner } from '../../src/a11y/axe-integration';
+import http from 'http';
+import { AddressInfo } from 'net';
+import { chromium, Browser, Page } from 'playwright';
+import { AxeRunner, toA11yResult } from '../../src/a11y/axe-integration';
+import type { AxeConfig } from '../../src/a11y/axe-integration';
 import type { A11yResult } from '../../src/a11y/types';
 
-// Mock @axe-core/playwright
-jest.mock('@axe-core/playwright');
+const AXE_VERSION: string = require('axe-core/package.json').version;
+
+const defaultConfig: AxeConfig = {
+  rules: {},
+  tags: ['wcag2a', 'wcag2aa'],
+  include: [],
+  exclude: [],
+  disableRules: [],
+  timeout: 30000,
+};
+
+/** A page with one image-alt (wcag2a) and one color-contrast (wcag2aa) violation. */
+const TWO_VIOLATIONS = `<html lang="en"><title>t</title><main>
+  <img src="x.png" id="img">
+  <p id="low" style="color:#eee;background:#fff">low contrast</p>
+</main></html>`;
+
+const ids = (r: A11yResult) => r.violations.map((v) => v.id).sort();
+const targets = (r: A11yResult) =>
+  r.violations.flatMap((v) => v.nodes.map((n) => `${v.id}:${JSON.stringify(n.target)}`)).sort();
 
 describe('AxeRunner', () => {
-  let mockPage: jest.Mocked<Page>;
+  let browser: Browser;
   let axeRunner: AxeRunner;
 
-  const defaultConfig = {
-    rules: {},
-    tags: ['wcag2a', 'wcag2aa'],
-    include: [],
-    exclude: [],
-    disableRules: [],
-    timeout: 10000,
-  };
-
+  beforeAll(async () => {
+    browser = await chromium.launch();
+  });
+  afterAll(async () => {
+    await browser.close();
+  });
   beforeEach(() => {
-    // Create mock Playwright page
-    mockPage = {
-      evaluate: jest.fn(),
-      goto: jest.fn(),
-      waitForLoadState: jest.fn(),
-      context: jest.fn(),
-    } as any;
-
     axeRunner = new AxeRunner(defaultConfig);
   });
 
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
+  /** A fresh context per page: the scan opens CDP sessions on it. */
+  async function pageWith(html: string, b: Browser = browser): Promise<Page> {
+    const context = await b.newContext();
+    const page = await context.newPage();
+    await page.setContent(html);
+    return page;
+  }
+
+  async function scan(html: string, config: Partial<AxeConfig> = {}): Promise<A11yResult> {
+    const page = await pageWith(html);
+    try {
+      return await new AxeRunner({ ...defaultConfig, ...config }).run(page, 'test', 'about:blank');
+    } finally {
+      await page.context().close();
+    }
+  }
 
   describe('run', () => {
-    it('should run axe-core analysis and return results', async () => {
-      const mockAxeResults = {
-        violations: [
-          {
-            id: 'color-contrast',
-            impact: 'serious',
-            tags: ['wcag2aa', 'wcag143'],
-            description: 'Elements must have sufficient color contrast',
-            help: 'Ensure contrast is at least 4.5:1',
-            helpUrl: 'https://dequeuniversity.com/rules/axe/4.6/color-contrast',
-            nodes: [
-              {
-                target: ['.low-contrast'],
-                html: '<span class="low-contrast">Text</span>',
-                failureSummary: 'Fix color contrast',
-                element: 'span',
-              },
-            ],
-          },
-        ],
-        passes: [
-          {
-            id: 'heading-order',
-            description: 'Headings are in a logical order',
-            nodes: [
-              {
-                target: ['h1'],
-                html: '<h1>Title</h1>',
-              },
-            ],
-          },
-        ],
-        incomplete: [],
-        inapplicable: [
-          {
-            id: 'frame-title',
-            description: 'Frames must have title attribute',
-          },
-        ],
-        testEngine: {
-          name: 'axe-core',
-          version: '4.8.0',
-        },
-      };
-
-      // Mock AxeBuilder
-      const { default: AxeBuilder } = require('@axe-core/playwright');
-      const mockAxeBuilder = {
-        withTags: jest.fn().mockReturnThis(),
-        disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults),
-      };
-      AxeBuilder.mockImplementation(() => mockAxeBuilder);
-
-      const result = await axeRunner.run(mockPage, 'homepage', 'https://example.com');
-
-      expect(result).toBeDefined();
-      expect(result.testName).toBe('homepage');
-      expect(result.url).toBe('https://example.com');
-      expect(result.passed).toBe(false); // Has violations
-      expect(result.violations).toHaveLength(1);
-      expect(result.violations[0].id).toBe('color-contrast');
-      expect(result.violations[0].impact).toBe('serious');
-      expect(result.passes).toHaveLength(1);
-      expect(result.summary.violations).toBe(1);
-      expect(result.summary.passes).toBe(1);
-      expect(result.testRunner.name).toBe('axe-core');
+    it('returns violations, passes and the engine that actually ran', async () => {
+      const result = await scan(TWO_VIOLATIONS);
+      expect(ids(result)).toEqual(['color-contrast', 'image-alt']);
+      expect(result.passed).toBe(false);
+      expect(result.passes.length).toBeGreaterThan(0);
+      expect(result.inapplicable.length).toBeGreaterThan(0);
+      expect(result.summary.violations).toBe(2);
+      expect(result.testRunner).toEqual({ name: 'axe-core', version: AXE_VERSION });
+      const img = result.violations.find((v) => v.id === 'image-alt')!;
+      expect(img.impact).toBe('critical');
+      expect(img.nodes[0]).toMatchObject({ target: ['#img'], element: '#img' });
+      expect(img.nodes[0].html).toContain('<img');
+      expect(result.timestamp).toBeInstanceOf(Date);
     });
 
-    it('should configure axe with provided tags', async () => {
-      const mockAxeResults = {
-        violations: [],
-        passes: [],
-        incomplete: [],
-        inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' },
-      };
-
-      const { default: AxeBuilder } = require('@axe-core/playwright');
-      const mockAxeBuilder = {
-        withTags: jest.fn().mockReturnThis(),
-        disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults),
-      };
-      AxeBuilder.mockImplementation(() => mockAxeBuilder);
-
-      await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-      expect(mockAxeBuilder.withTags).toHaveBeenCalledWith(['wcag2a', 'wcag2aa']);
+    it('passes a clean page', async () => {
+      const result = await scan('<html lang="en"><title>t</title><main><h1>Hi</h1></main></html>');
+      expect(result.violations).toEqual([]);
+      expect(result.passed).toBe(true);
     });
 
-    it('should disable specified rules', async () => {
-      const configWithDisabledRules = {
-        ...defaultConfig,
-        disableRules: ['color-contrast', 'link-name'],
-      };
-      axeRunner = new AxeRunner(configWithDisabledRules);
-
-      const mockAxeResults = {
-        violations: [],
-        passes: [],
-        incomplete: [],
-        inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' },
-      };
-
-      const { default: AxeBuilder } = require('@axe-core/playwright');
-      const mockAxeBuilder = {
-        withTags: jest.fn().mockReturnThis(),
-        disableRules: jest.fn().mockReturnThis(),
-        options: jest.fn().mockReturnThis(),
-        include: jest.fn().mockReturnThis(),
-        exclude: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults),
-      };
-      AxeBuilder.mockImplementation(() => mockAxeBuilder);
-
-      await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-      // disableRules is folded into the single options({rules}) call rather than
-      // going through AxeBuilder.disableRules(): that method assigns
-      // `this.option.rules = {}` before filling, so it would clobber config.rules.
-      expect(mockAxeBuilder.options).toHaveBeenCalledWith({
-        rules: { 'color-contrast': { enabled: false }, 'link-name': { enabled: false } },
-      });
+    it('wraps a failed scan in an execution error', async () => {
+      const page = await pageWith(TWO_VIOLATIONS);
+      await page.context().close();
+      await expect(axeRunner.run(page, 'test', 'about:blank')).rejects.toThrow(
+        /^Axe-core execution failed: /,
+      );
     });
+  });
 
-    // Issue #72: config.rules/include/exclude/timeout and CLI --rules were parsed
-    // and then silently dropped, so a scoped scan quietly ran as a full default scan.
-    describe('configuration wiring (issue #72)', () => {
-      const emptyResults = {
-        violations: [],
-        passes: [],
-        incomplete: [],
-        inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' },
-      };
-
-      const mockBuilder = () => {
-        const { default: AxeBuilder } = require('@axe-core/playwright');
-        const b = {
-          withTags: jest.fn().mockReturnThis(),
-          withRules: jest.fn().mockReturnThis(),
-          disableRules: jest.fn().mockReturnThis(),
-          include: jest.fn().mockReturnThis(),
-          exclude: jest.fn().mockReturnThis(),
-          options: jest.fn().mockReturnThis(),
-          analyze: jest.fn().mockResolvedValue(emptyResults),
-        };
-        AxeBuilder.mockImplementation(() => b);
-        return b;
-      };
-
-      it('applies each include selector', async () => {
-        const b = mockBuilder();
-        axeRunner = new AxeRunner({ ...defaultConfig, include: ['#main', '.content'] });
-
-        await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-        expect(b.include).toHaveBeenCalledWith('#main');
-        expect(b.include).toHaveBeenCalledWith('.content');
-      });
-
-      it('applies each exclude selector', async () => {
-        const b = mockBuilder();
-        axeRunner = new AxeRunner({ ...defaultConfig, exclude: ['#ads', 'footer'] });
-
-        await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-        expect(b.exclude).toHaveBeenCalledWith('#ads');
-        expect(b.exclude).toHaveBeenCalledWith('footer');
-      });
-
-      it('passes configured rules through options()', async () => {
-        const b = mockBuilder();
-        axeRunner = new AxeRunner({
-          ...defaultConfig,
-          rules: { 'color-contrast': { enabled: true } },
+  // #350: axe used to run in the page's main world, where the page under test could answer
+  // in its place.
+  describe('execution context (#350)', () => {
+    it("ignores a page's pinned window.axe and reports what axe-core finds", async () => {
+      const result = await scan(`<html lang="en"><title>t</title><script>
+        Object.defineProperty(window, 'axe', {
+          value: Object.freeze({
+            version: '${AXE_VERSION}',
+            run: () => Promise.resolve({ violations: [], passes: [], incomplete: [], inapplicable: [] }),
+            configure() {},
+          }),
+          writable: false,
+          configurable: false,
         });
-
-        await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-        expect(b.options).toHaveBeenCalledWith({
-          rules: { 'color-contrast': { enabled: true } },
-        });
-      });
-
-      // Regression guard for the clobber described above: both sources of rule
-      // config must survive into one merged map.
-      it('merges rules and disableRules into a single options() call', async () => {
-        const b = mockBuilder();
-        axeRunner = new AxeRunner({
-          ...defaultConfig,
-          rules: { 'image-alt': { enabled: true } },
-          disableRules: ['color-contrast'],
-        });
-
-        await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-        expect(b.options).toHaveBeenCalledTimes(1);
-        expect(b.options).toHaveBeenCalledWith({
-          rules: { 'image-alt': { enabled: true }, 'color-contrast': { enabled: false } },
-        });
-      });
-
-      // options() assigns this.option wholesale, so calling it after withTags would
-      // erase runOnly and silently restore a full scan.
-      it('calls options() before withTags so runOnly survives', async () => {
-        const b = mockBuilder();
-        axeRunner = new AxeRunner({
-          ...defaultConfig,
-          rules: { 'image-alt': { enabled: true } },
-        });
-
-        await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-        expect(b.options.mock.invocationCallOrder[0]).toBeLessThan(
-          b.withTags.mock.invocationCallOrder[0],
-        );
-      });
-
-      it('runOnlyRules uses withRules and takes precedence over tags', async () => {
-        const b = mockBuilder();
-        axeRunner = new AxeRunner({ ...defaultConfig, runOnlyRules: ['color-contrast'] });
-
-        await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-        // axe accepts a single runOnly; an explicit rule list is the narrower request.
-        expect(b.withRules).toHaveBeenCalledWith(['color-contrast']);
-        expect(b.withTags).not.toHaveBeenCalled();
-      });
-
-      it('falls back to tags when no runOnlyRules are configured', async () => {
-        const b = mockBuilder();
-        axeRunner = new AxeRunner(defaultConfig);
-
-        await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-        expect(b.withTags).toHaveBeenCalledWith(['wcag2a', 'wcag2aa']);
-        expect(b.withRules).not.toHaveBeenCalled();
-      });
-
-      it('omits options() entirely when no rule config is set', async () => {
-        const b = mockBuilder();
-        axeRunner = new AxeRunner(defaultConfig);
-
-        await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-        expect(b.options).not.toHaveBeenCalled();
-      });
-
-      it('fails with a timeout error when analyze exceeds the configured timeout', async () => {
-        const b = mockBuilder();
-        b.analyze.mockImplementation(() => new Promise(() => {})); // never settles
-        axeRunner = new AxeRunner({ ...defaultConfig, timeout: 20 });
-
-        await expect(axeRunner.run(mockPage, 'test', 'https://example.com')).rejects.toThrow(
-          /timed out after 20ms/,
-        );
-      });
-
-      it('applies include/exclude on runOnElement too', async () => {
-        const b = mockBuilder();
-        axeRunner = new AxeRunner({ ...defaultConfig, exclude: ['#ads'] });
-
-        await axeRunner.runOnElement(mockPage, '#widget', 'test', 'https://example.com');
-
-        expect(b.include).toHaveBeenCalledWith('#widget');
-        expect(b.exclude).toHaveBeenCalledWith('#ads');
-      });
-    });
-
-    it('should handle multiple violations with different impacts', async () => {
-      const mockAxeResults = {
-        violations: [
-          {
-            id: 'critical-issue',
-            impact: 'critical',
-            tags: ['wcag2a'],
-            description: 'Critical accessibility issue',
-            help: 'Fix critical issue',
-            helpUrl: 'https://example.com/critical',
-            nodes: [{ target: ['.critical'], html: '<div class="critical"></div>' }],
-          },
-          {
-            id: 'moderate-issue',
-            impact: 'moderate',
-            tags: ['wcag2aa'],
-            description: 'Moderate accessibility issue',
-            help: 'Fix moderate issue',
-            helpUrl: 'https://example.com/moderate',
-            nodes: [{ target: ['.moderate'], html: '<div class="moderate"></div>' }],
-          },
-        ],
-        passes: [],
-        incomplete: [],
-        inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' },
-      };
-
-      const { default: AxeBuilder } = require('@axe-core/playwright');
-      const mockAxeBuilder = {
-        withTags: jest.fn().mockReturnThis(),
-        disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults),
-      };
-      AxeBuilder.mockImplementation(() => mockAxeBuilder);
-
-      const result = await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-      expect(result.violations).toHaveLength(2);
-      expect(result.violations[0].impact).toBe('critical');
-      expect(result.violations[1].impact).toBe('moderate');
+      </script><main><img src="x.png" id="img"></main></html>`);
+      expect(ids(result)).toEqual(['image-alt']);
       expect(result.passed).toBe(false);
     });
 
-    it('should mark test as passed when no violations', async () => {
-      const mockAxeResults = {
-        violations: [],
-        passes: [
-          {
-            id: 'all-pass',
-            description: 'All tests pass',
-            nodes: [{ target: ['body'], html: '<body></body>' }],
-          },
-        ],
-        incomplete: [],
-        inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' },
-      };
-
-      const { default: AxeBuilder } = require('@axe-core/playwright');
-      const mockAxeBuilder = {
-        withTags: jest.fn().mockReturnThis(),
-        disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults),
-      };
-      AxeBuilder.mockImplementation(() => mockAxeBuilder);
-
-      const result = await axeRunner.run(mockPage, 'test', 'https://example.com');
-
-      expect(result.passed).toBe(true);
-      expect(result.violations).toHaveLength(0);
-      expect(result.summary.violations).toBe(0);
+    it('is unaffected by builtins the page poisons', async () => {
+      const result = await scan(`<html lang="en"><title>t</title><script>
+        Array.prototype.filter = function () { return []; };
+        Array.prototype.map = function () { return []; };
+        JSON.parse = () => ({});
+        Promise.prototype.then = function () { return this; };
+      </script><main><img src="x.png" id="img"></main></html>`);
+      expect(ids(result)).toEqual(['image-alt']);
     });
 
-    it('should handle axe-core execution errors', async () => {
-      const { default: AxeBuilder } = require('@axe-core/playwright');
-      const mockAxeBuilder = {
-        withTags: jest.fn().mockReturnThis(),
-        disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockRejectedValue(new Error('Axe analysis failed')),
-      };
-      AxeBuilder.mockImplementation(() => mockAxeBuilder);
+    it('leaves the page its own window.axe untouched', async () => {
+      const page =
+        await pageWith(`<html lang="en"><title>t</title><script>window.axe = { mine: true };</script>
+        <main><h1>x</h1></main></html>`);
+      try {
+        await axeRunner.run(page, 'test', 'about:blank');
+        expect(await page.evaluate('JSON.stringify(window.axe)')).toBe('{"mine":true}');
+      } finally {
+        await page.context().close();
+      }
+    });
+  });
 
-      await expect(axeRunner.run(mockPage, 'test', 'https://example.com')).rejects.toThrow(
-        'Axe-core execution failed: Axe analysis failed',
+  describe('iframes', () => {
+    let servers: http.Server[] = [];
+    const serve = (body: string): Promise<string> =>
+      new Promise((resolve) => {
+        const s = http.createServer((_q, r) => {
+          r.setHeader('content-type', 'text/html');
+          r.end(body);
+        });
+        servers.push(s);
+        s.listen(0, '127.0.0.1', () => resolve(String((s.address() as AddressInfo).port)));
+      });
+    afterEach(() => {
+      servers.forEach((s) => s.close());
+      servers = [];
+    });
+
+    /** Main page on 127.0.0.1 with a srcdoc frame and a frame from localhost (another site). */
+    async function framedUrl(): Promise<string> {
+      const childPort = await serve(
+        `<html lang="en"><title>c</title><main><img src="c.png" id="child-img"></main></html>`,
       );
+      const mainPort = await serve(`<html lang="en"><title>m</title><main>
+        <img src="m.png" id="main-img">
+        <iframe title="same" srcdoc='<html lang="en"><title>s</title><img src="s.png" id="srcdoc-img"></html>'></iframe>
+        <iframe title="cross" src="http://localhost:${childPort}/"></iframe>
+      </main></html>`);
+      return `http://127.0.0.1:${mainPort}/`;
+    }
+
+    const EXPECTED = [
+      'image-alt:["#main-img"]',
+      'image-alt:["iframe[title=\\"cross\\"]","#child-img"]',
+      'image-alt:["iframe[title=\\"same\\"]","#srcdoc-img"]',
+    ];
+
+    async function scanFramed(b: Browser): Promise<A11yResult> {
+      const context = await b.newContext();
+      const page = await context.newPage();
+      try {
+        await page.goto(await framedUrl(), { waitUntil: 'networkidle' });
+        return await axeRunner.run(page, 'test', page.url());
+      } finally {
+        await context.close();
+      }
+    }
+
+    it('scans same-process and cross-site frames', async () => {
+      expect(targets(await scanFramed(browser))).toEqual(EXPECTED);
     });
 
-    it('should include timestamp in results', async () => {
-      const mockAxeResults = {
-        violations: [],
-        passes: [],
-        incomplete: [],
-        inapplicable: [],
-        testEngine: { name: 'axe-core', version: '4.8.0' },
-      };
+    it('scans an out-of-process frame (site isolation forced)', async () => {
+      const isolated = await chromium.launch({ args: ['--site-per-process'] });
+      try {
+        expect(targets(await scanFramed(isolated))).toEqual(EXPECTED);
+      } finally {
+        await isolated.close();
+      }
+    });
 
-      const { default: AxeBuilder } = require('@axe-core/playwright');
-      const mockAxeBuilder = {
-        withTags: jest.fn().mockReturnThis(),
-        disableRules: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults),
-      };
-      AxeBuilder.mockImplementation(() => mockAxeBuilder);
+    it("ignores a frame's own pinned window.axe", async () => {
+      const result = await scan(`<html lang="en"><title>t</title><main>
+        <iframe title="f" srcdoc="<html lang=en><title>s</title><script>Object.defineProperty(window,'axe',{value:{},writable:false,configurable:false})</script><img src=s.png id=in></html>"></iframe>
+      </main></html>`);
+      expect(targets(result)).toEqual(['image-alt:["iframe","#in"]']);
+    });
+  });
 
-      const beforeTest = new Date();
-      const result = await axeRunner.run(mockPage, 'test', 'https://example.com');
-      const afterTest = new Date();
+  describe('configuration', () => {
+    it('applies the tag filter', async () => {
+      expect(ids(await scan(TWO_VIOLATIONS, { tags: ['wcag2a'] }))).toEqual(['image-alt']);
+      expect(ids(await scan(TWO_VIOLATIONS, { tags: ['wcag2aa'] }))).toEqual(['color-contrast']);
+    });
 
-      expect(result.timestamp).toBeInstanceOf(Date);
-      expect(result.timestamp.getTime()).toBeGreaterThanOrEqual(beforeTest.getTime());
-      expect(result.timestamp.getTime()).toBeLessThanOrEqual(afterTest.getTime());
+    it('runOnlyRules takes precedence over tags', async () => {
+      const result = await scan(TWO_VIOLATIONS, {
+        tags: ['wcag2a'],
+        runOnlyRules: ['color-contrast'],
+      });
+      expect(ids(result)).toEqual(['color-contrast']);
+      expect(result.passes.every((p) => p.id === 'color-contrast')).toBe(true);
+    });
+
+    it('disables rules from disableRules and from rules, merged', async () => {
+      expect(ids(await scan(TWO_VIOLATIONS, { disableRules: ['image-alt'] }))).toEqual([
+        'color-contrast',
+      ]);
+      expect(
+        ids(await scan(TWO_VIOLATIONS, { rules: { 'image-alt': { enabled: false } } })),
+      ).toEqual(['color-contrast']);
+      expect(
+        ids(
+          await scan(TWO_VIOLATIONS, {
+            rules: { 'image-alt': { enabled: false } },
+            disableRules: ['color-contrast'],
+          }),
+        ),
+      ).toEqual([]);
+    });
+
+    it('keeps the tag filter when rules are configured', async () => {
+      // AxeBuilder's options() replaced runOnly when called after withTags (#72). A rules
+      // map must not widen the scan: color-contrast (wcag2aa) stays out of a wcag2a scan.
+      const result = await scan(TWO_VIOLATIONS, {
+        tags: ['wcag2a'],
+        rules: { 'image-alt': { enabled: false } },
+      });
+      expect(ids(result)).toEqual([]);
+      expect(result.passes.some((p) => p.id === 'color-contrast')).toBe(false);
+    });
+
+    const SPLIT = `<html lang="en"><title>t</title><main>
+      <div id="a"><img src="a.png" id="ia"></div>
+      <div id="b"><img src="b.png" id="ib"></div></main></html>`;
+
+    it('applies include selectors', async () => {
+      expect(targets(await scan(SPLIT, { include: ['#a'] }))).toEqual(['image-alt:["#ia"]']);
+    });
+
+    it('applies exclude selectors', async () => {
+      expect(targets(await scan(SPLIT, { exclude: ['#a'] }))).toEqual(['image-alt:["#ib"]']);
+    });
+
+    it('fails with a timeout error when the scan exceeds the configured timeout', async () => {
+      await expect(scan(TWO_VIOLATIONS, { timeout: 1 })).rejects.toThrow(/timed out after 1ms/);
     });
   });
 
   describe('runOnElement', () => {
-    it('should run axe-core on specific element', async () => {
-      const mockAxeResults = {
-        violations: [
-          {
-            id: 'button-name',
-            impact: 'critical',
-            tags: ['wcag2a'],
-            description: 'Buttons must have discernible text',
-            help: 'Add text to button',
-            helpUrl: 'https://example.com/button-name',
-            nodes: [{ target: ['#submit-btn'], html: '<button id="submit-btn"></button>' }],
-          },
-        ],
-        testEngine: { name: 'axe-core', version: '4.8.0' },
-      };
-
-      const { default: AxeBuilder } = require('@axe-core/playwright');
-      const mockAxeBuilder = {
-        include: jest.fn().mockReturnThis(),
-        withTags: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockResolvedValue(mockAxeResults),
-      };
-      AxeBuilder.mockImplementation(() => mockAxeBuilder);
-
-      const result = await axeRunner.runOnElement(
-        mockPage,
-        '#submit-btn',
-        'button-test',
-        'https://example.com',
-      );
-
-      expect(mockAxeBuilder.include).toHaveBeenCalledWith('#submit-btn');
-      expect(result.testName).toBe('button-test_#submit-btn');
-      expect(result.violations).toHaveLength(1);
-      expect(result.violations[0].id).toBe('button-name');
+    it('scans only the given element', async () => {
+      const page = await pageWith(`<html lang="en"><title>t</title><main>
+        <div id="a"><img src="a.png" id="ia"></div><img src="b.png" id="ib"></main></html>`);
+      try {
+        const result = await axeRunner.runOnElement(page, '#a', 'test', 'about:blank');
+        expect(result.testName).toBe('test_#a');
+        expect(targets(result)).toEqual(['image-alt:["#ia"]']);
+        expect(result.testRunner.version).toBe(AXE_VERSION);
+      } finally {
+        await page.context().close();
+      }
     });
 
-    it('should handle element-specific errors', async () => {
-      const { default: AxeBuilder } = require('@axe-core/playwright');
-      const mockAxeBuilder = {
-        include: jest.fn().mockReturnThis(),
-        withTags: jest.fn().mockReturnThis(),
-        analyze: jest.fn().mockRejectedValue(new Error('Element not found')),
-      };
-      AxeBuilder.mockImplementation(() => mockAxeBuilder);
+    it('wraps element-scan errors', async () => {
+      const page = await pageWith(TWO_VIOLATIONS);
+      await page.context().close();
+      await expect(axeRunner.runOnElement(page, '#a', 'test', 'about:blank')).rejects.toThrow(
+        /^Axe-core element scan failed: /,
+      );
+    });
+  });
 
-      await expect(
-        axeRunner.runOnElement(mockPage, '#missing', 'test', 'https://example.com'),
-      ).rejects.toThrow('Axe-core element scan failed: Element not found');
+  // The result is checked where it comes back (#350, and the #393 comment): report writers
+  // call `.map`/`.join` on these fields, so a malformed one is refused here, not there.
+  describe('toA11yResult', () => {
+    const valid = {
+      violations: [
+        {
+          id: 'image-alt',
+          impact: 'critical',
+          tags: ['wcag2a'],
+          description: 'd',
+          help: 'h',
+          helpUrl: 'u',
+          nodes: [{ target: ['#img'], html: '<img>', failureSummary: 'f' }],
+        },
+      ],
+      passes: [{ id: 'p', description: 'd', nodes: [{ target: [['#host', '#in']], html: 'x' }] }],
+      incomplete: [],
+      inapplicable: [{ id: 'i', description: 'd' }],
+      testEngine: { name: 'axe-core', version: '4.13.0' },
+    };
+
+    it('maps a well-formed result, shadow-DOM targets included', () => {
+      const r = toA11yResult(valid, 'n', 'u');
+      expect(r.summary).toEqual({
+        total: 3,
+        violations: 1,
+        passes: 1,
+        incomplete: 0,
+        inapplicable: 1,
+      });
+      expect(r.passes[0].nodes[0].target).toEqual([['#host', '#in']]);
+      expect(r.violations[0].nodes[0].element).toBe('#img');
+    });
+
+    it('defaults a missing impact to moderate', () => {
+      const r = toA11yResult(
+        { ...valid, violations: [{ ...valid.violations[0], impact: null }] },
+        'n',
+        'u',
+      );
+      expect(r.violations[0].impact).toBe('moderate');
+    });
+
+    it.each([
+      ['violations not an array', { violations: {} }],
+      ['nodes not an array', { violations: [{ ...valid.violations[0], nodes: 'x' }] }],
+      [
+        'target not an array',
+        { violations: [{ ...valid.violations[0], nodes: [{ target: '#a', html: '' }] }] },
+      ],
+      ['unknown impact', { violations: [{ ...valid.violations[0], impact: 'catastrophic' }] }],
+      ['passes missing', { passes: undefined }],
+      ['id not a string', { inapplicable: [{ id: {}, description: '' }] }],
+    ])('refuses a result with %s', (_name, patch) => {
+      expect(() => toA11yResult({ ...valid, ...patch }, 'n', 'u')).toThrow(
+        /axe returned a malformed result/,
+      );
     });
   });
 
