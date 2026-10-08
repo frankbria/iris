@@ -75,7 +75,7 @@ src/
 │   └── baseline.ts        # Git-integrated baseline management
 ├── mcp/                   # MCP stdio server (experimental, spike scope)
 │   ├── server.ts          # `iris-mcp` bin — McpServer over StdioServerTransport
-│   └── tools.ts           # run_accessibility_test (axe violations only)
+│   └── tools.ts           # run_accessibility_test (axe violations + needsReview)
 ├── auth/config.ts         # createAuth(): the BetterAuth config portal + API share (ADR 0001 §4, #247)
 ├── legal/                 # versions.ts: current ToS/AUP versions + ACCEPTED_TERMS; acceptance.ts: record/check (#276)
 ├── api-key-auth.ts        # Hosted `iris connect`: Bearer org API key -> { orgId, keyId } (#341)

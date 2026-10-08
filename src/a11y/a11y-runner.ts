@@ -771,6 +771,19 @@ export class AccessibilityRunner {
           .join('\n')}`;
       const breaching = this.violationsAtThreshold(r);
       const below = r.axeResult.violations.filter((v) => !breaching.includes(v));
+      // axe's `incomplete` (#290): never a failure, but a CI reader must see it.
+      const output = [
+        ...(below.length > 0
+          ? [`Below the failure threshold:\n${below.map(describe).join('\n\n')}`]
+          : []),
+        ...(r.axeResult.incomplete.length > 0
+          ? [
+              `Needs manual review:\n${r.axeResult.incomplete
+                .map((i) => `${i.id}: ${i.description} (${i.nodes.length} element(s))`)
+                .join('\n')}`,
+            ]
+          : []),
+      ].join('\n\n');
       const cases: Array<{ name: string; failure?: string; detail?: string; out?: string }> = [
         {
           name: 'axe',
@@ -778,9 +791,7 @@ export class AccessibilityRunner {
             failure: `${breaching.length} violation(s) at the failure threshold`,
             detail: breaching.map(describe).join('\n\n'),
           }),
-          ...(below.length > 0 && {
-            out: `Below the failure threshold:\n${below.map(describe).join('\n\n')}`,
-          }),
+          ...(output && { out: output }),
         },
       ];
       if (r.keyboardResult) {
