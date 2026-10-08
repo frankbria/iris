@@ -283,6 +283,12 @@ plans/
   (`stripUserinfo`, src/report-encoding.ts). The report directory is created before
   writing. The hosted worker sets `failFast` (no browser time on pages whose results
   would be thrown away) and throws the page error itself, keeping fail-the-job semantics
+- **A WCAG level is WCAG 2.2 (#290).** `wcagTags(level)` (src/a11y/wcag.ts) is the one
+  table: the `iris a11y` `--tags` default, the MCP tool and hosted jobs. AA =
+  `wcag2a, wcag21a, wcag2aa, wcag21aa, wcag22aa`; axe tags a rule with the version that
+  introduced it, so 2.0 tags alone skipped `autocomplete-valid` and `target-size`. axe's
+  `incomplete` is "needs review": MCP `needsReview`, a CLI count, the HTML report and
+  JUnit `<system-out>`; never a failure. Hosted stored results do not carry it yet (#498)
 - **One a11y verdict per page (#288).** The runner sets `passed` and `failureReasons` on
   every result (`withVerdict`: axe violations at `--fail-on`, a failed keyboard or
   screen-reader check, or an error), and everything reads it: `summary.passed` (the exit

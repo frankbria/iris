@@ -122,14 +122,14 @@ npm start visual-diff --pages / --format html --output ./reports/visual.html
 ### Run Accessibility Tests
 
 ```bash
-# Test homepage for WCAG 2.0 AA
+# Test homepage for WCAG 2.2 AA (the default)
 npm start a11y --pages /
 
 # Multiple pages
 npm start a11y --pages "/,/products,/about"
 
-# WCAG 2.1 AA compliance
-npm start a11y --pages / --tags "wcag2a,wcag2aa,wcag21aa"
+# WCAG 2.0 A/AA rules only
+npm start a11y --pages / --tags "wcag2a,wcag2aa"
 
 # Include keyboard navigation tests
 npm start a11y --pages / --include-keyboard
@@ -149,7 +149,7 @@ npm start a11y --pages / --format html --output ./reports/a11y.html
 ```bash
 --pages <patterns>        # Pages to test (comma-separated)
 --rules <rules>           # Specific axe rules (comma-separated)
---tags <tags>             # Rule tags: wcag2a, wcag2aa, wcag21aa
+--tags <tags>             # Rule tags (default: wcag2a,wcag21a,wcag2aa,wcag21aa,wcag22aa)
 --fail-on <impacts>       # Impact levels to fail on
 --format <type>           # Report format: html, json, junit
 --output <path>           # Output file path
@@ -222,7 +222,6 @@ npm start visual-diff --pages "/" --update-baseline
 ```bash
 # 1. Run comprehensive accessibility audit
 npm start a11y --pages "/,/products,/about" \
-  --tags "wcag2a,wcag2aa,wcag21aa" \
   --include-keyboard \
   --include-screenreader \
   --format html \

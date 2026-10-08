@@ -209,10 +209,9 @@ iris visual-diff --pages "http://localhost:8080/" --semantic --provider ollama
 
 **Accessibility Testing:**
 ```bash
-# Run WCAG 2.1 AA compliance tests
+# WCAG 2.2 AA (the default level: 2.0, 2.1 and 2.2 A/AA rules)
 iris a11y \
   --pages "http://localhost:8080/**/*.html" \
-  --tags wcag2a,wcag2aa \
   --include-keyboard \
   --format html
 
@@ -366,7 +365,8 @@ curl http://host:8080/v1/jobs/<uuid> -H "Authorization: Bearer $KEY"
 # {"status":"queued|running|succeeded|failed", "summary", "results", "error", ...}
 ```
 
-Up to 20 http(s) URLs per job; `wcagLevel` is `A`, `AA` (default) or `AAA`. A finished
+Up to 20 http(s) URLs per job; `wcagLevel` is `A`, `AA` (default) or `AAA` of WCAG 2.2, so
+2.0 and 2.1 criteria are included. A finished
 job is `failed` with `results` when a violation breaches `failOn`, and `failed` with
 `error` when it could not run (for example an internal URL refused by the hosted
 policy). Another org's job id is `404`. Jobs are run by `iris worker` (hosted mode only,
@@ -744,8 +744,8 @@ instead of shelling out. It is a **spike**: exactly one tool today.
 | | |
 |---|---|
 | **Tool** | `run_accessibility_test` — scans a page with axe-core |
-| **Input** | `url` (required, http/https), `wcagLevel` (`AA` default, or `AAA`) |
-| **Output** | `{ url, passed, violationCount, violations[] }`, each violation `{ id, impact, description, helpUrl, nodes }` |
+| **Input** | `url` (required, http/https), `wcagLevel` (`AA` default, or `AAA`; WCAG 2.2, 2.0 and 2.1 criteria included) |
+| **Output** | `{ url, passed, violationCount, violations[], needsReview[] }`, each violation `{ id, impact, description, helpUrl, nodes }`; `needsReview` lists rules axe could not decide (`{ id, description, nodes }`), which never fail the scan |
 | **Keys** | none — axe-core runs locally |
 | **Redirects** | followed, with every hop checked against the navigation policy |
 
