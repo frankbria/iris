@@ -307,9 +307,10 @@ describe('agent loop', () => {
           `${PAGE}<button id="away" onclick="document.body.innerHTML='Logged out'">Log out</button>`,
         );
         scriptAI([
+          // Turn 1 ends verified (true): acted, then checked.
           [
-            { type: 'assert', kind: 'text_visible', target: 'Your cart' },
             { type: 'click', selector: '#pay' },
+            { type: 'assert', kind: 'text_visible', target: 'Your cart' },
           ],
           [{ type: 'click', selector: '#away' }],
         ]);
@@ -348,6 +349,21 @@ describe('agent loop', () => {
 
         expect(result.goalMet).toBe(true);
         expect(result.terminationReason).toBe('max_turns'); // it acted, so not a bare confirmation
+      });
+
+      // A failed click may still have been dispatched; a check after it is what counts.
+      it('takes a check made after a failed action', async () => {
+        scriptAI([
+          [
+            { type: 'click', selector: '#ghost' },
+            { type: 'assert', kind: 'text_visible', target: 'Your cart' },
+          ],
+        ]);
+
+        const result = await runAgentLoop({ instruction: 'check', executor, page, maxTurns: 1 });
+
+        expect(result.results[0].success).toBe(false);
+        expect(result.goalMet).toBe(true);
       });
 
       // A refused action never ran, so the page the check saw is still the page.

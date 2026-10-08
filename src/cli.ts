@@ -266,7 +266,7 @@ program
                 `\n🎯 Agent finished after ${outcome.turns} turn(s): ${outcome.terminationReason}`,
               );
               if (goalMet === null) {
-                say('   Goal unverified — no check ran after the agent last acted.');
+                say('   Goal unverified — no check of the final page ran.');
               } else {
                 say(`   Goal check: ${goalMet ? 'passed' : 'failed'}`);
               }
