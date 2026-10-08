@@ -473,3 +473,8 @@ Write/Edit, not as a pre-push afterthought.
 - **`pkill -f <pattern>` from the Bash tool kills its own shell** when the pattern appears in the command line (exit 144). Kill by PID (from `ss -ltnp` or `pgrep`, filtered) instead.
 - **The full suite under `--coverage` on a 4-core WSL box times out ~12 browser/Postgres suites** (load avg 6-7, the suite's own workers). Re-run the failed files alone before reading them as regressions (#142); do it before opening a PR so the PR body can state it.
 - **The audit gate fails every PR when an advisory lands on `main`'s tree.** Check `npm audit --omit=dev --audit-level=high` before pushing a feature branch; patch it in its own PR first, picking the first patched release, not the newest.
+
+## 2026-10-08 — #351
+
+- **Demo files are tracked, so `repo-hygiene.test.ts` scans them.** Showboat records each command verbatim, and a demo that calls a scratch-dir script or a second worktree by absolute path fails CI (home path, owner-named host). Use `$REPO` / `$SCRATCH` (or relative paths) in the recorded commands, and run `npx jest __tests__/repo-hygiene.test.ts` before pushing a demo.
+- **A mutation check found a test that could not fail.** The "later turn clears the verdict" test began with a turn that already ended `null`, so deleting the `goalMet = null` branch survived it. When a test claims "X is cleared", make sure X is set first.
