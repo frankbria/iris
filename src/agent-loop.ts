@@ -37,7 +37,11 @@ export type TerminationReason =
   'goal_met' | 'max_turns' | 'no_actions' | 'consecutive_failures' | 'error';
 
 export interface AgentRunResult {
-  /** true/false once assertions ran; null when the model never asserted anything. */
+  /**
+   * Whether the checks made after the agent's last action held. null when no
+   * assertion ran after it: nothing asserted at all, or the agent acted again
+   * after its last check, which then describes a page that is gone (#351).
+   */
   goalMet: boolean | null;
   turns: number;
   results: ExecutionResult[];
@@ -222,7 +226,19 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     }
     emptyPlans = 0;
 
+    /** This turn's checks made since its last executed action. */
     const turnAsserts: boolean[] = [];
+    let acted = false;
+    // A check describes the page as it was when it ran. Once the agent acts
+    // again it describes nothing, so the verdict is only the checks made after
+    // the last executed action, and with none it is unverified (#351).
+    const settleVerdict = () => {
+      if (turnAsserts.length > 0) {
+        goalMet = turnAsserts.every(Boolean);
+      } else if (acted) {
+        goalMet = null;
+      }
+    };
 
     for (const action of plan.actions) {
       // Policy is checked per action, immediately before it runs, because an
@@ -252,6 +268,11 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
 
       if (action.type === 'assert') {
         turnAsserts.push(result.success);
+      } else if (verdict.allowed) {
+        // Failed too: a click that threw may still have been dispatched. A
+        // refused action never ran, so the page the checks saw is unchanged.
+        turnAsserts.length = 0;
+        acted = true;
       }
 
       if (result.success) {
@@ -260,25 +281,19 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
         consecutiveFailures++;
         if (consecutiveFailures >= 3) {
           log(`turn ${turns}: three consecutive failures, stopping`);
-          // Fold in this turn's verdict before bailing. This return jumps out
-          // from inside the action loop, so without it an assertion that ran
-          // earlier in the same turn would go unreported and goalMet could stay
-          // null — which the field's contract reserves for "never asserted".
-          if (turnAsserts.length > 0) {
-            goalMet = turnAsserts.every(Boolean);
-          }
+          // Fold in this turn's verdict before bailing: this return jumps out
+          // from inside the action loop, past the settle below.
+          settleVerdict();
           return { goalMet, turns, results, terminationReason: 'consecutive_failures' };
         }
       }
     }
 
-    // The verdict is the LATEST turn's assertions, not every assertion ever run.
-    // A loop exists precisely so a failed check can be acted on and re-checked;
+    // The verdict is the LATEST checks, not every assertion ever run. A loop
+    // exists precisely so a failed check can be acted on and re-checked;
     // carrying the first failure forward forever would make recovery impossible
     // and could report terminationReason 'goal_met' alongside goalMet false.
-    if (turnAsserts.length > 0) {
-      goalMet = turnAsserts.every(Boolean);
-    }
+    settleVerdict();
 
     // Completion signal: the model spent this turn confirming rather than
     // acting, and everything it confirmed held. An assert alongside further

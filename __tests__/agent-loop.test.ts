@@ -261,9 +261,27 @@ describe('agent loop', () => {
     });
 
     // The consecutive-failures return jumps out from inside the action loop, so
-    // an assertion earlier in that same turn must still be reflected — goalMet
-    // null is reserved for "nothing ever asserted".
+    // an assertion in that same turn must still be reflected (#351: only one
+    // made after the turn's last executed action — a failed click may still
+    // have been dispatched, so the check before it no longer describes the page).
     it('reports the turn verdict even when it exits on consecutive failures', async () => {
+      scriptAI([
+        [
+          { type: 'click', selector: '#ghost-a' },
+          { type: 'click', selector: '#ghost-b' },
+          { type: 'assert', kind: 'text_visible', target: 'Order complete' }, // fails
+        ],
+      ]);
+
+      const result = await runAgentLoop({ instruction: 'try', executor, page, maxTurns: 2 });
+
+      expect(result.terminationReason).toBe('consecutive_failures');
+      expect(result.goalMet).toBe(false); // not null — an assertion did run
+    });
+
+    // #351: before, this reported goalMet true — the check that passed came
+    // before three clicks it says nothing about.
+    it('does not carry a passing check past the actions that followed it', async () => {
       scriptAI([
         [
           { type: 'assert', kind: 'text_visible', target: 'Your cart' }, // passes
@@ -276,7 +294,77 @@ describe('agent loop', () => {
       const result = await runAgentLoop({ instruction: 'try', executor, page, maxTurns: 2 });
 
       expect(result.terminationReason).toBe('consecutive_failures');
-      expect(result.goalMet).toBe(true); // not null — an assertion did run
+      expect(result.goalMet).toBeNull();
+    });
+
+    describe('the verdict describes the final page (#351)', () => {
+      // A goal checked on turn 1 and then acted past for the rest of the run
+      // used to end max_turns with goalMet true, which `iris run --agent`
+      // reports as success.
+      it('drops a verdict once a later turn acts without re-checking', async () => {
+        await load(
+          page,
+          `${PAGE}<button id="away" onclick="document.body.innerHTML='Logged out'">Log out</button>`,
+        );
+        scriptAI([
+          [
+            { type: 'assert', kind: 'text_visible', target: 'Your cart' },
+            { type: 'click', selector: '#pay' },
+          ],
+          [{ type: 'click', selector: '#away' }],
+        ]);
+
+        const result = await runAgentLoop({ instruction: 'check', executor, page, maxTurns: 2 });
+
+        expect(result.terminationReason).toBe('max_turns');
+        expect(result.goalMet).toBeNull();
+        expect(await page.getByText('Your cart').count()).toBe(0); // the check no longer holds
+      });
+
+      it('drops a verdict when the same turn acts after the check', async () => {
+        scriptAI([
+          [
+            { type: 'click', selector: '#pay' },
+            { type: 'assert', kind: 'text_visible', target: 'Your cart' },
+            { type: 'click', selector: '#pay' },
+          ],
+        ]);
+
+        const result = await runAgentLoop({ instruction: 'check', executor, page, maxTurns: 1 });
+
+        expect(result.goalMet).toBeNull();
+      });
+
+      it('keeps a check made after the last action', async () => {
+        scriptAI([
+          [
+            { type: 'assert', kind: 'text_visible', target: 'Order complete' }, // fails, then acted past
+            { type: 'click', selector: '#pay' },
+            { type: 'assert', kind: 'text_visible', target: 'Your cart' },
+          ],
+        ]);
+
+        const result = await runAgentLoop({ instruction: 'check', executor, page, maxTurns: 1 });
+
+        expect(result.goalMet).toBe(true);
+        expect(result.terminationReason).toBe('max_turns'); // it acted, so not a bare confirmation
+      });
+
+      // A refused action never ran, so the page the check saw is still the page.
+      it('keeps a verdict past an action the policy refused', async () => {
+        scriptAI([
+          [
+            { type: 'click', selector: '#pay' },
+            { type: 'assert', kind: 'text_visible', target: 'Your cart' },
+          ],
+          [{ type: 'click', selector: '#delete-account' }],
+        ]);
+
+        const result = await runAgentLoop({ instruction: 'check', executor, page, maxTurns: 2 });
+
+        expect(result.results[2].error).toMatch(/Refused by agent policy/);
+        expect(result.goalMet).toBe(true);
+      });
     });
 
     it('reports goalMet null when nothing was ever asserted', async () => {

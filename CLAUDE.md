@@ -897,6 +897,15 @@ Constraints that are easy to break:
   `checkAction` refuses too. Agent-loop tests therefore serve their fixture from a
   local http origin, not a `data:` URL.
 
+### Agent Loop Verdict (issue #351)
+
+`runAgentLoop`'s `goalMet` is the AND of the checks made after the agent's last
+*executed* action (success or failure: a failed click may still have been dispatched).
+Acting again clears it to `null` until the next check; a policy-refused action never ran
+and clears nothing. It used to be the latest asserting turn's checks, so a turn-1 pass
+survived seven turns of clicking and `iris run --agent` reported success at `max_turns`.
+One-shot `iris run` still ANDs every assert in the plan (plan 013's contract).
+
 ### Hosted Egress Proxy (issue #336)
 
 Under `IRIS_HOSTED`, `launchBrowser()` points Chromium at an in-process HTTP/CONNECT
