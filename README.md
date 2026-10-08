@@ -1404,7 +1404,7 @@ this repo avoid `Date.now()` deltas.
 - @anthropic-ai/sdk (Claude)
 
 **Accessibility:**
-- @axe-core/playwright
+- axe-core (run in a CDP isolated world)
 - pa11y
 
 **Utilities:**

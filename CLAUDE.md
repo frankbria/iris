@@ -297,6 +297,16 @@ plans/
   `keyboard`, `screen reader`; root counts are the emitted cases) and history (local and
   hosted `passed`). They used to decide separately, so CI could read `failures="0"` while
   the CLI exited 4
+- **axe runs in an isolated world (#350).** `AxeRunner` (src/a11y/axe-integration.ts) runs
+  `axe-core` over CDP: `Page.createIsolatedWorld` per frame, `runPartial` per frame,
+  `finishRun` in the top frame's isolated world. It shares the DOM, not the page's JS, so a
+  pinned `window.axe` or poisoned builtins cannot write the verdict (`@axe-core/playwright`
+  ran in the main world: a pinned fake was reported as an axe-core pass). Child frames are
+  found in the isolated world (`axe.utils.shadowSelect` -> `DOM.describeNode` -> `frameId`);
+  an out-of-process frame needs its own `newCDPSession(frame)` (that call fails for
+  in-process frames, which is how they are told apart). Arguments go as CDP values, never
+  spliced into source. `toA11yResult` zod-checks the result: malformed is a page error.
+  Functions sent to the page are strings, so `--coverage` instrumentation never reaches it
 - **A failed analysis is not a verdict (#281).** The classifier answers an outage or a tripped
   breaker with a fallback (`analysisFailed: true`, `severity: 'medium'`). The visual runner
   grades such a comparison by its pixels (`estimateSeverity`), counts it in

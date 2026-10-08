@@ -106,7 +106,7 @@ iris/
 - pixelmatch: Pixel-level diff detection
 - image-ssim: Structural similarity comparison (vendored in src/vendor/)
 - simple-git: Git integration for baselines
-- @axe-core/playwright: Accessibility testing
+- axe-core: Accessibility testing (run in a CDP isolated world, #350)
 - zod: Runtime type validation
 
 **Testing:**

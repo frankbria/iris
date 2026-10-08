@@ -15,26 +15,6 @@ import type { AddressInfo } from 'net';
 import { KeyboardTester } from '../../src/a11y/keyboard-tester';
 import { AccessibilityRunner } from '../../src/a11y/a11y-runner';
 
-// axe is not under test here; these cases target the keyboard/ARIA checks.
-jest.mock('@axe-core/playwright', () => ({
-  __esModule: true,
-  default: jest.fn().mockImplementation(() => ({
-    withTags: jest.fn().mockReturnThis(),
-    withRules: jest.fn().mockReturnThis(),
-    disableRules: jest.fn().mockReturnThis(),
-    include: jest.fn().mockReturnThis(),
-    exclude: jest.fn().mockReturnThis(),
-    options: jest.fn().mockReturnThis(),
-    analyze: jest.fn().mockResolvedValue({
-      violations: [],
-      passes: [],
-      incomplete: [],
-      inapplicable: [],
-      testEngine: { name: 'axe-core', version: '4.8.0' },
-    }),
-  })),
-}));
-
 const config = {
   testFocusOrder: false,
   testTrapDetection: false,
@@ -60,7 +40,7 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
   });
 
   beforeEach(async () => {
-    // axe/AxeBuilder requires a context-created page; keep the same shape here.
+    // The axe scan opens CDP sessions on the page's context, so use a context-created page.
     page = await (await browser.newContext()).newPage();
   });
 

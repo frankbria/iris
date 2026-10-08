@@ -12,64 +12,6 @@ import * as path from 'path';
 import * as os from 'os';
 import { AccessibilityRunner, AccessibilityRunnerConfig } from '../../src/a11y/a11y-runner';
 
-// Mock axe-core
-jest.mock('@axe-core/playwright', () => {
-  return {
-    // __esModule lets the esModuleInterop default-import helper resolve the
-    // mock as the constructor instead of double-wrapping it.
-    __esModule: true,
-    default: jest.fn().mockImplementation(() => ({
-      withTags: jest.fn().mockReturnThis(),
-      disableRules: jest.fn().mockReturnThis(),
-      include: jest.fn().mockReturnThis(),
-      analyze: jest.fn().mockResolvedValue({
-        violations: [
-          {
-            id: 'color-contrast',
-            impact: 'serious',
-            tags: ['wcag2aa', 'wcag143'],
-            description:
-              'Ensures the contrast between foreground and background colors meets WCAG 2 AA contrast ratio thresholds',
-            help: 'Elements must have sufficient color contrast',
-            helpUrl: 'https://dequeuniversity.com/rules/axe/4.8/color-contrast',
-            nodes: [
-              {
-                target: ['.low-contrast-text'],
-                html: '<p class="low-contrast-text">Low contrast text</p>',
-                failureSummary:
-                  'Fix any of the following:\n  Element has insufficient color contrast',
-              },
-            ],
-          },
-        ],
-        passes: [
-          {
-            id: 'document-title',
-            description: 'Ensures each HTML document contains a non-empty <title> element',
-            nodes: [
-              {
-                target: ['html'],
-                html: '<title>Test Page</title>',
-              },
-            ],
-          },
-        ],
-        incomplete: [],
-        inapplicable: [
-          {
-            id: 'audio-caption',
-            description: 'Ensures <audio> elements have captions',
-          },
-        ],
-        testEngine: {
-          name: 'axe-core',
-          version: '4.8.0',
-        },
-      }),
-    })),
-  };
-});
-
 describe('Accessibility CLI E2E Tests', () => {
   let tempDir: string;
   let browser: Browser;
@@ -1001,7 +943,7 @@ describe('Accessibility CLI E2E Tests', () => {
       const runner = new AccessibilityRunner(config);
       const result = await runner.run();
 
-      // Based on mock, should have serious violation
+      // The fixture page has low-contrast text: real axe reports color-contrast (serious)
       expect(result.summary.violationsBySeverity.serious).toBeGreaterThan(0);
       expect(result.summary.passed).toBe(false);
     });
