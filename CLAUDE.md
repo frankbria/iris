@@ -906,6 +906,27 @@ and clears nothing. It used to be the latest asserting turn's checks, so a turn-
 survived seven turns of clicking and `iris run --agent` reported success at `max_turns`.
 One-shot `iris run` still ANDs every assert in the plan (plan 013's contract).
 
+### Hung Pages and Provider Failures (issue #293)
+
+- **`AITranslationResponse.error`** is set by the text clients when the provider could
+  not be asked or its reply could not be read (unreachable, HTTP error, not JSON, empty).
+  `actions` is then empty. A reply that parsed but proposed no or schema-invalid actions
+  is a plan, not a failure, and leaves it unset. `runAgentLoop` ends `error` on it at
+  once; it used to retry it as an empty plan and report `no_actions`. `translate()` does
+  not carry it yet, so `iris run` / RPC still read an outage as an empty plan (#294).
+- **`page.title()`, `page.evaluate()` and `page.addStyleTag()` take no timeout** and wait
+  forever on a page spinning its main thread. Go through `src/page-timeout.ts`:
+  `withPageTimeout(call, fallback, ms)` (2 s default; a rejection still rejects) or
+  `addStyleTagBounded()` (throws on timeout: a capture without its mask would show what
+  the mask hides). Locator calls, screenshots and `waitForFunction` have their own.
+- **The a11y runner has one deadline per page** (`pageTimeoutMs`, default
+  `A11Y_PAGE_TIMEOUT_MS` = 120 s) instead of bounding its ~20 `evaluate` sites: a hang is
+  not a throw, so #287's page isolation never fired. The hung page is abandoned and closed
+  with the browser at the end of the run; the next page gets a fresh context.
+- Tests: `__tests__/hung-page.test.ts` (real Chromium, `setTimeout(() => { for (;;) {} })`,
+  with a positive control that the page really is hung). Closing a context whose renderer
+  spins can take seconds under load, hence the 15 s `afterEach`.
+
 ### Hosted Egress Proxy (issue #336)
 
 Under `IRIS_HOSTED`, `launchBrowser()` points Chromium at an in-process HTTP/CONNECT
