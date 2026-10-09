@@ -478,3 +478,11 @@ Write/Edit, not as a pre-push afterthought.
 
 - **Demo files are tracked, so `repo-hygiene.test.ts` scans them.** Showboat records each command verbatim, and a demo that calls a scratch-dir script or a second worktree by absolute path fails CI (home path, owner-named host). Use `$REPO` / `$SCRATCH` (or relative paths) in the recorded commands, and run `npx jest __tests__/repo-hygiene.test.ts` before pushing a demo.
 - **A mutation check found a test that could not fail.** The "later turn clears the verdict" test began with a turn that already ended `null`, so deleting the `goalMet = null` branch survived it. When a test claims "X is cleared", make sure X is set first.
+
+## 2026-10-09 — #293
+
+- **A red test must be red for the reason it claims.** The first a11y hung-page test froze the page at load and "failed" on main, but only because its 30 s Jest timeout equalled axe's own 30 s timeout: main already errored that page. Before calling a red real, check what the old code was waiting on (here: axe has a timeout, the keyboard checks' `page.evaluate` do not), and give the test a timeout well above any inner one.
+- **Don't edit `src/` while a full suite runs on it in the background.** ts-jest compiles each file when it loads, so later suites test a mix of old and new code. Start the full run only after the last fix, on a committed SHA.
+- **The `pkill -f` lesson above (#290) was hit again** (exit 144, three times). If a kill by pattern is unavoidable, bracket a letter (`pkill -f '[h]eadless_shell'`): the regex no longer matches its own command line.
+- **This repo's Jest prints no per-test lines, even with `--verbose`.** For a demo that must name the tests, use `--json --outputFile` and print `assertionResults`.
+- **`page.title()`, `page.evaluate()` and `page.addStyleTag()` have no timeout.** A grep for "evaluate" misses `addStyleTag`; when bounding page calls, list every Playwright method that runs in the page, not only the obvious ones.
