@@ -23,6 +23,12 @@ export interface TranslationResult {
   method: 'pattern' | 'ai';
   confidence: number;
   reasoning?: string;
+  /**
+   * Set when the AI provider was asked and failed (unavailable, request failed, reply
+   * unreadable): an outage, not a plan with no actions (#293, #294). No AI configured,
+   * or no match, leaves it unset.
+   */
+  error?: string;
 }
 
 /** Defense-in-depth cap on instruction size before any pattern/AI processing. */
@@ -258,6 +264,7 @@ async function translateWithAI(
         method: 'ai',
         confidence: 0,
         reasoning: 'AI client not available',
+        error: 'AI client not available',
       };
     }
 
@@ -273,13 +280,10 @@ async function translateWithAI(
       method: 'ai',
       confidence: response.confidence,
       reasoning: response.reasoning,
+      error: response.error,
     };
   } catch (error) {
-    return {
-      actions: [],
-      method: 'ai',
-      confidence: 0,
-      reasoning: `AI translation error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-    };
+    const message = `AI translation error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    return { actions: [], method: 'ai', confidence: 0, reasoning: message, error: message };
   }
 }

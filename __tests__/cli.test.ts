@@ -11,6 +11,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+/** What the OS would see: `iris run` reports through process.exitCode, unset meaning 0 (#294). */
+const exitStatus = () => process.exitCode ?? 0;
+
 describe('CLI Commands', () => {
   let consoleOutput: string[];
   const mockedLog = (output: string) => consoleOutput.push(output);
@@ -734,6 +737,7 @@ describe('CLI Commands', () => {
         actions: [{ type: 'click', selector: '#btn' }],
       });
       expect(typeof payload.translation.confidence).toBe('number');
+      expect(exitStatus()).toBe(0);
     });
 
     test('suppresses all human narration in JSON mode', async () => {
@@ -762,6 +766,7 @@ describe('CLI Commands', () => {
       expect(payload.status).toBe('success');
       expect(payload.results).toHaveLength(1);
       expect(payload.results[0]).toMatchObject({ success: true, duration: 42 });
+      expect(exitStatus()).toBe(0);
     });
 
     test('status is error and the failure surfaces in results when an action fails', async () => {
@@ -782,6 +787,7 @@ describe('CLI Commands', () => {
         success: false,
         error: 'selector not found',
       });
+      expect(exitStatus()).toBe(1);
     });
 
     // The zero-action path returns early from the try block. The envelope is emitted
@@ -799,6 +805,34 @@ describe('CLI Commands', () => {
       expect(payload.status).toBe('error');
       expect(payload.executed).toBe(false);
       expect(payload.translation.actions).toEqual([]);
+      expect(exitStatus()).toBe(1);
+    });
+
+    // #294 (from #293): a provider that could not be asked is a failure with its reason,
+    // not an instruction that happened to produce no actions.
+    test('a provider failure is reported as the reason, in JSON and on stderr', async () => {
+      const stderr: string[] = [];
+      jest.spyOn(console, 'error').mockImplementation((...a) => stderr.push(a.join(' ')));
+      jest.spyOn(translatorModule, 'translate').mockResolvedValue({
+        actions: [],
+        method: 'ai',
+        confidence: 0,
+        error: 'Ollama request failed: 503',
+      });
+
+      await runCli(['node', 'iris', 'run', 'pay the invoice', '--json']);
+
+      const payload = soleJsonPayload();
+      expect(payload.status).toBe('error');
+      expect(payload.translation.error).toBe('Ollama request failed: 503');
+      expect(stderr.join('\n')).toContain('Ollama request failed: 503');
+      expect(exitStatus()).toBe(1);
+    });
+
+    test('translation.error is null when the translation succeeded', async () => {
+      await runCli(['node', 'iris', 'run', 'click #btn', '--dry-run', '--json']);
+
+      expect(soleJsonPayload().translation.error).toBeNull();
     });
 
     // The error path must stay parseable even though translation never resolved.
@@ -812,6 +846,7 @@ describe('CLI Commands', () => {
       expect(payload.status).toBe('error');
       expect(payload.translation).toBeNull();
       expect(payload.results).toEqual([]);
+      expect(exitStatus()).toBe(1);
     });
 
     // Issue #116: per-action success only means "Playwright didn't throw".
@@ -831,6 +866,7 @@ describe('CLI Commands', () => {
       await runCli(['node', 'iris', 'run', 'verify Hi is visible', '--json']);
 
       expect(soleJsonPayload().goalMet).toBe(true);
+      expect(exitStatus()).toBe(0);
     });
 
     test('goalMet is false and status error when an assertion fails', async () => {
@@ -853,6 +889,7 @@ describe('CLI Commands', () => {
       const payload = soleJsonPayload();
       expect(payload.goalMet).toBe(false);
       expect(payload.status).toBe('error');
+      expect(exitStatus()).toBe(1);
     });
 
     // null, not false: a plan that asserted nothing has no goal to meet, and
@@ -937,6 +974,7 @@ describe('CLI Commands', () => {
 
         expect(launch).not.toHaveBeenCalled();
         expect(consoleOutput.some((l) => l.includes('--agent needs a starting page'))).toBe(true);
+        expect(exitStatus()).toBe(2);
       });
 
       test('IRIS_BASE_URL satisfies the start-URL requirement', async () => {
@@ -974,6 +1012,7 @@ describe('CLI Commands', () => {
         expect(consoleOutput.some((l) => l.includes('cannot be combined with --dry-run'))).toBe(
           true,
         );
+        expect(exitStatus()).toBe(2);
       });
 
       test('a usage error still produces a parseable envelope in --json mode', async () => {
@@ -989,6 +1028,7 @@ describe('CLI Commands', () => {
         expect(payload.status).toBe('error');
         expect(payload.executed).toBe(false);
         expect(payload.agent).toBeNull();
+        expect(exitStatus()).toBe(2);
       });
 
       test('--max-turns rejects a non-numeric value', async () => {
@@ -1175,6 +1215,7 @@ describe('CLI Commands', () => {
         const payload = soleJsonPayload();
         expect(payload.status).toBe('error');
         expect(payload.agent).toBeNull();
+        expect(exitStatus()).toBe(1);
       });
 
       test('the browser is cleaned up even when the loop throws', async () => {
@@ -1243,6 +1284,7 @@ describe('CLI Commands', () => {
         expect(payload.results).toHaveLength(3);
         // No single up-front translation exists in agent mode.
         expect(payload.translation).toBeNull();
+        expect(exitStatus()).toBe(0);
       });
 
       // In agent mode a failed action is expected — recovering from one is the
@@ -1285,6 +1327,7 @@ describe('CLI Commands', () => {
         expect(payload.agent.terminationReason).toBe(reason);
         expect(payload.goalMet).toBe(goalMet);
         expect(payload.status).toBe('error');
+        expect(exitStatus()).toBe(1);
       });
 
       // Observed in the demo: a model that keeps acting alongside its assert never
@@ -1302,6 +1345,7 @@ describe('CLI Commands', () => {
 
           expect(payload.goalMet).toBe(true);
           expect(payload.status).toBe('success');
+          expect(exitStatus()).toBe(0);
         },
       );
 
@@ -1318,6 +1362,7 @@ describe('CLI Commands', () => {
           });
 
           expect(payload.status).toBe('error');
+          expect(exitStatus()).toBe(1);
         },
       );
     });

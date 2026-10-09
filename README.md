@@ -544,6 +544,7 @@ iris run --json --url https://example.com "click the sign in button"
     "method": "pattern",
     "confidence": 0.9,
     "reasoning": "Matched click pattern: ^click (.+)$",
+    "error": null,
     "actions": [{ "type": "click", "selector": "the sign in button" }]
   },
   "executed": true,
@@ -563,14 +564,19 @@ iris run --json --url https://example.com "click the sign in button"
 ```
 
 - `translation.method` is `pattern` (deterministic rules) or `ai` (LLM-backed).
+- `translation.error` is the reason the AI provider failed (unreachable, HTTP error,
+  unreadable reply), and `null` otherwise. Such a run is a failure, not an instruction
+  that produced no actions.
 - `executed` is `false` and `results` is `[]` for `--dry-run`, which translates the
   instruction without touching a browser — useful for previewing what IRIS would do.
 - `translation` is `null` if the run failed before translation completed.
 - `goalMet` is `true` / `false` once assertions ran, and `null` when the plan asserted
   nothing — "no goal was stated" is never conflated with "the goal was met".
 - `agent` is `null` unless `--agent` was passed (see below).
-- Read `status` (`success` | `error`) to decide whether the run worked. **`iris run`
-  always exits 0** — see the exit-code table below.
+- `status` (`success` | `error`) and the exit code agree: `0` on success, `1` on
+  failure (an action failed, an assertion or the agent's goal did not hold, no actions,
+  the AI provider failed), `2` on invalid usage (`--agent` without a URL, `--agent
+  --dry-run`). See the exit-code table below.
 
 ### `iris run --agent` — plan against the real page (experimental)
 
@@ -728,19 +734,19 @@ offending selectors. Outcome is signalled by the exit code (`4` = violations fou
 
 ### Exit codes
 
-Unlike `run`, the two reporting commands signal outcome through the exit code:
+Every command signals its outcome through the exit code:
 
 | Code | Meaning | Commands |
 |------|---------|----------|
-| `0` | Completed (for `run`, check `status` in the JSON — it does not set a failure code) | all |
-| `1` | Unhandled error (for `connect`: an uncaught exception — the server exits rather than serve from unknown state) | `watch`, `connect`, top-level |
-| `2` | Invalid usage (bad flag or argument combination) | `visual-diff` |
+| `0` | Completed successfully | all |
+| `1` | `run`: the run failed or its goal was not met (`status: "error"`). Elsewhere: unhandled error (for `connect`: an uncaught exception — the server exits rather than serve from unknown state) | `run`, `watch`, `connect`, top-level |
+| `2` | Invalid usage (bad flag or argument combination) | `run`, `watch`, `connect`, `worker`, `admin`, `visual-diff`, `a11y` |
 | `3` | Environment/runtime error (browser launch, filesystem, network; for `connect`: the port is already in use) | `visual-diff`, `a11y`, `connect` |
 | `4` | Accessibility violations found | `a11y` |
 | `5` | Visual regression detected | `visual-diff` |
 
-Because `iris run` never sets a non-zero code, an assistant must branch on the
-`status` field rather than on the process result.
+A rejected option value (e.g. `--max-turns lots`) exits `1` from the argument parser,
+before the command runs (#496).
 
 ### MCP (experimental)
 

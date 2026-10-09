@@ -142,6 +142,8 @@ program
       let goalMet: boolean | null = null;
       // Populated only in --agent mode; stays null so the one-shot envelope is unchanged.
       let agent: { turns: number; terminationReason: string } | null = null;
+      // Exit 2 rather than 1: the flags were wrong, nothing was run (#294).
+      let usageError = false;
 
       /**
        * Executor options shared by the one-shot and agent paths, so the two
@@ -170,6 +172,7 @@ program
                 '   The loop plans against what is actually on the page, so it cannot start from about:blank.',
             );
             status = 'error';
+            usageError = true;
             return;
           }
           if (options.dryRun) {
@@ -178,6 +181,7 @@ program
                 '   Each turn is planned from the result of the last one, so there is nothing to translate without executing.',
             );
             status = 'error';
+            usageError = true;
             return;
           }
 
@@ -300,6 +304,13 @@ program
         say(`   Confidence: ${result.confidence}`);
         if (result.reasoning) {
           say(`   Reasoning: ${result.reasoning}`);
+        }
+
+        // The provider could not be asked: say why, rather than "no actions" (#293).
+        if (result.error) {
+          status = 'error';
+          console.error(`❌ AI translation failed: ${result.error}`);
+          return;
         }
 
         if (result.actions.length === 0) {
@@ -458,6 +469,7 @@ program
                 method: translation.method,
                 confidence: translation.confidence,
                 reasoning: translation.reasoning ?? null,
+                error: translation.error ?? null,
                 actions: translation.actions,
               },
               executed,
@@ -475,6 +487,9 @@ program
             }),
           );
         }
+
+        // exitCode, not exit(): a piped --json payload is flushed before the process ends.
+        if (status === 'error') process.exitCode = usageError ? 2 : 1;
       }
     },
   );

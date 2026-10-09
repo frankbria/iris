@@ -1325,9 +1325,11 @@ async function executeBrowserActions(
       if (billingMode === 'managed' && translation.actions.length === 0) {
         log('error', 'managed AI translation failed', {
           ...(principal && who(principal)),
-          err: translation.reasoning,
+          err: translation.error ?? translation.reasoning,
         });
         translation.reasoning = 'AI translation is unavailable right now';
+        // `error` (#294) carries the same vendor detail as `reasoning`.
+        if (translation.error) translation.error = translation.reasoning;
       }
       translationResult = translation;
       actionsToExecute = translation.actions;
