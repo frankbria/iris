@@ -54,7 +54,7 @@ describe('a page that never yields', () => {
 
   afterEach(async () => {
     await context?.close();
-  });
+  }, 15000);
 
   it('observePage returns a degraded digest instead of waiting forever', async () => {
     const digest = await observePage(page);
@@ -74,6 +74,20 @@ describe('a page that never yields', () => {
 
     expect(result.success).toBe(false);
     expect(result.metadata.title).toBe('Unknown');
+  }, 20000);
+
+  it('capture with animations off and masks fails instead of waiting forever', async () => {
+    // addStyleTag runs in the page too: the default visual run reaches it first.
+    const result = await new VisualCaptureEngine().capture(page, {
+      fullPage: false,
+      maskSelectors: ['p'],
+      stabilizeMs: 0,
+      disableAnimations: true,
+      type: 'png',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('did not respond');
   }, 20000);
 
   it('capture metadata falls back rather than waiting forever', async () => {

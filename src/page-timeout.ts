@@ -1,10 +1,12 @@
+import type { Page } from 'playwright';
+
 /**
  * Bound for page calls that have no timeout of their own.
  *
- * `page.title()` and `page.evaluate()` wait for the page's main thread, and a page
+ * `page.title()`, `page.evaluate()` and `page.addStyleTag()` wait for the page's main thread, and a page
  * spinning in `for (;;) {}` never gives it back: the call stays pending forever and
  * so does whatever awaited it (#293). Locator calls and screenshots take a
- * `timeout`; these two do not, so they are raced against a timer instead.
+ * `timeout`; these do not, so they are raced against a timer instead.
  */
 
 /** Long enough for a busy page, short enough that a hung one costs little. */
@@ -29,4 +31,20 @@ export async function withPageTimeout<T, F>(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * `page.addStyleTag`, bounded the same way, but a timeout throws: the style is a
+ * mask or a stabilizer the screenshot depends on, and a capture taken without a
+ * mask would show what the mask was there to hide.
+ */
+export async function addStyleTagBounded(
+  page: Pick<Page, 'addStyleTag'>,
+  content: string,
+): Promise<void> {
+  const added = await withPageTimeout(
+    page.addStyleTag({ content }).then(() => true),
+    false,
+  );
+  if (!added) throw new Error('The page did not respond (style injection timed out)');
 }

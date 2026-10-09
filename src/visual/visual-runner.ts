@@ -17,7 +17,7 @@ import { VisualReporter } from './reporter';
 import type { ProviderCredentials } from '../config';
 import type { AIProvider } from './ai-classifier';
 import type { CostStats } from '../ai-client/cost-tracker';
-import { withPageTimeout } from '../page-timeout';
+import { addStyleTagBounded, withPageTimeout } from '../page-timeout';
 
 export interface VisualTestRunnerConfig {
   pages: string[];
@@ -385,8 +385,9 @@ export class VisualTestRunner {
       }
 
       if (this.config.capture.stabilization.disableAnimations) {
-        await page.addStyleTag({
-          content: `
+        await addStyleTagBounded(
+          page,
+          `
             *, *::before, *::after {
               animation-duration: 0s !important;
               animation-delay: 0s !important;
@@ -394,7 +395,7 @@ export class VisualTestRunner {
               transition-delay: 0s !important;
             }
           `,
-        });
+        );
       }
 
       if (this.config.capture.stabilization.delay > 0) {

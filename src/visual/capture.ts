@@ -1,7 +1,7 @@
 import { Page } from 'playwright';
 import { createHash } from 'crypto';
 import { CaptureConfig, CaptureResult, CaptureMetadata } from './types';
-import { withPageTimeout } from '../page-timeout';
+import { addStyleTagBounded, withPageTimeout } from '../page-timeout';
 
 type Viewport = CaptureMetadata['viewport'];
 
@@ -186,8 +186,9 @@ export class VisualCaptureEngine {
    * Disable CSS animations and transitions
    */
   private async disableAnimations(page: Page): Promise<void> {
-    await page.addStyleTag({
-      content: `
+    await addStyleTagBounded(
+      page,
+      `
         *, *::before, *::after {
           animation-duration: 0s !important;
           animation-delay: 0s !important;
@@ -196,7 +197,7 @@ export class VisualCaptureEngine {
           transform: none !important;
         }
       `,
-    });
+    );
   }
 
   /**
@@ -204,13 +205,14 @@ export class VisualCaptureEngine {
    */
   private async maskElements(page: Page, selectors: string[]): Promise<void> {
     const selectorList = selectors.join(', ');
-    await page.addStyleTag({
-      content: `
+    await addStyleTagBounded(
+      page,
+      `
         ${selectorList} {
           visibility: hidden !important;
           opacity: 0 !important;
         }
       `,
-    });
+    );
   }
 }
