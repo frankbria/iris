@@ -144,6 +144,7 @@ ${
         actions: [],
         confidence: 0,
         reasoning: `Failed to translate: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: formatError(error),
         usage,
       };
     }
@@ -283,6 +284,7 @@ ${
         actions: [],
         confidence: 0,
         reasoning: `Failed to translate: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: formatError(error),
         usage,
       };
     }
@@ -398,6 +400,7 @@ Respond with JSON: {"actions": [...], "confidence": 0.8, "reasoning": "..."}`,
         actions: [],
         confidence: 0,
         reasoning: `Failed to translate with Ollama: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: formatError(error),
         usage,
       };
     }

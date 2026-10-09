@@ -1,6 +1,7 @@
 import { Page } from 'playwright';
 import { createHash } from 'crypto';
 import { CaptureConfig, CaptureResult, CaptureMetadata } from './types';
+import { withPageTimeout } from '../page-timeout';
 
 type Viewport = CaptureMetadata['viewport'];
 
@@ -98,8 +99,13 @@ export class VisualCaptureEngine {
     config: CaptureConfig,
   ): Promise<CaptureMetadata> {
     const url = page.url();
-    const title = await page.title();
-    const viewport = await page.evaluate<Viewport>(VIEWPORT_EXPRESSION);
+    // Bounded: on a hung page these never settle (#293). The fallbacks are what
+    // Playwright already knows without asking the page.
+    const title = await withPageTimeout(page.title(), 'Unknown');
+    const viewport = await withPageTimeout(
+      page.evaluate<Viewport>(VIEWPORT_EXPRESSION),
+      page.viewportSize() ?? { width: 0, height: 0 },
+    );
     const hash = this.generateHash(buffer);
     const timestamp = Date.now();
 
@@ -123,10 +129,11 @@ export class VisualCaptureEngine {
   private async generateErrorMetadata(page: Page, config: CaptureConfig): Promise<CaptureMetadata> {
     try {
       const url = page.url();
-      const title = await page.title().catch(() => 'Unknown');
-      const viewport = await page
-        .evaluate<Viewport>(VIEWPORT_EXPRESSION)
-        .catch(() => ({ width: 0, height: 0 }));
+      const title = await withPageTimeout(page.title(), 'Unknown').catch(() => 'Unknown');
+      const viewport = await withPageTimeout(
+        page.evaluate<Viewport>(VIEWPORT_EXPRESSION),
+        page.viewportSize() ?? { width: 0, height: 0 },
+      ).catch(() => ({ width: 0, height: 0 }));
 
       return {
         url,

@@ -17,6 +17,7 @@ import { createResolvedAIClient } from './ai-client';
 import { checkAction, originOf } from './agent-policy';
 import type { AgentPolicy } from './agent-policy';
 import { installUrlPolicyGuard } from './url-policy-guard';
+import { withPageTimeout } from './page-timeout';
 
 /** Cap on the serialized page digest. Keeps the prompt affordable on big pages. */
 export const MAX_DIGEST_CHARS = 4000;
@@ -27,6 +28,9 @@ const MAX_REPORTED_FAILURES = 5;
 /** Caps on the header fields, which are attacker/page controlled and unbounded. */
 export const MAX_URL_CHARS = 300;
 const MAX_TITLE_CHARS = 200;
+
+/** The snapshot's own timeout: the page's default may be none at all (#293). */
+const SNAPSHOT_TIMEOUT_MS = 5_000;
 
 function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max)}…[+${value.length - max}]` : value;
@@ -95,10 +99,11 @@ export async function observePage(page: Page): Promise<string> {
 
   let body: string;
   try {
-    body = await page.locator('body').ariaSnapshot();
+    body = await page.locator('body').ariaSnapshot({ timeout: SNAPSHOT_TIMEOUT_MS });
   } catch {
-    // A page mid-navigation can refuse the snapshot. The URL/title header is
-    // still useful context, so degrade rather than fail the turn.
+    // A page mid-navigation can refuse the snapshot, and a hung one times it out.
+    // The URL/title header is still useful context, so degrade rather than fail
+    // the turn.
     return `${header}\nPAGE: <accessibility snapshot unavailable>`;
   }
 
@@ -116,7 +121,7 @@ export async function observePage(page: Page): Promise<string> {
 
 async function safeTitle(page: Page): Promise<string> {
   try {
-    return await page.title();
+    return await withPageTimeout(page.title(), '<unknown>');
   } catch {
     return '<unknown>';
   }
@@ -126,8 +131,9 @@ async function safeTitle(page: Page): Promise<string> {
  * Drive an instruction to completion, re-observing between turns.
  *
  * Every exit is bounded. An agent that cannot tell it is stuck will happily burn
- * an API budget forever, so the loop stops on any of: the goal being met, two
- * consecutive empty plans, three consecutive action failures, or `maxTurns`.
+ * an API budget forever, so the loop stops on any of: the goal being met, a
+ * provider failure, two consecutive empty plans, three consecutive action
+ * failures, or `maxTurns`.
  */
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunResult> {
   const {
@@ -212,6 +218,12 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
       });
     } catch (error) {
       log(`turn ${turns}: translation failed — ${error instanceof Error ? error.message : error}`);
+      return { goalMet, turns, results, terminationReason: 'error' };
+    }
+    // The provider failed: asking again is not "letting the model think", and
+    // reporting it as no_actions blamed the model for an outage (#293).
+    if (plan.error) {
+      log(`turn ${turns}: translation failed — ${plan.error}`);
       return { goalMet, turns, results, terminationReason: 'error' };
     }
 

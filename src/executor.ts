@@ -10,6 +10,7 @@ import {
 } from './browser';
 import { assertNavigationAllowed, UrlPolicyOptions } from './url-policy';
 import { installUrlPolicyGuard, guardedGoto } from './url-policy-guard';
+import { withPageTimeout } from './page-timeout';
 
 /**
  * A page state that did not hold. Distinct from an infrastructure error so the
@@ -230,7 +231,7 @@ export class ActionExecutor {
       try {
         // Bound title retrieval: after a blocked/aborted navigation the frame can
         // leave page.title() pending indefinitely, so race it against a short timer.
-        title = await Promise.race([page.title(), this.delay(2000).then(() => undefined)]);
+        title = await withPageTimeout(page.title(), undefined);
       } catch {
         // Title retrieval failed, but we can still return URL
         title = undefined;

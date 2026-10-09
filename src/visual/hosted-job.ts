@@ -7,6 +7,7 @@ import { artifactName } from './artifacts';
 import { VisualCaptureEngine } from './capture';
 import { VisualDiffEngine } from './diff';
 import type { VisualTestResult } from './visual-runner';
+import { withPageTimeout } from '../page-timeout';
 
 /**
  * One hosted visual-diff job (#268): every URL on every device, screenshotted and
@@ -89,10 +90,11 @@ export async function runVisualJob(
           if (status >= 400) throw new Error(`${url} answered HTTP ${status}`);
           // Bounded: a page can keep a font pending forever, and the heartbeat would keep
           // the job alive while it waited (#442).
-          await Promise.race([
+          await withPageTimeout(
             page.evaluate('document.fonts.ready.then(() => undefined)'),
-            new Promise((r) => setTimeout(r, FONTS_TIMEOUT_MS)),
-          ]);
+            undefined,
+            FONTS_TIMEOUT_MS,
+          );
           const shot = await capture.capture(page, {
             fullPage: true,
             maskSelectors: [],
