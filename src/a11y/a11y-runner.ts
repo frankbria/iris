@@ -20,6 +20,7 @@ import type { UrlPolicyOptions } from '../url-policy';
 import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
 import { escapeHtml, escapeXml, safeHref, stripUserinfo } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
+import { withPageTimeout } from '../page-timeout';
 
 export interface AccessibilityRunnerConfig {
   pages: string[];
@@ -80,6 +81,13 @@ export interface AccessibilityRunnerConfig {
    * time spent on results that are thrown away.
    */
   failFast?: boolean;
+  /**
+   * How long one page may take before it is that page's error (#293). A page whose main
+   * thread never yields leaves axe and every `page.evaluate` pending forever, and a hang
+   * is not a throw, so without a deadline the run (and a hosted worker) waits for good.
+   * Default `A11Y_PAGE_TIMEOUT_MS`.
+   */
+  pageTimeoutMs?: number;
 }
 
 export interface AccessibilityTestResult {
@@ -128,6 +136,10 @@ export interface AccessibilityTestResult {
  * AccessibilityRunner orchestrates comprehensive accessibility testing
  */
 /** A page that could not be scanned: its reason, and an empty axe result (#287). */
+/** Generous: the keyboard walk alone may visit 200 stops on a large page. */
+export const A11Y_PAGE_TIMEOUT_MS = 120_000;
+const TIMED_OUT = Symbol('timed out');
+
 function erroredPage(page: string, error: unknown): AccessibilityTestResult['results'][0] {
   const empty = { total: 0, violations: 0, passes: 0, incomplete: 0, inapplicable: 0 };
   return {
@@ -215,9 +227,20 @@ export class AccessibilityRunner {
         // One page that fails (navigation, timeout, a check that throws on hostile markup)
         // is that page's errored result; the others still run (#287). Hosted jobs, which
         // fail as a whole, turn it back into a throw in the worker.
-        const result = await this.testPage(pagePattern).catch((error: unknown) =>
-          erroredPage(pagePattern, error),
-        );
+        // A hung page is abandoned, not awaited: its context is closed with the browser.
+        const pageTimeoutMs = this.config.pageTimeoutMs ?? A11Y_PAGE_TIMEOUT_MS;
+        const outcome = await withPageTimeout(
+          this.testPage(pagePattern),
+          TIMED_OUT,
+          pageTimeoutMs,
+        ).catch((error: unknown) => erroredPage(pagePattern, error));
+        const result =
+          outcome === TIMED_OUT
+            ? erroredPage(
+                pagePattern,
+                new Error(`The page did not finish within ${Math.round(pageTimeoutMs / 1000)} s`),
+              )
+            : outcome;
         results.push(result);
         if (result.error !== undefined && this.config.failFast) break;
 

@@ -146,4 +146,22 @@ describe('a11y runner page isolation (#287)', () => {
     expect(result.results[0].error).toMatch(/net::ERR_/);
     expect(result.results[0].error).not.toContain('hunter2');
   }, 120_000);
+
+  it('errors a page that never yields instead of waiting on it forever (#293)', async () => {
+    // Its main thread spins, so axe and every page.evaluate wait for good: a hang is
+    // not a throw, and only a deadline turns it into this page's error.
+    const hung =
+      'data:text/html;charset=utf-8,' +
+      encodeURIComponent(`<!doctype html><html lang="en"><head><title>Hung</title></head>
+        <body><main><h1>Hung</h1></main><script>setTimeout(() => { for (;;) {} }, 50);</script></body></html>`);
+
+    const result = await new AccessibilityRunner(
+      config([hung, PAGE('After')], { pageTimeoutMs: 3000 }),
+    ).run();
+
+    expect(result.results[0].error).toMatch(/did not finish within 3 s/);
+    expect(result.results[1].error).toBeUndefined();
+    expect(result.results[1].axeResult.passes.length).toBeGreaterThan(0);
+    expect(result.summary.pagesErrored).toBe(1);
+  }, 30000);
 });
