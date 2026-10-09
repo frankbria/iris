@@ -147,21 +147,27 @@ describe('a11y runner page isolation (#287)', () => {
     expect(result.results[0].error).not.toContain('hunter2');
   }, 120_000);
 
-  it('errors a page that never yields instead of waiting on it forever (#293)', async () => {
-    // Its main thread spins, so axe and every page.evaluate wait for good: a hang is
-    // not a throw, and only a deadline turns it into this page's error.
+  it('errors a page that hangs during the keyboard checks instead of waiting forever (#293)', async () => {
+    // axe has its own timeout; the keyboard and screen-reader checks' page.evaluate calls
+    // do not. This page is fine until a key is pressed, then its main thread spins, so the
+    // focus-order walk's first evaluate after Tab never returns. A hang is not a throw, and
+    // only a deadline turns it into this page's error.
     const hung =
       'data:text/html;charset=utf-8,' +
       encodeURIComponent(`<!doctype html><html lang="en"><head><title>Hung</title></head>
-        <body><main><h1>Hung</h1></main><script>setTimeout(() => { for (;;) {} }, 50);</script></body></html>`);
+        <body><main><h1>Hung</h1><button>One</button><button>Two</button></main>
+        <script>addEventListener('keydown', () => { for (;;) {} });</script></body></html>`);
+    const base = config([hung, PAGE('After')]);
 
-    const result = await new AccessibilityRunner(
-      config([hung, PAGE('After')], { pageTimeoutMs: 3000 }),
-    ).run();
+    const result = await new AccessibilityRunner({
+      ...base,
+      keyboard: { ...base.keyboard, testFocusOrder: true },
+      pageTimeoutMs: 5000,
+    }).run();
 
-    expect(result.results[0].error).toMatch(/did not finish within 3 s/);
+    expect(result.results[0].error).toMatch(/did not finish within 5 s/);
     expect(result.results[1].error).toBeUndefined();
     expect(result.results[1].axeResult.passes.length).toBeGreaterThan(0);
     expect(result.summary.pagesErrored).toBe(1);
-  }, 30000);
+  }, 60000);
 });
