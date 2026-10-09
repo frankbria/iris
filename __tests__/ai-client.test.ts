@@ -100,6 +100,8 @@ describe('AI Client', () => {
       expect(result.actions).toHaveLength(0);
       expect(result.confidence).toBe(0);
       expect(result.reasoning).toContain('Failed to translate: API Error');
+      // A failure is marked as one, so a caller can tell it from an empty plan (#293).
+      expect(result.error).toBe('API Error');
     });
   });
 
@@ -171,6 +173,8 @@ describe('AI Client', () => {
       expect(result.actions).toHaveLength(0);
       expect(result.confidence).toBe(0);
       expect(result.reasoning).toContain('Failed to translate: API Error');
+      // A failure is marked as one, so a caller can tell it from an empty plan (#293).
+      expect(result.error).toBe('API Error');
     });
 
     it('should preserve a legitimate confidence of 0', async () => {
@@ -187,6 +191,7 @@ describe('AI Client', () => {
       const result = await client.translateInstruction({ instruction: 'do something' });
 
       expect(result.confidence).toBe(0);
+      expect(result.error).toBeUndefined();
     });
   });
 
@@ -263,6 +268,7 @@ describe('AI Client', () => {
       expect(result.actions).toHaveLength(0);
       expect(result.confidence).toBe(0);
       expect(result.reasoning).toContain('Failed to translate with Ollama');
+      expect(result.error).toContain('Ollama request failed: 500');
     });
   });
 

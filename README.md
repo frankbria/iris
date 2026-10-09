@@ -619,9 +619,12 @@ never on the strength of a check made before later actions. `consecutive_failure
 and `error` stay failures regardless.
 
 **Bounds.** Every exit is bounded, because an agent that cannot tell it is stuck
-will happily burn an API budget forever. The loop stops on: the goal being met, two
-consecutive empty plans, three consecutive action failures, or `--max-turns`
-(default 8, max 50).
+will happily burn an API budget forever. The loop stops on: the goal being met, a
+provider failure, two consecutive empty plans, three consecutive action failures, or
+`--max-turns` (default 8, max 50). A provider that cannot be reached, answers an HTTP
+error or sends a reply that is not JSON ends the run at once with `error`; only a plan
+the model actually returned empty counts toward `no_actions`. A page that never gives
+its main thread back cannot hang the run either: page reads are bounded.
 
 **Requirements and limits.**
 

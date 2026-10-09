@@ -1,33 +1,23 @@
-# #351 [P1.13] Agent loop: verdict evaluation
+# Issue #293 — [P1.14] Agent loop error surfacing
 
-The issue body points at the private backlog (not on this box). Criteria below are derived
-from reading `src/agent-loop.ts`; the PR lists them for checking against the backlog's P1.13.
+Plan self-authored (no plan on the issue). No architectural fork; approved autonomously.
 
-## Problem (src/agent-loop.ts)
-`goalMet` is the latest turn's assertions, and it survives every action that runs after them:
-- **Across turns:** turn 1 `[click, assert "Welcome"]` passes; turns 2..8 click on without
-  asserting; the run ends `max_turns` with `goalMet: true`, and `iris run --agent` reports
-  `status: success` for a page nobody checked.
-- **Within a turn:** `[assert "Welcome", navigate /logout]` reports `goalMet: true` for the
-  page *before* the navigation.
-- **Abnormal exits:** `[assert ok, click x3 failing]` exits `consecutive_failures` with
-  `goalMet: true` (a test pinned this).
+## Steps
+1. `AITranslationResponse.error?: string` (src/ai-client/base.ts). The three text clients'
+   catch blocks set it (provider unreachable, HTTP error, unreadable reply). A schema-invalid
+   but parsed reply stays an empty plan without `error` (the model answered).
+2. `runAgentLoop`: a plan with `error` ends the run `terminationReason: 'error'` at once,
+   instead of counting as an empty plan (`no_actions`).
+3. One helper `withPageTimeout(promise, ms, fallback)` (src/page-timeout.ts) bounding page calls
+   that have no Playwright timeout of their own (`page.title()`, `page.evaluate()`):
+   - agent loop `safeTitle`, `ariaSnapshot({ timeout })`
+   - capture `generateMetadata` / `generateErrorMetadata` (title, viewport), `waitForFunction` timeout
+   - visual-runner fonts wait (best-effort, like hosted-job's)
+   - executor `getPageContext` reuses the helper
+4. Tests: a real Ollama-shaped HTTP server that fails -> loop `error`; real Chromium page that
+   busy-loops its main thread -> observePage and capture return within the bound.
 
-## Plan (TDD)
-1. A verdict covers the page only until the agent acts again. An *executed* non-assert
-   action (success or failure: a failed click may still have been dispatched) clears the
-   turn's assertions; a policy-refused action never ran, so it does not.
-2. At the end of a turn (and on the consecutive-failures exit): assertions left -> `goalMet`
-   is their AND; none left but the turn acted -> `null` (unverified); neither -> unchanged.
-3. Tests (real Chromium, scripted model): stale across turns -> `null` + `max_turns`;
-   assert-then-act in one turn -> `null`; act-then-assert -> `true`; refused action after a
-   passing assert keeps `true`; the consecutive-failures case -> `null` (test updated: it
-   pinned the stale verdict).
-4. CLI: "Goal unverified" message names the new cause; `status` logic unchanged (it reads
-   `goalMet !== true`). README `goalMet` / `--agent` paragraphs; CLAUDE.md note.
-
-## Not in scope
-- One-shot `iris run` computes `goalMet` from every assert in the plan (src/cli.ts); same
-  shape of question, different contract (plan 013). Filed as follow-up if needed.
-- Assertion strength (substring `url_matches`, 1 s `element_absent` grace) is executor
-  semantics, not the loop's verdict.
+## Acceptance criteria
+- [ ] Provider errors propagate as `error` status
+- [ ] All page-evaluated calls bounded by a timeout
+- [ ] Tests with a failing provider and a never-resolving page

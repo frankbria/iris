@@ -696,6 +696,47 @@ describe('agent loop', () => {
       expect(result.results).toEqual([]);
     });
 
+    it('ends with error, not no_actions, when the provider fails (#293)', async () => {
+      // A real provider over HTTP, not a stubbed client: the failure used to be
+      // swallowed inside the text client and come back as an empty plan, which the
+      // loop then retried and reported as `no_actions`.
+      let calls = 0;
+      const provider = createServer((_req, res) => {
+        calls++;
+        res.writeHead(400).end('model not loaded');
+      });
+      await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve));
+      const saved = process.env.OLLAMA_ENDPOINT;
+      process.env.OLLAMA_ENDPOINT = `http://127.0.0.1:${(provider.address() as AddressInfo).port}`;
+      const log: string[] = [];
+      try {
+        const result = await runAgentLoop({
+          instruction: 'click pay',
+          executor,
+          page,
+          maxTurns: 4,
+          log: (m) => log.push(m),
+        });
+
+        expect(result.terminationReason).toBe('error');
+        expect(result.turns).toBe(1);
+        expect(calls).toBe(1);
+        expect(log.join('\n')).toContain('Ollama request failed: 400');
+      } finally {
+        if (saved === undefined) delete process.env.OLLAMA_ENDPOINT;
+        else process.env.OLLAMA_ENDPOINT = saved;
+        await new Promise((resolve) => provider.close(resolve));
+      }
+    });
+
+    it('still treats a plan the model answered empty as no_actions', async () => {
+      scriptAI([]);
+
+      const result = await runAgentLoop({ instruction: 'anything', executor, page, maxTurns: 4 });
+
+      expect(result.terminationReason).toBe('no_actions');
+    });
+
     it('stays silent unless a log sink is supplied', async () => {
       scriptAI([[{ type: 'assert', kind: 'text_visible', target: 'Your cart' }]]);
       const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});

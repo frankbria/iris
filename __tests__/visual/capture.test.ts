@@ -24,6 +24,7 @@ describe('VisualCaptureEngine', () => {
       locator: jest.fn(),
       getByRole: jest.fn(),
       waitForFunction: jest.fn(),
+      viewportSize: jest.fn(() => ({ width: 1280, height: 720 })),
     } as any;
 
     captureEngine = new VisualCaptureEngine();

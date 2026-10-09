@@ -17,6 +17,7 @@ import { VisualReporter } from './reporter';
 import type { ProviderCredentials } from '../config';
 import type { AIProvider } from './ai-classifier';
 import type { CostStats } from '../ai-client/cost-tracker';
+import { addStyleTagBounded, withPageTimeout } from '../page-timeout';
 
 export interface VisualTestRunnerConfig {
   pages: string[];
@@ -374,12 +375,19 @@ export class VisualTestRunner {
       if (this.config.capture.stabilization.waitForFonts) {
         // A string, not a function: Istanbul instruments a function body with
         // counters that do not exist in the browser, which fails under --coverage.
-        await page.evaluate('document.fonts.ready.then(() => undefined)');
+        // Bounded and best-effort, as in hosted jobs: a page can keep a font pending
+        // forever, or never give its main thread back (#293).
+        await withPageTimeout(
+          page.evaluate('document.fonts.ready.then(() => undefined)'),
+          undefined,
+          5_000,
+        );
       }
 
       if (this.config.capture.stabilization.disableAnimations) {
-        await page.addStyleTag({
-          content: `
+        await addStyleTagBounded(
+          page,
+          `
             *, *::before, *::after {
               animation-duration: 0s !important;
               animation-delay: 0s !important;
@@ -387,7 +395,7 @@ export class VisualTestRunner {
               transition-delay: 0s !important;
             }
           `,
-        });
+        );
       }
 
       if (this.config.capture.stabilization.delay > 0) {

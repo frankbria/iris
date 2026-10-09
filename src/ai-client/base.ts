@@ -116,6 +116,13 @@ export interface AITranslationResponse {
    * answer was then unusable. Absent when the request failed before a reply.
    */
   usage?: AITokenUsage;
+  /**
+   * Why there is no plan, when the provider could not be asked or its reply could
+   * not be read (unreachable, HTTP error, not JSON). `actions` is then empty. Unset
+   * when the model answered, even with no actions: that is a plan, not a failure,
+   * and the agent loop must not retry a failure as if the model were thinking (#293).
+   */
+  error?: string;
 }
 
 /**
