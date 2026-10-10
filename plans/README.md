@@ -174,7 +174,7 @@ code is the ordering key.
 | `P1.13` | [#351](https://github.com/frankbria/iris/issues/351) | Agent loop: verdict evaluation | — | DONE (#503) |
 | `P1.14` | [#293](https://github.com/frankbria/iris/issues/293) | Agent loop error surfacing: provider failure and page-controlled hangs | — | DONE (#507) |
 | `P1.15` | [#294](https://github.com/frankbria/iris/issues/294) | `iris run` exits non-zero on failure | — | DONE (#509) |
-| `P1.16` | [#352](https://github.com/frankbria/iris/issues/352) | Typed values: credential references | — | TODO |
+| `P1.16` | [#352](https://github.com/frankbria/iris/issues/352) | Typed values: credential references | — | DONE (#512) |
 | `P1.17` | [#296](https://github.com/frankbria/iris/issues/296) | Do not auto-retry non-idempotent clicks and fills | — | TODO |
 | `P1.18` | [#297](https://github.com/frankbria/iris/issues/297) | Pattern translator: stop turning prose into CSS selectors | — | TODO |
 | `P1.19` | [#298](https://github.com/frankbria/iris/issues/298) | Vision provider detection and Ollama timeouts | — | TODO |
