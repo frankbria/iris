@@ -39,6 +39,11 @@ before filing). Groups A–E are independent of the platform work in F–K and c
 run in parallel with it. Issue numbers are not in code order; the `[PX.Y]`
 code is the ordering key.
 
+**Production comes last (2026-10-10).** Every issue closes on local, CI or staging
+evidence. A step that can only happen on the production box goes on [#515](https://github.com/frankbria/iris/issues/515)
+(P0.61), and the issue it came from closes without it. No issue is marked blocked on
+production.
+
 ### P0 — Launch blockers
 
 
@@ -138,6 +143,9 @@ code is the ordering key.
 | `P0.45` | [#273](https://github.com/frankbria/iris/issues/273) | Production environment and deploy pipeline | P0.20 (#248), P0.44 (#347) | DONE (PR #439) |
 | `P0.46` | [#274](https://github.com/frankbria/iris/issues/274) | Backups and restore drill for Postgres and object storage | P0.45 (#273) | DONE (PR #446; bucket half split to #445) |
 | `P0.47` | [#275](https://github.com/frankbria/iris/issues/275) | Observability: structured logs, metrics, alerting | P0.45 (#273) | DONE (PR #448) |
+| `P0.59` | [#440](https://github.com/frankbria/iris/issues/440) | Move staging onto the hosted stack so staged-<sha> proves what production runs | P0.45 (#273) | TODO (raised from P1.38, 2026-10-10: unblocks #514, #445, #376, #316) |
+| `P0.60` | [#514](https://github.com/frankbria/iris/issues/514) | Wire object storage and the managed AI key into the hosted deploy, on staging first | P0.59 (#440) | TODO |
+| `P0.61` | [#515](https://github.com/frankbria/iris/issues/515) | Production first-deploy checklist: every step that needs the production box | every other open P0 and P1 | BLOCKED (needs-operator, needs-owner; last by design) |
 
 **K. Legal, trust & data lifecycle**
 
@@ -148,7 +156,7 @@ code is the ordering key.
 | `P0.50` | [#348](https://github.com/frankbria/iris/issues/348) | Abuse handling and security contact | P0.24 (#341) | DONE (PR #455) |
 | `P0.51` | [#349](https://github.com/frankbria/iris/issues/349) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | DONE (PR #470) |
 | `P0.52` | [#435](https://github.com/frankbria/iris/issues/435) | Reap jobs stuck in running after a worker crash | P0.39 (#267) | DONE (PR #443) |
-| `P0.53` | [#445](https://github.com/frankbria/iris/issues/445) | Object storage backups: bucket versioning/replication and a restore drill | P0.29 (#257) | BLOCKED (on #257) |
+| `P0.53` | [#445](https://github.com/frankbria/iris/issues/445) | Object storage backups: bucket versioning/replication and a restore drill | P0.60 (#514) | BLOCKED (on #514; closes on a staging bucket) |
 | `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | BLOCKED (needs-owner) |
 | `P0.55` | [#460](https://github.com/frankbria/iris/issues/460) | Signed artifact URLs in run detail | P0.29 (#257) | DONE (PR #471) |
 | `P0.56` | [#463](https://github.com/frankbria/iris/issues/463) | Portal: visual diff images and baseline approval | P0.40 (#268), P0.55 (#460) | DONE (PR #474) |
@@ -192,10 +200,9 @@ code is the ordering key.
 | `P1.31` | [#361](https://github.com/frankbria/iris/issues/361) | Audit log of tenant actions | P0.26 (#254) | TODO |
 | `P1.32` | [#311](https://github.com/frankbria/iris/issues/311) | Docs truth pass for the hosted product | P0.3 (#231), P0.45 (#273) | TODO |
 | `P1.33` | [#375](https://github.com/frankbria/iris/issues/375) | Hosted egress: prove WebTransport and QUIC cannot bypass the proxy | P0.9 (#336) | TODO |
-| `P1.34` | [#376](https://github.com/frankbria/iris/issues/376) | Container egress firewall for the hosted deployment | P0.9 (#336), P1.33 (#375) | TODO |
+| `P1.34` | [#376](https://github.com/frankbria/iris/issues/376) | Container egress firewall for the hosted deployment | P0.9 (#336), P1.33 (#375), P0.59 (#440) | TODO |
 | `P1.35` | [#379](https://github.com/frankbria/iris/issues/379) | Egress proxy timeouts, configurable popup cap, per-session page cap | P0.11 (#338) | TODO |
 | `P1.36` | [#408](https://github.com/frankbria/iris/issues/408) | Portal: remove members, change roles, leave an org | P0.22 (#250) | TODO |
-| `P1.38` | [#440](https://github.com/frankbria/iris/issues/440) | Move staging onto the hosted stack so staged-<sha> proves what production runs | P0.45 (#273) | TODO |
 | `P1.39` | [#442](https://github.com/frankbria/iris/issues/442) | Job-level deadline: a hung browser holds the worker forever | P0.52 (#435) | TODO |
 
 ### P2 — Post-launch fast-follow
@@ -206,7 +213,7 @@ code is the ordering key.
 | `P2.2` | [#362](https://github.com/frankbria/iris/issues/362) | MCP tool: follow-up items | P0.7 (#334) | TODO |
 | `P2.3` | [#314](https://github.com/frankbria/iris/issues/314) | Hosted MCP over HTTP with tenant auth and metering | P0.24 (#341), P0.35 (#263), P2.2 (#362) | TODO |
 | `P2.4` | [#315](https://github.com/frankbria/iris/issues/315) | Per-plan artifact storage quota | P0.29 (#257), P0.37 (#346) | TODO |
-| `P2.5` | [#316](https://github.com/frankbria/iris/issues/316) | Zero-downtime deploys | P0.45 (#273), P1.30 (#309) | TODO |
+| `P2.5` | [#316](https://github.com/frankbria/iris/issues/316) | Zero-downtime deploys | P0.45 (#273), P1.30 (#309), P0.59 (#440) | TODO |
 | `P2.6` | [#317](https://github.com/frankbria/iris/issues/317) | Public status page | P0.47 (#275) | TODO |
 | `P2.7` | [#318](https://github.com/frankbria/iris/issues/318) | Store money as integer micro-units | P0.35 (#263) | TODO |
 | `P2.8` | [#319](https://github.com/frankbria/iris/issues/319) | Watcher: `--execute` targets and nested ignore globs | — | TODO |
