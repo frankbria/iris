@@ -175,8 +175,10 @@ describe('credential references', () => {
         secrets,
       );
       await page.goto(`${origin}/?pw=${encodeURIComponent(SECRET)}`);
+      await page.evaluate(`document.title = ${JSON.stringify(`${SECRET} - Search`)}`);
       const result = await ex.executeAction({ type: 'click', selector: '#user' }, page, secrets);
       expect(result.context?.url).toBe(`${origin}/?pw=<redacted>`);
+      expect(result.context?.title).toBe('<redacted> - Search');
     });
 
     it('cuts a multi-line value from a failed fill error', async () => {
@@ -187,6 +189,7 @@ describe('credential references', () => {
         mapSecrets({ NOTE: value }),
       );
       expect(result.success).toBe(false);
+      expect(result.error).toMatch(/fill\("<redacted>/); // positive control: it was quoted
       expect(result.error).not.toMatch(/line-one-Q7|line-two-K4/);
     });
 

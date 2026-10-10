@@ -289,7 +289,8 @@ export class ActionExecutor {
 
       return {
         url,
-        title,
+        // A page may title itself with what was typed ("<query> — Search").
+        title: title === undefined ? undefined : this.redactSecrets(title),
         timestamp,
       };
     } catch {
