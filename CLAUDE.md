@@ -72,6 +72,7 @@ src/
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
 │   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268; 0012: artifact purges, #472)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
+├── credential-refs.ts     # {{secret:NAME}} fill values: sources, resolve at fill time, scrub (#352)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
 ├── hosted.ts              # IRIS_HOSTED switch: read once, fails closed (ADR 0001 §5)
 ├── log.ts                 # log(): JSON lines hosted, `[iris] …` locally; redaction net (#275)
@@ -95,6 +96,7 @@ src/
 __tests__/
 ├── cli.test.ts                    # CLI command testing
 ├── cli-run-exit.test.ts           # Spawned `iris run`: exit 0 / 1 (provider outage, reason in JSON) / 2 (usage) reach the OS (#294)
+├── credential-refs.test.ts        # Real Chromium: {{secret:NAME}} typed, kept out of results, fill errors and the agent digest; hosted env off (#352)
 ├── browser.test.ts                # Browser automation testing
 ├── ai-client.test.ts              # Text AI client tests
 ├── ai-client-vision.test.ts       # Vision AI client tests (17 tests)
@@ -906,6 +908,26 @@ Acting again clears it to `null` until the next check; a policy-refused action n
 and clears nothing. It used to be the latest asserting turn's checks, so a turn-1 pass
 survived seven turns of clicking and `iris run --agent` reported success at `max_turns`.
 One-shot `iris run` still ANDs every assert in the plan (plan 013's contract).
+
+### Credential References (issue #352)
+
+A fill's `text` may be `{{secret:NAME}}` (the whole value; NAME `[A-Za-z_][A-Za-z0-9_]{0,63}`).
+`src/credential-refs.ts` holds the syntax and sources; the executor resolves it in
+`performAction` and nowhere else, so instruction, AI plan, results and history carry the
+reference.
+
+- **Sources**: `executeAction(action, page, secrets?)`. Omitted: `IRIS_SECRET_<NAME>` locally
+  (CLI, watcher, agent loop), nothing under `IRIS_HOSTED`. The RPC always passes the
+  request's `secrets` map (zod-checked names), so it never reads the server's env, local
+  mode included. Unknown or embedded (`pw: {{secret:X}}`) references throw
+  `CredentialReferenceError`: non-retryable, message names the reference only.
+- **Two leaks Playwright creates, both probed**: a failed `page.fill` error quotes the value
+  in its call log (`- fill("…")`), so the fill case cuts the typed value (literal ones too)
+  from the error; and `ariaSnapshot()` shows field values, password inputs included, so the
+  agent loop's digest goes through `executor.redactSecrets()` (values this executor resolved
+  from references) before the model sees it.
+- No org vault: hosted fills arrive over the RPC from a client that holds its credentials. A
+  vault would be one more `SecretSource`. `IRIS_SECRET_*` is scrubbed by `jest.setup.ts`.
 
 ### Hung Pages and Provider Failures (issue #293)
 

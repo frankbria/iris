@@ -1,28 +1,43 @@
-# Issue #294 — [P1.15] `iris run` exits non-zero on failure
+# Issue #352 — [P1.16] Typed values: credential references
 
-Plan self-authored (no plan on the issue). No architectural fork; approved autonomously.
+Plan self-authored: the issue points at the private backlog (not on this box), so the criteria
+below are derived from the issue summary ("credential references for fill values, resolved
+only at fill time"), ADR 0001 §5 (the operator's secrets never serve a tenant) and probes of
+the current code. Please check them against the backlog's P1.16 list.
+
+## What leaks today (probed, Playwright 1.62)
+- A fill value is in the instruction, so it goes to the AI provider, and comes back in the plan.
+- The agent loop's page digest (`ariaSnapshot`) shows typed values, password fields included,
+  and goes to the AI on the next turn.
+- A failed `page.fill` error quotes the value (`- fill("…")` in the call log), and that error
+  reaches the RPC reply, run history (org-readable) and logs.
 
 ## Steps
-1. `TranslationResult.error?: string` (src/translator.ts): `translate()` carries the text
-   client's `AITranslationResponse.error` (#293), and sets it where the provider was asked and
-   failed (client unavailable, a throw). No AI configured / no tenant credentials stays a plan
-   with no actions, not an outage.
-2. Hosted RPC (src/protocol.ts): on IRIS's managed key, `error` gets the same rewrite as
-   `reasoning` (#479), so the vendor account's details are logged, not returned.
-3. `iris run` (src/cli.ts): sets `process.exitCode` from the run, not `process.exit()`, so a
-   piped `--json` payload is flushed: 0 success, 1 failure / goal not met (an outage too),
-   2 usage error (`--agent` without a URL, `--agent --dry-run`). A translation with `error` is
-   reported as the failure reason (stderr, and `translation.error` in the JSON).
-4. Tests: in-process cli.test.ts cases assert `process.exitCode` per path; a spawned real
-   `iris run` proves the status reaches the OS and the JSON is complete; translator test for
-   `error`; protocol test for the managed rewrite.
-5. Docs: README exit-code table and the `run` JSON notes; CLAUDE.md.
+1. `src/credential-refs.ts`: `{{secret:NAME}}` (whole fill value, NAME `[A-Za-z_][A-Za-z0-9_]{0,63}`),
+   `SecretSource = (name) => string | undefined`, `envSecrets()` (`IRIS_SECRET_<NAME>`),
+   `mapSecrets(record)` (own keys only), `resolveFillText()` (throws `CredentialReferenceError`:
+   unknown name, or a reference that is not the whole value), `scrubValues()`.
+2. Executor: `executeAction(action, page, secrets?)` / `executeActions(…, secrets?)`. The source
+   defaults to `envSecrets()` locally and to none under `IRIS_HOSTED` (fail closed). The value is
+   resolved inside `performAction` only; the action in the result keeps the reference. A fill's
+   error has its typed value cut (literal values too). A reference error is non-retryable.
+   The executor keeps the values it resolved from references; `redactSecrets(text)` cuts them.
+3. Agent loop: the digest goes through `executor.redactSecrets()` before it reaches the model.
+4. RPC `executeBrowserAction` takes `secrets?: Record<NAME, string>`, request-scoped, never
+   stored; it is the only source for RPC (never the server's env, local or hosted).
+5. AI prompts (3 text clients): keep `{{secret:NAME}}` verbatim as the whole fill text.
+6. `jest.setup.ts` scrubs `IRIS_SECRET_*`. Docs: README, CLAUDE.md, docs/data-flows.md.
 
 ## Decisions
-- Exit 1 (not 3) for a provider outage: the issue specifies 0/1/2, and the agent loop's
-  outcome carries no reason to tell an outage apart. `translation.error` distinguishes it.
-- Commander's own parse errors keep commander's exit code (#496 owns that inconsistency).
+- Values come from the caller (request `secrets` on RPC, `IRIS_SECRET_*` env for the CLI), not
+  an org vault in Postgres. Hosted surfaces with fills are RPC only (jobs do not fill; the agent
+  loop is CLI-only, #428), and the client already holds its credentials. A vault can be added
+  later as another `SecretSource` without changing the syntax.
+- Whole-value references only: a reference embedded in other text is an error, not literal text.
 
-## Acceptance criteria
-- [ ] Documented exit codes (0 success, 1 failure/goal not met, 2 usage error)
-- [ ] CLI tests assert exit codes
+## Acceptance criteria (derived)
+- [ ] A fill can name a credential by reference; the value is resolved only at fill time
+- [ ] The value never reaches the AI (instruction, plan, agent digest), results, history or logs
+- [ ] Unknown / malformed references fail the action with a message naming the reference only
+- [ ] Hosted: the server process env is never a source
+- [ ] Each covered by a regression test

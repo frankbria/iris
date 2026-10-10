@@ -48,6 +48,8 @@ Guidelines:
 - Use CSS selectors for targeting elements (prefer data-testid, id, or semantic selectors)
 - Be specific with selectors to avoid ambiguity
 - Break complex instructions into multiple actions
+- A value written {{secret:NAME}} is a credential reference: use it verbatim as the
+  whole fill text. Never expand, guess or alter it
 - An instruction phrased as "make sure / verify / check / confirm X" MUST end with at
   least one assert action expressing X — that assertion is how the goal is judged
 - When a page digest is supplied, plan against it: propose only the next 1-3 actions.
@@ -191,6 +193,8 @@ Guidelines:
 - Use CSS selectors for targeting elements (prefer data-testid, id, or semantic selectors)
 - Be specific with selectors to avoid ambiguity
 - Break complex instructions into multiple actions
+- A value written {{secret:NAME}} is a credential reference: use it verbatim as the
+  whole fill text. Never expand, guess or alter it
 - An instruction phrased as "make sure / verify / check / confirm X" MUST end with at
   least one assert action expressing X — that assertion is how the goal is judged
 - When a page digest is supplied, plan against it: propose only the next 1-3 actions.
@@ -333,6 +337,8 @@ If the goal is already satisfied, emit exactly ONE assert confirming it and noth
 The page digest names elements by ARIA role and accessible name, NOT by selector, so
 never invent an id. For click and fill, a digest line button "Sign in" becomes the
 selector button:has-text("Sign in").
+A value written {{secret:NAME}} is a credential reference: use it verbatim as the whole
+fill text. Never expand, guess or alter it.
 An assert target is NOT always a selector: text_visible takes the literal visible text
 (Welcome back — never text=Welcome back), url_matches takes a URL substring, and only
 element_visible and element_absent take a selector.

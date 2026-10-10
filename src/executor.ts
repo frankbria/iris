@@ -11,6 +11,16 @@ import {
 import { assertNavigationAllowed, UrlPolicyOptions } from './url-policy';
 import { installUrlPolicyGuard, guardedGoto } from './url-policy-guard';
 import { withPageTimeout } from './page-timeout';
+import { isHostedMode } from './hosted';
+import {
+  CredentialReferenceError,
+  envSecrets,
+  looksLikeReference,
+  noSecrets,
+  resolveFillText,
+  scrubValues,
+  SecretSource,
+} from './credential-refs';
 
 /**
  * A page state that did not hold. Distinct from an infrastructure error so the
@@ -69,6 +79,8 @@ export class ActionExecutor {
   private browser: Browser | null = null;
   /** A launch still in progress, so `cleanup()` can wait for it and close what it yields. */
   private launching: Promise<Browser> | null = null;
+  /** Values this executor typed from credential references (#352), for `redactSecrets`. */
+  private readonly resolvedSecrets = new Set<string>();
 
   constructor(options: ActionExecutorOptions = {}) {
     this.options = {
@@ -153,8 +165,16 @@ export class ActionExecutor {
 
   /**
    * Execute a single action with retry logic and error handling.
+   *
+   * `secrets` resolves a fill's `{{secret:NAME}}` (#352). Omitted, it is
+   * `IRIS_SECRET_<NAME>` locally and nothing under IRIS_HOSTED: the server's
+   * environment is the operator's, never a tenant's.
    */
-  async executeAction(action: Action, page: Page): Promise<ExecutionResult> {
+  async executeAction(
+    action: Action,
+    page: Page,
+    secrets: SecretSource = isHostedMode() ? noSecrets : envSecrets(),
+  ): Promise<ExecutionResult> {
     if (!page) {
       throw new Error('Page is null or undefined');
     }
@@ -165,7 +185,7 @@ export class ActionExecutor {
     // Try initial execution + retries
     for (let attempt = 0; attempt <= this.options.retryAttempts; attempt++) {
       try {
-        await this.performAction(action, page);
+        await this.performAction(action, page, secrets);
 
         const duration = Date.now() - startTime;
         const context = this.options.trackContext ? await this.getPageContext(page) : undefined;
@@ -198,7 +218,7 @@ export class ActionExecutor {
     return {
       success: false,
       action,
-      error: lastError?.message || 'Unknown error',
+      error: this.redactError(action, lastError?.message || 'Unknown error'),
       duration,
       context,
     };
@@ -207,15 +227,44 @@ export class ActionExecutor {
   /**
    * Execute a sequence of actions.
    */
-  async executeActions(actions: Action[], page: Page): Promise<ExecutionResult[]> {
+  async executeActions(
+    actions: Action[],
+    page: Page,
+    secrets?: SecretSource,
+  ): Promise<ExecutionResult[]> {
     const results: ExecutionResult[] = [];
 
     for (const action of actions) {
-      const result = await this.executeAction(action, page);
+      const result = await this.executeAction(action, page, secrets);
       results.push(result);
     }
 
     return results;
+  }
+
+  /**
+   * `text` with every value this executor typed from a credential reference cut.
+   * The page shows what a field holds (an ARIA snapshot includes password fields),
+   * so anything read back from the page must pass through this before a model.
+   */
+  redactSecrets(text: string): string {
+    return scrubValues(text, this.resolvedSecrets);
+  }
+
+  /**
+   * An error message as a result may carry it (#352), cut only here, after the retry
+   * decision read the original. Any action's error may quote the page (Playwright
+   * previews the element it resolved, attributes included, and a page can reflect a
+   * typed value), and a fill's call log quotes what it typed (`- fill("…")`).
+   */
+  private redactError(action: Action, message: string): string {
+    const redacted = this.redactSecrets(message);
+    // ponytail: a literal under 4 characters is left, or cutting it would mangle every
+    // message ("e<redacted>ceeded"); a value that must not leak belongs in a reference.
+    // A reference is a name, and its error must say which one.
+    return action.type === 'fill' && action.text.length >= 4 && !looksLikeReference(action.text)
+      ? scrubValues(redacted, [action.text])
+      : redacted;
   }
 
   /**
@@ -225,7 +274,8 @@ export class ActionExecutor {
     const timestamp = Date.now();
 
     try {
-      const url = page.url();
+      // A GET form can put a typed value in the URL (#352).
+      const url = this.redactSecrets(page.url());
       let title: string | undefined;
 
       try {
@@ -239,7 +289,8 @@ export class ActionExecutor {
 
       return {
         url,
-        title,
+        // A page may title itself with what was typed ("<query> — Search").
+        title: title === undefined ? undefined : this.redactSecrets(title),
         timestamp,
       };
     } catch {
@@ -273,15 +324,20 @@ export class ActionExecutor {
   /**
    * Perform the actual action on the page.
    */
-  private async performAction(action: Action, page: Page): Promise<void> {
+  private async performAction(action: Action, page: Page, secrets: SecretSource): Promise<void> {
     switch (action.type) {
       case 'click':
         await click(page, action.selector);
         break;
 
-      case 'fill':
-        await typeText(page, action.selector, action.text);
+      case 'fill': {
+        // Resolved here and nowhere else: the action (and so the result, history
+        // and the model's view of prior actions) keeps the reference (#352).
+        const { value, fromReference } = resolveFillText(action.text, secrets);
+        if (fromReference) this.resolvedSecrets.add(value);
+        await typeText(page, action.selector, value);
         break;
+      }
 
       case 'navigate':
         // Fail fast on a URL that is refused outright, so the caller gets a clear
@@ -411,6 +467,10 @@ export class ActionExecutor {
     // A failed assertion describes the page as it is; re-reading it cannot
     // change the answer, and each retry would wait out the timeout again.
     if (error instanceof AssertionFailedError) {
+      return true;
+    }
+    // An unknown or malformed reference stays unknown on every attempt.
+    if (error instanceof CredentialReferenceError) {
       return true;
     }
 
