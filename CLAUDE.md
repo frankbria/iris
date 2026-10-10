@@ -94,6 +94,7 @@ src/
 
 __tests__/
 ├── cli.test.ts                    # CLI command testing
+├── cli-run-exit.test.ts           # Spawned `iris run`: exit 0 / 1 (provider outage, reason in JSON) / 2 (usage) reach the OS (#294)
 ├── browser.test.ts                # Browser automation testing
 ├── ai-client.test.ts              # Text AI client tests
 ├── ai-client-vision.test.ts       # Vision AI client tests (17 tests)
@@ -912,8 +913,22 @@ One-shot `iris run` still ANDs every assert in the plan (plan 013's contract).
   not be asked or its reply could not be read (unreachable, HTTP error, not JSON, empty).
   `actions` is then empty. A reply that parsed but proposed no or schema-invalid actions
   is a plan, not a failure, and leaves it unset. `runAgentLoop` ends `error` on it at
-  once; it used to retry it as an empty plan and report `no_actions`. `translate()` does
-  not carry it yet, so `iris run` / RPC still read an outage as an empty plan (#294).
+  once; it used to retry it as an empty plan and report `no_actions`. `translate()`
+  carries it as `TranslationResult.error` (#294), also set when the client is unavailable
+  or throws; no AI configured / no tenant credentials stays a plain empty plan. The RPC
+  reply returns the whole `TranslationResult`, so on IRIS's managed key `error` gets the
+  same rewrite as `reasoning` (#479). The watcher still ignores it.
+
+### `iris run` Exit Codes (issue #294)
+
+- `0` success, `1` failure (`status: "error"`: failed action, unmet goal, no actions, a
+  provider outage with its reason in `translation.error`), `2` usage (`--agent` without a
+  URL, `--agent --dry-run`). Commander's own option errors exit 1 (#496).
+- **Set through `process.exitCode`, never `process.exit()`**: the `--json` payload is the
+  last `console.log`, and on a pipe stdout is async, so `exit()` can truncate it.
+- In-process `runCli()` tests set `exitCode` on the Jest process; `jest.setup.ts` resets
+  it after every test, or a leftover `1` fails a `--runInBand` run whose tests all passed.
+  `cli-run-exit.test.ts` spawns the real CLI to prove the code reaches the OS.
 - **`page.title()`, `page.evaluate()` and `page.addStyleTag()` take no timeout** and wait
   forever on a page spinning its main thread. Go through `src/page-timeout.ts`:
   `withPageTimeout(call, fallback, ms)` (2 s default; a rejection still rejects) or

@@ -121,6 +121,7 @@ describe('Translator', () => {
       expect(result.method).toBe('ai');
       expect(result.confidence).toBe(0.8);
       expect(result.reasoning).toBe('AI-generated action');
+      expect(result.error).toBeUndefined();
       expect(createResolvedAIClient).toHaveBeenCalled();
     });
 
@@ -138,6 +139,8 @@ describe('Translator', () => {
       expect(result.method).toBe('ai');
       expect(result.confidence).toBe(0);
       expect(result.reasoning).toBe('AI client not available');
+      // The provider could not be asked: an outage, not an empty plan (#294).
+      expect(result.error).toBe('AI client not available');
     });
 
     it('should handle config validation errors', async () => {
@@ -150,6 +153,8 @@ describe('Translator', () => {
       expect(result.method).toBe('ai');
       expect(result.confidence).toBe(0);
       expect(result.reasoning).toBe('AI translation failed: API key missing');
+      // No AI configured is not an outage: nothing was asked.
+      expect(result.error).toBeUndefined();
     });
 
     it('should handle AI translation errors', async () => {
@@ -171,6 +176,28 @@ describe('Translator', () => {
       expect(result.method).toBe('ai');
       expect(result.confidence).toBe(0);
       expect(result.reasoning).toBe('AI translation error: Network error');
+      expect(result.error).toBe('AI translation error: Network error');
+    });
+
+    // #293 made the text clients report a failed request as `error`; translate()
+    // dropped it, so `iris run` read an outage as "no actions" (#294).
+    it('carries the client response error', async () => {
+      const { createResolvedAIClient } = await import('../src/ai-client');
+      const { validateConfig } = await import('../src/config');
+      (validateConfig as jest.Mock).mockReturnValue([]);
+      (createResolvedAIClient as jest.Mock).mockResolvedValue({
+        isAvailable: jest.fn().mockResolvedValue(true),
+        translateInstruction: jest.fn().mockResolvedValue({
+          actions: [],
+          confidence: 0,
+          error: 'Ollama request failed: 503',
+        }),
+      });
+
+      const result = await translate('complex instruction that no pattern matches');
+
+      expect(result.actions).toEqual([]);
+      expect(result.error).toBe('Ollama request failed: 503');
     });
 
     it('should include context in AI requests', async () => {

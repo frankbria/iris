@@ -386,6 +386,11 @@ declare global {
 
 // Clean up any temporary files after each test suite
 afterEach(() => {
+  // `iris run` reports its outcome through process.exitCode (#294). In-process
+  // runCli() tests set it on the Jest process itself, where a leftover 1 would
+  // fail the whole run (--runInBand) after every test passed.
+  process.exitCode = undefined;
+
   const tempDir = path.join(__dirname, '__tests__', 'temp');
   if (fs.existsSync(tempDir)) {
     const tempFiles = fs.readdirSync(tempDir);

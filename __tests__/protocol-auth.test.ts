@@ -654,8 +654,11 @@ describe('hosted RPC history (#254)', () => {
         instruction: 'make sure the cart looks right',
       });
       expect(reply.result.translationResult.reasoning).toMatch(expected);
+      // The provider failure is carried as `error` too (#294), under the same rewrite.
+      expect(reply.result.translationResult.error).toMatch(expected);
       if (billingMode === 'managed') {
         expect(errors.mock.calls.flat().join(' ')).toMatch(/managed AI translation failed/);
+        expect(JSON.stringify(reply)).not.toContain('wxyz');
       }
     } finally {
       if (before === undefined) delete process.env.OPENAI_BASE_URL;
