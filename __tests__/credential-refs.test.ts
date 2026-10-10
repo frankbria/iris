@@ -74,6 +74,8 @@ describe('credential references', () => {
 
   it('scrubValues cuts the URL-encoded forms of a value', () => {
     expect(scrubValues('/?pw=p%26w+d&x=1', ['p&w d'])).toBe('/?pw=<redacted>&x=1');
+    // A form escapes !'()~, which encodeURIComponent leaves bare.
+    expect(scrubValues('/?pw=hunter2%21%28x%29', ['hunter2!(x)'])).toBe('/?pw=<redacted>');
   });
 
   it('refuses a reference whatever its case', () => {
