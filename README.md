@@ -166,6 +166,11 @@ iris run "click #submit-button" --url https://example.com
 iris run "fill #email with user@example.com" --url https://example.com
 iris run "navigate to https://example.com"
 
+# Credentials by reference: the AI, results and history see {{secret:NAME}};
+# the value (from IRIS_SECRET_<NAME>) is typed at fill time only
+export IRIS_SECRET_LOGIN_PW='…'
+iris run "fill #password with {{secret:LOGIN_PW}}" --url https://example.com
+
 # Or set the starting page once for the session
 export IRIS_BASE_URL=http://localhost:3000
 iris run "click #submit-button"

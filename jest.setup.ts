@@ -147,6 +147,10 @@ for (const key of [
 ]) {
   delete process.env[key];
 }
+// #352: credential values for `{{secret:NAME}}` fills, a family rather than a list.
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith('IRIS_SECRET_')) delete process.env[key];
+}
 
 // The cost ledger and vision cache live in the data dir (#241). Emptied at the
 // start of every test file: a reused ledger carries spend from one file (or

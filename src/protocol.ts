@@ -18,6 +18,7 @@ import type { AICredentials } from './ai-client/credentials';
 import type { UsageEvent } from './billing/usage';
 import type { SettledAICall } from './ai-client/factory';
 import { errMessage, log } from './log';
+import { mapSecrets } from './credential-refs';
 import { metrics, REQUEST_BUCKETS } from './metrics';
 
 export interface JsonRpcRequest {
@@ -72,6 +73,9 @@ const ExecuteBrowserActionParams = z.object({
     .url()
     .refine((u) => /^https?:$/.test(new URL(u).protocol))
     .optional(),
+  // Values for this request's `{{secret:NAME}}` fills (#352): the only source on
+  // the RPC, never the server's environment; not stored, not logged.
+  secrets: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/), z.string()).optional(),
 });
 
 export interface JsonRpcResponse {
@@ -966,7 +970,7 @@ export function startServer(
               res.error = { code: -32602, message: 'Invalid params' };
               break;
             }
-            const { instruction, actions, url } = parsed.data;
+            const { instruction, actions, url, secrets } = parsed.data;
             const startedAt = new Date();
 
             // Shared: actions still run concurrently with each other, but never
@@ -989,6 +993,7 @@ export function startServer(
                 url,
                 limits.maxActionsPerRequest,
                 { aiCredentials: options?.aiCredentials, usage: options?.usage },
+                secrets ?? {},
               );
             });
             if (principal && options?.history) {
@@ -1252,6 +1257,7 @@ async function executeBrowserActions(
     aiCredentials?: (principal: Principal) => Promise<TenantCredentials | null>;
     usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
   } = {},
+  secrets: Record<string, string> = {},
 ): Promise<{
   success: boolean;
   results: ExecutionResult[];
@@ -1395,7 +1401,11 @@ async function executeBrowserActions(
     }
 
     // Execute the actions
-    const results = await session.executor.executeActions(actionsToExecute, session.page);
+    const results = await session.executor.executeActions(
+      actionsToExecute,
+      session.page,
+      mapSecrets(secrets),
+    );
 
     const success = results.every((result) => result.success);
 

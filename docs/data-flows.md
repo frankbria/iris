@@ -174,6 +174,13 @@ on the container's tmpfs. It ends when the client closes it, the connection drop
 30 minutes idle (`sessionTimeout`, `src/protocol.ts`). Downloads and service workers are
 blocked (`src/browser.ts`).
 
+**Credential values** (#352): a fill may name `{{secret:NAME}}`; on the RPC the value
+comes in that request's `secrets` (never the server's environment) and is typed at fill
+time (`src/credential-refs.ts`, `src/executor.ts`). It is not stored or logged; the session
+holds it in memory, like the page that holds it, until the session ends. The reference,
+not the value, is what results and history carry, and a failed fill's error has the value
+cut.
+
 ### Logs
 
 | | |
@@ -210,13 +217,15 @@ contacted unless the org opts into fallback, and with BYOK only the org's vendor
 - **Text translation** (hosted RPC `executeBrowserAction` with an `instruction`, and only
   when pattern matching does not understand it): the instruction text and the request's
   `url`, inside IRIS's fixed system prompt (`src/translator.ts`, `src/ai-client/text.ts`).
-  No screenshot and no page content.
+  No screenshot and no page content. A literal fill value in the instruction is sent with
+  it; a `{{secret:NAME}}` reference is sent as the reference, never its value (#352).
 - **Vision classification** (local CLI today; hosted with #268): the baseline and current
   screenshots, optionally the pixel-diff mask, the page URL and element selector, and up to
   three previous classifications (`src/ai-client/vision.ts`).
 - **Agent loop** (local CLI `--agent` only, not hosted): each turn also sends the page URL,
   title and an accessibility snapshot of the page text, capped at 4,000 characters
-  (`src/agent-loop.ts`).
+  (`src/agent-loop.ts`). The snapshot includes what fields hold; values typed from a
+  credential reference are cut from it (#352).
 
 **Managed credits** (#479): an org whose owners choose IRIS credits (`org_ai_settings.mode
 = managed`) sends the same data on IRIS's own vendor key (`IRIS_MANAGED_AI_PROVIDER` /

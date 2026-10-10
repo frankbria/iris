@@ -23,7 +23,12 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
     wss = startServer(port);
     pageServer = http.createServer((_req, res) => {
       res.setHeader('Content-Type', 'text/html');
-      res.end('<html><body><h1>Test Page</h1><button id="button">Click me</button></body></html>');
+      res.end(
+        '<html><body><h1>Test Page</h1><button id="button">Click me</button>' +
+          // #352: echoes what was typed, so a test can see the resolved value arrive.
+          '<input id="pw" oninput="document.getElementById(\'echo\').textContent = this.value">' +
+          '<p id="echo"></p></body></html>',
+      );
     });
     await new Promise<void>((resolve) => pageServer.listen(0, '127.0.0.1', () => resolve()));
     const addr = pageServer.address();
@@ -704,6 +709,64 @@ describe('Protocol Layer (JSON-RPC over WebSocket)', () => {
 
         await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 92, method: 'closeBrowser' });
       } finally {
+        ws.close();
+      }
+    }, 30000);
+
+    // #352: a fill names a credential; the value comes with the request, is typed,
+    // and is in nothing the reply carries back. The server's env is never a source.
+    test('resolves {{secret:NAME}} from the request only', async () => {
+      const value = 'rpc-Pw-7731';
+      process.env.IRIS_SECRET_FROM_ENV = value;
+      const ws = await createPersistentConnection(localPort);
+      try {
+        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 93, method: 'launchBrowser' });
+        const filled = await sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 94,
+          method: 'executeBrowserAction',
+          params: {
+            actions: [
+              { type: 'navigate', url: pageUrl },
+              { type: 'fill', selector: '#pw', text: '{{secret:PW}}' },
+            ],
+            secrets: { PW: value },
+          },
+        });
+        expect(filled.result.success).toBe(true);
+        expect(filled.result.results[1].action.text).toBe('{{secret:PW}}');
+        expect(JSON.stringify(filled)).not.toContain(value);
+
+        const typed = await sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 95,
+          method: 'executeBrowserAction',
+          params: { actions: [{ type: 'assert', kind: 'text_visible', target: value }] },
+        });
+        expect(typed.result.success).toBe(true);
+
+        const fromEnv = await sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 96,
+          method: 'executeBrowserAction',
+          params: { actions: [{ type: 'fill', selector: '#pw', text: '{{secret:FROM_ENV}}' }] },
+        });
+        expect(fromEnv.result.results[0]).toMatchObject({
+          success: false,
+          error: expect.stringMatching(/Unknown credential reference \{\{secret:FROM_ENV\}\}/),
+        });
+
+        const badName = await sendRequestViaConnection(ws, {
+          jsonrpc: '2.0',
+          id: 97,
+          method: 'executeBrowserAction',
+          params: { actions: [], secrets: { 'not-a-name': 'x' } },
+        });
+        expect(badName.error?.code).toBe(-32602);
+
+        await sendRequestViaConnection(ws, { jsonrpc: '2.0', id: 98, method: 'closeBrowser' });
+      } finally {
+        delete process.env.IRIS_SECRET_FROM_ENV;
         ws.close();
       }
     }, 30000);

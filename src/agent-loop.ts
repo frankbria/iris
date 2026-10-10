@@ -193,7 +193,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
   while (turns < maxTurns) {
     turns++;
 
-    const digest = await observePage(page);
+    // The digest shows what fields hold: a value typed from a credential
+    // reference must not reach the model (#352).
+    const digest = executor.redactSecrets(await observePage(page));
     log(`turn ${turns}: observing (${digest.length} chars)`);
 
     let plan;
