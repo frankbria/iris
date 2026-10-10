@@ -77,14 +77,22 @@ export function scrubValues(text: string, values: Iterable<string>): string {
     forms.add(value.replace(/\s+/g, ' ').trim());
     for (const line of value.split(/\r?\n/)) forms.add(line.trim());
     // In a URL: as encodeURIComponent writes it, and as a GET form does, which also
-    // escapes !'()~ and writes a space as +.
-    const encoded = encodeURIComponent(value);
-    forms.add(encoded);
-    forms.add(
-      encoded
-        .replace(/[!'()~]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
-        .replace(/%20/g, '+'),
-    );
+    // escapes !'()~ and writes a space as +. A lone surrogate cannot be encoded (and
+    // throws); the raw forms above still cover it.
+    let encoded: string | undefined;
+    try {
+      encoded = encodeURIComponent(value);
+    } catch {
+      encoded = undefined;
+    }
+    if (encoded !== undefined) {
+      forms.add(encoded);
+      forms.add(
+        encoded
+          .replace(/[!'()~]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+          .replace(/%20/g, '+'),
+      );
+    }
   }
   forms.delete('');
   if (forms.size === 0) return text;

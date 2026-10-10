@@ -78,6 +78,12 @@ describe('credential references', () => {
     expect(scrubValues('/?pw=hunter2%21%28x%29', ['hunter2!(x)'])).toBe('/?pw=<redacted>');
   });
 
+  // Legal JSON on the RPC, and encodeURIComponent throws on it.
+  it('scrubValues survives a value with a lone surrogate', () => {
+    const lone = String.fromCharCode(0xd800) + 'b';
+    expect(scrubValues(`a ${lone} c`, [lone])).toBe('a <redacted> c');
+  });
+
   it('refuses a reference whatever its case', () => {
     expect(() => resolveFillText('{{SECRET:X}}', mapSecrets({ X: 'v' }))).toThrow(
       CredentialReferenceError,
