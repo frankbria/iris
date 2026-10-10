@@ -88,18 +88,22 @@ export interface AgentLoopOptions {
  * exists in Playwright 1.62; `locator.ariaSnapshot()` is its replacement and
  * emits the same role/name information in a flatter YAML-ish form.
  */
-export async function observePage(page: Page): Promise<string> {
+export async function observePage(
+  page: Page,
+  redact: (text: string) => string = (text) => text,
+): Promise<string> {
   // The URL is capped too. A data: URL carries the whole encoded document and a
   // real one can carry a huge query string, either of which would blow the
   // digest budget through the header alone and defeat the body cap entirely.
-  const header = `URL: ${truncate(page.url(), MAX_URL_CHARS)}\nTITLE: ${truncate(
-    await safeTitle(page),
+  const header = `URL: ${truncate(redact(page.url()), MAX_URL_CHARS)}\nTITLE: ${truncate(
+    redact(await safeTitle(page)),
     MAX_TITLE_CHARS,
   )}`;
 
   let body: string;
   try {
-    body = await page.locator('body').ariaSnapshot({ timeout: SNAPSHOT_TIMEOUT_MS });
+    // Redacted before the cap, or a value cut across it would leave its prefix (#352).
+    body = redact(await page.locator('body').ariaSnapshot({ timeout: SNAPSHOT_TIMEOUT_MS }));
   } catch {
     // A page mid-navigation can refuse the snapshot, and a hung one times it out.
     // The URL/title header is still useful context, so degrade rather than fail
@@ -195,7 +199,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
 
     // The digest shows what fields hold: a value typed from a credential
     // reference must not reach the model (#352).
-    const digest = executor.redactSecrets(await observePage(page));
+    const digest = await observePage(page, (text) => executor.redactSecrets(text));
     log(`turn ${turns}: observing (${digest.length} chars)`);
 
     let plan;
@@ -207,7 +211,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
           // Capped for the same reason the digest header is: every provider
           // interpolates this verbatim into the prompt, so an uncapped value
           // here reintroduces the whole encoded data: URL by another route.
-          url: truncate(page.url(), MAX_URL_CHARS),
+          url: truncate(executor.redactSecrets(page.url()), MAX_URL_CHARS),
           currentPage: digest,
           // Snapshot, not the live array: passing the reference lets later turns
           // mutate a request the client may still be holding, so what a provider

@@ -17,7 +17,7 @@ import {
   scrubValues,
 } from '../src/credential-refs';
 import { ActionExecutor } from '../src/executor';
-import { runAgentLoop } from '../src/agent-loop';
+import { observePage, runAgentLoop, MAX_DIGEST_CHARS } from '../src/agent-loop';
 import * as aiClient from '../src/ai-client';
 import type { Action } from '../src/actions';
 
@@ -64,6 +64,24 @@ describe('credential references', () => {
     expect(source('OTHER')).toBeUndefined();
   });
 
+  // An ARIA snapshot collapses whitespace; Playwright's call log splits lines with ANSI codes.
+  it('scrubValues also cuts the collapsed and per-line forms of a value', () => {
+    expect(scrubValues('textbox: aq7 bz9', ['  aq7\n bz9 '])).toBe('textbox: <redacted>');
+    expect(scrubValues('fill("aa1\u001b[22m\n\u001b[2mbb2")', ['aa1\nbb2'])).toBe(
+      'fill("<redacted>\u001b[22m\n\u001b[2m<redacted>")',
+    );
+  });
+
+  it('scrubValues cuts the URL-encoded forms of a value', () => {
+    expect(scrubValues('/?pw=p%26w+d&x=1', ['p&w d'])).toBe('/?pw=<redacted>&x=1');
+  });
+
+  it('refuses a reference whatever its case', () => {
+    expect(() => resolveFillText('{{SECRET:X}}', mapSecrets({ X: 'v' }))).toThrow(
+      CredentialReferenceError,
+    );
+  });
+
   it('scrubValues cuts every occurrence and ignores empty values', () => {
     expect(scrubValues(`x ${SECRET} y ${SECRET}`, [SECRET, ''])).toBe('x <redacted> y <redacted>');
   });
@@ -81,6 +99,9 @@ describe('credential references', () => {
           <label>User <input id="user"></label>
           <label>Password <input id="pw" type="password"></label>
           <input id="ro" readonly>
+          <input id="mirror" oninput="this.setAttribute('value', this.value)">
+          <div id="cover" style="position:fixed;inset:0;display:none"></div>
+          <textarea id="notes" readonly></textarea>
           <p id="done" hidden>Signed in</p>
         </body>`);
       });
@@ -126,6 +147,55 @@ describe('credential references', () => {
       );
       expect(result.success).toBe(true);
       expect(await page.inputValue('#pw')).toBe(SECRET);
+    });
+
+    // Playwright previews the element it resolved, attributes included, and a page
+    // (React, for one) may reflect a typed value into the value attribute.
+    it('cuts a resolved value from any later action error', async () => {
+      const ex = executor();
+      const secrets = mapSecrets({ LOGIN_PW: SECRET });
+      await ex.executeAction(
+        { type: 'fill', selector: '#mirror', text: '{{secret:LOGIN_PW}}' },
+        page,
+        secrets,
+      );
+      await page.evaluate("document.getElementById('cover').style.display = 'block'");
+      const result = await ex.executeAction({ type: 'click', selector: '#mirror' }, page, secrets);
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/value="<redacted>"/); // positive control: it was quoted
+      expect(result.error).not.toContain(SECRET);
+    });
+
+    it('cuts a resolved value from the context URL', async () => {
+      const ex = new ActionExecutor({ timeout: 1000, retryAttempts: 0, trackContext: true });
+      const secrets = mapSecrets({ LOGIN_PW: SECRET });
+      await ex.executeAction(
+        { type: 'fill', selector: '#pw', text: '{{secret:LOGIN_PW}}' },
+        page,
+        secrets,
+      );
+      await page.goto(`${origin}/?pw=${encodeURIComponent(SECRET)}`);
+      const result = await ex.executeAction({ type: 'click', selector: '#user' }, page, secrets);
+      expect(result.context?.url).toBe(`${origin}/?pw=<redacted>`);
+    });
+
+    it('cuts a multi-line value from a failed fill error', async () => {
+      const value = 'line-one-Q7\nline-two-K4';
+      const result = await executor().executeAction(
+        { type: 'fill', selector: '#notes', text: '{{secret:NOTE}}' },
+        page,
+        mapSecrets({ NOTE: value }),
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).not.toMatch(/line-one-Q7|line-two-K4/);
+    });
+
+    it('observePage redacts before it caps the digest', async () => {
+      await page.setContent(`<p>${'x'.repeat(MAX_DIGEST_CHARS * 2)}</p>`);
+      const redact = jest.fn((text: string) => text);
+      await observePage(page, redact);
+      const longest = Math.max(...redact.mock.calls.map(([text]) => text.length));
+      expect(longest).toBeGreaterThan(MAX_DIGEST_CHARS);
     });
 
     it('fails an unknown reference at once, without typing', async () => {

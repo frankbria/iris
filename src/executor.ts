@@ -15,6 +15,7 @@ import { isHostedMode } from './hosted';
 import {
   CredentialReferenceError,
   envSecrets,
+  looksLikeReference,
   noSecrets,
   resolveFillText,
   scrubValues,
@@ -217,7 +218,7 @@ export class ActionExecutor {
     return {
       success: false,
       action,
-      error: lastError?.message || 'Unknown error',
+      error: this.redactError(action, lastError?.message || 'Unknown error'),
       duration,
       context,
     };
@@ -251,13 +252,30 @@ export class ActionExecutor {
   }
 
   /**
+   * An error message as a result may carry it (#352), cut only here, after the retry
+   * decision read the original. Any action's error may quote the page (Playwright
+   * previews the element it resolved, attributes included, and a page can reflect a
+   * typed value), and a fill's call log quotes what it typed (`- fill("…")`).
+   */
+  private redactError(action: Action, message: string): string {
+    const redacted = this.redactSecrets(message);
+    // ponytail: a literal under 4 characters is left, or cutting it would mangle every
+    // message ("e<redacted>ceeded"); a value that must not leak belongs in a reference.
+    // A reference is a name, and its error must say which one.
+    return action.type === 'fill' && action.text.length >= 4 && !looksLikeReference(action.text)
+      ? scrubValues(redacted, [action.text])
+      : redacted;
+  }
+
+  /**
    * Get current page context (URL, title, timestamp).
    */
   async getPageContext(page: Page): Promise<PageContext> {
     const timestamp = Date.now();
 
     try {
-      const url = page.url();
+      // A GET form can put a typed value in the URL (#352).
+      const url = this.redactSecrets(page.url());
       let title: string | undefined;
 
       try {
@@ -316,14 +334,7 @@ export class ActionExecutor {
         // and the model's view of prior actions) keeps the reference (#352).
         const { value, fromReference } = resolveFillText(action.text, secrets);
         if (fromReference) this.resolvedSecrets.add(value);
-        try {
-          await typeText(page, action.selector, value);
-        } catch (error) {
-          // Playwright's call log quotes what it typed (`- fill("…")`), and this
-          // message reaches replies and org-readable history. Literal values too.
-          if (error instanceof Error) error.message = scrubValues(error.message, [value]);
-          throw error;
-        }
+        await typeText(page, action.selector, value);
         break;
       }
 

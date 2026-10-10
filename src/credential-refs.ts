@@ -10,7 +10,7 @@
 
 /** The whole fill value must be the reference; NAME as an env-var suffix. */
 const REFERENCE = /^\{\{secret:([A-Za-z_][A-Za-z0-9_]{0,63})\}\}$/;
-const REFERENCE_LIKE = /\{\{\s*secret\s*:/;
+const REFERENCE_LIKE = /\{\{\s*secret\s*:/i;
 
 /** A credential name -> its value, or `undefined` when there is none. */
 export type SecretSource = (name: string) => string | undefined;
@@ -34,6 +34,11 @@ export function mapSecrets(map: Record<string, string>): SecretSource {
 
 export const noSecrets: SecretSource = () => undefined;
 
+/** Whether fill text is, or tries to be, a reference: a name, not a value. */
+export function looksLikeReference(text: string): boolean {
+  return REFERENCE_LIKE.test(text);
+}
+
 /**
  * The value a fill types. A reference that is unknown, or not the whole text,
  * throws (naming the reference, never a value): typed literally it would be a
@@ -45,9 +50,9 @@ export function resolveFillText(
 ): { value: string; fromReference: boolean } {
   const match = REFERENCE.exec(text);
   if (!match) {
-    if (REFERENCE_LIKE.test(text)) {
+    if (looksLikeReference(text)) {
       throw new CredentialReferenceError(
-        'A credential reference must be the whole fill value: {{secret:NAME}}',
+        'Invalid credential reference: the whole fill value must be {{secret:NAME}}, NAME of letters, digits and _',
       );
     }
     return { value: text, fromReference: false };
@@ -59,11 +64,29 @@ export function resolveFillText(
   return { value, fromReference: true };
 }
 
-/** `text` with every occurrence of each (non-empty) value replaced by `<redacted>`. */
+/**
+ * `text` with each (non-empty) value replaced by `<redacted>`. Also the forms a value
+ * takes on the way out: whitespace-collapsed (an ARIA snapshot normalises it), line
+ * by line (Playwright's call log wraps each line in ANSI codes, splitting the value)
+ * and URL-encoded.
+ */
 export function scrubValues(text: string, values: Iterable<string>): string {
-  let out = text;
+  const forms = new Set<string>();
   for (const value of values) {
-    if (value) out = out.split(value).join('<redacted>');
+    forms.add(value);
+    forms.add(value.replace(/\s+/g, ' ').trim());
+    for (const line of value.split(/\r?\n/)) forms.add(line.trim());
+    // As a GET form puts it in a URL.
+    forms.add(encodeURIComponent(value));
+    forms.add(encodeURIComponent(value).replace(/%20/g, '+'));
   }
-  return out;
+  forms.delete('');
+  if (forms.size === 0) return text;
+  // One pass, longest form first at each position: replacing form by form would let
+  // a short line match inside an earlier `<redacted>`.
+  const pattern = [...forms]
+    .sort((a, b) => b.length - a.length)
+    .map((form) => form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  return text.replace(new RegExp(pattern, 'g'), '<redacted>');
 }
