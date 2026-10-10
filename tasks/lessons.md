@@ -486,3 +486,10 @@ Write/Edit, not as a pre-push afterthought.
 - **The `pkill -f` lesson above (#290) was hit again** (exit 144, three times). If a kill by pattern is unavoidable, bracket a letter (`pkill -f '[h]eadless_shell'`): the regex no longer matches its own command line.
 - **This repo's Jest prints no per-test lines, even with `--verbose`.** For a demo that must name the tests, use `--json --outputFile` and print `assertionResults`.
 - **`page.title()`, `page.evaluate()` and `page.addStyleTag()` have no timeout.** A grep for "evaluate" misses `addStyleTag`; when bounding page calls, list every Playwright method that runs in the page, not only the obvious ones.
+
+## 2026-10-09 — #294
+
+- **Read this file at session start.** The `pkill -f` self-match (#290, #293) was hit three more times here, in new shapes: `pkill -f "node fixture294.js"`, `pkill -f "until ! pgrep"`, and a wait loop `until ! pgrep -f "<pattern>"` that never ended because `pgrep` matched the loop's own shell. Bracket a letter (`'[f]ixture294'`) in *every* `pgrep`/`pkill -f`, including wait conditions.
+- **Check iowait before a full local suite, not just load.** Another session's `git worktree remove --force` (deleting a `node_modules` tree) held iowait at 60-70% with swap full: a bare `iris run --dry-run` took 17 s wall-clock for 1.7 s of CPU, and every spawned-CLI test timed out. `vmstat 1 3` (`wa` column) and `ps -eo stat,args | awk '$1 ~ /D/'` name the culprit; wait for it rather than reading timeouts as regressions. CI's full run is the gate when the box cannot finish one.
+- **Adding a field to a type returned over a tenant boundary is a disclosure change.** `TranslationResult` goes into the RPC reply whole, so a new `error` field was a second channel for IRIS's vendor-account detail until it got the managed-key rewrite. Grep where a type is serialised before widening it.
+
