@@ -900,6 +900,16 @@ Constraints that are easy to break:
   `checkAction` refuses too. Agent-loop tests therefore serve their fixture from a
   local http origin, not a `data:` URL.
 
+### Retries Never Repeat a Side Effect (issue #296)
+
+`ActionExecutor.executeAction` retries `click` and `fill` only when the error proves nothing
+was dispatched (`NOT_DISPATCHED` in src/executor.ts: "Element is not attached to the DOM").
+Real Chromium resolves `page.click` when the handler throws, the document is replaced or the
+page navigates to a refused port, so a click error that does arrive is a protocol or target
+error mid-dispatch, or unknown, and repeating it can submit twice. `navigate` (a GET) and
+asserts keep the general rules (#75: timeouts and policy verdicts are not retried). Retry
+tests that need a generic transient failure use `navigate`.
+
 ### Agent Loop Verdict (issue #351)
 
 `runAgentLoop`'s `goalMet` is the AND of the checks made after the agent's last
