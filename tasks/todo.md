@@ -1,43 +1,24 @@
-# Issue #352 — [P1.16] Typed values: credential references
+# #296 [P1.17] Do not auto-retry non-idempotent clicks and fills
 
-Plan self-authored: the issue points at the private backlog (not on this box), so the criteria
-below are derived from the issue summary ("credential references for fill values, resolved
-only at fill time"), ADR 0001 §5 (the operator's secrets never serve a tenant) and probes of
-the current code. Please check them against the backlog's P1.16 list.
+## Findings (real Chromium)
 
-## What leaks today (probed, Playwright 1.62)
-- A fill value is in the instruction, so it goes to the AI provider, and comes back in the plan.
-- The agent loop's page digest (`ariaSnapshot`) shows typed values, password fields included,
-  and goes to the AI on the next turn.
-- A failed `page.fill` error quotes the value (`- fill("…")` in the call log), and that error
-  reaches the RPC reply, run history (org-readable) and logs.
+`page.click` resolves when the click already happened and then: the handler throws, the
+document is replaced, the element detaches on mousedown, or the page navigates to a refused
+port. So a click that reaches the retry loop failed in a rare, ambiguous way (protocol or
+target error mid-dispatch, an unknown error), which is exactly when a retry can submit twice.
+`page.fill` rejects before typing for a non-input target (deterministic).
 
-## Steps
-1. `src/credential-refs.ts`: `{{secret:NAME}}` (whole fill value, NAME `[A-Za-z_][A-Za-z0-9_]{0,63}`),
-   `SecretSource = (name) => string | undefined`, `envSecrets()` (`IRIS_SECRET_<NAME>`),
-   `mapSecrets(record)` (own keys only), `resolveFillText()` (throws `CredentialReferenceError`:
-   unknown name, or a reference that is not the whole value), `scrubValues()`.
-2. Executor: `executeAction(action, page, secrets?)` / `executeActions(…, secrets?)`. The source
-   defaults to `envSecrets()` locally and to none under `IRIS_HOSTED` (fail closed). The value is
-   resolved inside `performAction` only; the action in the result keeps the reference. A fill's
-   error has its typed value cut (literal values too). A reference error is non-retryable.
-   The executor keeps the values it resolved from references; `redactSecrets(text)` cuts them.
-3. Agent loop: the digest goes through `executor.redactSecrets()` before it reaches the model.
-4. RPC `executeBrowserAction` takes `secrets?: Record<NAME, string>`, request-scoped, never
-   stored; it is the only source for RPC (never the server's env, local or hosted).
-5. AI prompts (3 text clients): keep `{{secret:NAME}}` verbatim as the whole fill text.
-6. `jest.setup.ts` scrubs `IRIS_SECRET_*`. Docs: README, CLAUDE.md, docs/data-flows.md.
+## Plan
 
-## Decisions
-- Values come from the caller (request `secrets` on RPC, `IRIS_SECRET_*` env for the CLI), not
-  an org vault in Postgres. Hosted surfaces with fills are RPC only (jobs do not fill; the agent
-  loop is CLI-only, #428), and the client already holds its credentials. A vault can be added
-  later as another `SecretSource` without changing the syntax.
-- Whole-value references only: a reference embedded in other text is an error, not literal text.
+1. `src/executor.ts`: `click` and `fill` are retried only when the error proves nothing was
+   dispatched (`NOT_DISPATCHED`: Playwright's pre-dispatch "Element is not attached to the
+   DOM"). Every other error fails at once for them. Navigate and asserts keep today's rules.
+2. Tests (`__tests__/executor.test.ts`): a click/fill that submitted and then failed with a
+   generic or protocol error runs once (the AC test); a pre-dispatch detach is retried;
+   the existing "generic errors are retried" tests move to `navigate` (a GET), since that
+   behaviour is exactly what #296 removes for click/fill.
+3. README (retry options paragraph), CLAUDE.md (one bullet), plans row, lessons.
 
-## Acceptance criteria (derived)
-- [ ] A fill can name a credential by reference; the value is resolved only at fill time
-- [ ] The value never reaches the AI (instruction, plan, agent digest), results, history or logs
-- [ ] Unknown / malformed references fail the action with a message naming the reference only
-- [ ] Hosted: the server process env is never a source
-- [ ] Each covered by a regression test
+## Acceptance criteria
+- [ ] Retries only for errors that prove the action did not happen
+- [ ] Test: a click whose handler throws after submitting is not repeated
