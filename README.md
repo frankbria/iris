@@ -402,7 +402,7 @@ Clients may not ask for a visible browser or devtools (`-32602`). Their `timeout
 and `launchBrowser` returns the values it will actually use under `options`.
 `retryAttempts` never repeats a `click` or `fill`: one that failed may already have reached
 the page (a submitted form would be submitted again), and Playwright retries a click it can
-prove did not happen by itself. It applies to `navigate`. A
+prove did not happen by itself. It applies to `navigate` and asserts. A
 ping every 30 s terminates a peer that stopped answering, which frees its browser.
 Those ceilings and the interval are settable through `startServer(port, { limits })`.
 

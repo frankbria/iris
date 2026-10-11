@@ -44,7 +44,9 @@ export class AssertionFailedError extends Error {
  * Navigate (a GET) and asserts (reads) keep the general rules.
  */
 function mayRepeat(action: Action): boolean {
-  return action.type !== 'click' && action.type !== 'fill';
+  // Named, not "anything but click and fill": a new action type stays unretried until
+  // someone decides it is safe to repeat.
+  return action.type === 'navigate' || action.type === 'assert';
 }
 
 export interface ExecutionResult {

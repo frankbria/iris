@@ -3,12 +3,12 @@
 *2026-10-11T21:09:20Z by Showboat 0.6.1*
 <!-- showboat-id: 527a041f-69f4-4142-832d-167ad6206f63 -->
 
-Real ActionExecutor, real Chromium, a local shop page whose Buy button POSTs an order. The evidence is how many orders the server received. 'Before' is origin/main, 'after' is this branch.
+Real ActionExecutor, real Chromium, a local shop page whose Buy button POSTs an order. The evidence is how many orders the server received. 'Before' is origin/main, 'after' is this branch. `$SCRATCH` holds the demo script (double-submit.js), `$MAIN` is a checkout of origin/main (its node_modules serve both runs), and `$PWD` is this branch.
 
 ## Criterion 2: a click whose handler throws after submitting is not repeated. Real Chromium resolves page.click when the handler throws, so nothing is injected here.
 
 ```bash
-INJECT=0 node /home/frankbria/.claude/jobs/9f6471bd/tmp/demo296/double-submit.js $PWD /home/frankbria/projects/iris
+INJECT=0 node $SCRATCH/double-submit.js $PWD $MAIN
 ```
 
 ```output
@@ -19,7 +19,7 @@ orders the shop received: 1
 ## Criterion 1: a click that fails after it was dispatched is not retried. Chromium never fails page.click after dispatching on demand, so the script wraps the real click: the real press posts the order, then the wrapper throws the protocol error a mid-dispatch failure produces.
 
 ```bash
-echo '== before (origin/main)'; node /home/frankbria/.claude/jobs/9f6471bd/tmp/demo296/double-submit.js /home/frankbria/projects/iris /home/frankbria/projects/iris; echo '== after (this branch)'; node /home/frankbria/.claude/jobs/9f6471bd/tmp/demo296/double-submit.js $PWD /home/frankbria/projects/iris
+echo '== before (origin/main)'; node $SCRATCH/double-submit.js $MAIN $MAIN; echo '== after (this branch)'; node $SCRATCH/double-submit.js $PWD $MAIN
 ```
 
 ```output
