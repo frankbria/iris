@@ -44,6 +44,26 @@ describe('assert action execution', () => {
 
   const run = (action: Action) => executor.executeAction(action, page);
 
+  // #296, in real Chromium: a click whose handler submits and then throws succeeds, and
+  // the submission happens once. page.click resolves here, so nothing reaches the retry
+  // loop; the executor's unit tests cover the errors that do (never repeated either).
+  it('submits once when a click handler throws after submitting (#296)', async () => {
+    const retrying = new ActionExecutor({
+      timeout: 1000,
+      retryAttempts: 3,
+      retryDelay: 1,
+      trackContext: false,
+    });
+    await page.setContent(
+      `<button id="buy" onclick="window.orders = (window.orders || 0) + 1; throw new Error('after posting')">Buy</button>`,
+    );
+
+    const result = await retrying.executeAction({ type: 'click', selector: '#buy' }, page);
+
+    expect(result.success).toBe(true);
+    expect(await page.evaluate('window.orders')).toBe(1);
+  });
+
   describe('text_visible', () => {
     it('passes when the text is on the page', async () => {
       const r = await run({ type: 'assert', kind: 'text_visible', target: 'Welcome back' });
