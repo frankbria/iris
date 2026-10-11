@@ -35,22 +35,16 @@ export class AssertionFailedError extends Error {
 }
 
 /**
- * Errors Playwright raises before it dispatches any input: the click or fill did not
- * happen. Kept to messages that prove it; an ambiguous one is not on the list.
- */
-const NOT_DISPATCHED = [/element is not attached to the dom/i];
-
-/**
- * Whether a failed action may be tried again (#296). A click or fill may already have
- * reached the page when it fails (a form submitted, an order placed): real Chromium
- * resolves `page.click` when the handler throws, the document is replaced or the page
- * navigates away, so what does reach here is a protocol or target error mid-dispatch, or
- * an unknown one. Those are repeated only when the error proves nothing was dispatched.
+ * Whether a failed action may be tried again (#296). A click or fill is never repeated:
+ * it may already have reached the page (a form submitted, an order placed). Playwright
+ * already retries everything that proves nothing was dispatched (a detached element is
+ * re-resolved until the timeout), and real Chromium resolves `page.click` when the
+ * handler throws, the document is replaced or the page navigates away. So an error that
+ * does reach here is a timeout, a protocol or target error mid-dispatch, or unknown.
  * Navigate (a GET) and asserts (reads) keep the general rules.
  */
-function mayRepeat(action: Action, error: Error): boolean {
-  if (action.type !== 'click' && action.type !== 'fill') return true;
-  return NOT_DISPATCHED.some((pattern) => pattern.test(error.message));
+function mayRepeat(action: Action): boolean {
+  return action.type !== 'click' && action.type !== 'fill';
 }
 
 export interface ExecutionResult {
@@ -219,7 +213,7 @@ export class ActionExecutor {
         lastError = error instanceof Error ? error : new Error(String(error));
 
         // Check if this is a non-retryable error
-        if (this.isNonRetryableError(lastError) || !mayRepeat(action, lastError)) {
+        if (this.isNonRetryableError(lastError) || !mayRepeat(action)) {
           break;
         }
 

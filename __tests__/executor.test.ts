@@ -663,8 +663,9 @@ describe('ActionExecutor', () => {
     });
 
     // #296: a click or fill may already have reached the page when it fails (a form was
-    // submitted, an order placed), and repeating it repeats that. They are retried only
-    // when the error proves nothing was dispatched; anything else fails at once.
+    // submitted, an order placed), and repeating it repeats that. They are never retried:
+    // Playwright already re-resolves a detached element itself, so no error proving
+    // "nothing was dispatched" reaches the executor for a selector action.
     describe('click and fill are not repeated after they may have happened (#296)', () => {
       it('does not repeat a click whose handler submitted and then failed', async () => {
         const exec = new ActionExecutor({ retryAttempts: 3, retryDelay: 1 });
@@ -715,27 +716,18 @@ describe('ActionExecutor', () => {
         await exec.cleanup();
       });
 
-      it.each([
-        ['click', click],
-        ['fill', typeText],
-      ])('retries a %s that was refused before dispatch (element detached)', async (type, fn) => {
+      it('does not repeat a click Playwright refused as detached either', async () => {
+        // Only reachable with noAutoWaiting, which the executor never sets: Playwright
+        // re-resolves a detached element itself. Repeating would gain nothing it lacks.
         const exec = new ActionExecutor({ retryAttempts: 3, retryDelay: 1 });
         const p = await exec.createPage();
-        (fn as jest.Mock)
-          .mockRejectedValueOnce(
-            new Error('elementHandle.click: Element is not attached to the DOM'),
-          )
-          .mockResolvedValueOnce(undefined);
+        (click as jest.Mock).mockRejectedValue(
+          new Error('elementHandle.click: Element is not attached to the DOM'),
+        );
 
-        const action = (
-          type === 'click'
-            ? { type: 'click', selector: '#b' }
-            : { type: 'fill', selector: '#q', text: 'x' }
-        ) as Action;
-        const result = await exec.executeAction(action, p);
+        await exec.executeAction({ type: 'click', selector: '#b' } as Action, p);
 
-        expect(result.success).toBe(true);
-        expect(fn).toHaveBeenCalledTimes(2);
+        expect(click).toHaveBeenCalledTimes(1);
         await exec.cleanup();
       });
     });

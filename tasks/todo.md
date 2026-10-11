@@ -10,11 +10,13 @@ target error mid-dispatch, an unknown error), which is exactly when a retry can 
 
 ## Plan
 
-1. `src/executor.ts`: `click` and `fill` are retried only when the error proves nothing was
-   dispatched (`NOT_DISPATCHED`: Playwright's pre-dispatch "Element is not attached to the
-   DOM"). Every other error fails at once for them. Navigate and asserts keep today's rules.
+1. `src/executor.ts`: `click` and `fill` are never retried (`mayRepeat`). The first version
+   kept an allowlist of pre-dispatch errors ("Element is not attached to the DOM"), but the
+   installed Playwright retries that case itself and throws it only under `noAutoWaiting`,
+   so it never reached the executor; it went (internal review). Navigate and asserts keep
+   today's rules.
 2. Tests (`__tests__/executor.test.ts`): a click/fill that submitted and then failed with a
-   generic or protocol error runs once (the AC test); a pre-dispatch detach is retried;
+   generic or protocol error runs once (the AC test); a detach error is not repeated either;
    the existing "generic errors are retried" tests move to `navigate` (a GET), since that
    behaviour is exactly what #296 removes for click/fill.
 3. README (retry options paragraph), CLAUDE.md (one bullet), plans row, lessons.

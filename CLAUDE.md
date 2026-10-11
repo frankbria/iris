@@ -902,13 +902,15 @@ Constraints that are easy to break:
 
 ### Retries Never Repeat a Side Effect (issue #296)
 
-`ActionExecutor.executeAction` retries `click` and `fill` only when the error proves nothing
-was dispatched (`NOT_DISPATCHED` in src/executor.ts: "Element is not attached to the DOM").
-Real Chromium resolves `page.click` when the handler throws, the document is replaced or the
-page navigates to a refused port, so a click error that does arrive is a protocol or target
-error mid-dispatch, or unknown, and repeating it can submit twice. `navigate` (a GET) and
-asserts keep the general rules (#75: timeouts and policy verdicts are not retried). Retry
-tests that need a generic transient failure use `navigate`.
+`ActionExecutor.executeAction` never retries `click` or `fill` (`mayRepeat` in
+src/executor.ts): a failed one may already have reached the page, and repeating it can submit
+twice. Nothing is lost: Playwright itself re-resolves a detached element until the timeout
+("element was detached from the DOM, retrying"; it throws "Element is not attached to the DOM"
+only under `noAutoWaiting`, which IRIS never sets), and real Chromium resolves `page.click`
+when the handler throws, the document is replaced or the page navigates to a refused port.
+An error that reaches the executor is a timeout, a protocol or target error mid-dispatch, or
+unknown. `navigate` (a GET) and asserts keep the general rules (#75: timeouts and policy
+verdicts are not retried); retry tests that need a transient failure use `navigate`.
 
 ### Agent Loop Verdict (issue #351)
 
