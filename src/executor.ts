@@ -34,6 +34,21 @@ export class AssertionFailedError extends Error {
   }
 }
 
+/**
+ * Whether a failed action may be tried again (#296). A click or fill is never repeated:
+ * it may already have reached the page (a form submitted, an order placed). Playwright
+ * already retries everything that proves nothing was dispatched (a detached element is
+ * re-resolved until the timeout), and real Chromium resolves `page.click` when the
+ * handler throws, the document is replaced or the page navigates away. So an error that
+ * does reach here is a timeout, a protocol or target error mid-dispatch, or unknown.
+ * Navigate (a GET) and asserts (reads) keep the general rules.
+ */
+function mayRepeat(action: Action): boolean {
+  // Named, not "anything but click and fill": a new action type stays unretried until
+  // someone decides it is safe to repeat.
+  return action.type === 'navigate' || action.type === 'assert';
+}
+
 export interface ExecutionResult {
   success: boolean;
   action: Action;
@@ -200,7 +215,7 @@ export class ActionExecutor {
         lastError = error instanceof Error ? error : new Error(String(error));
 
         // Check if this is a non-retryable error
-        if (this.isNonRetryableError(lastError)) {
+        if (this.isNonRetryableError(lastError) || !mayRepeat(action)) {
           break;
         }
 

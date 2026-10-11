@@ -556,38 +556,40 @@ describe('ActionExecutor', () => {
       await executor.cleanup();
     });
 
+    // Retries for an action that is safe to repeat. A navigate is a GET; click and fill
+    // are not retried on errors like these (#296, below).
     it('should retry failed actions and eventually succeed', async () => {
-      const action: Action = { type: 'click', selector: '#retry-btn' };
+      const action: Action = { type: 'navigate', url: 'https://example.com' };
 
       // Mock to fail twice, then succeed
-      (click as jest.Mock)
+      mockPage.goto
         .mockRejectedValueOnce(new Error('Temporary failure 1'))
         .mockRejectedValueOnce(new Error('Temporary failure 2'))
-        .mockResolvedValueOnce(undefined);
+        .mockResolvedValueOnce(null);
 
       const result = await executor.executeAction(action, page);
 
       expect(result.success).toBe(true);
-      expect(click).toHaveBeenCalledTimes(3);
+      expect(mockPage.goto).toHaveBeenCalledTimes(3);
     });
 
     it('should fail after exhausting all retry attempts', async () => {
-      const action: Action = { type: 'click', selector: '#always-fails' };
+      const action: Action = { type: 'navigate', url: 'https://example.com' };
       const persistentError = new Error('Persistent failure');
 
-      (click as jest.Mock).mockRejectedValue(persistentError);
+      mockPage.goto.mockRejectedValue(persistentError);
 
       const result = await executor.executeAction(action, page);
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Persistent failure');
-      expect(click).toHaveBeenCalledTimes(4); // Initial + 3 retries
+      expect(mockPage.goto).toHaveBeenCalledTimes(4); // Initial + 3 retries
     });
 
     it('should respect retry delay between attempts', async () => {
-      const action: Action = { type: 'click', selector: '#slow-retry' };
+      const action: Action = { type: 'navigate', url: 'https://example.com' };
 
-      (click as jest.Mock).mockRejectedValue(new Error('Always fails'));
+      mockPage.goto.mockRejectedValue(new Error('Always fails'));
 
       // Issue #142: this measured `endTime - startTime >= 300`. Load cannot
       // break a lower bound — it only makes elapsed time larger — yet the test
@@ -660,6 +662,76 @@ describe('ActionExecutor', () => {
       await retrying.cleanup();
     });
 
+    // #296: a click or fill may already have reached the page when it fails (a form was
+    // submitted, an order placed), and repeating it repeats that. They are never retried:
+    // Playwright already re-resolves a detached element itself, so no error proving
+    // "nothing was dispatched" reaches the executor for a selector action.
+    describe('click and fill are not repeated after they may have happened (#296)', () => {
+      it('does not repeat a click whose handler submitted and then failed', async () => {
+        const exec = new ActionExecutor({ retryAttempts: 3, retryDelay: 1 });
+        const p = await exec.createPage();
+        let submissions = 0;
+        (click as jest.Mock).mockImplementation(async () => {
+          submissions++; // the click reached the page
+          throw new Error('Error: submit handler threw after posting the order');
+        });
+
+        const result = await exec.executeAction({ type: 'click', selector: '#buy' } as Action, p);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('submit handler threw');
+        expect(submissions).toBe(1);
+        await exec.cleanup();
+      });
+
+      it.each([
+        [
+          'a protocol error mid-dispatch',
+          'Protocol error (Input.dispatchMouseEvent): Target closed',
+        ],
+        [
+          'a destroyed context',
+          'Execution context was destroyed, most likely because of a navigation',
+        ],
+        ['an unknown error', 'Something went wrong'],
+      ])('does not repeat a click after %s', async (_label, message) => {
+        const exec = new ActionExecutor({ retryAttempts: 3, retryDelay: 1 });
+        const p = await exec.createPage();
+        (click as jest.Mock).mockRejectedValue(new Error(message));
+
+        await exec.executeAction({ type: 'click', selector: '#b' } as Action, p);
+
+        expect(click).toHaveBeenCalledTimes(1);
+        await exec.cleanup();
+      });
+
+      it('does not repeat a fill that may have typed', async () => {
+        const exec = new ActionExecutor({ retryAttempts: 3, retryDelay: 1 });
+        const p = await exec.createPage();
+        (typeText as jest.Mock).mockRejectedValue(new Error('Something went wrong'));
+
+        await exec.executeAction({ type: 'fill', selector: '#q', text: 'x' } as Action, p);
+
+        expect(typeText).toHaveBeenCalledTimes(1);
+        await exec.cleanup();
+      });
+
+      it('does not repeat a click Playwright refused as detached either', async () => {
+        // Only reachable with noAutoWaiting, which the executor never sets: Playwright
+        // re-resolves a detached element itself. Repeating would gain nothing it lacks.
+        const exec = new ActionExecutor({ retryAttempts: 3, retryDelay: 1 });
+        const p = await exec.createPage();
+        (click as jest.Mock).mockRejectedValue(
+          new Error('elementHandle.click: Element is not attached to the DOM'),
+        );
+
+        await exec.executeAction({ type: 'click', selector: '#b' } as Action, p);
+
+        expect(click).toHaveBeenCalledTimes(1);
+        await exec.cleanup();
+      });
+    });
+
     // Issue #75: the non-retryable list said 'element not found', but Playwright
     // never emits that. A missing selector produces a timeout message, so the
     // most common failure mode was retried — each attempt burning the full page
@@ -725,18 +797,20 @@ describe('ActionExecutor', () => {
 
       // The guard must stay narrow: genuinely transient faults still get retries,
       // because those fail fast rather than consuming the whole timeout budget.
+      // On a navigate. A click that fails this way already fired the request that failed,
+      // so it is not repeated (#296).
       it('still retries a transient network error', async () => {
         const exec = new ActionExecutor({ retryAttempts: 2, retryDelay: 1 });
         const page = await exec.createPage();
-        (click as jest.Mock).mockRejectedValue(new Error('net::ERR_CONNECTION_RESET'));
+        mockPage.goto.mockRejectedValue(new Error('net::ERR_CONNECTION_RESET'));
 
         const result = await exec.executeAction(
-          { type: 'click', selector: '#btn' } as Action,
+          { type: 'navigate', url: 'https://example.com' } as Action,
           page,
         );
 
         expect(result.success).toBe(false);
-        expect(click).toHaveBeenCalledTimes(3); // initial + 2 retries
+        expect(mockPage.goto).toHaveBeenCalledTimes(3); // initial + 2 retries
         await exec.cleanup();
       });
     });

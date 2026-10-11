@@ -501,3 +501,10 @@ Write/Edit, not as a pre-push afterthought.
 - **Replacing several strings one after another can match inside your own placeholder.** `split/join` form by form turned `a b` into `text<redacted>ox` (a short form matched inside "textbox" and later inside `<redacted>`). One regex alternation, longest first, single pass.
 - **`gh issue comment` has no `--jq`.** A `cmd --jq … || fallback` chain posted the fallback text ("see above") as a real comment. Never put a side-effecting fallback after a command whose flags you have not checked.
 - **Under load, run the demo against `dist/`, not ts-node.** `npx ts-node src/cli.ts` exceeded 120 s at load ~11; `node dist/cli.js` took 22 s. Rebuild first so `dist/` matches HEAD.
+
+## 2026-10-11 — #296
+
+- **Check what the library already retries before adding an allowlist.** For `page.click/fill(selector)`, Playwright re-resolves a detached element itself and surfaces a pre-dispatch failure as a timeout; "Element is not attached to the DOM" is thrown only under `noAutoWaiting`. An executor-level "retry only if pre-dispatch" list was dead code, and matched against the whole message (Playwright's call log quotes the element's attributes), so page text could have re-enabled a retry. Read the library's retry loop (`coreBundle.js`) before writing one.
+- **Never run mutation checks while a reviewer is reading the tree.** opencode saw `src/executor.ts` change twice mid-review and had to clone to /tmp. Second time this happened (also #289). Finish mutation runs, commit, then start the reviewers.
+- **A side-effect bug needs outcome evidence, not call counts.** The demo counted orders on a local server (4 before, 1 after). When the failure cannot be produced on demand, wrap the real call (real effect, injected error) and say so.
+- **A committed demo must not name local paths.** `tasks/` is tracked now, and `repo-hygiene.test.ts` fails on a home directory. Write commands with `$SCRATCH` / `$REPO`-style placeholders and say what each holds, as the other demos do.
