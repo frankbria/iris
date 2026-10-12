@@ -41,6 +41,26 @@ export interface RetentionReport {
   failures: string[];
 }
 
+/**
+ * A visual job running at an org's purge can still write under its prefix (its finish is
+ * then refused): queue `org/<org>/` once more a day after the purge, once (#476). The reaper
+ * and the job deadline bound such a job to minutes. Returns how many were queued.
+ */
+async function queueResweeps(db: Kysely<unknown>, now: Date): Promise<number> {
+  return db.transaction().execute(async (tx) => {
+    const { rows } = await sql<{ org_id: string }>`
+      update org_deletions set resweep_done = true
+      where purged_at is not null and not resweep_done
+        and purged_at < ${now}::timestamptz - interval '1 day'
+      returning org_id`.execute(tx);
+    for (const { org_id } of rows) {
+      await sql`insert into artifact_purges (org_id, prefix)
+        values (${org_id}, ${'org/' + org_id + '/'})`.execute(tx);
+    }
+    return rows.length;
+  });
+}
+
 export function offboarding(db: Kysely<unknown>) {
   const orgExists = async (q: Kysely<unknown>, orgId: string) =>
     (await sql`select 1 from organization where id = ${orgId}`.execute(q)).rows.length > 0;
@@ -118,7 +138,7 @@ export function offboarding(db: Kysely<unknown>) {
     await sql`insert into artifact_purges (org_id, prefix) values (${orgId}, ${`org/${orgId}/`})`.execute(
       tx,
     );
-    await sql`update org_deletions set purged_at = now(), reason = 'purged', requested_by = 'purged'
+    await sql`update org_deletions set purged_at = ${now}, reason = 'purged', requested_by = 'purged'
       where org_id = ${orgId}`.execute(tx);
     return true;
   };
@@ -323,6 +343,9 @@ export function offboarding(db: Kysely<unknown>) {
             where user_id is null and pseudonymised_at < ${sevenYearsAgo}`.execute(db),
         ),
       );
+
+      // One more sweep of each purged org's prefix, a day later (#476).
+      await step('resweep', 0, () => queueResweeps(db, now));
 
       // Last, so rows deleted above are already queued (#472). Without a store the queue
       // waits for a container that has one.

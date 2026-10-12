@@ -16,6 +16,7 @@ import * as orgAiSettings from './migrations/0013_org_ai_settings';
 import * as observationUsage from './migrations/0014_observation_usage';
 import * as artifactObjects from './migrations/0015_artifact_objects';
 import * as userSuspensions from './migrations/0016_user_suspensions';
+import * as orgResweep from './migrations/0017_org_resweep';
 import { createPostgresDb, resolveDatabaseUrl } from './postgres';
 
 /**
@@ -40,6 +41,7 @@ export const MIGRATIONS = {
   '0014_observation_usage': observationUsage,
   '0015_artifact_objects': artifactObjects,
   '0016_user_suspensions': userSuspensions,
+  '0017_org_resweep': orgResweep,
 };
 
 /**
