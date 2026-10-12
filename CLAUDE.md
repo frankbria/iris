@@ -1262,8 +1262,9 @@ dials the address it vetted, so a rebinding resolver gets no second lookup.
   the forward path reports `socket.errored`, since `http.request` says only "socket hang
   up". Tests fake a black hole with `Object.assign(new net.Socket(), { connecting: true })`:
   a never-connected socket rejects writes at once, and a real TEST-NET address is dropped
-  on one network and unreachable at once on another. On WSL the "502 when the vetted
-  address refuses" test now gets this 504 (#382's blackhole) instead of hanging.
+  on one network and unreachable at once on another. The "502 when the vetted address
+  refuses" test dials a port it bound and closed, not 127.0.0.1:1, which blackholes on WSL
+  (#382).
 - Tests substitute DNS and dialing through `hostedEgressProxy({ lookup, connect })`,
   called before the first launch in the registry. `connect` sends the one "public"
   test address (`8.8.8.8`) to a local server, so every refusal has a positive control
@@ -2230,8 +2231,7 @@ Global TDD/coverage/no-mock rules apply. IRIS-specific:
 - **Coverage**: >=85% for new code (repo-wide actual: ~93% statements / ~82% branch; new
   code should not lower it). Check with `npm run test -- --coverage`.
 - **Pass rate**: 100% of non-skipped tests (current: 2209/2210 passing, 1 skipped, 0
-  failing on CI, identical with and without a repo-root `.env`; on WSL the egress-proxy
-  "502 when the vetted address refuses" test times out, see #382).
+  failing on CI, identical with and without a repo-root `.env`).
 - **Commits**: conventional with scope (`feat(cli):`, `fix(a11y):`); branches
   `feature/…`, `fix/…`, `docs/…`; PR to main, CI green before done.
 - **Docs in the same PR**: this file (new patterns/gotchas), `docs/data-flows.md`
