@@ -1171,12 +1171,13 @@ reference.
 - **Hardening (#513)**:
   - **Origin binding**: a source may return `{ value, origin }`
     (`IRIS_SECRET_ORIGIN_<NAME>` locally; an RPC `secrets` entry `{ value, origin }`, zod-checked
-    URL). `resolveFillText(text, source, pageOrigin)` refuses a bound reference unless the
-    field's frame (the target handle's `ownerFrame()`, else the page) has exactly that http(s)
-    origin; an unknown or opaque origin is refused. A malformed env binding fails the fill,
-    never unbinds the value.
-  - **Redaction by element**: the executor remembers each field it filled from a reference
-    (a locator in the field's frame, not the handle, which the caller disposes) and
+    URL). A reference fill resolves its element first (`fillFromReference`: the policy's handle,
+    else the selector's own `elementHandle`, frame-entry selectors included) and
+    `resolveFillText(text, source, pageOrigin)` refuses a bound reference unless that element's
+    frame has exactly that http(s) origin; an unknown or opaque origin is refused. The value is
+    typed into that same element. A malformed env binding fails the fill, never unbinds it.
+  - **Redaction by element**: the executor keeps the handle of each field it filled from a
+    reference (a policy handle is retained, not disposed after the action) and
     `refreshFieldValues()` re-reads what they hold, so `redactSecrets` also cuts a
     `maxlength` prefix or a page rewrite of the value. The agent loop and RPC `observe` call it
     before reading the page. Values under 4 characters read back are not cut.

@@ -149,6 +149,7 @@ describe('credential references', () => {
           <div id="cover" style="position:fixed;inset:0;display:none"></div>
           <textarea id="notes" readonly></textarea>
           <label>Code <input id="short" maxlength="6"></label>
+          <label>Renamed <input id="renames" maxlength="6" oninput="this.id = 'renamed'"></label>
           <p id="done" hidden>Signed in</p>
         </body>`);
       });
@@ -315,6 +316,55 @@ describe('credential references', () => {
       );
       expect(ok.success).toBe(true);
       expect(await page.inputValue('#pw')).toBe(SECRET);
+    });
+
+    // Codex review: the binding is checked against the frame the field is in, also when the
+    // selector enters a cross-origin iframe and no policy handle is given.
+    it("checks the binding against the iframe a selector enters, not the page's origin", async () => {
+      const inner = createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<!doctype html><title>Pay</title><body><input id="card"></body>');
+      });
+      await new Promise<void>((resolve) => inner.listen(0, '127.0.0.1', resolve));
+      // localhost, not 127.0.0.1: another origin on the same machine.
+      const innerOrigin = `http://localhost:${(inner.address() as AddressInfo).port}`;
+      try {
+        await page.setContent(`<iframe src="${innerOrigin}/"></iframe>`);
+        await page.frameLocator('iframe').locator('#card').waitFor();
+        const fill = (origin: string) =>
+          executor().executeAction(
+            {
+              type: 'fill',
+              selector: 'iframe >> internal:control=enter-frame >> #card',
+              text: '{{secret:LOGIN_PW}}',
+            },
+            page,
+            mapSecrets({ LOGIN_PW: { value: SECRET, origin } }),
+          );
+        const refused = await fill(origin); // bound to the parent page's origin
+        expect(refused.success).toBe(false);
+        expect(refused.error).toMatch(/is bound to/);
+        const typed = await fill(innerOrigin);
+        expect(typed.success).toBe(true);
+        expect(await page.frameLocator('iframe').locator('#card').inputValue()).toBe(SECRET);
+      } finally {
+        await new Promise((resolve) => inner.close(resolve));
+      }
+    }, 30_000);
+
+    // Codex review: the reader keeps the filled element itself; replaying the selector
+    // misses a field whose id an input handler changed.
+    it('redacts what a field holds even after its selector stops matching', async () => {
+      const ex = executor();
+      const r = await ex.executeAction(
+        { type: 'fill', selector: '#renames', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: SECRET }),
+      );
+      expect(r.success).toBe(true);
+      expect(await page.locator('#renames').count()).toBe(0); // positive control: renamed
+      await ex.refreshFieldValues();
+      expect(ex.redactSecrets(`Renamed: ${SECRET.slice(0, 6)}`)).toBe('Renamed: <redacted>');
     });
 
     // #513: a field that keeps only a prefix (maxlength) shows a value the scrub never saw.

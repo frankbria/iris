@@ -82,7 +82,7 @@ export interface PageContext {
 export const EXECUTOR_DEFAULTS = { retryAttempts: 3, retryDelay: 1000, timeout: 30000 } as const;
 
 /** What a field holds now (input value, else its text), read for at most a second. */
-async function readField(field: Locator): Promise<string> {
+async function readField(field: ElementHandle): Promise<string> {
   const value = await withPageTimeout(
     field.inputValue().catch(() => field.textContent().then((t) => t ?? '')),
     '',
@@ -114,6 +114,8 @@ export class ActionExecutor {
   private readonly secretFieldReaders: Array<() => Promise<string>> = [];
   /** What those fields held at the last `refreshFieldValues`, cut by `redactSecrets` too. */
   private fieldValues = new Set<string>();
+  /** Policy handles kept for those readers, not disposed after their action. */
+  private readonly retainedHandles = new WeakSet<ElementHandle>();
 
   constructor(options: ActionExecutorOptions = {}) {
     this.options = {
@@ -214,7 +216,9 @@ export class ActionExecutor {
     try {
       return await this.runAction(action, page, secrets, target);
     } finally {
-      await target?.dispose().catch(() => undefined);
+      // Kept when a reference fill keeps reading the field through it (#513).
+      if (target && !this.retainedHandles.has(target))
+        await target.dispose().catch(() => undefined);
     }
   }
 
@@ -298,6 +302,34 @@ export class ActionExecutor {
    */
   redactSecrets(text: string): string {
     return scrubValues(text, [...this.resolvedSecrets, ...this.fieldValues]);
+  }
+
+  /**
+   * A fill whose text is a credential reference (#513): the element it goes to is resolved
+   * first (the policy's handle, else the selector's), so a binding is checked against that
+   * element's own frame, iframes included, and the value is typed into that same element.
+   * The handle is kept for `refreshFieldValues`, which reads the element itself: replaying
+   * the selector misses a field whose id changed or that sits in a frame.
+   */
+  private async fillFromReference(
+    action: Extract<Action, { type: 'fill' }>,
+    page: Page,
+    secrets: SecretSource,
+    target?: ElementHandle,
+  ): Promise<void> {
+    const handle =
+      target ??
+      (await page
+        .locator(action.selector)
+        .first()
+        .elementHandle({ timeout: this.options.timeout ?? EXECUTOR_DEFAULTS.timeout }));
+    const url = (await handle.ownerFrame())?.url() ?? '';
+    const origin = URL.canParse(url) ? new URL(url).origin : undefined;
+    const { value } = resolveFillText(action.text, secrets, origin);
+    this.resolvedSecrets.add(value);
+    this.retainedHandles.add(handle);
+    this.secretFieldReaders.push(() => readField(handle));
+    await handle.fill(value);
   }
 
   /**
@@ -444,19 +476,13 @@ export class ActionExecutor {
 
       case 'fill': {
         // Resolved here and nowhere else: the action (and so the result, history
-        // and the model's view of prior actions) keeps the reference (#352). The
-        // origin is the field's frame's, for a reference bound to one (#513).
-        const frame = target ? await target.ownerFrame() : null;
-        const url = frame ? frame.url() : page.url();
-        const origin = URL.canParse(url) ? new URL(url).origin : undefined;
-        const { value, fromReference } = resolveFillText(action.text, secrets, origin);
-        if (fromReference) {
-          this.resolvedSecrets.add(value);
-          // A locator in the field's frame, not the handle: the caller disposes that.
-          const field = (frame ?? page).locator(action.selector).first();
-          this.secretFieldReaders.push(() => readField(field));
+        // and the model's view of prior actions) keeps the reference (#352).
+        if (!looksLikeReference(action.text)) {
+          const { value } = resolveFillText(action.text, secrets);
+          await (target ? target.fill(value) : typeText(page, action.selector, value));
+          break;
         }
-        await (target ? target.fill(value) : typeText(page, action.selector, value));
+        await this.fillFromReference(action, page, secrets, target);
         break;
       }
 
