@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
 import { log } from './log';
 import { orgArtifacts, type ArtifactStore } from './artifact-store';
+import { forgetArtifacts } from './storage-quota';
 
 /**
  * Org offboarding, account deletion and the daily retention pass (#349; owner decisions
@@ -334,6 +335,7 @@ export function offboarding(db: Kysely<unknown>) {
             for (const row of rows) {
               try {
                 await orgArtifacts(artifacts, row.org_id).deletePrefix(row.prefix);
+                await forgetArtifacts(db, row.org_id, row.prefix); // #315's usage follows
               } catch (err) {
                 // A prefix that can never be valid (not safe segments, or outside its org)
                 // would be retried forever at the head of the queue: drop it, loudly.

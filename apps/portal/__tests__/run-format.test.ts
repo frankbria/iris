@@ -1,4 +1,9 @@
-import { describeResult, formatTime, runsHref } from "@/lib/run-format"
+import {
+  describeResult,
+  formatBytes,
+  formatTime,
+  runsHref,
+} from "@/lib/run-format"
 
 /** How run results read on the portal (#270), one shape per run kind (#254). */
 describe("describeResult", () => {
@@ -76,4 +81,14 @@ describe("runsHref", () => {
 
 it("formatTime is UTC, to the second", () => {
   expect(formatTime("2026-06-01T10:00:00.123Z")).toBe("2026-06-01 10:00:00 UTC")
+})
+
+describe("formatBytes (#315)", () => {
+  it("picks the largest unit that keeps the number at least 1", () => {
+    expect(formatBytes(0)).toBe("0 B")
+    expect(formatBytes(1023)).toBe("1023 B")
+    expect(formatBytes(1024)).toBe("1.0 KiB")
+    expect(formatBytes(1.5 * 1024 * 1024)).toBe("1.5 MiB")
+    expect(formatBytes(20 * 1024 ** 3)).toBe("20.0 GiB")
+  })
 })

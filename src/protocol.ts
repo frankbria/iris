@@ -523,7 +523,9 @@ export function startServer(
     /** Signs run-detail artifacts (#460); unset, run detail carries none. */
     artifacts?: ArtifactStore;
     /** The org's plan limits for job submits (#346). */
-    entitlements?: (orgId: string) => Promise<{ runsPerMonth: number }>;
+    entitlements?: (
+      orgId: string,
+    ) => Promise<{ runsPerMonth: number; artifactStorageBytes?: number }>;
     /** Signed URL lifetime in seconds (default 300, at most 900). */
     artifactUrlTtlSeconds?: number;
     /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */

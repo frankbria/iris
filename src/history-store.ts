@@ -1,4 +1,5 @@
 import { recordAudit } from './audit-log';
+import { StorageQuotaExceededError, storageUsage } from './storage-quota';
 import { stripUserinfo } from './report-encoding';
 import type Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
@@ -360,7 +361,7 @@ export interface OrgJobs {
    */
   enqueue(
     job: JobSpec,
-    options?: { maxOutstanding?: number; monthlyRunLimit?: number },
+    options?: { maxOutstanding?: number; monthlyRunLimit?: number; storageLimitBytes?: number },
   ): Promise<string | null>;
   /** `null` for an id that is not this org's, or not a uuid. */
   get(id: string): Promise<StoredJob | null>;
@@ -445,7 +446,10 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
           actor: { apiKeyId: apiKeyId ?? null },
         }),
 
-      async enqueue({ kind, params }, { maxOutstanding = Infinity, monthlyRunLimit } = {}) {
+      async enqueue(
+        { kind, params },
+        { maxOutstanding = Infinity, monthlyRunLimit, storageLimitBytes } = {},
+      ) {
         // One transaction under a per-org advisory lock: the count and the insert
         // cannot interleave with another enqueue of the same org.
         const attempt = (keyId: string | null) =>
@@ -475,6 +479,13 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
               const used = Number(rows[0].used);
               if (used + requested > monthlyRunLimit)
                 throw new RunQuotaExceededError(monthlyRunLimit, used);
+            }
+            // A visual job stores screenshots (#315): an org at its quota is refused now,
+            // not part-way through the job. a11y jobs store nothing.
+            if (storageLimitBytes !== undefined && kind === 'visual') {
+              const stored = await storageUsage(tx, orgId);
+              if (stored >= storageLimitBytes)
+                throw new StorageQuotaExceededError(storageLimitBytes, stored);
             }
             const { rows } = await sql<{ id: string }>`
               insert into runs (org_id, api_key_id, kind, status, params)

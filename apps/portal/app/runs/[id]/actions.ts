@@ -53,6 +53,11 @@ export async function approveBaseline(
   if (outcome.status === "not-found")
     return { error: "That result was not found." }
   if (outcome.status === "conflict") return { error: outcome.reason }
+  if (outcome.status === "over-quota")
+    return {
+      error:
+        "This organization has used its artifact storage. Delete old runs or upgrade the plan.",
+    }
   revalidatePath(`/runs/${runId}`)
   return {
     done: `Approved as the ${outcome.baseline.device} baseline of ${outcome.baseline.page}.`,
