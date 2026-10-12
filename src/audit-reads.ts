@@ -32,6 +32,9 @@ export class InvalidAuditCursorError extends Error {
 }
 
 const CURSOR = /^[1-9][0-9]{0,18}$/;
+/** Postgres bigint's maximum: 19 digits can exceed it (codex review). */
+const MAX_ID = 9223372036854775807n;
+const validCursor = (cursor: string) => CURSOR.test(cursor) && BigInt(cursor) <= MAX_ID;
 
 interface Row {
   id: string;
@@ -58,7 +61,7 @@ export async function auditPage(
   orgId: string,
   { cursor, limit = 50 }: { cursor?: string; limit?: number },
 ): Promise<AuditPage> {
-  if (cursor !== undefined && !CURSOR.test(cursor)) throw new InvalidAuditCursorError();
+  if (cursor !== undefined && !validCursor(cursor)) throw new InvalidAuditCursorError();
   const size = Math.min(Math.max(Math.trunc(limit), 1), 100);
   const { rows } = await sql<Row>`
     select a.id::text as id, a.created_at, a.action, a.target, a.metadata,

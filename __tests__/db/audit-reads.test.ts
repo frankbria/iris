@@ -91,7 +91,8 @@ if (!ADMIN_URL) {
   });
 
   it('refuses a cursor it did not make', async () => {
-    for (const cursor of ['abc', '0', '-1', '1e3', '99999999999999999999']) {
+    // 19 digits over bigint's maximum (codex review): refused here, not by a cast error.
+    for (const cursor of ['abc', '0', '-1', '1e3', '99999999999999999999', '9999999999999999999']) {
       await expect(auditPage(db, 'org-a', { cursor })).rejects.toThrow(InvalidAuditCursorError);
     }
   });
