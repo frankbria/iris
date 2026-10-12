@@ -1538,8 +1538,8 @@ Building in public. Star the repo to follow along! ⭐
 
 **Installation:**
 ```bash
-npm install -g iris-suite  # Coming soon to npm
-# Or install from source:
+# Not on npm yet: install from source. (The npm name `iris-suite` is reserved; its 0.0.1 is
+# an empty placeholder, not IRIS.)
 git clone https://github.com/frankbria/iris.git && cd iris && npm install && npm run build && npm link
 ```
 

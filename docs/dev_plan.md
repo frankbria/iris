@@ -115,7 +115,7 @@ Assuming **2-week sprints**, small team (2–3 engineers):
 - **Repo Setup:** Single package structure (CLI + IRIS core + integrations).
 - **CI/CD:** GitHub Actions → automated tests on PRs, packaged binaries on release.
 - **Testing:** Jest for unit tests, Playwright for E2E tests of IRIS itself.
-- **Deployment:** Node.js CLI published to npm as `iris-suite`; optional Docker container distribution.
+- **Deployment:** Node.js CLI, to be published to npm as `iris-suite` (the name is reserved; not published yet, #320); optional Docker container distribution.
 - **Storage:** SQLite local DB for results; Vector DB for AI pattern recall (future).
 
 ---
