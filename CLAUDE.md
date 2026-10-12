@@ -714,6 +714,12 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   min on a blackhole).
 - **uid 1001 everywhere.** The portal image runs as `portal` (1001) like pwuser, so the
   deploy writes every app secret file once, owned by 1001. `pg_password` is 70.
+- **Optional settings reach the containers through the deploy job (#549)**: object storage
+  (`IRIS_S3_*` to iris, worker and portal) and managed AI (`IRIS_MANAGED_AI_*` to iris) come
+  from the `production` environment. Compose passes each as `${NAME:-}` (empty is unset to
+  the services' own readers), the two secret files are always written (empty when unused,
+  so the mounts exist), and `settings.env` names a `_FILE` path only when its secret was
+  given: a `_FILE` var set without the rest would be a partial config (exit 3).
 - **`_FILE` secrets go through `readSecretEnv()`** (src/secret-env.ts): `resolveDatabaseUrl`,
   `resolveKeyring`, `hostedServices`' `BETTER_AUTH_SECRET`, and the portal's
   `BETTER_AUTH_SECRET` / `SMTP_URL`. Do not add another reader.
@@ -1039,6 +1045,13 @@ listed in the body of the PR that closed #353, for checking against it.
   an AI plan with the pin off (`allowCrossOrigin`: the page is the watched `file://`, which has
   no origin), so the destructive checks remain; `watch` has no `--allow*` flags. Private
   backlog item P1.22.
+- **The action goes to the element that was checked (#530)**: the check reads through one
+  `ElementHandle` (`locator.elementHandle()`), returns it as `PolicyVerdict.target`, and
+  every caller passes it to `executeAction(action, page, secrets, target)`, which clicks or
+  fills that handle and disposes of it. Dispatching by selector re-resolved it, so a page
+  could show a disabled benign control to the check and swap a destructive one in before it
+  became clickable. A swapped-out handle detaches, and the click fails instead. A test that
+  needs a failed read stubs `ElementHandle` reads, not `Locator` ones.
 
 ### Retries Never Repeat a Side Effect (issue #296)
 
@@ -1548,9 +1561,20 @@ index; 0005: `attempts`, `claim_token`, `heartbeat_at`, #435), no broker (ADR 00
   finish's row lock). `runWorker` refuses `heartbeatMs * 2 >= staleMs`. Migration 0005
   sets `lock_timeout = 5s`: its exclusive lock on `runs` must not queue behind a long
   transaction while the old release serves. A browser that hangs while the worker's event
-  loop still beats is never reaped (#442). During a rollout, a pre-0005 worker finishes
+  loop still beats is never reaped; the job deadline ends it instead (#442, below). During a rollout, a pre-0005 worker finishes
   without a token check until it is recreated (seconds; usage stays idempotent).
   Polling, not LISTEN/NOTIFY.
+- **Every job has a deadline (#442)**: `jobDeadlineMs(job)` (src/worker.ts) is pages x
+  `A11Y_PAGE_BUDGET_MS` (120 s) + 60 s for a11y, `JOB_DEADLINE_MS` + 5 min for visual,
+  capped at `MAX_JOB_MS` (30 min). Past it, `processNextJob` closes every browser the
+  process holds (`openBrowsers()` in src/browser.ts, a registry `launchBrowser()` fills;
+  the worker runs one job at a time), each close bounded at 10 s, and fails the job with
+  `The job timed out` and no usage. The run's promise may settle later; it is ignored, and
+  the run's `AbortSignal` is aborted first: `runVisualJob` checks it before every artifact
+  write and before seeding a baseline (codex review), so a write blocked past the deadline
+  cannot be followed by a baseline for a job already failed.
+  The worker copies the runners' budgets rather than importing them (as `DEFAULT_STALE_MS`):
+  `job-deadline.test.ts` pins the copies.
 - **Tests**: set `process.env.IRIS_HOSTED = '1'` at the top of the file and start
   `hostedEgressProxy({ lookup, connect })` before the first launch; no isolateModules is
   needed, because the worker loads the runner lazily.

@@ -100,7 +100,7 @@ describe('launchBrowser with missing Playwright browsers (issue #79)', () => {
   });
 
   it('still returns the browser on the happy path', async () => {
-    const browser = { close: jest.fn() };
+    const browser = { close: jest.fn(), once: jest.fn() };
     mockLaunch.mockResolvedValue(browser);
 
     await expect(launchBrowser()).resolves.toBe(browser);
@@ -141,7 +141,7 @@ describe('launchBrowser on a host that cannot sandbox Chromium (issue #331)', ()
   });
 
   it('requests the sandbox and leaves signal handling to IRIS', async () => {
-    mockLaunch.mockResolvedValue({ close: jest.fn() });
+    mockLaunch.mockResolvedValue({ close: jest.fn(), once: jest.fn() });
 
     await launchBrowser();
     expect(mockLaunch).toHaveBeenCalledWith(
@@ -155,7 +155,7 @@ describe('launchBrowser on a host that cannot sandbox Chromium (issue #331)', ()
   });
 
   it('only the exact value "0" turns the sandbox off', async () => {
-    mockLaunch.mockResolvedValue({ close: jest.fn() });
+    mockLaunch.mockResolvedValue({ close: jest.fn(), once: jest.fn() });
 
     for (const [value, sandbox] of [
       ['0', false],

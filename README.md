@@ -1072,7 +1072,7 @@ unchanged. The same `--base-url` flag and `IRIS_BASE_URL` env var apply to
 ### Features
 
 **WCAG Compliance:**
-- WCAG 2.0/2.1 Level A, AA, AAA validation
+- WCAG 2.2 Level A and AA validation by default (2.0 and 2.1 rules included); AAA via `--tags`
 - axe-core integration with 90+ rules
 - Configurable rule sets and tags
 - Impact-based severity classification

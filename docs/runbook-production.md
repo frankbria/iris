@@ -608,35 +608,37 @@ deploy serves an expired file.
 ## Artifact storage (issues #257, #460)
 
 Run detail (`GET /v1/runs/:id`) returns visual artifacts as signed URLs (5 minutes) when
-`iris connect` has an S3-compatible store. Set on the `iris` service, the secret as a file:
+the services have an S3-compatible store; hosted visual jobs need one. Set them in the
+`production` GitHub environment, and the next deploy passes them to iris, worker and
+portal (#549):
 
-| Variable | Value |
-| --- | --- |
-| `IRIS_S3_ENDPOINT` | `https://…` of the bucket's S3 API (unset: run detail shows no artifacts) |
-| `IRIS_S3_BUCKET` | a private bucket |
-| `IRIS_S3_REGION` | default `us-east-1` |
-| `IRIS_S3_ACCESS_KEY_ID` | read and write on the bucket |
-| `IRIS_S3_SECRET_ACCESS_KEY_FILE` | a secret file, like `database_url` |
+| Name | Kind | Value |
+| --- | --- | --- |
+| `IRIS_S3_ENDPOINT` | variable | `https://…` of the bucket's S3 API (unset: no artifacts, visual jobs answer 503) |
+| `IRIS_S3_BUCKET` | variable | a private bucket |
+| `IRIS_S3_REGION` | variable | default `us-east-1` |
+| `IRIS_S3_ACCESS_KEY_ID` | variable | read and write on the bucket |
+| `IRIS_S3_SECRET_ACCESS_KEY` | secret | the deploy writes it to `secrets/s3_secret_access_key` and sets `IRIS_S3_SECRET_ACCESS_KEY_FILE` |
 
 The worker (visual jobs, #268) and the portal (screenshots and approval on run detail,
 #463) take the same variables. The worker and the portal need **write** access (the
 worker stores screenshots; approving in the portal copies an image to a new baseline
 key); `iris connect` needs read and write too, as API approval does the same copy.
 A partial configuration stops `iris connect` (exit 3) rather than serving without
-artifacts. The production vendor is not chosen yet (#273); the compose file does not pass
-these until it is. Nothing writes artifacts until hosted visual jobs (#268).
+artifacts, so the health gate rolls the deploy back. The vendor is the operator's choice
+(#273); the repository names none.
 
 ## Managed AI credits (issue #479)
 
 Orgs that choose **IRIS credits** on `/provider-keys` make AI calls on IRIS's own vendor
-key, up to their plan's monthly credit; then their own key, if they stored one. Set on the
-`iris` service (and the worker, once hosted jobs make AI calls). The production compose
-file does not pass these yet (#549):
+key, up to their plan's monthly credit; then their own key, if they stored one. Set them in
+the `production` GitHub environment; the deploy passes them to the `iris` service (the
+worker gets them once hosted jobs make AI calls) (#549):
 
-| Variable | Value |
-| --- | --- |
-| `IRIS_MANAGED_AI_PROVIDER` | `openai` or `anthropic` |
-| `IRIS_MANAGED_AI_KEY_FILE` | a secret file holding IRIS's key for that vendor |
+| Name | Kind | Value |
+| --- | --- | --- |
+| `IRIS_MANAGED_AI_PROVIDER` | variable | `openai` or `anthropic` |
+| `IRIS_MANAGED_AI_KEY` | secret | IRIS's key for that vendor; written to `secrets/managed_ai_key`, read through `IRIS_MANAGED_AI_KEY_FILE` |
 
 Unset, managed mode falls through to each org's own key. One without the other stops
 `iris connect` (exit 3). The vendor is then IRIS's subprocessor for those orgs (the

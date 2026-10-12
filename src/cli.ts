@@ -4,6 +4,7 @@ import { resolveDbPath } from './data-dir';
 import { once } from 'events';
 import { loadDotenv, loadConfig } from './config';
 import { isHostedMode } from './hosted';
+import type { PolicyVerdict } from './agent-policy';
 import type { IrisConfig, ProviderCredentials } from './config';
 import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-options';
 import type { AIProvider } from './visual/ai-classifier';
@@ -386,11 +387,11 @@ program
               const action = result.actions[i];
               say(`   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`);
 
-              const verdict = policy
+              const verdict: PolicyVerdict = policy
                 ? await checkPlannedAction(action, policy, page, startOrigin)
                 : { allowed: true };
               const execResult: ExecutionResult = verdict.allowed
-                ? await executor.executeAction(action, page)
+                ? await executor.executeAction(action, page, undefined, verdict.target)
                 : {
                     success: false,
                     action,

@@ -61,12 +61,13 @@ a database backup cannot open the stored provider keys without the master key.
 Every secret is read from a file (`NAME_FILE`) where the service supports it, never from
 a plain environment variable `docker inspect` would show.
 
-**Not wired yet** ([#549](https://github.com/frankbria/iris/issues/549)): the services
-read `IRIS_S3_*` (screenshot storage) and `IRIS_MANAGED_AI_PROVIDER` +
-`IRIS_MANAGED_AI_KEY_FILE` (managed AI credits), but `docker-compose.production.yml` and
-the deploy job pass neither. Until they do, production's visual-diff jobs answer 503 (the
-worker runs a11y only), run detail shows no screenshots, and an org on IRIS credits uses
-its own key.
+**Optional, from the same environment** (#549): object storage as variables
+`IRIS_S3_ENDPOINT`, `IRIS_S3_BUCKET`, `IRIS_S3_REGION`, `IRIS_S3_ACCESS_KEY_ID` and the
+secret `IRIS_S3_SECRET_ACCESS_KEY` (passed to iris, worker and portal); managed AI credits
+as the variable `IRIS_MANAGED_AI_PROVIDER` and the secret `IRIS_MANAGED_AI_KEY` (passed to
+iris). Unset, production's visual-diff jobs answer 503 (the worker runs a11y only), run
+detail shows no screenshots, and an org on IRIS credits uses its own key. A partial S3
+setting stops the services (exit 3), so the deploy rolls back.
 
 ## Who may deploy
 
