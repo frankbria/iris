@@ -13,6 +13,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
+import { createServer, type Server } from 'http';
+import type { AddressInfo } from 'net';
 import { FileWatcher } from '../../src/watcher';
 
 const HTML = `<!doctype html>
@@ -75,6 +77,92 @@ describe('watch --execute real-browser E2E (issue #58)', () => {
     expect(output).toContain('🎉 All 1 actions completed successfully!');
 
     logSpy.mockRestore();
+  }, 60000);
+});
+
+// #354: an AI-translated plan runs under the agent policy in `watch --execute` too. A
+// stand-in OpenAI plans a click on a "Delete account" button in the watched file.
+describe('watch --execute applies the agent policy to an AI plan (#354)', () => {
+  const ACCOUNT = `<!doctype html>
+<html><body>
+  <button id="save">Save</button>
+  <button id="wipe" onclick="this.textContent='wiped'">Delete account</button>
+</body></html>`;
+  let tempDir: string;
+  let vendor: Server;
+  let watcher: FileWatcher | undefined;
+  const saved = {
+    key: process.env.OPENAI_API_KEY,
+    base: process.env.OPENAI_BASE_URL,
+    db: process.env.IRIS_DB_PATH,
+  };
+
+  beforeAll(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-watch-policy-'));
+    fs.writeFileSync(path.join(tempDir, 'account.html'), ACCOUNT);
+    process.env.IRIS_DB_PATH = path.join(tempDir, 'iris.db');
+    vendor = createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        const plan = {
+          actions: [{ type: 'click', selector: 'body button:nth-of-type(2)' }],
+          confidence: 0.9,
+        };
+        res.setHeader('content-type', 'application/json');
+        res.end(
+          JSON.stringify({
+            choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(plan) } }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => vendor.listen(0, '127.0.0.1', resolve));
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.OPENAI_BASE_URL = `http://127.0.0.1:${(vendor.address() as AddressInfo).port}/v1`;
+  });
+
+  afterAll(async () => {
+    if (watcher) await watcher.stop();
+    await new Promise((resolve) => vendor.close(resolve));
+    for (const [k, v] of [
+      ['OPENAI_API_KEY', saved.key],
+      ['OPENAI_BASE_URL', saved.base],
+      ['IRIS_DB_PATH', saved.db],
+    ] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('refuses the destructive click the model proposed', async () => {
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      watcher = new FileWatcher({
+        cwd: tempDir,
+        patterns: ['*.html'],
+        instruction: 'tidy up this account page',
+        execute: true,
+        headless: true,
+        debounceMs: 50,
+        persistent: true,
+      });
+      await watcher.start();
+      await waitFor(() => logSpy.mock.calls.some((c) => c.join(' ').includes('watcher ready')));
+      fs.writeFileSync(path.join(tempDir, 'account.html'), ACCOUNT.replace('Save', 'Save now'));
+
+      await waitFor(() =>
+        logSpy.mock.calls.some((c) => c.join(' ').includes('actions completed successfully')),
+      );
+      const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(output).toMatch(
+        /Refused by agent policy: target resolves to an element that looks destructive/,
+      );
+      expect(output).toContain('0/1 actions completed successfully');
+    } finally {
+      logSpy.mockRestore();
+    }
   }, 60000);
 });
 

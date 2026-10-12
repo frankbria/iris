@@ -683,7 +683,9 @@ guarantee. Every action the model proposes is checked before it reaches the brow
 | All four action types available | `--allow click,assert` to restrict |
 
 The same policy covers **every plan a model proposed**, not only `--agent` (#354): a one-shot
-`iris run` whose instruction the AI translated, and an RPC `executeBrowserAction` whose
+`iris run` whose instruction the AI translated, `iris watch --execute` with an AI-translated
+instruction (destructive checks only: the watched file has no origin to pin to), and an RPC
+`executeBrowserAction` whose
 `instruction` the AI translated (relaxed with a `policy` param:
 `{ "allow": [...], "allowCrossOrigin": true, "allowDestructive": true }`). A plan you wrote
 yourself (a pattern-translated instruction such as `click #delete-row`, or explicit RPC `actions`) is

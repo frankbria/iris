@@ -977,7 +977,10 @@ listed in the body of the PR that closed #353, for checking against it.
   checks) and `pinPage` (request-level pin) are the shared path; `startOriginOf` takes the
   requested URL, then the page, then the plan's first navigation. The RPC applies the
   per-action checks only (`executeUnderPolicy` in protocol.ts): the request-level guard
-  would stay on the session's page for later requests. Private backlog item P1.22.
+  would stay on the session's page for later requests. `iris watch --execute` applies it to
+  an AI plan with the pin off (`allowCrossOrigin`: the page is the watched `file://`, which has
+  no origin), so the destructive checks remain; `watch` has no `--allow*` flags. Private
+  backlog item P1.22.
 
 ### Retries Never Repeat a Side Effect (issue #296)
 
