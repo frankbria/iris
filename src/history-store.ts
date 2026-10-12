@@ -1,3 +1,4 @@
+import { recordAudit } from './audit-log';
 import { stripUserinfo } from './report-encoding';
 import type Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
@@ -479,6 +480,14 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
               insert into runs (org_id, api_key_id, kind, status, params)
               values (${orgId}, ${keyId}, ${kind}, 'queued', ${toJsonb(params)}::jsonb)
               returning id`.execute(tx);
+            // Audited with the submit (#361); the key id even if it was revoked meanwhile.
+            await recordAudit(tx, {
+              orgId,
+              actor: { apiKeyId: apiKeyId ?? null },
+              action: 'job.submit',
+              target: `run:${rows[0].id}`,
+              metadata: { kind },
+            });
             return rows[0].id;
           });
         try {

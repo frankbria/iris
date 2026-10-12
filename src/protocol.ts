@@ -1,3 +1,4 @@
+import type { AuditEntry } from './audit-log';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createServer, IncomingMessage, STATUS_CODES } from 'http';
 import { handleJobsRequest, type ApiJobs, type RunReader } from './jobs-api';
@@ -496,6 +497,8 @@ export function startServer(
      * each AI call its translations make. Local connections record nothing.
      */
     usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
+    /** Hosted: writes a tenant audit entry (#361): session start and end. Failures are logged. */
+    audit?: (entry: AuditEntry) => Promise<void>;
     /**
      * How often an open tenant session's browser minutes are written (#263), so a
      * crash or a forced restart loses at most one interval, and a session spanning a
@@ -719,8 +722,24 @@ export function startServer(
         }),
       );
   };
-  const meterMinutes = (_principal: Principal) => (session: BrowserSession) =>
+  /** A tenant audit entry (#361); best effort: the session goes on if the write fails. */
+  const audit = (entry: AuditEntry): void => {
+    void options?.audit?.(entry).catch((err: unknown) =>
+      log('error', 'failed to record audit entry', {
+        action: entry.action,
+        err: errMessage(err),
+      }),
+    );
+  };
+  const meterMinutes = (principal: Principal) => (session: BrowserSession) => {
     billMinutes(session, Date.now());
+    audit({
+      orgId: principal.orgId,
+      actor: { apiKeyId: principal.keyId },
+      action: 'session.end',
+      target: `session:${session.id}`,
+    });
+  };
   const checkpoint = setInterval(
     () => {
       const now = Date.now();
@@ -1017,6 +1036,14 @@ export function startServer(
               );
               sessions.set(ws, session);
               log('info', 'session started', { sessionId: session.id, ...who(principal) });
+              if (principal) {
+                audit({
+                  orgId: principal.orgId,
+                  actor: { apiKeyId: principal.keyId },
+                  action: 'session.start',
+                  target: `session:${session.id}`,
+                });
+              }
               return {
                 success: true,
                 // Says what happened. This used to claim "Browser launched
