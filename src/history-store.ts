@@ -6,12 +6,14 @@ import { calculateAccessibilityScore } from './a11y/a11y-runner';
 import type { AccessibilityTestResult } from './a11y/a11y-runner';
 import {
   getA11yTestResults,
-  getTestRuns,
+  getTestRun,
   getVisualTestResults,
   initializeDatabase,
   insertA11yTestResult,
   insertTestRun,
   insertVisualTestResult,
+  iterateTestRuns,
+  type TestRun,
 } from './db';
 import type { ExecutionResult } from './executor';
 import { insertUsage, type UsageEvent } from './billing/usage';
@@ -672,6 +674,13 @@ function toStoredSeverity(
  * per-comparison or per-page rows of its kind. Synchronous, like better-sqlite3.
  */
 export function recordSqliteRun(db: Database.Database, run: RunInput): number {
+  // One transaction (#356): a run is stored with all its results or not at all, and the
+  // rows share one commit instead of an fsync each. Nested in a caller's transaction, it
+  // becomes a savepoint.
+  return db.transaction(() => writeSqliteRun(db, run))();
+}
+
+function writeSqliteRun(db: Database.Database, run: RunInput): number {
   const { summary, passed } = summarize(run);
   const testRunId = insertTestRun(db, {
     instruction: summary,
@@ -679,54 +688,89 @@ export function recordSqliteRun(db: Database.Database, run: RunInput): number {
     startTime: run.startedAt,
     endTime: run.finishedAt,
   });
-  if (run.kind === 'visual') {
-    for (const c of run.result.results) {
-      insertVisualTestResult(db, {
-        testRunId,
-        page: c.page,
-        device: c.device,
-        baselineRef: c.baselinePath ?? null,
-        currentRef: c.screenshotPath,
-        diffRef: c.diffPath ?? null,
-        diffPercentage: 1 - c.similarity,
-        aiAnalysis: c.aiAnalysis ? JSON.stringify(c.aiAnalysis) : null,
-        severity: toStoredSeverity(c.severity),
-        status: c.passed ? 'passed' : 'failed',
-        timestamp: run.finishedAt,
-        // Why it could not be made (#284); page-influenced text, so bounded, as hosted.
-        error: c.error ? boundedError(c.error) : null,
-      });
-    }
-  } else if (run.kind === 'a11y') {
-    const stored = resultsOf(run);
-    for (const [i, page] of run.result.results.entries()) {
-      const { result } = stored[i];
-      const counts = violationCounts(page);
-      insertA11yTestResult(db, {
-        testRunId,
-        page: page.page,
-        violationsCritical: counts.critical,
-        violationsSerious: counts.serious,
-        violationsModerate: counts.moderate,
-        violationsMinor: counts.minor,
-        keyboardPassed: result.keyboardPassed as boolean,
-        screenReaderPassed: result.screenReaderPassed as boolean,
-        // Scored per page against its own violations.
-        // The column is NOT NULL: an unscanned page stores 0, with status failed (#287).
-        score: (result.score as number | undefined) ?? 0,
-        status: stored[i].passed ? 'passed' : 'failed',
-        error: (result.error as string | undefined) ?? null,
-        timestamp: run.finishedAt,
-      });
-    }
-  }
+  if (run.kind === 'visual') writeVisualResults(db, testRunId, run);
+  else if (run.kind === 'a11y') writeA11yResults(db, testRunId, run);
   return testRunId;
+}
+
+const orNull = <T>(value: T | undefined): T | null => value ?? null;
+const statusOf = (passed: boolean) => (passed ? 'passed' : 'failed') as 'passed' | 'failed';
+const jsonOrNull = (value: unknown) => (value ? JSON.stringify(value) : null);
+/** Why a comparison could not be made (#284); page-influenced text, so bounded, as hosted. */
+const errorOrNull = (error: string | undefined) => (error ? boundedError(error) : null);
+
+function writeVisualResults(
+  db: Database.Database,
+  testRunId: number,
+  run: Extract<RunInput, { kind: 'visual' }>,
+): void {
+  for (const c of run.result.results) {
+    insertVisualTestResult(db, {
+      testRunId,
+      page: c.page,
+      device: c.device,
+      baselineRef: orNull(c.baselinePath),
+      currentRef: c.screenshotPath,
+      diffRef: orNull(c.diffPath),
+      diffPercentage: 1 - c.similarity,
+      aiAnalysis: jsonOrNull(c.aiAnalysis),
+      severity: toStoredSeverity(c.severity),
+      status: statusOf(c.passed),
+      timestamp: run.finishedAt,
+      error: errorOrNull(c.error),
+    });
+  }
+}
+
+function writeA11yResults(
+  db: Database.Database,
+  testRunId: number,
+  run: Extract<RunInput, { kind: 'a11y' }>,
+): void {
+  const stored = resultsOf(run);
+  for (const [i, page] of run.result.results.entries()) {
+    const { result } = stored[i];
+    const counts = violationCounts(page);
+    insertA11yTestResult(db, {
+      testRunId,
+      page: page.page,
+      violationsCritical: counts.critical,
+      violationsSerious: counts.serious,
+      violationsModerate: counts.moderate,
+      violationsMinor: counts.minor,
+      keyboardPassed: result.keyboardPassed as boolean,
+      screenReaderPassed: result.screenReaderPassed as boolean,
+      // Scored per page against its own violations.
+      // The column is NOT NULL: an unscanned page stores 0, with status failed (#287).
+      score: (result.score as number | undefined) ?? 0,
+      status: statusOf(stored[i].passed),
+      error: (result.error as string | undefined) ?? null,
+      timestamp: run.finishedAt,
+    });
+  }
 }
 
 // The exact shape summarize() writes, so a user's own instruction for `iris run`
 // that starts with "visual: " is not taken for a run.
 const SUMMARY_KIND =
   /^(rpc|a11y|visual): \d+ (?:action|page|comparison)\(s\), \d+ (?:failed|violation\(s\))$/;
+
+/** The first `limit` rows that are runs, read no further than that (#356). */
+function firstRuns(
+  rows: Iterable<TestRun>,
+  toRun: (row: TestRun) => StoredRun | null,
+  limit: number,
+): StoredRun[] {
+  const runs: StoredRun[] = [];
+  for (const row of rows) {
+    const run = toRun(row);
+    if (run && runs.push(run) >= limit) break;
+  }
+  return runs;
+}
+
+/** A canonical integer row id, or 0, which no row has (AUTOINCREMENT starts at 1). */
+const rowIdOf = (id: string): number => (/^[1-9]\d*$/.test(id) ? Number(id) : 0);
 
 /** In the order they ran: the db.ts getters return newest first by `created_at`. */
 const sortById = <T extends { id?: number }>(rows: T[]) =>
@@ -747,7 +791,7 @@ export function sqliteHistoryStore(dbPath: string): HistoryStore {
       db.close();
     }
   };
-  const toRun = (row: ReturnType<typeof getTestRuns>[number]): StoredRun | null => {
+  const toRun = (row: TestRun): StoredRun | null => {
     const kind = SUMMARY_KIND.exec(row.instruction)?.[1] as RunKind | undefined;
     if (!kind) return null;
     return {
@@ -765,18 +809,14 @@ export function sqliteHistoryStore(dbPath: string): HistoryStore {
       return String(withDb((db) => recordSqliteRun(db, run)));
     },
     async list({ limit = 50 } = {}) {
-      return withDb((db) =>
-        getTestRuns(db)
-          .map(toRun)
-          .filter((r): r is StoredRun => r !== null)
-          // Newest first by insertion order: `created_at` has one-second resolution.
-          .sort((x, y) => Number(y.id) - Number(x.id))
-          .slice(0, limit),
-      );
+      // Newest first by insertion order (`created_at` has one-second resolution), read
+      // lazily and stopped at `limit` runs instead of loading the whole table (#356).
+      return withDb((db) => firstRuns(iterateTestRuns(db), toRun, limit));
     },
     async get(id) {
       return withDb((db) => {
-        const row = getTestRuns(db).find((r) => String(r.id) === id);
+        // By primary key, not a scan of the whole table (#356). Only a canonical integer id.
+        const row = getTestRun(db, rowIdOf(id));
         const run = row && toRun(row);
         if (!run) return null;
         const testRunId = Number(id);

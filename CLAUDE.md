@@ -1669,6 +1669,15 @@ tables.
   (`visual: N comparison(s), M failed`, …); rows `iris run` / `iris watch` write are
   not runs of the store, even when a user's instruction starts with `visual: `. It lists by insertion
   order, because SQLite's `created_at` has one-second resolution.
+- **Local writes are one transaction, reads by key (#356).** `recordSqliteRun` wraps the run row
+  and its result rows in one `db.transaction` (all or nothing, one commit; nested in a
+  caller's transaction it is a savepoint). `list` reads `iterateTestRuns` (by id, newest
+  first) and stops at `limit` runs; `get` reads by primary key (`getTestRun`) and accepts
+  only a canonical integer id. `getTestRuns` breaks `created_at` ties by id.
+- **SQLite files are created 0600** by `ensureDatabaseDir` (db.ts) before SQLite opens them,
+  for the history, the vision cache and the cost ledger (#356): the data directory may
+  already exist with wider permissions than the 0700 it is created with. An existing file
+  keeps its mode. Private backlog item P1.24; criteria derived from the code
 - Hosted CLI `a11y` / `visual` are not tenant surfaces. Hosted a11y/visual runs arrive
   with the job APIs (#267/#268), which call the same store.
 
