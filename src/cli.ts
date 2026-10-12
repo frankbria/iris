@@ -684,8 +684,8 @@ program
   .description('Start JSON-RPC/WebSocket server on the given port')
   .argument(
     '[port]',
-    'Port to listen on (1-65535)',
-    (v) => parseIntOption(v, { min: 1, max: 65535, name: 'port' }),
+    'Port to listen on (1-65535; 0 picks a free one and prints it)',
+    (v) => parseIntOption(v, { min: 0, max: 65535, name: 'port' }),
     4000,
   )
   .option(
@@ -863,7 +863,11 @@ program
     // Advertise the address actually bound. Hardcoding 127.0.0.1 here would
     // describe a container as unreachable while it works fine, and advertising
     // `localhost` would send dual-stack clients to ::1 and miss an IPv4 listener.
-    console.log(`JSON-RPC server listening on ws://${host}:${port}`);
+    // The bound port, not the requested one: `connect 0` lets the OS pick (#364), and a
+    // caller reads it from this line instead of racing for a port it chose itself.
+    const address = wss.address?.();
+    const bound = address && typeof address === 'object' ? address.port : port;
+    console.log(`JSON-RPC server listening on ws://${host}:${bound}`);
     // Only echo a token this process invented. Reprinting a supplied one tells
     // the operator what they already know and copies a secret into the logs.
     if (authToken && !suppliedToken) {
