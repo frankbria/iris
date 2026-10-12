@@ -60,10 +60,17 @@ export interface A11yTestResult {
  * data and cost history. ':memory:' and other special paths have no real dir.
  */
 export function ensureDatabaseDir(dbPath: string): void {
+  // In-memory and anonymous temporary databases ('' to better-sqlite3) have no file.
+  if (dbPath === ':memory:' || dbPath === '') return;
   const dbDir = path.dirname(dbPath);
-  if (dbPath !== ':memory:' && !fs.existsSync(dbDir)) {
+  if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });
   }
+  // Created 0600 before SQLite opens it (#356): the history holds page URLs and error
+  // text, and the directory may already exist with wider permissions than the 0700 above.
+  // An existing file keeps its mode: that is the owner's choice. SQLite gives its journal
+  // the database file's permissions.
+  if (!fs.existsSync(dbPath)) fs.closeSync(fs.openSync(dbPath, 'a', 0o600));
 }
 
 export function initializeDatabase(dbPath: string): Database.Database {
@@ -214,21 +221,41 @@ export function insertTestRun(db: Database.Database, testRun: TestRun): number {
  * Get test run records from the database.
  */
 export function getTestRuns(db: Database.Database, limit?: number): TestRun[] {
+  // `created_at` has one-second resolution: rows written together tie on it, and the id
+  // breaks the tie newest first (#356).
   const query = limit
-    ? 'SELECT * FROM test_results ORDER BY created_at DESC LIMIT ?'
-    : 'SELECT * FROM test_results ORDER BY created_at DESC';
+    ? 'SELECT * FROM test_results ORDER BY created_at DESC, id DESC LIMIT ?'
+    : 'SELECT * FROM test_results ORDER BY created_at DESC, id DESC';
 
   const stmt = db.prepare(query);
   const rows = limit ? stmt.all(limit) : stmt.all();
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return rows.map((row: any) => ({
+  return rows.map(toTestRun);
+}
+
+/** Every `test_results` row, newest first by id, read lazily (#356). */
+export function iterateTestRuns(db: Database.Database): IterableIterator<TestRun> {
+  const rows = db.prepare('SELECT * FROM test_results ORDER BY id DESC').iterate();
+  return (function* () {
+    for (const row of rows) yield toTestRun(row);
+  })();
+}
+
+/** One `test_results` row by id, or undefined. */
+export function getTestRun(db: Database.Database, id: number): TestRun | undefined {
+  const row = db.prepare('SELECT * FROM test_results WHERE id = ?').get(id);
+  return row === undefined ? undefined : toTestRun(row);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toTestRun(row: any): TestRun {
+  return {
     id: row.id,
     instruction: row.instruction,
     status: row.status,
     startTime: new Date(row.start_time),
     endTime: row.end_time ? new Date(row.end_time) : undefined,
-  }));
+  };
 }
 
 /**
