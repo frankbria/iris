@@ -1988,9 +1988,11 @@ list too, or the suite silently becomes machine-dependent again.
 
 The local stores define their schema in code only (the dead `migrations/*.sql` were
 removed): the history store (`src/db.ts`) runs ordered versions from `schema_version`
-(`applyMigrationV1..V3`, in one `immediate()` transaction); the cost ledger and the vision
-cache create their tables and add missing columns idempotently on open (`PRAGMA table_info`).
-A schema change is a new `applyMigrationVn` (history) or a guarded `ALTER` (ledger, cache).
+(`applyMigrationV1..V3`, in one `immediate()` transaction); the cost ledger creates its
+table and adds missing columns idempotently on open (`PRAGMA table_info`); the vision cache
+creates its table and indexes (`IF NOT EXISTS`) and has no upgrade path yet.
+A schema change is a new `applyMigrationVn` (history) or a guarded `ALTER` (the ledger's
+upgrade transaction; the cache would need one added).
 
 ### Data Directory and Budgets (issue #241)
 
