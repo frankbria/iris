@@ -146,9 +146,9 @@ function reportDecision(decision: GuardDecision): void {
  * navigation policy" tells a caller nothing about whether it was the scheme, a
  * metadata host, or the pinned origin. Ask for the reason instead.
  */
-function blockReason(url: string, policy: UrlPolicyOptions): string | null {
+function blockReason(url: string, policy: UrlPolicyOptions, resourceType?: string): string | null {
   try {
-    assertNavigationAllowed(url, policy);
+    assertNavigationAllowed(url, policy, resourceType);
     return null;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -197,7 +197,7 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<CDPSess
 
   cdp.on('Fetch.requestPaused', async (event) => {
     const url = event.request.url;
-    const reason = blockReason(url, state.policy);
+    const reason = blockReason(url, state.policy, event.resourceType);
 
     try {
       if (!reason) {
@@ -447,7 +447,7 @@ async function installContextNet(context: BrowserContext, entry: ContextEntry): 
     const consulted = policy ? [policy] : [...entry.guards].map((g) => g.policy);
     let reason: string | null = null;
     for (const candidate of consulted) {
-      reason = blockReason(url, candidate);
+      reason = blockReason(url, candidate, resourceType);
       if (reason) break; // one refusal is enough
     }
 

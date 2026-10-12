@@ -24,6 +24,13 @@ export interface UrlPolicyOptions {
    * carry a filled-in secret off-origin (#337).
    */
   pinnedOrigin?: string;
+  /**
+   * Origins a pinned page may load sub-resources from (#378): images, fonts, stylesheets,
+   * media and scripts. Never a document (top-level or frame), XHR/fetch, beacon or socket,
+   * so an allowed asset origin is never a navigation target. An asset URL's query still
+   * reaches that origin: list only origins you trust. Full origins, compared exactly.
+   */
+  assetOrigins?: readonly string[];
   /** Allow `file://` navigation (e.g. the watcher rendering local files). Default: false. Ignored under IRIS_HOSTED. */
   allowFile?: boolean;
   /**
@@ -195,10 +202,24 @@ export function isWithinPinnedOrigin(url: string, pinnedOrigin: string): boolean
   }
 }
 
+/** Request types an `assetOrigins` entry may admit under a pin (#378), lower-case. */
+const ASSET_TYPES = new Set(['image', 'font', 'stylesheet', 'media', 'script']);
+
+/** Whether a request of this type (CDP's `Image` or Playwright's `image`) is an asset. */
+export function isAssetRequest(resourceType: string | undefined): boolean {
+  return resourceType !== undefined && ASSET_TYPES.has(resourceType.toLowerCase());
+}
+
 /**
  * Throw if `url` is not a permitted navigation target. Returns normally when allowed.
+ * `resourceType` is the request's, when the caller knows it: an asset may come from an
+ * `assetOrigins` entry under a pin (#378); everything else is held to the pin.
  */
-export function assertNavigationAllowed(url: string, options: UrlPolicyOptions = {}): void {
+export function assertNavigationAllowed(
+  url: string,
+  options: UrlPolicyOptions = {},
+  resourceType?: string,
+): void {
   // Hosted mode is applied here, last, rather than by each caller: every
   // navigation path (the navigate action, the per-request guard, the MCP
   // pre-flight) ends up in this function, and no caller's policy can relax it.
@@ -227,7 +248,13 @@ export function assertNavigationAllowed(url: string, options: UrlPolicyOptions =
     throw new Error(`Navigation blocked: scheme "${scheme}" is not allowed (only http/https).`);
   }
 
-  if (options.pinnedOrigin && !satisfiesPinnedOrigin(parsed, options.pinnedOrigin)) {
+  const admittedAsset =
+    isAssetRequest(resourceType) && (options.assetOrigins ?? []).includes(parsed.origin);
+  if (
+    options.pinnedOrigin &&
+    !satisfiesPinnedOrigin(parsed, options.pinnedOrigin) &&
+    !admittedAsset
+  ) {
     throw new Error(
       `Navigation blocked: ${parsed.origin} leaves the pinned origin ${options.pinnedOrigin}.`,
     );
