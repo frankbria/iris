@@ -192,7 +192,7 @@ production.
 | `P1.23` | [#355](https://github.com/frankbria/iris/issues/355) | Vision prompts: content framing | — | DONE (#526) |
 | `P1.24` | [#356](https://github.com/frankbria/iris/issues/356) | Local history store improvements | — | DONE (#527) |
 | `P1.25` | [#357](https://github.com/frankbria/iris/issues/357) | RPC server: JSON-RPC compliance and error responses | P0.2 (#330) | DONE (#529) |
-| `P1.26` | [#358](https://github.com/frankbria/iris/issues/358) | `iris connect`: startup configuration | P0.3 (#231) | TODO |
+| `P1.26` | [#358](https://github.com/frankbria/iris/issues/358) | `iris connect`: startup configuration | P0.3 (#231) | DONE (#531) |
 | `P1.27` | [#306](https://github.com/frankbria/iris/issues/306) | Build and smoke-test the container on every PR; tie base image to Playwright | — | TODO |
 | `P1.28` | [#359](https://github.com/frankbria/iris/issues/359) | CI/CD: action pinning and deploy configuration | P0.1 (#329) | TODO |
 | `P1.29` | [#360](https://github.com/frankbria/iris/issues/360) | Container image: pinning, scanning, SBOM, notices | P1.27 (#306) | TODO |
