@@ -195,10 +195,16 @@ describe('egress proxy: malformed and failing requests', () => {
   });
 
   it('answers 502 when the vetted address refuses the connection', async () => {
-    // The dialer sends 8.8.4.4 to 127.0.0.1 on the requested port; port 1 is closed.
-    expect((await get('http://down.test:1/')).status).toBe(502);
-    expect((await tunnel('down.test:1')).status).toBe(502);
-    expect(dials).toEqual(['8.8.4.4:1', '8.8.4.4:1']);
+    // The dialer sends 8.8.4.4 to 127.0.0.1 on the requested port. A port this test bound
+    // and closed, not port 1: on WSL2 a connect to 127.0.0.1:1 hangs instead of being
+    // refused (#382), so the refusal must be the test's own.
+    const closed = net.createServer().listen(0, '127.0.0.1');
+    await once(closed, 'listening');
+    const port = (closed.address() as net.AddressInfo).port;
+    await new Promise((resolve) => closed.close(resolve));
+    expect((await get(`http://down.test:${port}/`)).status).toBe(502);
+    expect((await tunnel(`down.test:${port}`)).status).toBe(502);
+    expect(dials).toEqual([`8.8.4.4:${port}`, `8.8.4.4:${port}`]);
   });
 
   it('keeps serving after a client sends garbage', async () => {

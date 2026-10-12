@@ -4,7 +4,7 @@ import { LogOutButton } from "@/components/auth-forms"
 import { OrgSwitcher } from "@/components/org-forms"
 import { SuspendedBanner } from "@/components/contact-link"
 import { getDb } from "@/lib/auth"
-import { requireOrg } from "@/lib/org"
+import { isManager, requireOrg } from "@/lib/org"
 import { formatBytes } from "@/lib/run-format"
 import { orgEntitlements } from "../../../../src/billing/plans"
 import { storageUsage } from "../../../../src/storage-quota"
@@ -42,6 +42,11 @@ export default async function DashboardPage() {
       <Link href="/provider-keys" className="text-sm underline">
         AI provider keys
       </Link>
+      {isManager(role) && (
+        <Link href="/audit" className="text-sm underline">
+          Audit log
+        </Link>
+      )}
       <div>
         <LogOutButton />
       </div>
