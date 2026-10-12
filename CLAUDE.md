@@ -2075,6 +2075,9 @@ tables.
 - **`ActionExecutor.cleanup()` waits for an in-flight launch**, then closes what
   it yields. A cleanup that landed mid-launch used to find no browser yet; if
   page creation then failed, that Chromium ran with nothing to close it.
+- **Concurrent `createPage()` calls share one launch (#383).** `launchBrowser()` returns
+  the in-flight `launching` promise first; two callers each used to start a Chromium, and
+  the first one's process was never closed.
 - **A dead browser is dropped, not reused.** The executor clears it on
   `disconnected`, and the protocol clears a `session.page` that `isClosed()`,
   so the next action relaunches. Playwright notices a kill ~100ms after the
