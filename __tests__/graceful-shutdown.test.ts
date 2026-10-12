@@ -122,12 +122,14 @@ describe('readiness and drain, in process (#309)', () => {
 
 describe('an upgrade whose key check ends after the drain began (#309)', () => {
   it('is refused with 503, not admitted', async () => {
+    const order: string[] = [];
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
     const wss = startServer(0, {
       authenticate: {
         verify: async () => {
           await held;
+          order.push('checked');
           return { orgId: 'org-a', keyId: 'key-a' };
         },
         recheck: async () => true,
@@ -142,10 +144,17 @@ describe('an upgrade whose key check ends after the drain began (#309)', () => {
       late.on('error', () => undefined);
       const answered = once(late, 'unexpected-response');
       await new Promise((resolve) => setTimeout(resolve, 200)); // the check is under way
-      expect(await drainServer(wss, 1_000)).toBe(true);
-      release();
+      // The drain waits for the check, so its 503 is written before the drain resolves and
+      // iris connect closes and exits (which would reset the socket instead).
+      const drained = drainServer(wss, 5_000).then((ok) => {
+        order.push('drained');
+        return ok;
+      });
+      setTimeout(release, 300);
       const [, response] = await answered;
       expect(response.statusCode).toBe(503);
+      expect(await drained).toBe(true);
+      expect(order).toEqual(['checked', 'drained']);
     } finally {
       await new Promise((resolve) => wss.close(resolve));
     }

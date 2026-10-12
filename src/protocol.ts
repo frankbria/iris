@@ -1274,10 +1274,12 @@ export function startServer(
   drainers.set(wss, async (deadlineMs) => {
     draining = true;
     const end = performance.now() + deadlineMs;
-    while (inFlight > 0 && performance.now() < end) {
+    // Upgrades still in their key check too: each gets its 503 once the check ends,
+    // rather than a reset when the close destroys its socket.
+    while ((inFlight > 0 || verifying > 0) && performance.now() < end) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    return inFlight === 0;
+    return inFlight === 0 && verifying === 0;
   });
 
   return wss;
