@@ -537,9 +537,24 @@ export function startServer(
   const verified = new WeakMap<IncomingMessage, Principal>();
   /** Upgrades whose key is still being verified; they count against the connection cap. */
   let verifying = 0;
+  /** Shutting down (#309): readiness answers 503, new upgrades and requests are refused. */
+  let draining = false;
+  /** RPC messages being handled; a drain waits for them to reach zero. */
+  let inFlight = 0;
 
   // One listener for both: the WebSocket upgrade, and the job REST API (#267).
   const server = createServer((req, res) => {
+    // Liveness and readiness (#309), before auth and logging: probes run every few seconds,
+    // and a hosted deployment has no shared token to authenticate one with (#341).
+    if (req.method === 'GET' && (req.url === '/health/live' || req.url === '/health/ready')) {
+      const ready = req.url === '/health/live' || !draining;
+      res.writeHead(ready ? 200 : 503, {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      });
+      res.end(JSON.stringify({ status: ready ? 'ok' : 'draining' }));
+      return;
+    }
     // One line per REST request, with the id echoed back so a client can quote it (#275).
     const t0 = performance.now();
     // Ours is always generated (a client's could collide with another's); a safe
@@ -632,6 +647,7 @@ export function startServer(
         log('info', 'connection refused', { reason, status });
         done(false, status, message);
       };
+      if (draining) return refuse(503, 'Server is shutting down', 'draining');
       if (origin && !allowedOrigins.includes(origin)) {
         return refuse(403, 'Origin not allowed', 'origin');
       }
@@ -852,7 +868,7 @@ export function startServer(
       if (ws.readyState === WebSocket.OPEN) ws.send(serializeResponse(res));
     };
 
-    ws.on('message', async (data) => {
+    const handleMessage = async (data: WebSocket.RawData) => {
       // Per request (#275): an id for its log line, and the start of its latency.
       const t0 = performance.now();
       const requestId = randomUUID();
@@ -929,6 +945,10 @@ export function startServer(
       let refused = false;
 
       try {
+        // Draining (#309): what is in flight finishes, nothing new starts.
+        if (draining) {
+          throw { code: -32000, message: 'Server is shutting down', refused: true };
+        }
         switch (req.method) {
           case 'executeCommand': {
             const parsed = ExecuteCommandParams.safeParse(req.params);
@@ -1184,6 +1204,15 @@ export function startServer(
         },
         !closed,
       );
+    };
+    // Counted for a drain (#309): it waits until every request in flight is answered.
+    ws.on('message', async (data) => {
+      inFlight++;
+      try {
+        await handleMessage(data);
+      } finally {
+        inFlight--;
+      }
     });
 
     ws.on('close', () => {
@@ -1230,7 +1259,28 @@ export function startServer(
     closed = true;
   });
 
+  drainers.set(wss, async (deadlineMs) => {
+    draining = true;
+    const end = performance.now() + deadlineMs;
+    while (inFlight > 0 && performance.now() < end) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return inFlight === 0;
+  });
+
   return wss;
+}
+
+const drainers = new WeakMap<WebSocketServer, (deadlineMs: number) => Promise<boolean>>();
+
+/**
+ * Begin a graceful shutdown (#309): readiness answers 503, new connections and new requests
+ * are refused, and the promise resolves once every request in flight has been answered,
+ * true, or when `deadlineMs` passes first, false. The caller then closes the server, which
+ * ends the sessions and their browsers.
+ */
+export function drainServer(wss: WebSocketServer, deadlineMs: number): Promise<boolean> {
+  return drainers.get(wss)?.(deadlineMs) ?? Promise.resolve(true);
 }
 
 /**

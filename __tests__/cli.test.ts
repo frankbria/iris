@@ -367,6 +367,9 @@ describe('CLI Commands', () => {
     // Invoking the handler should close connected clients AND the server, so the
     // 'close' drain can run and the process can exit (no hang on Ctrl+C).
     (newSigint[0] as () => void)();
+    // It drains first (#309): with nothing in flight the drain resolves at once, but
+    // asynchronously, so let its promise settle before looking.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(clientClose).toHaveBeenCalledWith(1001, 'Server shutting down');
     expect(mockClose).toHaveBeenCalledTimes(1);
 

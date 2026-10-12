@@ -30,6 +30,23 @@ export async function main(): Promise<void> {
   const server = new McpServer({ name: 'iris', version: packageVersion() });
   registerTools(server);
   await server.connect(new StdioServerTransport());
+
+  // Exit on SIGTERM / SIGINT and when the client closes stdin (#309). The SDK neither
+  // handles a signal nor ends on EOF, so a scan in progress kept the process (and its
+  // Chromium) running after the client was gone. Playwright closes the browsers it
+  // launched when the process exits.
+  let exiting = false;
+  const exit = (reason: string) => {
+    if (exiting) return;
+    exiting = true;
+    console.error(`[iris-mcp] ${reason}; exiting`);
+    void server.close().finally(() => process.exit(0));
+    // A close that hangs (a tool call holding the transport) must not keep the process.
+    setTimeout(() => process.exit(0), 2000).unref();
+  };
+  process.on('SIGTERM', () => exit('SIGTERM'));
+  process.on('SIGINT', () => exit('SIGINT'));
+  process.stdin.on('end', () => exit('stdin closed'));
 }
 
 if (require.main === module) {

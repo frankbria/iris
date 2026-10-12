@@ -51,10 +51,23 @@ describe('docker-compose.staging.yml hardening (issue #332)', () => {
     expect(compose).toMatch(/^\s+pids_limit: [1-9]\d*$/m);
   });
 
-  it('gives shutdown longer than the server takes to force-exit (5s, src/cli.ts)', () => {
+  it('gives shutdown longer than the drain plus the force-exit take (src/cli.ts, #309)', () => {
     const grace = compose.match(/^\s+stop_grace_period: (\d+)s$/m);
     expect(grace).not.toBeNull();
-    expect(Number(grace![1])).toBeGreaterThan(5);
+    const drainMs = Number(
+      read('src/cli.ts')
+        .match(/const DRAIN_DEADLINE_MS = ([\d_]+);/)![1]
+        .replace(/_/g, ''),
+    );
+    // The drain, then 5s for wedged sockets before the forced exit.
+    expect(Number(grace![1]) * 1000).toBeGreaterThan(drainMs + 5000);
+  });
+
+  it('probes readiness, not a 404, in production (#309)', () => {
+    const production = read('docker-compose.production.yml');
+    expect(production).toMatch(
+      /fetch\('http:\/\/127\.0\.0\.1:4000\/health\/ready'\)\.then\(r=>process\.exit\(r\.status===200\?0:1\)/,
+    );
   });
 
   it('delivers the token as a secret file, never as an environment variable', () => {
