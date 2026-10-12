@@ -644,7 +644,7 @@ export class FileWatcher {
     // A changed .ts or .css is no page (#319): navigating Chromium to its source and
     // clicking there is what the README example used to do. Decided before translating,
     // so nothing is paid for and no run is recorded (PR bot review).
-    if (this.options.execute && event.type !== 'unlink' && target === null) {
+    if (this.options.execute && target === null) {
       this.logger.log(
         `⏭️  Not executed: ${event.path} is not a page. Pass --url (or set IRIS_BASE_URL) for the page to run against.`,
       );
