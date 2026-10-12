@@ -1087,6 +1087,34 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(escape.map((i) => i.success)).toEqual([true, true]);
     });
 
+    // Codex review: past the per-page bound the rest are untested, which is not a pass.
+    it('reports dialogs left untested past the limit instead of passing (#491)', async () => {
+      const dialogs = Array.from(
+        { length: 52 },
+        (_, i) => `<div role="dialog" id="d${i}"><button>Ok ${i}</button></div>`,
+      ).join('');
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>${dialogs}
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          const d = document.activeElement && document.activeElement.closest('[role=dialog]');
+          if (d) d.style.display = 'none';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'many-dialogs',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.filter((i) => i.success)).toHaveLength(50);
+      expect(escape.find((i) => !i.success)).toMatchObject({
+        target: 'page',
+        actualBehavior: expect.stringMatching(/^2 dialog\(s\) not tested/),
+      });
+      expect(result.passed).toBe(false);
+    }, 120_000);
+
     it('does not fail a dialog that an earlier Escape already closed', async () => {
       await load(
         page,

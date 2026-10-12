@@ -245,6 +245,22 @@ const STILL_OPEN = ({
 /** At most this many dialogs are tested with Escape on one page. */
 const MAX_ESCAPE_DIALOGS = 50;
 
+/** In-page: showing dialogs not yet tested (no `attr`), counted when the bound is hit. */
+const UNTESTED_DIALOGS = ({ selector, attr }: { selector: string; attr: string }): number => {
+  const showing = (el: Element) => {
+    const style = getComputedStyle(el);
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      Element.prototype.getClientRects.call(el).length > 0 &&
+      !Element.prototype.closest.call(el, '[inert]')
+    );
+  };
+  return Array.from(document.querySelectorAll(selector)).filter(
+    (el) => showing(el) && !Element.prototype.hasAttribute.call(el, attr),
+  ).length;
+};
+
 /**
  * An evaluate that died because the page navigated (a dialog whose Escape handler sends
  * the user elsewhere): that dialog was dismissed, not a failure of the check (#286).
@@ -940,7 +956,8 @@ export class KeyboardTester {
       });
 
     try {
-      for (let n = 0; n < MAX_ESCAPE_DIALOGS; n++) {
+      let n = 0;
+      for (; n < MAX_ESCAPE_DIALOGS; n++) {
         const value = 'escape-' + n;
         const picked = await page.evaluate(PICK_DIALOG, {
           selector: DIALOG_SELECTOR,
@@ -963,6 +980,18 @@ export class KeyboardTester {
           outcome(picked.label, open ? 'Still visible' : 'Closed', !open);
         } catch {
           outcome(picked.label, 'Failed to test', false);
+        }
+      }
+      // The bound keeps a page from holding the run; what it left untested is not a pass
+      // (codex review).
+      if (n === MAX_ESCAPE_DIALOGS) {
+        const left = await page.evaluate(UNTESTED_DIALOGS, { selector: DIALOG_SELECTOR, attr });
+        if (left > 0) {
+          outcome(
+            'page',
+            left + ' dialog(s) not tested: the limit is ' + MAX_ESCAPE_DIALOGS + ' per page',
+            false,
+          );
         }
       }
     } finally {

@@ -252,7 +252,8 @@ plans/
   within 2 px; height may change), with its name (`aria-label`, `aria-labelledby`, first
   heading) and text containing or contained in its own (a re-render), which is marked tested
   too. No class lists and no page-wide count: a dialog that opened elsewhere, under another
-  name, or slid into the gap with other text is a different dialog. At most 50 per page
+  name, or slid into the gap with other text is a different dialog. At most 50 per page;
+  showing dialogs left untested past that are a failed `page` interaction, never a pass
 - **The a11y runner isolates pages (#287).** A page that fails (navigation, timeout, a check
   that throws on hostile markup) is that page's result with `error` and an empty axe
   result; the other pages still run. `summary.pagesErrored` counts them, and an errored page
