@@ -815,6 +815,44 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
     });
 
     describe('money in integer micro-dollars (#318)', () => {
+      // Codex review: the legacy path rounded to nearest, and fixed pending rows' estimates.
+      it('rounds legacy rows up like new writes, and follows an older release settling', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-micros-legacy-'));
+        const file = path.join(dir, 'ledger.db');
+        const old = new Database(file);
+        old.exec(`CREATE TABLE cost_tracking (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL,
+          provider TEXT NOT NULL, model TEXT NOT NULL, operation TEXT NOT NULL,
+          cost REAL NOT NULL, cached INTEGER NOT NULL DEFAULT 0,
+          pending INTEGER NOT NULL DEFAULT 0)`);
+        const add = old.prepare(
+          `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, pending) VALUES (?, 'openai', 'gpt-4o-mini', 'vision-analysis', ?, ?)`,
+        );
+        add.run(Date.now(), 0.0000153, 0); // settled: must count 16, as toMicros would
+        add.run(Date.now(), 0.00000015, 0); // one token: must not be $0
+        const pending = Number(add.run(Date.now(), 0.03, 1).lastInsertRowid); // an old reservation
+        old.close();
+
+        const upgraded = new CostTracker(file);
+        try {
+          const raw = new Database(file);
+          expect(raw.prepare('SELECT cost_micros FROM cost_tracking ORDER BY id').all()).toEqual([
+            { cost_micros: 16 },
+            { cost_micros: 1 },
+            { cost_micros: null },
+          ]);
+          // The older process settles its reservation, updating `cost` only.
+          raw
+            .prepare('UPDATE cost_tracking SET cost = 0.003, pending = 0 WHERE id = ?')
+            .run(pending);
+          raw.close();
+          expect(upgraded.getStats().totalCost).toBe((16 + 1 + 3_000) / 1e6);
+        } finally {
+          upgraded.close();
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
       it('converts USD to micros, rounding a paid fraction up and float noise away', () => {
         expect(toMicros(0)).toBe(0);
         expect(toMicros(2.5e-5)).toBe(25); // 2.5e-5 * 1e6 is 25.000000000000004 in floats

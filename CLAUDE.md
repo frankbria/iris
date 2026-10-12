@@ -202,9 +202,11 @@ plans/
 - **Budget is reserved before a call and settled after it (issue #244).** `CostTracker.reserve()` checks the breaker and inserts a `pending = 1` row at the call's worst-case cost (8k in / 1k out tokens at the model's rate; text calls add one token per request character, since the instruction is uncapped short of the RPC payload limit) in one `BEGIN IMMEDIATE` transaction, so calls in flight count against the budget, across connections and processes. `settle(id, usage)` rewrites the row with the real cost; `release(id)` deletes it when no reply came back. Admission is "spend + reservations < limit", so N parallel calls end within the limit plus one call. `trackOperation()` never throws: a call that was answered is paid for, and dropping its row is how spend went missing. A pending row left by a crashed process keeps counting at its estimate (fails safe)
   - **Money is summed in integer micro-dollars (#318)**: every row also carries `cost_micros`
     (`toMicros()`: through nano-dollars, then rounded up, so a paid call is never $0 and
-    float noise adds nothing), and every sum adds `COALESCE(cost_micros, round(cost * 1e6))`,
-    so rows an older release writes (`cost` only) still count. The REAL `cost` stays for that
-    release. The upgrade backfills the column in the existing `immediate()` transaction.
+    float noise adds nothing), and every sum adds `COALESCE(cost_micros, <cost in micros, rounded up>)`,
+    so rows an older release writes (`cost` only) still count; the fallback rounds up the same
+    way. The REAL `cost` stays for that release. The upgrade backfills settled rows only, in
+    the existing `immediate()` transaction: an older process settles its own pending rows by
+    updating `cost`, which a fixed `cost_micros` would ignore (codex review).
   - A reply the provider billed but IRIS rejected (empty, not JSON, outside the schema) throws `AIResponseRejectedError` carrying `usage`, and the smart client settles it before moving on. After a call is settled nothing may send it to the next vendor: a cache-write failure is logged, not treated as a provider failure
 - **SmartAIVisionClient**: Cache-first; calls the configured provider only. Other vendors are tried (configured provider still first) only when `enableFallback` is passed or `ai.fallback === true` in the config (#245). The old default walked a fixed `ollama → openai → anthropic` chain, so an OpenAI user with a local Ollama got Ollama's answer and an outage billed a vendor, or a BYOK key, the user never chose. Strict `=== true`, because `config.json` is untyped and `"false"` is truthy
 - **A page that grew or shrank is diffed, not refused (#282).** `VisualDiffEngine.compare`

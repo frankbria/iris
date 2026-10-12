@@ -276,8 +276,12 @@ export function toMicros(usd: number): number {
 
 const fromMicros = (micros: number | null): number => (micros ?? 0) / 1e6;
 
-/** A row's micros when only `cost` is set: rows an older release wrote, and the backfill. */
-const LEGACY_MICROS = 'CAST(ROUND(cost * 1000000) AS INTEGER)';
+/**
+ * A row's micros when only `cost` is set: rows an older release wrote, and the backfill.
+ * The same rule as `toMicros()` (codex review): nano-dollars, then rounded up by integer
+ * division, so a legacy row is never counted lower than this release would count it.
+ */
+const LEGACY_MICROS = '((CAST(ROUND(cost * 1000000000) AS INTEGER) + 999) / 1000)';
 /** What every sum adds: the exact column, else the row's `cost` converted. */
 const MICROS = `COALESCE(cost_micros, ${LEGACY_MICROS})`;
 
@@ -392,7 +396,10 @@ export class CostTracker {
         // as before, for a release that reads this file and does not know the column.
         if (!names.has('cost_micros')) {
           this.db.exec('ALTER TABLE cost_tracking ADD COLUMN cost_micros INTEGER');
-          this.db.exec(`UPDATE cost_tracking SET cost_micros = ${LEGACY_MICROS}`);
+          // Settled rows only (codex review): an older process settles its own pending
+          // reservations by updating `cost`, which a fixed `cost_micros` would ignore. Left
+          // null, a pending row is summed from `cost`, before and after it settles.
+          this.db.exec(`UPDATE cost_tracking SET cost_micros = ${LEGACY_MICROS} WHERE pending = 0`);
         }
       })
       .immediate();
