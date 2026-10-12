@@ -5,7 +5,6 @@ import { sql, type Kysely, type RawBuilder } from 'kysely';
 import { log } from './log';
 import { orgArtifacts, type ArtifactStore } from './artifact-store';
 import { forgetArtifacts } from './storage-quota';
-import { lockBaselineObject } from './visual-baselines';
 
 /**
  * Org offboarding, account deletion and the daily retention pass (#349; owner decisions
@@ -74,20 +73,25 @@ async function collectSupersededBaselines(
   now: Date,
 ): Promise<number> {
   const cutoff = sql`${now}::timestamptz - make_interval(days => ${RUN_RETENTION_DAYS})`;
-  // Oldest first, so a key that keeps failing is retried without hiding newer ones for long.
+  // Random order: objects that keep failing cannot fill every batch and starve the rest
+  // (codex review). ponytail: no attempt tracking; add an attempted_at if a failure pattern
+  // ever needs ordering.
   const { rows } = await sql<{ org_id: string; key: string }>`
     select o.org_id, o.key from artifact_objects o
     where o.key ~ '^org/[^/]+/project/[^/]+/baselines/'
       and ${collectableSql(sql.ref('o.org_id'), sql.ref('o.key'), cutoff)}
-    order by o.created_at limit 500`.execute(db);
+    order by random() limit 500`.execute(db);
   let collected = 0;
   const failed: string[] = [];
   for (const { org_id, key } of rows) {
     try {
-      // Re-checked under the object's lock: an approval may have made it current again
-      // since the listing (codex review).
+      // Re-checked with its accounting row locked (codex review). Approval rewrites a key
+      // through that row (the quota reservation refreshes `created_at`), so it either
+      // committed before this check, which then finds it new or current, or waits for this
+      // delete and writes the object again afterwards.
       const gone = await db.transaction().execute(async (tx) => {
-        await lockBaselineObject(tx, org_id, key);
+        await sql`select 1 from artifact_objects where org_id = ${org_id} and key = ${key}
+          for update`.execute(tx);
         const { rows: still } = await sql<{ ok: boolean }>`
           select ${collectableSql(org_id, key, cutoff)} as ok`.execute(tx);
         if (!still[0].ok) return false;

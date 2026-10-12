@@ -58,6 +58,8 @@ export function quotaArtifacts(
   return {
     async put(key, body, contentType) {
       // Reserve: the row goes in only while the org's other objects leave room for it.
+      // `created_at` is when the object was last written: a rewrite (a re-approval reusing
+      // its key) is new again, so the baseline collector (#475) keeps it.
       const { rows } = await sql<{ reserved: boolean; used: string; replaced: boolean }>`
         with prior as (
           select coalesce(sum(bytes), 0) as total,
@@ -68,7 +70,7 @@ export function quotaArtifacts(
           insert into artifact_objects (org_id, key, bytes)
           select ${orgId}, ${key}, ${body.length} from prior
           where prior.total - prior.existing + ${body.length} <= ${limitBytes}
-          on conflict (org_id, key) do update set bytes = excluded.bytes
+          on conflict (org_id, key) do update set bytes = excluded.bytes, created_at = now()
           returning 1
         )
         select exists (select 1 from reserved) as reserved,

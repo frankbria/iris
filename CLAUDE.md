@@ -1841,6 +1841,11 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   queued or running is skipped that pass (it may still record a link). The inventory is
   `artifact_objects` (#315), so images stored before it are not found; deletion is
   `ArtifactStore.delete(key)` (S3 `DeleteObject`, filesystem `rm --force`).
+  Each candidate is re-checked and deleted with its `artifact_objects` row locked
+  (`for update`), and the quota write refreshes that row's `created_at` on a rewrite, so a
+  re-approval reusing the key is either seen as new or waits and writes the object again.
+  Candidates are taken in random order, so failing ones cannot starve the rest; a failure
+  is reported after the others are tried.
 - **Not purged**: live orgs' AI ledger rows (no period decided).
 
 ### BYOK Provider Keys (issue #344)

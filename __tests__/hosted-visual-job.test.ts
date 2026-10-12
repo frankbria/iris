@@ -26,7 +26,6 @@ import { postgresHistory, postgresJobs } from '../src/history-store';
 import { startServer, type Authenticator, type Principal } from '../src/protocol';
 import { processNextVisualJob } from '../src/worker';
 import { offboarding } from '../src/offboarding';
-import { lockBaselineObject } from '../src/visual-baselines';
 import { quotaArtifacts } from '../src/storage-quota';
 import { runVisualJob } from '../src/visual/hosted-job';
 import { orgArtifacts } from '../src/artifact-store';
@@ -489,16 +488,18 @@ const page = (color: string, extra = 0) =>
     await sql`update runs set status = 'failed', finished_at = now() where id = ${inFlight}`.execute(
       db,
     );
-    // A re-approval of K1's run, holding the object's lock as approval does, makes K1 current
-    // again while the pass runs: the pass re-checks under the lock and keeps it (codex review).
+    // A re-approval of K1's run, uncommitted while a pass runs: approval rewrites the key
+    // through its accounting row (the quota reservation) and makes it current. The pass
+    // waits for that row, re-checks, and keeps K1 (codex review).
     const reapproved = db.transaction().execute(async (tx) => {
-      await lockBaselineObject(tx, 'org-b', k1);
+      await sql`update artifact_objects set created_at = now()
+        where org_id = 'org-b' and key = ${k1}`.execute(tx);
       const pass = offboarding(db).runRetention({ artifacts: store });
       await new Promise((r) => setTimeout(r, 1500));
       await sql`update visual_baselines set object_key = ${k1}
         where org_id = 'org-b' and project = 'gc'`.execute(tx);
       // Wrapped: returning the promise itself would make the commit wait for the pass,
-      // which waits for this transaction's lock.
+      // which waits for this transaction's row lock.
       return { pass };
     });
     const raced = await (await reapproved).pass;
@@ -506,6 +507,8 @@ const page = (color: string, extra = 0) =>
     expect(await store.get(k1)).not.toBeNull();
     await sql`update visual_baselines set object_key = ${k2}
       where org_id = 'org-b' and project = 'gc'`.execute(db);
+    await sql`update artifact_objects set created_at = now() - interval '100 days'
+      where org_id = 'org-b' and key = ${k1}`.execute(db);
 
     const swept = await offboarding(db).runRetention({ artifacts: store });
     expect(swept.failures).toEqual([]);
