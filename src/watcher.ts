@@ -6,7 +6,7 @@ import { describeAction } from './actions';
 import { initializeDatabase, insertTestRun } from './db';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
 import { guardedGoto } from './url-policy-guard';
-import { checkPlannedAction, planPolicy, type PolicyVerdict } from './agent-policy';
+import { checkPlannedAction, originOf, planPolicy, type PolicyVerdict } from './agent-policy';
 import { Page } from 'playwright';
 import { VisualCaptureEngine } from './visual/capture';
 import { VisualDiffEngine } from './visual/diff';
@@ -32,6 +32,11 @@ export interface WatchOptions {
   retryDelay?: number; // Delay between retries (default: 1000)
   /** Refuse loopback, private and reserved hosts (default: false; forced on by IRIS_HOSTED). */
   blockPrivateHosts?: boolean;
+  /**
+   * The page `--execute` runs the instruction against (#319). Falls back to IRIS_BASE_URL,
+   * then to the changed file when it is HTML; a change to any other file runs nothing.
+   */
+  url?: string;
   // AI feedback mode options
   /** Classify what changed on screen instead of replaying an instruction. */
   feedback?: boolean;
@@ -150,6 +155,7 @@ export class FileWatcher {
       retryAttempts: options.retryAttempts ?? 2,
       retryDelay: options.retryDelay ?? 1000,
       blockPrivateHosts: options.blockPrivateHosts ?? false,
+      url: options.url ?? '',
       feedback: options.feedback ?? false,
       feedbackUrl: options.feedbackUrl ?? '',
       maxAiCalls: options.maxAiCalls ?? DEFAULT_MAX_AI_CALLS,
@@ -228,7 +234,11 @@ export class FileWatcher {
    * for lack of stats is still dropped before it triggers a run.
    */
   private buildIgnoreFilter(): (testPath: string, stats?: { isDirectory(): boolean }) => boolean {
-    const isIgnored = picomatch(this.options.ignore);
+    // At any depth (#319): `node_modules/**` must skip a nested node_modules too, not
+    // only the one at the watch root. Patterns already anchored (`**/`, `/`) stay as given.
+    const isIgnored = picomatch(
+      this.options.ignore.map((p) => (p.startsWith('**/') || p.startsWith('/') ? p : `**/${p}`)),
+    );
 
     return (testPath, stats) => {
       const relative = path.relative(this.options.cwd, testPath).split(path.sep).join('/');
@@ -586,6 +596,16 @@ export class FileWatcher {
     }
   }
 
+  /**
+   * The page `--execute` runs against (#319): `--url`, else IRIS_BASE_URL, else the changed
+   * file when it is HTML. `null` when there is none: a source file is not a page.
+   */
+  private executeTarget(changed: string, fileUrl: string): string | null {
+    const configured = this.options.url || process.env.IRIS_BASE_URL;
+    if (configured) return configured;
+    return /\.html?$/i.test(changed) ? fileUrl : null;
+  }
+
   private async executeInstruction(event: WatchEvent): Promise<void> {
     if (this.options.feedback) {
       try {
@@ -610,8 +630,9 @@ export class FileWatcher {
       // concatenation would mis-parse when handed to page.goto().
       const fileUrl = pathToFileURL(path.resolve(this.options.cwd, event.path)).href;
 
+      const target = this.executeTarget(event.path, fileUrl);
       const result = await translate(this.options.instruction, {
-        url: fileUrl,
+        url: target ?? fileUrl,
       });
 
       this.logger.log(`✨ Translation result (${result.method}):`);
@@ -630,7 +651,13 @@ export class FileWatcher {
       // Execute actions if enabled. Skip execution entirely on unlink: the file is
       // gone, so there is nothing to navigate to, and running translated DOM actions
       // against the stale reused page would act on the previous file's content.
-      if (this.options.execute && event.type !== 'unlink') {
+      if (this.options.execute && event.type !== 'unlink' && target === null) {
+        // A changed .ts or .css is no page (#319): navigating Chromium to its source
+        // and clicking there is what the README example used to do.
+        this.logger.log(
+          `\n⏭️  Not executed: ${event.path} is not a page. Pass --url (or set IRIS_BASE_URL) for the page to run against.`,
+        );
+      } else if (this.options.execute && event.type !== 'unlink' && target) {
         this.logger.log('\n🚀 Executing actions in browser...');
 
         try {
@@ -643,17 +670,21 @@ export class FileWatcher {
             throw new Error('Browser session not initialized');
           }
 
-          // Navigate to the changed file first so DOM-targeting actions run against
-          // its real DOM rather than the blank page. This is execution setup, not a
-          // translated action, so it is not counted in executionResults.
-          this.logger.log(`   🌐 Navigating to ${fileUrl}`);
-          await guardedGoto(this.page, fileUrl);
+          // Navigate to the target first so DOM-targeting actions run against its real
+          // DOM rather than the blank page. This is execution setup, not a translated
+          // action, so it is not counted in executionResults.
+          this.logger.log(`   🌐 Navigating to ${target}`);
+          await guardedGoto(this.page, target);
 
-          // An AI plan runs under the agent policy, as on every path (#354). The page is
-          // the changed file (`file://`), which has no origin to pin to, so the origin pin
-          // is off and the destructive checks remain; `watch` has no --allow* flags, and a
-          // literal instruction (a pattern plan) is the user's own, as in `iris run`.
-          const policy = planPolicy(result.method === 'ai', { allowCrossOrigin: true });
+          // An AI plan runs under the agent policy, as on every path (#354). A page URL
+          // pins the plan to its origin, as `iris run` does; a changed HTML file
+          // (`file://`) has no origin to pin to, so the pin is off there and the
+          // destructive checks remain. `watch` has no --allow* flags, and a literal
+          // instruction (a pattern plan) is the user's own, as in `iris run`.
+          const startOrigin = originOf(target);
+          const policy = planPolicy(result.method === 'ai', {
+            allowCrossOrigin: startOrigin === null,
+          });
 
           // Execute each action and report progress
           for (let i = 0; i < result.actions.length; i++) {
@@ -663,7 +694,7 @@ export class FileWatcher {
             );
 
             const verdict: PolicyVerdict = policy
-              ? await checkPlannedAction(action, policy, this.page, null)
+              ? await checkPlannedAction(action, policy, this.page, startOrigin)
               : { allowed: true };
             const execResult: ExecutionResult = verdict.allowed
               ? await this.executor.executeAction(action, this.page, undefined, verdict.target)
@@ -899,6 +930,7 @@ export interface WatchExecutionOptions {
   /** Suppress narration; errors still print. Threaded to the watcher's logger. */
   quiet?: boolean;
   blockPrivateHosts?: boolean;
+  url?: string;
   headless?: boolean;
   browserTimeout?: number;
   retryAttempts?: number;
@@ -967,6 +999,9 @@ export async function watchFiles(
     }
     if (executionOptions.blockPrivateHosts !== undefined) {
       options.blockPrivateHosts = executionOptions.blockPrivateHosts;
+    }
+    if (executionOptions.url !== undefined) {
+      options.url = executionOptions.url;
     }
     if (executionOptions.headless !== undefined) {
       options.headless = executionOptions.headless;

@@ -106,6 +106,19 @@ describe('watcher against real chokidar 5 (issue #172)', () => {
     expect(seen.some((p) => p.includes('node_modules'))).toBe(false);
   }, 30000);
 
+  // #319: the ignore globs were compiled as given, so `node_modules/**` skipped only the
+  // node_modules at the watch root, and a monorepo's nested ones were walked and watched.
+  it('ignores a nested node_modules too, not only the one at the root', async () => {
+    fs.mkdirSync(path.join(dir, 'packages', 'app', 'node_modules', 'dep'), { recursive: true });
+    const seen = await startWatching(['**/*.{ts,tsx}']);
+
+    fs.writeFileSync(path.join(dir, 'packages', 'app', 'node_modules', 'dep', 'index.ts'), 'x');
+    fs.writeFileSync(path.join(dir, 'packages', 'app', 'main.ts'), 'export const a = 1;');
+
+    expect(await until(() => seen.some((p) => p.endsWith('main.ts')))).toBe(true);
+    expect(seen.some((p) => p.includes('node_modules'))).toBe(false);
+  }, 30000);
+
   it('watches a single file target that lives outside the process cwd', async () => {
     // Caught in review of #182. chokidar 3 took the path as a watch target, so
     // cwd was irrelevant; chokidar 5 watches cwd and filters, so leaving cwd at
