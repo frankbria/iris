@@ -670,6 +670,49 @@ describe('hosted RPC history (#254)', () => {
     }
   });
 
+  // #482, codex review: a billed managed call whose usage row fails to write keeps its
+  // reservation (release says so), or the spent credit would come back.
+  test('a managed call whose usage could not be recorded is released as unrecorded', async () => {
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const outcomes: unknown[] = [];
+    const translate = jest
+      .spyOn(translatorModule, 'translate')
+      .mockImplementation(async (_i, _c, scope) => {
+        const credentials = scope?.credentials;
+        if (typeof credentials === 'function') await credentials();
+        // As MeteredTextClient.report does: a failed report is logged, never thrown.
+        await Promise.resolve(
+          scope?.onUsage?.({
+            callId: 'call-u',
+            operation: 'text',
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            costUsd: 0.003,
+            estimated: false,
+          }),
+        ).catch(() => undefined);
+        return { actions: [], method: 'ai', confidence: 0, reasoning: 'stub' };
+      });
+    try {
+      const url = await serve({
+        usage: { record: async () => Promise.reject(new Error('ledger down')) } as never,
+        aiCredentials: async () => ({
+          provider: 'openai',
+          apiKey: 'iris-managed',
+          billingMode: 'managed',
+          release: async (outcome) => void outcomes.push(outcome),
+        }),
+      });
+      const b = await open(url, as('key-b'));
+      await call(b, 'launchBrowser');
+      await call(b, 'executeBrowserAction', { instruction: 'check the order total' });
+      expect(outcomes).toEqual([{ unrecorded: true }]);
+    } finally {
+      translate.mockRestore();
+      errors.mockRestore();
+    }
+  });
+
   // #479: a provider error on IRIS's own key describes IRIS's vendor account, not the
   // tenant's. The real OpenAI client and translator, against a local server answering 401
   // (OPENAI_BASE_URL is the operator's routing, which injected credentials keep).

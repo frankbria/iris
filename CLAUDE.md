@@ -1607,7 +1607,9 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   credential carries
   `release()`; the RPC server strips it before `translate()` and runs it in a `finally`, after
   the settled usage row is written (`onUsage` is awaited). A row older than 10 minutes stops
-  counting and is deleted at the org's next admission (a crashed call). The estimate is a
+  counting and is deleted at the org's next admission (a crashed call). A billed call whose
+  usage row failed to write is released as `{ unrecorded: true }`: its row becomes `held`
+  and counts as spent until the month ends (codex review), since nothing else records it. The estimate is a
   resolver parameter, computed in `hostedServices()`: the portal imports `managed-ai.ts`,
   and the cost tracker would bring SQLite into its bundle. Stripe reporting is #264.
 

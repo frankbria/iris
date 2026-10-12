@@ -258,7 +258,7 @@ then on its own key if it has one (`src/billing/managed-ai.ts`). For those reque
 vendor is IRIS's subprocessor. The ledger row carries `billing_mode = managed`. Each
 vendor's own retention applies to what it receives. While a managed call is in flight, a
 `managed_ai_reservations` row (org, worst-case amount, time; no content) holds its credit
-(#482); it is deleted when the call ends, or after 10 minutes, and with the org.
+(#482); it is deleted when the call ends, or after 10 minutes, and with the org. A call that was billed but whose usage row could not be written keeps its row (`held`) until the month ends.
 
 ### Email (SMTP provider)
 

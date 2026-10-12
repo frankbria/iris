@@ -213,7 +213,7 @@ export interface BrowserSession {
  */
 export type TenantCredentials = AICredentials & {
   billingMode: 'byok' | 'managed';
-  release?: () => Promise<void>;
+  release?: (outcome?: { unrecorded?: boolean }) => Promise<void>;
 };
 
 export interface Principal {
@@ -1607,7 +1607,9 @@ async function executeBrowserActions(
       // Whose account a billed call is on, from the credential the resolver gave (#479).
       let billingMode = 'byok' as 'byok' | 'managed';
       // Frees the credit a managed credential reserved, once translation is over (#482).
-      let release: (() => Promise<void>) | undefined;
+      let release: TenantCredentials['release'];
+      // A billed call whose usage row failed to write keeps its reservation (#482).
+      let unrecorded = false;
       const translation = await translate(
         instruction,
         url ? { url } : undefined,
@@ -1624,16 +1626,21 @@ async function executeBrowserActions(
                   { provider: call.provider, kind, billing_mode: billingMode },
                   call.costUsd,
                 );
-                return tenant.usage?.record(principal.orgId, [
-                  {
-                    kind,
-                    quantity: 1,
-                    unitCostUsd: call.costUsd,
-                    estimated: call.estimated,
-                    billingMode,
-                    idempotencyKey: `${call.operation}:${call.callId}`,
-                  },
-                ]);
+                return tenant.usage
+                  ?.record(principal.orgId, [
+                    {
+                      kind,
+                      quantity: 1,
+                      unitCostUsd: call.costUsd,
+                      estimated: call.estimated,
+                      billingMode,
+                      idempotencyKey: `${call.operation}:${call.callId}`,
+                    },
+                  ])
+                  .catch((err: unknown) => {
+                    unrecorded = true;
+                    throw err; // still reported by the metered client
+                  });
               },
               credentials: async () => {
                 if (!tenant.aiCredentials) return null;
@@ -1659,7 +1666,7 @@ async function executeBrowserActions(
       ).finally(() =>
         // The settled usage (if any) is already in the ledger: the reservation can go. A
         // failed release is logged; the row then stops counting after its TTL.
-        release?.().catch((err) =>
+        release?.({ unrecorded }).catch((err) =>
           log('error', 'releasing managed AI credit failed', {
             ...(principal && who(principal)),
             err: errMessage(err),

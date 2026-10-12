@@ -83,7 +83,11 @@ export async function managedSpendThisMonth(db: Kysely<unknown>, orgId: string):
  */
 export type ResolvedAI = AICredentials & {
   billingMode: BillingMode;
-  release?: () => Promise<void>;
+  /**
+   * Run once the call is over. `unrecorded`: the provider billed it but its usage row
+   * failed to write, so the reservation is kept as spent for the month (codex review).
+   */
+  release?: (outcome?: { unrecorded?: boolean }) => Promise<void>;
 };
 
 /** A reservation older than this no longer counts: its call crashed or hung (#482). */
@@ -102,9 +106,13 @@ async function reserveCredit(
 ): Promise<string | null> {
   return db.transaction().execute(async (tx) => {
     await sql`select pg_advisory_xact_lock(hashtext(${'managed-ai:' + orgId}))`.execute(tx);
-    // Stale rows of this org go here: nothing else sweeps them.
-    await sql`delete from managed_ai_reservations where org_id = ${orgId}
-      and created_at < now() - make_interval(mins => ${RESERVATION_TTL_MINUTES})`.execute(tx);
+    // Stale rows of this org go here: nothing else sweeps them. A held row (a billed call
+    // with no usage row) stays and counts for its month; earlier months' go.
+    await sql`delete from managed_ai_reservations where org_id = ${orgId} and (
+      (not held and created_at < now() - make_interval(mins => ${RESERVATION_TTL_MINUTES}))
+      or created_at < date_trunc('month', now() at time zone 'UTC') at time zone 'UTC')`.execute(
+      tx,
+    );
     const { rows } = await sql<{ reserved: string }>`
       select coalesce(sum(amount_usd), 0) as reserved from managed_ai_reservations
       where org_id = ${orgId}`.execute(tx);
@@ -153,7 +161,13 @@ export function managedAiResolver(deps: {
           provider: deps.managedKey.provider,
           apiKey: deps.managedKey.apiKey,
           billingMode: 'managed',
-          release: async () => {
+          release: async (outcome) => {
+            if (outcome?.unrecorded) {
+              await sql`update managed_ai_reservations set held = true where id = ${id}`.execute(
+                deps.db,
+              );
+              return;
+            }
             await sql`delete from managed_ai_reservations where id = ${id}`.execute(deps.db);
           },
         };

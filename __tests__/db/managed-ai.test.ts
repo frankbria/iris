@@ -52,7 +52,7 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
     u.pathname = `/${dbName}`;
     db = createPostgresDb(u.toString());
     await migrateToLatest(db);
-    for (const org of ['org-m', 'org-b', 'org-x', 'org-r', 'org-big']) {
+    for (const org of ['org-m', 'org-b', 'org-x', 'org-r', 'org-big', 'org-held']) {
       await sql`insert into organization (id, name, slug, "createdAt") values (${org}, ${org}, ${org}, now())`.execute(
         db,
       );
@@ -169,6 +169,23 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
   // Codex review: priced at the provider's dearest registered rates, because the model a
   // call runs on may be a rescued successor of a retired default (#184); and the request's
   // own size is added to the input ceiling, as the budget reservation does (#244).
+  // Codex review: a call the provider billed but whose usage row failed to write keeps its
+  // reservation, counted as spent for the month, not released and not expired.
+  it('keeps the reservation of a billed call whose usage could not be recorded (#482)', async () => {
+    await orgEntitlements(db).setPlan('org-held', 'pro'); // $10
+    await orgAiSettings(db).set('org-held', 'managed', 'user:u5');
+    await spend('org-held', 8, 'managed'); // room for two $1 calls
+    const resolve = resolver(MANAGED, () => 1);
+    const first = await resolve({ orgId: 'org-held' });
+    await first!.release!({ unrecorded: true });
+    // Even after the in-flight window, the held reservation still counts.
+    await sql`update managed_ai_reservations set created_at = now() - interval '1 hour'
+      where org_id = 'org-held'`.execute(db);
+    const second = await resolve({ orgId: 'org-held' });
+    expect(second?.billingMode).toBe('managed');
+    expect(await resolve({ orgId: 'org-held' })).toBeNull(); // 8 + 1 held + 1 in flight
+  });
+
   it("prices the worst case at the provider's dearest rates plus the request size (#482)", () => {
     // claude-opus-5: 8000 input tokens at $5/M plus 1000 output at $25/M.
     expect(managedCallEstimateUsd('anthropic')).toBeCloseTo(0.065, 6);
