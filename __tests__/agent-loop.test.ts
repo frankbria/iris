@@ -282,6 +282,13 @@ describe('agent loop', () => {
     // #351: before, this reported goalMet true — the check that passed came
     // before three clicks it says nothing about.
     it('does not carry a passing check past the actions that followed it', async () => {
+      // Disabled, so each click reaches the executor and times out waiting for it: a failed
+      // click may still have been dispatched. (A selector that matches nothing is refused
+      // before it runs since #353, and a refused action clears nothing, by #351's rule.)
+      await load(
+        page,
+        `${PAGE}<button id="ghost-a" disabled>A</button><button id="ghost-b" disabled>B</button><button id="ghost-c" disabled>C</button>`,
+      );
       scriptAI([
         [
           { type: 'assert', kind: 'text_visible', target: 'Your cart' }, // passes
@@ -528,12 +535,29 @@ describe('agent loop', () => {
           expect(await page.title()).toBe('DELETED');
         });
 
-        it('leaves a selector that matches nothing to the executor', async () => {
+        // Codex review: the check used to give up after 1 s and allow the action, and the
+        // click's longer auto-wait then found a destructive control rendered late.
+        it('checks an element that appears late, within the action timeout', async () => {
+          await page.evaluate(
+            `setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<button id="late" onclick="document.title=\\'LATE\\'">Delete everything</button>'), 1600)`,
+          );
+          page.setDefaultTimeout(3000);
+          scriptAI([[{ type: 'click', selector: '#late' }]]);
+
+          const result = await runAgentLoop({ instruction: 'tidy', executor, page, maxTurns: 1 });
+
+          expect(result.results[0].error).toMatch(/Refused by agent policy.*looks destructive/);
+          expect(await page.title()).toBe('Account');
+        });
+
+        it('refuses, as not found, a selector that never matches', async () => {
           scriptAI([[{ type: 'click', selector: '#not-here' }]]);
+          const execute = jest.spyOn(executor, 'executeAction');
 
           const result = await runAgentLoop({ instruction: 'click', executor, page, maxTurns: 1 });
 
-          expect(result.results[0].error).not.toMatch(/Refused by agent policy/);
+          expect(execute).not.toHaveBeenCalled();
+          expect(result.results[0].error).toMatch(/Refused by agent policy.*#not-here.*not found/);
         });
       });
 

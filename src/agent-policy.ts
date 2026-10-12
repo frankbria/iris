@@ -207,8 +207,8 @@ export function checkAction(
   return ALLOWED;
 }
 
-/** How long the resolved-target check waits for the element before leaving it to the executor. */
-const RESOLVE_TIMEOUT_MS = 1000;
+/** Reading an attached element's attributes and text is quick; this only bounds a hung page. */
+const READ_TIMEOUT_MS = 1000;
 
 /** Attributes that name an element to its user, read with its text content. */
 const NAMING_ATTRIBUTES = ['aria-label', 'title', 'id', 'name', 'value', 'placeholder', 'alt'];
@@ -219,8 +219,8 @@ const NAMING_ATTRIBUTES = ['aria-label', 'title', 'id', 'name', 'value', 'placeh
  * account" without naming it, and {@link checkAction} only reads the selector.
  *
  * A heuristic like the selector check, and the page controls what it reads: a hostile page
- * can still label a destructive control blandly. An element that is not there within
- * {@link RESOLVE_TIMEOUT_MS} is left to the executor, which fails it as usual.
+ * can still label a destructive control blandly. An element that never appears is refused
+ * (see resolvedVerdict).
  */
 export async function checkResolvedTarget(
   action: Action,
@@ -229,7 +229,21 @@ export async function checkResolvedTarget(
 ): Promise<PolicyVerdict> {
   // Only click and fill aim at an element; asserts are read-only (see checkAction).
   if (policy.allowDestructive || !('selector' in action)) return ALLOWED;
-  const term = await resolvedDestructiveTerm(page, action.selector);
+  return resolvedVerdict(page, action.selector);
+}
+
+/**
+ * Fails closed (codex review, #353): an element the check cannot read is not acted on. The
+ * check waits as long as the click would (the page's action timeout), so a control that
+ * renders late is read, not skipped; one that never appears would have timed out in the
+ * executor anyway.
+ */
+async function resolvedVerdict(page: Page, selector: string): Promise<PolicyVerdict> {
+  const words = await elementWords(page.locator(selector).first());
+  if (words === null) {
+    return { allowed: false, reason: `target ${selector} was not found on the page` };
+  }
+  const term = destructiveTerm(words);
   return term
     ? {
         allowed: false,
@@ -238,26 +252,21 @@ export async function checkResolvedTarget(
     : ALLOWED;
 }
 
-/** The destructive term on the element `selector` resolves to, if any. */
-async function resolvedDestructiveTerm(page: Page, selector: string): Promise<string | null> {
-  return destructiveTerm((await elementWords(page.locator(selector).first())) ?? '');
-}
-
 const unread = () => null;
 
 /**
- * What a user reads on `target`: its naming attributes and text content, or null when it is
- * not on the page within {@link RESOLVE_TIMEOUT_MS}. Playwright's own reads, not a page
- * function: under `jest --coverage` a function sent to the page carries instrumentation the
- * page does not have.
+ * What a user reads on `target`: its naming attributes and text content, or null when it
+ * is not on the page within the page's action timeout. Playwright's own reads, not a page
+ * function: under `jest --coverage` a function sent to the page carries instrumentation
+ * the page does not have.
  */
 async function elementWords(target: Locator): Promise<string | null> {
-  const timeout = { timeout: RESOLVE_TIMEOUT_MS };
   try {
-    await target.waitFor({ state: 'attached', ...timeout });
+    await target.waitFor({ state: 'attached' });
   } catch {
     return null;
   }
+  const timeout = { timeout: READ_TIMEOUT_MS };
   const attributes = NAMING_ATTRIBUTES.map((name) =>
     target.getAttribute(name, timeout).catch(unread),
   );

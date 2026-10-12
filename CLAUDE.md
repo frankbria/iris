@@ -936,9 +936,13 @@ listed in the body of the PR that closed #353, for checking against it.
   `getAttribute`/`textContent`, not `locator.evaluate`: a page function would need to be
   a string under `--coverage`, and a string arrow passed to `locator.evaluate` is
   evaluated as an expression that returns the function, never calling it (`undefined`).
-- An element not attached within 1 s is left to the executor (it fails as before). The
-  page controls what is read, so a hostile page can still label a destructive control
-  blandly; this narrows the selector-only gap, it does not close it.
+- **It fails closed** (codex review): the check waits for the element with the page's own
+  action timeout (what the click would wait), so a control rendered late is read, not
+  skipped; one that never appears is refused as "not found" (it would have timed out in the
+  executor). A refusal never ran, so it does not clear the goal verdict (#351); a test that
+  needs a failing click uses a real but disabled element. The page controls what is read,
+  so a hostile page can still label a destructive control blandly; this narrows the
+  selector-only gap, it does not close it.
 - One-shot `iris run` and the RPC do not apply agent policy at all yet: #354.
 
 ### Retries Never Repeat a Side Effect (issue #296)
