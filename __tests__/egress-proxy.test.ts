@@ -359,6 +359,7 @@ describe('egress proxy: timeouts (#379)', () => {
   async function bounded(overrides: {
     lookup?: (host: string) => Promise<string[]>;
     connect?: (address: string, port: number) => net.Socket;
+    idleTimeoutMs?: number;
   }): Promise<{ proxy: EgressProxy; port: number }> {
     const p = await startEgressProxy({
       lookup: async (host) => (host === 'site.test' ? [PUBLIC] : ['8.8.4.4']),
@@ -420,7 +421,8 @@ describe('egress proxy: timeouts (#379)', () => {
     up.listen(0, '127.0.0.1');
     await once(up, 'listening');
     const upPort = (up.address() as AddressInfo).port;
-    const { proxy: p, port } = await bounded({});
+    // 1 s, pinged every 100 ms: a loaded CI runner must not idle out the busy tunnel.
+    const { proxy: p, port } = await bounded({ idleTimeoutMs: 1_000 });
     try {
       const open = async () => {
         const client = net.connect(port, '127.0.0.1');
@@ -430,13 +432,18 @@ describe('egress proxy: timeouts (#379)', () => {
         await once(client, 'data'); // 200 Connection Established
         return client;
       };
-      // Busy: an echo every 100 ms keeps it open past the 300 ms bound.
+      // Busy: an echo every 100 ms keeps it open past the bound. A close fails at once
+      // instead of leaving the echo wait hanging.
       const busy = await open();
-      for (let i = 0; i < 8; i++) {
+      const closed = once(busy, 'close').then(() => {
+        throw new Error('the busy tunnel was closed');
+      });
+      for (let i = 0; i < 15; i++) {
         busy.write('ping');
-        await once(busy, 'data');
+        await Promise.race([once(busy, 'data'), closed]);
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
+      closed.catch(() => undefined); // closed below on purpose
       expect(busy.destroyed).toBe(false);
       busy.destroy();
       // Quiet: closed by the proxy.
