@@ -313,8 +313,9 @@ plans/
   caller, `cli-run-exit.test.ts`). `resetModelProbeCache()` clears it too; a test that mocks
   `fetch` for the same endpoint twice must call it between cases
 - **OpenAI requests send `max_completion_tokens`**, not the deprecated `max_tokens` (#298);
-  Anthropic keeps `max_tokens` (its own API). The o-series still refuses `temperature: 0.1`
-  (#520)
+  Anthropic keeps `max_tokens` (its own API). The o-series refuses any `temperature` but the
+  default, so `isReasoningModel()` (`o1`/`o3`/`o4`, `-mini`, snapshots) drops it from both
+  OpenAI clients' requests (#520); other models keep 0.1
 - **`--ai-model <id>`** on `visual-diff` and `watch` is the vision model (`diff.aiModel`,
   `ai.model` -> `AIVisualClassifier`). `<PROVIDER>_MODEL` stays the text model
 - **Vision prompts frame page content (#355).** `visionContextBlock()` (src/ai-client/vision.ts)
