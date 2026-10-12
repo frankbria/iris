@@ -77,15 +77,52 @@ export async function managedSpendThisMonth(db: Kysely<unknown>, orgId: string):
   return Number(rows[0].spent);
 }
 
-export type ResolvedAI = AICredentials & { billingMode: BillingMode };
+/**
+ * A credential for one call. A managed one carries `release`: the caller runs it once the
+ * call is over (settled or not), which frees the credit reserved for it (#482).
+ */
+export type ResolvedAI = AICredentials & {
+  billingMode: BillingMode;
+  release?: () => Promise<void>;
+};
+
+/** A reservation older than this no longer counts: its call crashed or hung (#482). */
+const RESERVATION_TTL_MINUTES = 10;
+
+/**
+ * Reserves `estimateUsd` of the org's managed credit if spend plus live reservations leave
+ * room for it, under a per-org lock so parallel calls cannot all pass. Returns the
+ * reservation's id, or null when the credit is used up.
+ */
+async function reserveCredit(
+  db: Kysely<unknown>,
+  orgId: string,
+  creditUsd: number,
+  estimateUsd: number,
+): Promise<string | null> {
+  return db.transaction().execute(async (tx) => {
+    await sql`select pg_advisory_xact_lock(hashtext(${'managed-ai:' + orgId}))`.execute(tx);
+    // Stale rows of this org go here: nothing else sweeps them.
+    await sql`delete from managed_ai_reservations where org_id = ${orgId}
+      and created_at < now() - make_interval(mins => ${RESERVATION_TTL_MINUTES})`.execute(tx);
+    const { rows } = await sql<{ reserved: string }>`
+      select coalesce(sum(amount_usd), 0) as reserved from managed_ai_reservations
+      where org_id = ${orgId}`.execute(tx);
+    const committed = (await managedSpendThisMonth(tx, orgId)) + Number(rows[0].reserved);
+    if (committed + estimateUsd > creditUsd) return null;
+    const inserted = await sql<{ id: string }>`
+      insert into managed_ai_reservations (org_id, amount_usd) values (${orgId}, ${estimateUsd})
+      returning id`.execute(tx);
+    return inserted.rows[0].id;
+  });
+}
 
 /**
  * The per-call credential resolver for hosted requests (`startServer({ aiCredentials })`).
  *
- * ponytail: a managed call is admitted while any credit is left, and its usage is written
- * when it settles, so the overshoot is the cost of the calls in flight for the org (bounded
- * by its rate buckets and sessions; the operator's CostTracker budget still reserves per
- * call, #244). Reserve in Postgres if that overshoot ever matters.
+ * A managed call reserves its worst-case cost first (#482): it is admitted only when this
+ * month's managed spend plus the calls in flight leave room for it, so N parallel calls stay
+ * within the credit. The caller releases the reservation when the call is over.
  */
 export function managedAiResolver(deps: {
   db: Kysely<unknown>;
@@ -94,17 +131,27 @@ export function managedAiResolver(deps: {
   ) => Promise<{ byokAllowed: boolean; managedAiCreditUsdPerMonth: number }>;
   providerKeys: { credentialsFor(orgId: string): Promise<AICredentials | null> };
   managedKey: ManagedKey | null;
+  /**
+   * Worst-case cost of one managed call, reserved before it (#482): hosted wiring passes
+   * `managedCallEstimateUsd` (src/ai-client/cost-tracker.ts). A parameter, not an import:
+   * the portal loads this module, and the cost tracker would bring SQLite into its bundle.
+   */
+  estimateUsd: number;
 }): (principal: { orgId: string }) => Promise<ResolvedAI | null> {
   const settings = orgAiSettings(deps.db);
+  const { estimateUsd } = deps;
   return async ({ orgId }) => {
     const [mode, plan] = await Promise.all([settings.get(orgId), deps.entitlements(orgId)]);
     if (mode === 'managed' && deps.managedKey) {
-      const left = plan.managedAiCreditUsdPerMonth - (await managedSpendThisMonth(deps.db, orgId));
-      if (left > 0)
+      const id = await reserveCredit(deps.db, orgId, plan.managedAiCreditUsdPerMonth, estimateUsd);
+      if (id)
         return {
           provider: deps.managedKey.provider,
           apiKey: deps.managedKey.apiKey,
           billingMode: 'managed',
+          release: async () => {
+            await sql`delete from managed_ai_reservations where id = ${id}`.execute(deps.db);
+          },
         };
     }
     // BYOK, or managed with no credit left: the org's own key, never the reverse.

@@ -207,7 +207,14 @@ export interface BrowserSession {
  * The mode is required: a managed key recorded as `byok` would never count against the
  * org's credit.
  */
-export type TenantCredentials = AICredentials & { billingMode: 'byok' | 'managed' };
+/**
+ * A tenant's credential for one request. `release`, when present, is run once the AI call
+ * is over, settled or not: it frees managed credit reserved for the call (#482).
+ */
+export type TenantCredentials = AICredentials & {
+  billingMode: 'byok' | 'managed';
+  release?: () => Promise<void>;
+};
 
 export interface Principal {
   orgId: string;
@@ -1593,6 +1600,8 @@ async function executeBrowserActions(
       const principal = session.principal;
       // Whose account a billed call is on, from the credential the resolver gave (#479).
       let billingMode = 'byok' as 'byok' | 'managed';
+      // Frees the credit a managed credential reserved, once translation is over (#482).
+      let release: (() => Promise<void>) | undefined;
       const translation = await translate(
         instruction,
         url ? { url } : undefined,
@@ -1624,8 +1633,11 @@ async function executeBrowserActions(
                 if (!tenant.aiCredentials) return null;
                 try {
                   const resolved = await tenant.aiCredentials(principal);
-                  if (resolved) billingMode = resolved.billingMode;
-                  return resolved;
+                  if (!resolved) return null;
+                  billingMode = resolved.billingMode;
+                  const { release: free, ...credentials } = resolved;
+                  release = free;
+                  return credentials;
                 } catch (err) {
                   log('error', 'AI credentials lookup failed; translating without AI', {
                     ...who(principal),
@@ -1636,6 +1648,15 @@ async function executeBrowserActions(
               },
             }
           : {},
+      ).finally(() =>
+        // The settled usage (if any) is already in the ledger: the reservation can go. A
+        // failed release is logged; the row then stops counting after its TTL.
+        release?.().catch((err) =>
+          log('error', 'releasing managed AI credit failed', {
+            ...(principal && who(principal)),
+            err: errMessage(err),
+          }),
+        ),
       );
       // On IRIS's managed key, a translation with no actions is a failure whose reason
       // (provider error, invalid reply) describes IRIS's vendor account: a key's last

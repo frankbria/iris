@@ -1597,9 +1597,17 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - **IRIS's key** is operator config, read once at startup: `IRIS_MANAGED_AI_PROVIDER`
   (`openai` | `anthropic`) + `IRIS_MANAGED_AI_KEY(_FILE)`; one without the other exits 3. On
   the `jest.setup.ts` scrub list.
-- ponytail: a call is admitted while any credit is left, so the overshoot is the cost of
-  the org's calls in flight; the operator's CostTracker budget still reserves per call (#244).
-  Stripe reporting of managed usage is #264.
+- **Credit is reserved before the call (#482).** `managed_ai_reservations` (migration 0018):
+  under `pg_advisory_xact_lock(hashtext('managed-ai:' || org))` the resolver admits a managed
+  call only when this month's managed spend + live reservations + the call's worst case fit
+  the credit, and inserts a reservation at that worst case (`managedCallEstimateUsd`: the
+  cost tracker's `RESERVATION_CEILING` at the provider's default text model, priced by
+  `worstCaseCallUsd`; an unpriced model gets the dearest rates). The credential carries
+  `release()`; the RPC server strips it before `translate()` and runs it in a `finally`, after
+  the settled usage row is written (`onUsage` is awaited). A row older than 10 minutes stops
+  counting and is deleted at the org's next admission (a crashed call). The estimate is a
+  resolver parameter, computed in `hostedServices()`: the portal imports `managed-ai.ts`,
+  and the cost tracker would bring SQLite into its bundle. Stripe reporting is #264.
 
 ### Hosted Job API (issue #267)
 
