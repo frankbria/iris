@@ -583,9 +583,30 @@ Not instant, and not everything:
   suspension. A job already running when you suspend finishes and is billed.
 - Members can still invite people, accept invitations and switch orgs. Membership is
   not what does harm; keys and jobs are. They cannot create a new org, which would carry
-  fresh keys past the suspension. Account-level bans are not built yet.
+  fresh keys past the suspension. To stop a person, ban the user (below).
 
 Unsuspending restores all of it at once. The org's data is untouched either way.
+
+### Ban or unban a user (issue #457)
+
+```bash
+docker compose exec iris node dist/cli.js admin ban-user <userId or email> --reason "AUP 3.1: phishing (ticket 124)"
+docker compose exec iris node dist/cli.js admin user-status <userId or email>
+docker compose exec iris node dist/cli.js admin unban-user <userId or email> --reason "Appeal granted (ticket 124)"
+```
+
+Kept in `user_suspensions`, with actor and reason, as for orgs. A ban, at once:
+
+- deletes the user's portal sessions (signed out on the next request) and refuses every
+  new sign-in with `USER_BANNED`; without a session they cannot accept an invitation;
+- revokes the API keys they created in every org they belong to (audited as
+  `api_key.delete`, reason `user banned`). Keys made before #361 have no creator on record:
+  check the org's keys and suspend the org if needed. A live RPC connection on a revoked key
+  closes at its next re-check (60 s).
+
+Not covered: their orgs and memberships stay (suspend the org too if it is theirs), and a
+new sign-up under another address is a new user. Unbanning restores sign-in only; revoked
+keys stay revoked.
 
 ### Published contacts
 

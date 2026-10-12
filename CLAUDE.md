@@ -70,7 +70,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268; 0012: artifact purges, #472; 0013: org AI settings, #479; 0014: observation usage, #312)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268; 0012: artifact purges, #472; 0013: org AI settings, #479; 0014: observation usage, #312; 0016: user bans, #457)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── credential-refs.ts     # {{secret:NAME}} fill values: sources, resolve at fill time, scrub (#352)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
@@ -540,6 +540,15 @@ Operator suspension of an org, and the published contacts. Ops side: runbook "Ab
 - **`iris admin suspend-org|unsuspend-org <orgId> --reason … [--actor …]`** and
   `org-status`: hosted only (exit 2), exit 3 when the database is unreachable, 1 for an
   unknown org. Actor defaults to `$SUDO_USER`/`$USER`.
+- **User bans (#457)** reuse the same history code: `org-suspension.ts` is one core over a
+  `Subject` (table, id column, resolve, optional `onSuspend` in the same transaction);
+  `orgSuspensions` and `userSuspensions` (by id or email, `user_suspensions`, migration 0016,
+  user-scoped and cascading) are its two instances, with the same `suspend`/`unsuspend`
+  actions. A ban deletes the user's sessions and revokes the keys they created (#408's
+  `revokeKeysCreatedBy`) in that transaction; `createAuth()`'s `session.create.before`
+  refuses a banned user (`403 USER_BANNED`). Every session is made there, so invitations
+  (which need one) are covered too. There is no cookie cache: deleting the session rows
+  signs them out at once. `iris admin ban-user|unban-user|user-status`.
 - **Contacts are operator configuration**, never invented: `IRIS_SECURITY_CONTACT`,
   `IRIS_ABUSE_CONTACT`, `IRIS_SUPPORT_CONTACT` (`mailto:` or `https:`, validated;
   malformed throws). Unset shows a `[placeholder]` on `/contact`, and

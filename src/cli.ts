@@ -967,7 +967,7 @@ async function withAdminDb(
     return;
   }
   const { createPostgresDb, probeDatabase, resolveDatabaseUrl } = await import('./db/postgres');
-  const { orgSuspensions, UnknownOrgError } = await import('./org-suspension');
+  const { orgSuspensions, UnknownOrgError, UnknownUserError } = await import('./org-suspension');
   const { OffboardingError } = await import('./offboarding');
   let db: ReturnType<typeof createPostgresDb> | undefined;
   try {
@@ -984,7 +984,8 @@ async function withAdminDb(
     await fn(orgSuspensions(db), db);
   } catch (err) {
     console.error((err as Error).message);
-    code = err instanceof UnknownOrgError || err instanceof OffboardingError ? 1 : 3;
+    const unknown = err instanceof UnknownOrgError || err instanceof UnknownUserError;
+    code = unknown || err instanceof OffboardingError ? 1 : 3;
   } finally {
     await db.destroy();
   }
@@ -997,47 +998,92 @@ const defaultActor = () => process.env.SUDO_USER || process.env.USER || 'operato
 const formatEvent = (e: import('./org-suspension').SuspensionEvent) =>
   `${e.createdAt.toISOString()}  ${e.action.padEnd(9)}  by ${e.actor}: ${e.reason}`;
 
-for (const action of ['suspend', 'unsuspend'] as const) {
-  admin
-    .command(`${action}-org <orgId>`)
-    .description(
-      action === 'suspend'
-        ? 'Suspend an org: its keys get 403, live connections close, queued jobs fail'
-        : 'Lift an org suspension',
-    )
-    .requiredOption('--reason <text>', 'Why (recorded; never shown to the tenant)')
-    .option('--actor <name>', 'Who is acting (default: $SUDO_USER, $USER, or "operator")')
-    .action(async (orgId: string, options: { reason: string; actor?: string }) => {
-      const by = { reason: options.reason.trim(), actor: (options.actor ?? defaultActor()).trim() };
-      if (!by.reason || !by.actor) {
-        console.error('--reason and --actor must not be blank');
-        process.exit(2); // Invalid usage
-        return;
-      }
-      await withAdminDb(async (suspensions) => {
-        const result = await suspensions[action](orgId, by);
-        const state = result.suspended ? 'suspended' : 'active';
-        console.log(
-          result.changed
-            ? `org ${orgId} is now ${state}`
-            : `org ${orgId} is already ${state}; nothing recorded`,
-        );
-      });
-    });
+/**
+ * Suspension of an org (#348) and bans of a user (#457, by id or email): the same history,
+ * so the same commands. A ban also revokes the user's sessions and the keys they made.
+ */
+const SUSPENDABLE = [
+  {
+    noun: 'org',
+    arg: '<orgId>',
+    on: 'suspend-org',
+    off: 'unsuspend-org',
+    suspendedState: 'suspended',
+    record: 'suspension',
+    onHelp: 'Suspend an org: its keys get 403, live connections close, queued jobs fail',
+    offHelp: 'Lift an org suspension',
+    factory: 'orgSuspensions',
+  },
+  {
+    noun: 'user',
+    arg: '<userIdOrEmail>',
+    on: 'ban-user',
+    off: 'unban-user',
+    suspendedState: 'banned',
+    record: 'ban',
+    onHelp: 'Ban a user: sessions and the keys they made are revoked, sign-in is refused',
+    offHelp: 'Lift a user ban',
+    factory: 'userSuspensions',
+  },
+] as const;
+type Suspendable = (typeof SUSPENDABLE)[number];
+
+async function openHistory(subject: Suspendable, db: import('kysely').Kysely<unknown>) {
+  return (await import('./org-suspension'))[subject.factory](db);
 }
 
-admin
-  .command('org-status <orgId>')
-  .description("Print an org's suspension state and history")
-  .action(async (orgId: string) => {
-    await withAdminDb(async (suspensions) => {
-      const status = await suspensions.status(orgId);
-      console.log(`org ${orgId}: ${status.suspended ? 'suspended' : 'active'}`);
-      const history = await suspensions.history(orgId);
-      if (!history.length) console.log('no suspension history');
-      for (const event of history) console.log(formatEvent(event));
-    });
+async function setSuspension(
+  subject: Suspendable,
+  action: 'suspend' | 'unsuspend',
+  ref: string,
+  options: { reason: string; actor?: string },
+): Promise<void> {
+  const by = { reason: options.reason.trim(), actor: (options.actor ?? defaultActor()).trim() };
+  if (!by.reason || !by.actor) {
+    console.error('--reason and --actor must not be blank');
+    process.exit(2); // Invalid usage
+    return;
+  }
+  await withAdminDb(async (_s, db) => {
+    const result = await (await openHistory(subject, db))[action](ref, by);
+    const state = result.suspended ? subject.suspendedState : 'active';
+    console.log(
+      result.changed
+        ? subject.noun + ' ' + ref + ' is now ' + state
+        : subject.noun + ' ' + ref + ' is already ' + state + '; nothing recorded',
+    );
   });
+}
+
+async function printSuspension(subject: Suspendable, ref: string): Promise<void> {
+  await withAdminDb(async (_s, db) => {
+    const history = await openHistory(subject, db);
+    const status = await history.status(ref);
+    console.log(
+      subject.noun + ' ' + ref + ': ' + (status.suspended ? subject.suspendedState : 'active'),
+    );
+    const events = await history.history(ref);
+    if (!events.length) console.log('no ' + subject.record + ' history');
+    for (const event of events) console.log(formatEvent(event));
+  });
+}
+
+for (const subject of SUSPENDABLE) {
+  for (const action of ['suspend', 'unsuspend'] as const) {
+    admin
+      .command((action === 'suspend' ? subject.on : subject.off) + ' ' + subject.arg)
+      .description(action === 'suspend' ? subject.onHelp : subject.offHelp)
+      .requiredOption('--reason <text>', 'Why (recorded; never shown to the tenant)')
+      .option('--actor <name>', 'Who is acting (default: $SUDO_USER, $USER, or "operator")')
+      .action((ref: string, options: { reason: string; actor?: string }) =>
+        setSuspension(subject, action, ref, options),
+      );
+  }
+  admin
+    .command(subject.noun + '-status ' + subject.arg)
+    .description('Print the ' + subject.record + ' state and history of a ' + subject.noun)
+    .action((ref: string) => printSuspension(subject, ref));
+}
 
 /** Offboarding and retention (#349): deletion is a 30-day soft delete, then a purge. */
 admin
