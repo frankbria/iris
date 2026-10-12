@@ -307,7 +307,8 @@ export class ActionExecutor {
           ),
       ),
       null,
-    );
+      // A frame detaching or navigating mid-listing rejects: unlisted, so no screenshot.
+    ).catch(() => null);
     if (lists === null) return null;
     const all = lists.flat();
     const fields = all.slice(0, 100);

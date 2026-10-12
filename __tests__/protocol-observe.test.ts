@@ -213,6 +213,27 @@ describe('executor.secretFields', () => {
     }
   }, 60_000);
 
+  // PR bot: a frame detaching mid-listing rejected, and observe answered a bare error. Racy
+  // to cause for real, so the frame list is the one stub: its listing rejects.
+  it('answers null when a frame cannot be listed, rather than throwing', async () => {
+    const page = await executor.createPage();
+    try {
+      await page.setContent('<!doctype html><title>F</title><input id="a" aria-label="a">');
+      await executor.executeAction(
+        { type: 'fill', selector: '#a', text: '{{secret:PW}}' },
+        page,
+        mapSecrets({ PW: SECRET }),
+      );
+      const detached = {
+        locator: () => ({ all: () => Promise.reject(new Error('Frame was detached')) }),
+      };
+      jest.spyOn(page, 'frames').mockReturnValue([detached] as never);
+      expect(await executor.secretFields(page)).toBeNull();
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+
   it('answers null for a page that does not answer, so no unmasked screenshot is taken', async () => {
     const page = await executor.createPage();
     try {
