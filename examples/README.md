@@ -182,7 +182,7 @@ node ../../dist/cli.js visual-diff --pages "http://localhost:8080/sample-page.ht
 - **Parallel Execution**: Configurable concurrency
 
 ### Accessibility Testing
-- **WCAG Compliance**: 2.1 Level A, AA, AAA support
+- **WCAG Compliance**: 2.2 Level A and AA by default (2.0 and 2.1 rules included), AAA via `--tags`
 - **axe-core Integration**: Industry-standard a11y engine
 - **Keyboard Testing**: Tab order, focus traps, arrow navigation
 - **Screen Reader**: ARIA validation, landmark structure
