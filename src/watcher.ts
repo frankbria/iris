@@ -242,16 +242,29 @@ export class FileWatcher {
   private buildIgnoreFilter(): (testPath: string, stats?: { isDirectory(): boolean }) => boolean {
     // At any depth (#319): `node_modules/**` must skip a nested node_modules too, not
     // only the one at the watch root. Patterns already anchored (`**/`, `/`) stay as given.
-    const isIgnored = picomatch(
-      this.options.ignore.map((p) => (p.startsWith('**/') || p.startsWith('/') ? p : `**/${p}`)),
+    // gitignore's meaning (PR bot review): ignored when a pattern matches and no `!`
+    // pattern does. In one picomatch array a negation matches everything outside it, so
+    // `!dist/public/**` ignored nearly every file instead of keeping dist/public watched.
+    const anyDepth = (p: string): string =>
+      p.startsWith('**/') || p.startsWith('/') ? p : `**/${p}`;
+    const kept = this.options.ignore.filter((p) => p.startsWith('!')).map((p) => p.slice(1));
+    const ignoredBy = picomatch(
+      this.options.ignore.filter((p) => !p.startsWith('!')).map(anyDepth),
     );
+    const keptBy = kept.length ? picomatch(kept.map(anyDepth)) : () => false;
+    const isIgnored = (p: string): boolean => ignoredBy(p) && !keptBy(p);
 
     return (testPath, stats) => {
       const relative = path.relative(this.options.cwd, testPath).split(path.sep).join('/');
       // The watch root itself must never be ignored.
       if (relative === '' || relative === '.') return false;
 
-      if (isIgnored(relative)) return true;
+      if (isIgnored(relative)) {
+        // With `!` patterns a directory is never pruned: a kept path may lie inside it, so
+        // its files are judged one by one (with stats, below this call) instead.
+        if (kept.length && (!stats || stats.isDirectory())) return false;
+        return true;
+      }
       if (stats && !stats.isDirectory()) return !this.matchesPatterns(relative);
       return false;
     };

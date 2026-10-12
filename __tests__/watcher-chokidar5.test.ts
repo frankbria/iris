@@ -119,6 +119,45 @@ describe('watcher against real chokidar 5 (issue #172)', () => {
     expect(seen.some((p) => p.includes('node_modules'))).toBe(false);
   }, 30000);
 
+  it('watches a kept path inside an ignored directory, for real', async () => {
+    fs.mkdirSync(path.join(dir, 'dist', 'public'), { recursive: true });
+    const seen: string[] = [];
+    watcher = new FileWatcher({
+      patterns: ['**/*.js'],
+      ignore: ['node_modules/**', 'dist/**', '!dist/public/**'],
+      cwd: dir,
+      debounceMs: 30,
+      persistent: true,
+      logger: silent,
+    });
+    type Handler = (type: string, filePath: string) => void;
+    (watcher as unknown as { handleFileEvent: Handler }).handleFileEvent = (_t, p) => {
+      seen.push(p);
+    };
+    await watcher.start();
+    expect(await until(() => watcher!.getStatus().isRunning, 10000)).toBe(true);
+
+    fs.writeFileSync(path.join(dir, 'dist', 'bundle.js'), 'x');
+    fs.writeFileSync(path.join(dir, 'dist', 'public', 'app.js'), 'x');
+
+    expect(await until(() => seen.some((p) => p.endsWith('app.js')))).toBe(true);
+    expect(seen.some((p) => p.endsWith('bundle.js'))).toBe(false);
+  }, 30000);
+
+  it('keeps a negated ignore glob a negation at any depth (PR bot review)', () => {
+    const w = new FileWatcher({
+      cwd: dir,
+      ignore: ['dist/**', '!dist/public/**'],
+      patterns: ['**/*.js'],
+      logger: silent,
+    });
+    type Filter = (p: string, stats?: { isDirectory(): boolean }) => boolean;
+    const ignored = (w as unknown as { buildIgnoreFilter(): Filter }).buildIgnoreFilter();
+    const file = { isDirectory: () => false };
+    expect(ignored(path.join(dir, 'pkg', 'dist', 'app.js'), file)).toBe(true);
+    expect(ignored(path.join(dir, 'pkg', 'dist', 'public', 'app.js'), file)).toBe(false);
+  });
+
   it('watches a single file target that lives outside the process cwd', async () => {
     // Caught in review of #182. chokidar 3 took the path as a watch target, so
     // cwd was irrelevant; chokidar 5 watches cwd and filters, so leaving cwd at

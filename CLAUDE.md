@@ -1046,7 +1046,9 @@ listed in the body of the PR that closed #353, for checking against it.
   request layer, `pinPage` before the first navigation), or with the pin off
   when the page is a changed HTML file (`file://` has no origin), so the destructive checks
   remain; `watch` has no `--allow*` flags. A changed non-HTML file with no URL runs nothing,
-  decided before translating (no AI spend, no run recorded): it is not a page (#319). Ignore globs match at any depth (`**/` is prefixed). Private
+  decided before translating (no AI spend, no run recorded): it is not a page (#319). Ignore globs match at any depth (`**/` is prefixed) with
+  gitignore's `!`: ignored when a pattern matches and no `!` pattern does; with any `!`
+  pattern, directories are not pruned (a kept path may lie inside) and files are judged singly. Private
   backlog item P1.22.
 - **The action goes to the element that was checked (#530)**: the check reads through one
   `ElementHandle` (`locator.elementHandle()`), returns it as `PolicyVerdict.target`, and
