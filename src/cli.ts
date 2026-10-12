@@ -532,6 +532,10 @@ program
   .description('Watch files or directories and trigger runs on changes')
   .option('-i, --instruction <instruction>', 'Instruction to run when files change', 'click submit')
   .option('--execute', 'Enable browser execution (default: translation only)')
+  .option(
+    '--url <url>',
+    'Page --execute runs the instruction against (or set IRIS_BASE_URL). Without it, only a changed HTML file is opened',
+  )
   .option('--headless', 'Run browser in headless mode (default: true when executing)')
   .option('--quiet', 'Suppress per-change narration; errors still print', false)
   .option(
@@ -594,6 +598,7 @@ program
         execute: options.execute,
         quiet: options.quiet,
         blockPrivateHosts: options.blockPrivateHosts,
+        url: options.url,
         headless: options.headless,
         browserTimeout: options.browserTimeout,
         retryAttempts: options.retryAttempts,
@@ -1217,6 +1222,7 @@ interface WatchCommandOptions {
   execute?: boolean;
   quiet?: boolean;
   blockPrivateHosts?: boolean;
+  url?: string;
   headless?: boolean;
   browserTimeout?: number;
   retryAttempts?: number;

@@ -1058,8 +1058,13 @@ listed in the body of the PR that closed #353, for checking against it.
   requested URL, then the page, then the plan's first navigation. The RPC applies the
   per-action checks only (`executeUnderPolicy` in protocol.ts): the request-level guard
   would stay on the session's page for later requests. `iris watch --execute` applies it to
-  an AI plan with the pin off (`allowCrossOrigin`: the page is the watched `file://`, which has
-  no origin), so the destructive checks remain; `watch` has no `--allow*` flags. Private
+  an AI plan: pinned to the origin of `--url` / `IRIS_BASE_URL` (#319; per action and at the
+  request layer, `pinPage` before the first navigation), or with the pin off
+  when the page is a changed HTML file (`file://` has no origin), so the destructive checks
+  remain; `watch` has no `--allow*` flags. A changed non-HTML file with no URL runs nothing,
+  decided before translating (no AI spend, no run recorded): it is not a page (#319). Ignore globs match at any depth (`**/` is prefixed) with
+  gitignore's `!`: ignored when a pattern matches and no `!` pattern does; with any `!`
+  pattern, directories are not pruned (a kept path may lie inside) and files are judged singly. Private
   backlog item P1.22.
 - **The action goes to the element that was checked (#530)**: the check reads through one
   `ElementHandle` (`locator.elementHandle()`), returns it as `PolicyVerdict.target`, and

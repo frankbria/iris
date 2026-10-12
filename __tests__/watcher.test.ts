@@ -482,9 +482,13 @@ describe('FileWatcher execute-mode runtime', () => {
     errorSpy.mockRestore();
   });
 
-  it('runs the action loop and persists execution counts on success', async () => {
+  it('runs the action loop against --url and persists execution counts on success', async () => {
     const { insertTestRun } = await import('../src/db');
-    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    const watcher = new FileWatcher({
+      execute: true,
+      debounceMs: 50,
+      url: 'http://127.0.0.1:9/app',
+    });
 
     await watcher.start();
     expect(mockExecutorInstance.launchBrowser).toHaveBeenCalled();
@@ -492,12 +496,8 @@ describe('FileWatcher execute-mode runtime', () => {
     changeCallback!('src/test.ts');
     await jest.advanceTimersByTimeAsync(60);
 
-    // The page is navigated to the changed file before any action runs, so
-    // DOM-targeting actions operate on the real page instead of about:blank.
-    expect(mockPage.goto).toHaveBeenCalledWith(
-      pathToFileURL(path.resolve(process.cwd(), 'src/test.ts')).href,
-      undefined,
-    );
+    // The page under test, not the changed source file (#319), before any action runs.
+    expect(mockPage.goto).toHaveBeenCalledWith('http://127.0.0.1:9/app', undefined);
 
     // The single default action from the translator mock is executed.
     expect(mockExecutorInstance.executeAction).toHaveBeenCalledTimes(1);
@@ -508,6 +508,66 @@ describe('FileWatcher execute-mode runtime', () => {
         instruction: expect.stringContaining('Executed: 1/1 actions'),
       }),
     );
+  });
+
+  it('does not open a changed source file as a page when no --url is set (#319)', async () => {
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start();
+
+    changeCallback!('src/test.ts');
+    await jest.advanceTimersByTimeAsync(60);
+
+    expect(mockPage.goto).not.toHaveBeenCalled();
+    expect(mockExecutorInstance.executeAction).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith(expect.stringMatching(/Not executed: .*Pass --url/));
+    // Decided before translating: nothing is paid for a change that runs nothing.
+    const { translate } = await import('../src/translator');
+    expect(translate).not.toHaveBeenCalled();
+    await watcher.stop();
+  });
+
+  it('does not translate the deletion of a non-page file either (PR bot review)', async () => {
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start();
+
+    unlinkCallback!('src/gone.ts');
+    await jest.advanceTimersByTimeAsync(60);
+
+    const { translate } = await import('../src/translator');
+    expect(translate).not.toHaveBeenCalled();
+    await watcher.stop();
+  });
+
+  it('does not translate a deletion under --url either: nothing would run (PR bot review)', async () => {
+    const watcher = new FileWatcher({
+      execute: true,
+      debounceMs: 50,
+      url: 'http://localhost:3000',
+    });
+    await watcher.start();
+
+    unlinkCallback!('src/gone.ts');
+    await jest.advanceTimersByTimeAsync(60);
+
+    const { translate } = await import('../src/translator');
+    expect(translate).not.toHaveBeenCalled();
+    expect(mockPage.goto).not.toHaveBeenCalled();
+    await watcher.stop();
+  });
+
+  it('opens a changed HTML file itself when no --url is set', async () => {
+    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    await watcher.start();
+
+    changeCallback!('pages/index.html');
+    await jest.advanceTimersByTimeAsync(60);
+
+    expect(mockPage.goto).toHaveBeenCalledWith(
+      pathToFileURL(path.resolve(process.cwd(), 'pages/index.html')).href,
+      undefined,
+    );
+    expect(mockExecutorInstance.executeAction).toHaveBeenCalledTimes(1);
+    await watcher.stop();
   });
 
   it('skips browser execution entirely on unlink events (the file is gone)', async () => {
@@ -540,7 +600,11 @@ describe('FileWatcher execute-mode runtime', () => {
       .mockResolvedValueOnce({ success: true, duration: 10, context: {} })
       .mockResolvedValueOnce({ success: false, error: 'not found', duration: 10 });
 
-    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    const watcher = new FileWatcher({
+      execute: true,
+      debounceMs: 50,
+      url: 'http://127.0.0.1:9/app',
+    });
     await watcher.start();
 
     changeCallback!('src/test.ts');
@@ -569,18 +633,19 @@ describe('FileWatcher execute-mode runtime', () => {
         }),
     );
 
+    // Changed HTML files are the pages themselves, so each run is told apart by its URL.
     const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
     await watcher.start();
 
-    changeCallback!('first.ts');
+    changeCallback!('first.html');
     await jest.advanceTimersByTimeAsync(60); // run #1 is mid-flight, awaiting executeAction
 
     expect(translate).toHaveBeenCalledTimes(1);
 
     // Two more events while run #1 is still executing: neither may start a
     // concurrent run, and they must coalesce into a single follow-up.
-    changeCallback!('second.ts');
-    changeCallback!('third.ts');
+    changeCallback!('second.html');
+    changeCallback!('third.html');
     await jest.advanceTimersByTimeAsync(60);
 
     expect(translate).toHaveBeenCalledTimes(1);
@@ -593,7 +658,7 @@ describe('FileWatcher execute-mode runtime', () => {
     expect(translate).toHaveBeenCalledTimes(2);
     expect(translate).toHaveBeenLastCalledWith(
       'click submit',
-      expect.objectContaining({ url: expect.stringContaining('third.ts') }),
+      expect.objectContaining({ url: expect.stringContaining('third.html') }),
     );
     expect(mockExecutorInstance.launchBrowser).toHaveBeenCalledTimes(1);
     expect(mockExecutorInstance.createPage).toHaveBeenCalledTimes(1);
@@ -603,7 +668,11 @@ describe('FileWatcher execute-mode runtime', () => {
     const { translate } = await import('../src/translator');
     mockExecutorInstance.executeAction.mockRejectedValueOnce(new Error('page crashed'));
 
-    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    const watcher = new FileWatcher({
+      execute: true,
+      debounceMs: 50,
+      url: 'http://127.0.0.1:9/app',
+    });
     await watcher.start();
 
     changeCallback!('first.ts');
@@ -637,7 +706,11 @@ describe('FileWatcher execute-mode runtime', () => {
         }),
     );
 
-    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    const watcher = new FileWatcher({
+      execute: true,
+      debounceMs: 50,
+      url: 'http://127.0.0.1:9/app',
+    });
     await watcher.start();
 
     changeCallback!('src/test.ts');
@@ -654,7 +727,11 @@ describe('FileWatcher execute-mode runtime', () => {
 
   it('discards events that land while the watcher is stopping', async () => {
     const { translate } = await import('../src/translator');
-    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    const watcher = new FileWatcher({
+      execute: true,
+      debounceMs: 50,
+      url: 'http://127.0.0.1:9/app',
+    });
     await watcher.start();
     await jest.advanceTimersByTimeAsync(1); // let the ready callback mark it running
 
@@ -671,7 +748,11 @@ describe('FileWatcher execute-mode runtime', () => {
   });
 
   it('stop() before the ready event still tears down the eagerly launched browser', async () => {
-    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    const watcher = new FileWatcher({
+      execute: true,
+      debounceMs: 50,
+      url: 'http://127.0.0.1:9/app',
+    });
     await watcher.start(); // ready callback is queued on a timer and has NOT fired
 
     await watcher.stop();
@@ -684,7 +765,11 @@ describe('FileWatcher execute-mode runtime', () => {
   it('stop() during recovery backoff does not relaunch the browser', async () => {
     mockExecutorInstance.executeAction.mockRejectedValueOnce(new Error('page crashed'));
 
-    const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
+    const watcher = new FileWatcher({
+      execute: true,
+      debounceMs: 50,
+      url: 'http://127.0.0.1:9/app',
+    });
     await watcher.start();
 
     changeCallback!('src/test.ts');
@@ -765,7 +850,7 @@ describe('FileWatcher execute-mode runtime', () => {
     const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
     await watcher.start();
 
-    changeCallback!('src/test.ts');
+    changeCallback!('src/test.html');
     // Debounce fires -> executeInstruction catch -> recoverBrowserSession,
     // which waits 2000ms before re-initializing.
     await jest.advanceTimersByTimeAsync(60);

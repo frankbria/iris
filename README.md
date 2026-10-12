@@ -260,7 +260,7 @@ iris a11y \
 ```bash
 # Watch files and auto-execute on changes
 iris watch src/ --instruction "reload page"
-iris watch "**/*.ts" --execute
+iris watch "src/**/*.ts" --execute --url http://localhost:3000
 
 # Or: on every save, tell me what changed on screen (see below)
 iris watch src/ --feedback --feedback-url http://localhost:3000
