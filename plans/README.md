@@ -187,11 +187,11 @@ production.
 | `P1.18` | [#297](https://github.com/frankbria/iris/issues/297) | Pattern translator: stop turning prose into CSS selectors | — | DONE (#517) |
 | `P1.19` | [#298](https://github.com/frankbria/iris/issues/298) | Vision provider detection and Ollama timeouts | — | DONE (#521) |
 | `P1.20` | [#299](https://github.com/frankbria/iris/issues/299) | AI cache and ledger hygiene: memory-tier TTL, index name collision | — | DONE (#524) |
-| `P1.21` | [#353](https://github.com/frankbria/iris/issues/353) | Agent policy: action validation | — | TODO |
+| `P1.21` | [#353](https://github.com/frankbria/iris/issues/353) | Agent policy: action validation | — | DONE (#525) |
 | `P1.22` | [#354](https://github.com/frankbria/iris/issues/354) | Agent policy: apply flags on every execution path | P0.7 (#334), P1.21 (#353) | TODO |
 | `P1.23` | [#355](https://github.com/frankbria/iris/issues/355) | Vision prompts: content framing | — | DONE (#526) |
 | `P1.24` | [#356](https://github.com/frankbria/iris/issues/356) | Local history store improvements | — | DONE (#527) |
-| `P1.25` | [#357](https://github.com/frankbria/iris/issues/357) | RPC server: JSON-RPC compliance and error responses | P0.2 (#330) | TODO |
+| `P1.25` | [#357](https://github.com/frankbria/iris/issues/357) | RPC server: JSON-RPC compliance and error responses | P0.2 (#330) | DONE (#529) |
 | `P1.26` | [#358](https://github.com/frankbria/iris/issues/358) | `iris connect`: startup configuration | P0.3 (#231) | TODO |
 | `P1.27` | [#306](https://github.com/frankbria/iris/issues/306) | Build and smoke-test the container on every PR; tie base image to Playwright | — | TODO |
 | `P1.28` | [#359](https://github.com/frankbria/iris/issues/359) | CI/CD: action pinning and deploy configuration | P0.1 (#329) | TODO |
