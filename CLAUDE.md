@@ -1039,6 +1039,13 @@ listed in the body of the PR that closed #353, for checking against it.
   an AI plan with the pin off (`allowCrossOrigin`: the page is the watched `file://`, which has
   no origin), so the destructive checks remain; `watch` has no `--allow*` flags. Private
   backlog item P1.22.
+- **The action goes to the element that was checked (#530)**: the check reads through one
+  `ElementHandle` (`locator.elementHandle()`), returns it as `PolicyVerdict.target`, and
+  every caller passes it to `executeAction(action, page, secrets, target)`, which clicks or
+  fills that handle and disposes of it. Dispatching by selector re-resolved it, so a page
+  could show a disabled benign control to the check and swap a destructive one in before it
+  became clickable. A swapped-out handle detaches, and the click fails instead. A test that
+  needs a failed read stubs `ElementHandle` reads, not `Locator` ones.
 
 ### Retries Never Repeat a Side Effect (issue #296)
 

@@ -6,7 +6,7 @@ import { describeAction } from './actions';
 import { initializeDatabase, insertTestRun } from './db';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
 import { guardedGoto } from './url-policy-guard';
-import { checkPlannedAction, planPolicy } from './agent-policy';
+import { checkPlannedAction, planPolicy, type PolicyVerdict } from './agent-policy';
 import { Page } from 'playwright';
 import { VisualCaptureEngine } from './visual/capture';
 import { VisualDiffEngine } from './visual/diff';
@@ -662,11 +662,11 @@ export class FileWatcher {
               `   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`,
             );
 
-            const verdict = policy
+            const verdict: PolicyVerdict = policy
               ? await checkPlannedAction(action, policy, this.page, null)
               : { allowed: true };
             const execResult: ExecutionResult = verdict.allowed
-              ? await this.executor.executeAction(action, this.page)
+              ? await this.executor.executeAction(action, this.page, undefined, verdict.target)
               : {
                   success: false,
                   action,
