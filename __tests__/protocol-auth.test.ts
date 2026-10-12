@@ -318,12 +318,47 @@ describe('request rate limits (#342)', () => {
     expect(replies.map((r) => r.error?.code)).toEqual([-32600, -32600, -32029]);
   });
 
-  test('frames that are not JSON spend the budget too, though they get no reply', async () => {
+  test('frames that are not JSON spend the budget too, and are answered -32700 (#357)', async () => {
     const url = await serve({ limits: { keyRequestsPerMinute: 2 } });
     const a = await open(url, as('key-a'));
+    const replies: JsonRpcResponse[] = [];
+    a.on('message', (d) => replies.push(JSON.parse(d.toString())));
     a.send('not json');
     a.send('{');
+    await eventually(() => replies.length === 2);
+    expect(replies.map((r) => [r.id, r.error?.code])).toEqual([
+      [null, -32700],
+      [null, -32700],
+    ]);
     expect((await limited(a))?.code).toBe(-32029);
+  });
+
+  // Codex review (#357): a notification never gets a reply, a rate refusal included.
+  // Codex final review: an object with no id that is not a valid request (`{}`) is an
+  // invalid request, not a notification, so its rate refusal is still answered.
+  test('a malformed object without an id still gets the rate refusal', async () => {
+    const url = await serve({ limits: { keyRequestsPerMinute: 1 } });
+    const a = await open(url, as('key-a'));
+    const replies: JsonRpcResponse[] = [];
+    a.on('message', (d) => replies.push(JSON.parse(d.toString())));
+    a.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getStatus' })); // spends the token
+    a.send('{}');
+    await eventually(() => replies.length === 2);
+    expect(replies[1]).toMatchObject({ id: null, error: { code: -32029 } });
+  });
+
+  test('a notification over the rate is dropped without a reply, and still charged', async () => {
+    const url = await serve({ limits: { keyRequestsPerMinute: 1 } });
+    const a = await open(url, as('key-a'));
+    const replies: JsonRpcResponse[] = [];
+    a.on('message', (d) => replies.push(JSON.parse(d.toString())));
+    a.send(JSON.stringify({ jsonrpc: '2.0', method: 'getStatus' })); // spends the one token
+    a.send(JSON.stringify({ jsonrpc: '2.0', method: 'getStatus' })); // over the rate
+    a.send(JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'getStatus' }));
+    await eventually(() => replies.length === 1);
+    expect(replies).toEqual([
+      expect.objectContaining({ id: 9, error: expect.objectContaining({ code: -32029 }) }),
+    ]);
   });
 
   test('a wall clock stepping backward does not drain a budget', async () => {

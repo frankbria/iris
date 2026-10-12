@@ -23,7 +23,8 @@ import { metrics, REQUEST_BUCKETS } from './metrics';
 
 export interface JsonRpcRequest {
   jsonrpc: '2.0';
-  id: number | string;
+  /** Absent on a notification, which gets no reply (JSON-RPC 2.0 §4.1). */
+  id?: number | string | null;
   method: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   params?: any;
@@ -86,6 +87,67 @@ export interface JsonRpcResponse {
   result?: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   error?: { code: number; message: string; data?: any };
+}
+
+/** A JSON-RPC 2.0 id: a string, a number or null (§4). */
+const isRpcId = (id: unknown): id is string | number | null =>
+  id === null || typeof id === 'string' || typeof id === 'number';
+
+/** Whether `value` is not a JSON-RPC 2.0 request object (#357). */
+function invalidRequest(value: Record<string, unknown>): boolean {
+  return (
+    value.jsonrpc !== '2.0' ||
+    typeof value.method !== 'string' ||
+    ('id' in value && !isRpcId(value.id))
+  );
+}
+
+/**
+ * A notification (§4.1): a valid request object with no `id` member. A malformed object
+ * without one (`{}`) is an invalid request, not a notification, and is answered (codex).
+ */
+function isNotification(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  return !('id' in value) && !invalidRequest(value as Record<string, unknown>);
+}
+
+/**
+ * The error a thrown value is answered with (#357). A value the server threw on purpose
+ * carries an integer JSON-RPC code and a message, and keeps them. Anything else (an Error
+ * from Playwright or Node, whose `code` may be a string like `ECONNREFUSED`) is -32603
+ * Internal error with no detail: its message can name paths and internals, and the caller
+ * logs it instead.
+ */
+export function toRpcError(thrown: unknown): { code: number; message: string; data?: unknown } {
+  const err = (typeof thrown === 'object' && thrown !== null ? thrown : {}) as {
+    code?: unknown;
+    message?: unknown;
+    data?: unknown;
+  };
+  if (!Number.isInteger(err.code) || typeof err.message !== 'string') {
+    return { code: -32603, message: 'Internal error' };
+  }
+  return {
+    code: err.code as number,
+    message: err.message,
+    ...(err.data !== undefined && { data: err.data }),
+  };
+}
+
+/**
+ * A response as a frame. A result that cannot be serialized (a cycle, a BigInt) becomes a
+ * -32603 frame for the same id instead of no reply at all (#357, from #330).
+ */
+export function serializeResponse(res: JsonRpcResponse): string {
+  try {
+    return JSON.stringify(res);
+  } catch {
+    return JSON.stringify({
+      jsonrpc: '2.0',
+      id: res.id,
+      error: { code: -32603, message: 'Internal error' },
+    });
+  }
 }
 
 export interface BrowserSession {
@@ -769,7 +831,7 @@ export function startServer(
     // is awaiting. ws then buffers the reply for a peer that is gone instead of
     // sending it, so check first (#330).
     const reply = (res: JsonRpcResponse) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(res));
+      if (ws.readyState === WebSocket.OPEN) ws.send(serializeResponse(res));
     };
 
     ws.on('message', async (data) => {
@@ -796,23 +858,28 @@ export function startServer(
         );
         if (wait > 0) {
           const id = (parsed as { id?: unknown } | null)?.id;
-          reply({
-            jsonrpc: '2.0',
-            id: typeof id === 'string' || typeof id === 'number' ? id : null,
-            error: {
-              code: RATE_LIMITED,
-              message: 'Rate limit exceeded',
-              data: { retryAfterMs: wait },
-            },
-          });
+          // A notification gets no reply, a rate refusal included (§4.1, #357); it is still
+          // charged and logged.
+          if (!isNotification(parsed)) {
+            reply({
+              jsonrpc: '2.0',
+              id: typeof id === 'string' || typeof id === 'number' ? id : null,
+              error: {
+                code: RATE_LIMITED,
+                message: 'Rate limit exceeded',
+                data: { retryAfterMs: wait },
+              },
+            });
+          }
           refusal(rpcMethod(parsed), 'rate_limited', t0, { ...requestFields, code: RATE_LIMITED });
           return;
         }
         keyRate.take(principal.keyId);
         orgRate.take(principal.orgId);
       }
-      // Charged above, then dropped without a reply, as before.
+      // Charged above. JSON-RPC 2.0 answers it with -32700 and a null id (#357).
       if (unparseable) {
+        reply({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
         refusal('unknown', 'client_error', t0, { ...requestFields, code: -32700 });
         return;
       }
@@ -827,9 +894,20 @@ export function startServer(
         refusal('unknown', 'client_error', t0, { ...requestFields, code: -32600 });
         return;
       }
+      // A request object needs `jsonrpc: "2.0"`, a string `method`, and an id that is a
+      // string, number or null when present (#357). The id is echoed only if it is one.
+      const candidate = parsed as Record<string, unknown>;
+      if (invalidRequest(candidate)) {
+        const id = isRpcId(candidate.id) ? candidate.id : null;
+        reply({ jsonrpc: '2.0', id, error: { code: -32600, message: 'Invalid Request' } });
+        refusal('unknown', 'client_error', t0, { ...requestFields, code: -32600 });
+        return;
+      }
       const req = parsed as JsonRpcRequest;
+      // No `id` member: a notification. It runs, and gets no reply, error or not (§4.1).
+      const notification = isNotification(req);
 
-      const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id };
+      const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id ?? null };
       let refused = false;
 
       try {
@@ -1056,14 +1134,17 @@ export function startServer(
         const err = typeof thrown === 'object' && thrown !== null ? thrown : {};
         // A refusal the client caused (no session, a session limit): not a server error.
         refused = err.refused === true;
-        res.error = {
-          code: err.code || -32000,
-          message: err.message || 'Server error',
-          data: err.data,
-        };
+        res.error = toRpcError(thrown);
+        if (res.error.code === -32603) {
+          log('error', 'rpc handler failed', {
+            ...requestFields,
+            method: rpcMethod(req),
+            err: thrown instanceof Error ? thrown.message : String(thrown),
+          });
+        }
       }
 
-      reply(res);
+      if (!notification) reply(res);
       // executeBrowserAction: the action types that ran, never their selectors or values.
       const ran = (res.result as { results?: ExecutionResult[] } | undefined)?.results;
       const outcome = refused

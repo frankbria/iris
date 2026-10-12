@@ -218,7 +218,8 @@ describe('a non-object throw inside a handler (#330)', () => {
   });
 
   it.each([null, undefined, 'text'])(
-    'thrown %p still gets a -32000 reply',
+    // #330 asked for *a* reply; #357 made it the spec's -32603 Internal error.
+    'thrown %p still gets a -32603 reply',
     async (thrown) => {
       jest.spyOn(translatorModule, 'translateSync').mockImplementation(() => {
         throw thrown;
@@ -232,7 +233,7 @@ describe('a non-object throw inside a handler (#330)', () => {
           params: { instruction: 'x' },
         }),
       );
-      expect(res).toMatchObject({ id: 7, error: { code: -32000, message: 'Server error' } });
+      expect(res).toMatchObject({ id: 7, error: { code: -32603, message: 'Internal error' } });
     },
     5000,
   );
