@@ -642,6 +642,9 @@ async function startMetrics(port: number | undefined): Promise<boolean> {
   }
 }
 
+/** How long `iris connect` waits for requests in flight on SIGTERM before closing (#309). */
+const DRAIN_DEADLINE_MS = 12_000;
+
 program
   .command('connect')
   .description('Start JSON-RPC/WebSocket server on the given port')
@@ -684,7 +687,7 @@ program
   )
   .option('--metrics-port <port>', METRICS_PORT_HELP, parseMetricsPort)
   .action(async (port: number, options: ConnectOptions) => {
-    const { startServer, installProcessErrorPolicy } = await import('./protocol');
+    const { startServer, installProcessErrorPolicy, drainServer } = await import('./protocol');
     const { randomBytes } = await import('crypto');
     const { readFile } = await import('fs/promises');
 
@@ -839,8 +842,17 @@ program
     // connections and won't fire 'close' (or let the process exit) while a
     // client stays connected. Installing this handler also suppresses Node's
     // default SIGINT/SIGTERM termination, so without this the process would hang.
-    const shutdown = () => {
-      console.log('\nShutting down JSON-RPC server...');
+    // Drain first (#309): readiness turns 503, new connections and requests are refused, and
+    // requests in flight are answered, up to DRAIN_DEADLINE_MS. Then the sockets close and
+    // the sessions' browsers with them. Compose's stop_grace_period (20s) covers the drain
+    // plus the 5s force-exit below. A second signal skips the wait.
+    let stopping = false;
+    const shutdown = async () => {
+      if (stopping) process.exit(0);
+      stopping = true;
+      console.log('\nShutting down JSON-RPC server: draining requests in flight...');
+      const drained = await drainServer(wss, DRAIN_DEADLINE_MS);
+      if (!drained) console.error(`Drain deadline (${DRAIN_DEADLINE_MS}ms) passed; closing anyway`);
       for (const client of wss?.clients ?? []) {
         client.close(1001, 'Server shutting down');
       }
@@ -855,8 +867,8 @@ program
         process.exit(0);
       }, 5000).unref();
     };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', () => void shutdown());
+    process.on('SIGTERM', () => void shutdown());
   });
 
 program

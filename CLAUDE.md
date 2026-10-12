@@ -680,8 +680,8 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   of its own are applied (an older release on a newer schema), and refuses when it also
   has pending ones (branched off before the newer release). Kysely alone throws
   "corrupted migrations" for both.
-- **Health**: iris-api `GET /` -> 404 (the job API, before auth; the token check cannot
-  authenticate in hosted mode, #309). Portal `/api/health` (dynamic, `no-store`): 200 only
+- **Health**: iris-api `GET /health/ready` -> 200 (unauthenticated, 503 while draining;
+  #309). Portal `/api/health` (dynamic, `no-store`): 200 only
   when getAuth() builds, the master key loads and `select 1` answers; 503 with no detail.
   Worker: `probeDatabase()` at startup (exit 3), heartbeat file written per poll and every
   30s during a job (`IRIS_WORKER_HEARTBEAT_FILE`), compose fails it at 180s.
@@ -1156,6 +1156,27 @@ quoting the page. Both report writers route every interpolation through
   element/token sequence. Substring checks pass on half-escaped documents.
 - Writing `\u....` escapes through a tool call can land as the raw character on
   disk. Check with `cat -A` when editing a regex or fixture that uses them.
+
+### Graceful Shutdown and Readiness (issue #309)
+
+- **`GET /health/live` and `GET /health/ready`** on the `iris connect` listener, answered
+  before auth, logging and the job routes: probes run every few seconds, and hosted mode has
+  no shared token to authenticate a probe with (#341). Live is 200 while the process serves;
+  ready is 503 while draining. Production's compose healthcheck probes readiness (it used to
+  infer health from `GET /` answering 404).
+- **SIGTERM drains** (`drainServer(wss, ms)`, src/protocol.ts): readiness turns 503, new
+  upgrades get 503 (re-checked after an async key check), new REST requests 503 (no job is
+  queued during shutdown), new requests on open sockets `-32000 Server is shutting down`, and it
+  resolves once every message in flight has been answered (a counter around the message
+  handler), or at the deadline (`DRAIN_DEADLINE_MS` = 12 s in cli.ts). Then the sockets
+  close and the sessions' browsers with them; 5 s later a forced exit. `stop_grace_period`
+  (20 s) must exceed both; `container-config.test.ts` reads the constant. A second signal
+  exits at once.
+- **`iris-mcp` exits on SIGTERM, SIGINT and stdin EOF** (the SDK does neither), closing the
+  server with a 2 s cap; Playwright closes its browsers on exit.
+- Tests: `graceful-shutdown.test.ts` (in process, and real processes for `iris connect` and
+  `iris-mcp`). A test that runs `iris connect`'s SIGINT handler with a mocked server must let
+  the drain's promise settle before asserting.
 
 ### RPC Server Error Policy (issue #330)
 

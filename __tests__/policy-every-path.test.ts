@@ -24,9 +24,14 @@ import { startServer } from '../src/protocol';
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const PAGE = `<!doctype html><html lang="en"><head><title>Account</title></head><body>
+<script>
+  // Synchronous, so the request has reached the site before the click returns: the CLI
+  // closes Chromium right after it, which could drop a queued beacon on a loaded runner.
+  function post(path) { const x = new XMLHttpRequest(); x.open('POST', path, false); x.send(); }
+</script>
 <form onsubmit="return false">
-  <button type="button" onclick="navigator.sendBeacon('/save')">Save</button>
-  <button type="button" onclick="navigator.sendBeacon('/delete')">Delete account</button>
+  <button type="button" onclick="post('/save')">Save</button>
+  <button type="button" onclick="post('/delete')">Delete account</button>
 </form></body></html>`;
 const DESTRUCTIVE = [{ type: 'click', selector: 'form button:nth-of-type(2)' }];
 /** What the stand-in model plans; a test may set it. */

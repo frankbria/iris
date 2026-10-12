@@ -70,16 +70,16 @@ services:
         max-size: '10m'
         max-file: '3'
     # Hosted mode cannot run docker/healthcheck.js: it authenticates with the shared
-    # token, which hosted mode refuses (#309). A 404 for GET / comes from the job API
-    # (src/jobs-api.ts) before any auth: the listener is up and hosted services
-    # started, which includes the database probe. 426 would mean token mode.
+    # token, which hosted mode refuses. Readiness (#309) needs no auth: 200 once the
+    # listener is up, which comes after hosted services started (database probe
+    # included); 503 while draining on SIGTERM.
     healthcheck:
       test:
         [
           'CMD',
           'node',
           '-e',
-          "fetch('http://127.0.0.1:4000/').then(r=>process.exit(r.status===404?0:1),()=>process.exit(1))",
+          "fetch('http://127.0.0.1:4000/health/ready').then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 10s
