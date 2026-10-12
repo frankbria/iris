@@ -822,18 +822,14 @@ cat > ~/.iris/config.json << 'EOF'
 {
   "ai": {
     "provider": "openai",
-    "apiKey": "sk-your-key-here",
-    "model": "gpt-4-vision-preview"
-  },
-  "visual": {
-    "semantic": {
-      "enabled": true,
-      "confidence": 0.7
-    }
+    "apiKey": "sk-your-key-here"
   }
 }
 EOF
 ```
+
+Only `ai`, `watch` and `budget` are read from this file. AI analysis of a visual
+diff is switched on per run with `--semantic` (below), not here.
 
 ### Run Visual Test with AI Analysis
 
