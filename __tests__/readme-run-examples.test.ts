@@ -68,7 +68,7 @@ describe('README `iris run` examples (issue #297)', () => {
         const results = await executor.executeActions(
           actions,
           page,
-          mapSecrets({ LOGIN_PW: 'pw' }),
+          mapSecrets({ LOGIN_PW: 'pw-for-tests' }),
         );
         expect(results.map((r) => r.error ?? 'ok')).toEqual(actions.map(() => 'ok'));
         if (actions.some((a) => a.type === 'click')) expect(await page.title()).toBe('clicked');
