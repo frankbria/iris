@@ -26,6 +26,12 @@ export interface EgressProxyOptions {
   lookup?: (hostname: string) => Promise<string[]>;
   /** Open the upstream connection to an already-vetted address. Default: `net.connect`. */
   connect?: (address: string, port: number) => net.Socket;
+  /** Bound on resolving one name (#379): a stalled resolver answers 504. Default 10 s. */
+  lookupTimeoutMs?: number;
+  /** Bound on the upstream TCP connect: a black-holed address answers 504. Default 10 s. */
+  connectTimeoutMs?: number;
+  /** An upstream connection with no traffic either way this long is closed. Default 5 min. */
+  idleTimeoutMs?: number;
 }
 
 export interface EgressProxy {
@@ -48,7 +54,7 @@ const HOP_BY_HOP = [
 /** Why a request was not forwarded, as the HTTP status the client gets. */
 class Refusal extends Error {
   constructor(
-    readonly status: 400 | 403 | 502,
+    readonly status: 400 | 403 | 502 | 504,
     message: string,
   ) {
     super(message);
@@ -87,14 +93,46 @@ function parseAuthority(raw: string): { hostname: string; port: number } {
 export async function startEgressProxy(options: EgressProxyOptions = {}): Promise<EgressProxy> {
   const lookup = options.lookup ?? systemLookup;
   const connect = options.connect ?? ((address, port) => net.connect({ host: address, port }));
+  const { lookupTimeoutMs = 10_000, connectTimeoutMs = 10_000, idleTimeoutMs = 300_000 } = options;
+
+  /**
+   * The upstream socket, bounded (#379): a connect that never completes, then a connection
+   * with no traffic, is destroyed with a 504 refusal, which every caller already answers.
+   * Without these a black-holed address or a silent tunnel held a socket for minutes.
+   */
+  function dial(address: string, port: number): net.Socket {
+    const socket = connect(address, port);
+    socket.setTimeout(connectTimeoutMs, () =>
+      socket.destroy(new Refusal(504, 'upstream connect timed out')),
+    );
+    socket.once('connect', () =>
+      socket.setTimeout(idleTimeoutMs, () =>
+        socket.destroy(new Refusal(504, 'upstream connection idle')),
+      ),
+    );
+    return socket;
+  }
+
+  /** The resolver's answer, or a 504 refusal once `lookupTimeoutMs` has passed. */
+  function boundedLookup(host: string): Promise<string[]> {
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Refusal(504, `resolving ${host} timed out`)),
+        lookupTimeoutMs,
+      );
+    });
+    return Promise.race([lookup(host), timedOut]).finally(() => clearTimeout(timer));
+  }
 
   /** The one address this connection may use: resolved once, vetted, dialed as-is. */
   async function vet(hostname: string): Promise<string> {
     const host = hostname.replace(/^\[|\]$/g, '');
     let addresses: string[];
     try {
-      addresses = net.isIP(host) ? [host] : await lookup(host);
-    } catch {
+      addresses = net.isIP(host) ? [host] : await boundedLookup(host);
+    } catch (error) {
+      if (error instanceof Refusal) throw error;
       addresses = [];
     }
     if (addresses.length === 0) throw new Refusal(502, `cannot resolve ${host}`);
@@ -125,12 +163,13 @@ export async function startEgressProxy(options: EgressProxyOptions = {}): Promis
     // would be a descriptor leaked per request.
     headers.connection = 'close';
 
+    let socket: net.Socket | undefined;
     const upstream = http.request({
       method: req.method,
       path: url.pathname + url.search,
       headers,
       setHost: false, // the client's Host header is already the right one
-      createConnection: () => connect(address, port),
+      createConnection: () => (socket = dial(address, port)),
     });
     // Fires when the response is done or the client went away mid-way; either
     // way the upstream has nothing left to do.
@@ -155,7 +194,8 @@ export async function startEgressProxy(options: EgressProxyOptions = {}): Promis
       socket.destroy();
       refuse(res, new Refusal(502, 'upstream switched protocols unasked'));
     });
-    upstream.on('error', (error) => refuse(res, error));
+    // The request reports its own "socket hang up"; the socket's error says why (a 504).
+    upstream.on('error', (error) => refuse(res, socket?.errored ?? error));
     req.on('error', () => upstream.destroy());
     req.pipe(upstream);
   }
@@ -173,7 +213,7 @@ export async function startEgressProxy(options: EgressProxyOptions = {}): Promis
   async function tunnel(req: http.IncomingMessage, client: Duplex, head: Buffer): Promise<void> {
     const { hostname, port } = parseAuthority(req.url ?? '');
     const address = await vet(hostname);
-    const upstream = connect(address, port);
+    const upstream = dial(address, port);
     let established = false;
     client.on('close', () => upstream.destroy());
     upstream.on('error', (error) => {
