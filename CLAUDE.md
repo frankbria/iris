@@ -865,6 +865,23 @@ The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a
 file because compose interprets `${...}` in an inline script as its own syntax.
 
+### `iris connect` Startup Configuration (issue #358)
+
+Private backlog item P1.26; criteria derived from the code and #358's comments (its
+database item was delivered by #341: hosted startup exits 3 without `DATABASE_URL(_FILE)`).
+
+- **Hosted mode never reads `.env`.** `runCli()` calls `loadDotenv()` only when
+  `isHostedMode()` is off. Hosted configuration is the deploy's environment and `_FILE`
+  secrets; a stray `.env` in the image or working directory supplied unset credentials.
+  IRIS_HOSTED is read before any `.env`, so a `.env` cannot switch hosted mode on or off.
+  Tested by a spawned hosted `connect` (`hosted-dotenv.test.ts`): the token only in `.env`
+  reaches the database check (exit 3); the same token from the environment is refused (2).
+- **Warnings, not refusals** (`warnStartupConfig`): hosted-only flags (`--rate-per-key`,
+  `--rate-per-org`, `--max-sessions-per-org`, `--max-connections-per-org`) given outside
+  hosted mode do nothing (no principal, #342), and a supplied shared token under 32
+  characters is weak. Refusing either would break existing setups whose tokens are secrets
+  the check cannot see; the token is never printed.
+
 ### Hosted Mode URL Policy (issue #334)
 
 `IRIS_HOSTED` is read once by `isHostedMode()` (src/hosted.ts), memoized, and fails

@@ -3,6 +3,7 @@ import { Command, InvalidArgumentError } from 'commander';
 import { resolveDbPath } from './data-dir';
 import { once } from 'events';
 import { loadDotenv, loadConfig } from './config';
+import { isHostedMode } from './hosted';
 import type { IrisConfig, ProviderCredentials } from './config';
 import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-options';
 import type { AIProvider } from './visual/ai-classifier';
@@ -681,7 +682,6 @@ program
     // IRIS_CONNECT_TOKEN_FILE is the deployed form (#332): an env var shows up in
     // `docker inspect` and /proc/<pid>/environ, a mounted secret file does not.
     const tokenFile = process.env.IRIS_CONNECT_TOKEN_FILE;
-    const { isHostedMode } = await import('./hosted');
     // Hosted mode (#341, ADR 0001 §4): tenants authenticate with their org's API
     // keys, and the shared token is off. A token set anyway is refused rather than
     // ignored: whoever set it expects it to be what guards the server.
@@ -738,6 +738,7 @@ program
         return;
       }
     }
+    warnStartupConfig(options, authenticate ? undefined : suppliedToken);
     const authToken = authenticate ? undefined : suppliedToken || randomBytes(32).toString('hex');
 
     const limits = Object.fromEntries(
@@ -1119,6 +1120,40 @@ function resolveSemanticAI(
       : process.env[semanticKeyEnvVar(provider)];
 
   return { provider, model, apiKey, credentials, fallback };
+}
+
+/** The `connect` flags that only act on API-key (hosted) connections (#342). */
+const HOSTED_ONLY_FLAGS = {
+  ratePerKey: '--rate-per-key',
+  ratePerOrg: '--rate-per-org',
+  maxSessionsPerOrg: '--max-sessions-per-org',
+  maxConnectionsPerOrg: '--max-connections-per-org',
+} as const;
+
+/** Shortest shared token `iris connect` takes without a warning; generated ones are 64. */
+const MIN_TOKEN_CHARS = 32;
+
+/**
+ * Say what would otherwise be silently weak at startup (#358): hosted-only flags outside
+ * hosted mode (no principal, so they limit nothing), and a short shared token. Warnings,
+ * not refusals: the flags are harmless locally, and a deployed token is a secret this
+ * check cannot see in advance. Never prints the token.
+ */
+function warnStartupConfig(options: ConnectOptions, suppliedToken: string | undefined): void {
+  if (!isHostedMode()) {
+    const given = Object.entries(HOSTED_ONLY_FLAGS)
+      .filter(([key]) => options[key as keyof typeof HOSTED_ONLY_FLAGS] !== undefined)
+      .map(([, flag]) => flag);
+    if (given.length > 0) {
+      console.error(`Warning: without IRIS_HOSTED (API-key mode), no effect: ${given.join(', ')}.`);
+    }
+  }
+  if (suppliedToken && suppliedToken.length < MIN_TOKEN_CHARS) {
+    console.error(
+      `Warning: IRIS_CONNECT_TOKEN is ${suppliedToken.length} characters; use at least ${MIN_TOKEN_CHARS} ` +
+        '(e.g. `openssl rand -hex 32`).',
+    );
+  }
 }
 
 /** `iris watch` options, as commander parses them. */
@@ -1519,7 +1554,11 @@ program
   });
 
 export async function runCli(args: string[]): Promise<void> {
-  loadDotenv(); // pick up .env before any command reads process.env
+  // Pick up .env before any command reads process.env, locally. Hosted mode's
+  // configuration is the deploy's environment and `_FILE` secrets only: a stray `.env` in
+  // the image or working directory must not supply a credential (#358). IRIS_HOSTED is
+  // read here, from the real environment, so a `.env` cannot switch hosted mode either.
+  if (!isHostedMode()) loadDotenv();
   // `program` is a module-level singleton and commander keeps parsed option values
   // on it, so a second runCli() in the same process would inherit the previous
   // run's flags (e.g. a leftover --dry-run). Reset every option to its default.

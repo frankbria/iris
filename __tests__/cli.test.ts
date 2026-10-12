@@ -236,6 +236,42 @@ describe('CLI Commands', () => {
       });
     });
 
+    // #358: outside hosted mode these flags do nothing (#342: no principal, no tenant
+    // limits). Said, so an operator does not believe they are in force.
+    it('warns that the per-key and per-org flags need hosted mode', async () => {
+      const errors: string[] = [];
+      jest.spyOn(console, 'error').mockImplementation((...a) => void errors.push(a.join(' ')));
+      await runCli(['node', 'iris', 'connect', '--rate-per-key', '60']);
+      expect(errors.join('\n')).toMatch(/without IRIS_HOSTED.*no effect: --rate-per-key\./);
+    });
+
+    it('does not warn when no hosted-only flag is given', async () => {
+      const errors: string[] = [];
+      jest.spyOn(console, 'error').mockImplementation((...a) => void errors.push(a.join(' ')));
+      await runCli(['node', 'iris', 'connect', '--max-sessions', '2']);
+      expect(errors.join('\n')).not.toMatch(/IRIS_HOSTED/);
+    });
+
+    // #358: a short shared token guards a server that drives a browser. A warning, not
+    // a refusal: deployed tokens are secrets this check cannot see in advance.
+    it('warns about a supplied token shorter than 32 characters', async () => {
+      const errors: string[] = [];
+      jest.spyOn(console, 'error').mockImplementation((...a) => void errors.push(a.join(' ')));
+      process.env.IRIS_CONNECT_TOKEN = 'short-token';
+      await runCli(['node', 'iris', 'connect']);
+      expect(errors.join('\n')).toMatch(/IRIS_CONNECT_TOKEN is 11 characters/);
+      expect(errors.join('\n')).not.toContain('short-token');
+      expect(startArgs()[1].authToken).toBe('short-token');
+    });
+
+    it('does not warn about a long supplied token', async () => {
+      const errors: string[] = [];
+      jest.spyOn(console, 'error').mockImplementation((...a) => void errors.push(a.join(' ')));
+      process.env.IRIS_CONNECT_TOKEN = 'x'.repeat(32);
+      await runCli(['node', 'iris', 'connect']);
+      expect(errors.join('\n')).not.toMatch(/characters/);
+    });
+
     it('rejects a limit of 0 before starting the server', async () => {
       jest.spyOn(process.stderr, 'write').mockReturnValue(true);
       jest.spyOn(process, 'exit').mockImplementation(((code: number) => {
