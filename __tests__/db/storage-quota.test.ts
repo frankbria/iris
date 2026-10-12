@@ -97,6 +97,18 @@ const VISUAL: VisualJobParams = {
     expect(await storageUsage(db, 'org-b')).toBe(50);
   });
 
+  it('dates a rewritten key from its last write (#475: the baseline collector reads it)', async () => {
+    const a = quota('org-a', 1_000);
+    await a.put(key('org-a', 'again'), bytes(10), 'image/png');
+    await sql`update artifact_objects set created_at = now() - interval '100 days'
+      where org_id = 'org-a' and key = ${key('org-a', 'again')}`.execute(db);
+    await a.put(key('org-a', 'again'), bytes(10), 'image/png');
+    const { rows } = await sql<{ fresh: boolean }>`
+      select created_at > now() - interval '1 minute' as fresh from artifact_objects
+      where org_id = 'org-a' and key = ${key('org-a', 'again')}`.execute(db);
+    expect(rows[0].fresh).toBe(true);
+  });
+
   it('refuses a write past the quota, and stores nothing of it', async () => {
     const a = quota('org-a', 500);
     await a.put(key('org-a', 'fits'), bytes(400), 'image/png');
