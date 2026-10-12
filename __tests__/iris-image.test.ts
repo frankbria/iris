@@ -134,6 +134,35 @@ function docker(...args: string[]) {
     expect(touch.code).toBe(0);
   });
 
+  // #360: notices for what ships, and no npm in the runtime image.
+  it("ships third-party notices for its production dependencies, and not the portal's", () => {
+    const notices = docker(
+      'run',
+      '--rm',
+      '--entrypoint',
+      'cat',
+      IMAGE!,
+      '/app/THIRD_PARTY_NOTICES.txt',
+    );
+    expect(notices.code).toBe(0);
+    expect(notices.out).toMatch(/^playwright@\S+\nLicense: Apache-2\.0$/m);
+    expect(notices.out).toMatch(/^ws@\S+\nLicense: MIT$/m);
+    expect(notices.out).not.toMatch(/^next@/m);
+  });
+
+  it('has no npm', () => {
+    const npm = docker(
+      'run',
+      '--rm',
+      '--entrypoint',
+      'sh',
+      IMAGE!,
+      '-c',
+      'command -v npm npx || echo none',
+    );
+    expect(npm.out.trim()).toBe('none');
+  });
+
   it('carries no portal packages', () => {
     const found = docker(
       'run',

@@ -882,6 +882,17 @@ break and expensive to rediscover:
   `DOCKER_BUILDKIT=0 docker build -t iris:local .` (BuildKit without buildx fails, and a
   docker-container builder does not load the image).
 
+- **Supply chain (#360).** Every `FROM` in `Dockerfile` and `Dockerfile.portal` is pinned by
+  digest (`tag@sha256:…`; Dependabot's docker entry bumps both). CI writes a CycloneDX SBOM per
+  image with a digest-pinned Trivy (one image copy, `--timeout 15m`; the default timed out on
+  this host), scans the SBOM, fails on a fixable CRITICAL, lists fixable HIGH, and uploads the
+  SBOMs as the `image-sboms` artifact. The runtime image has no npm (`rm -rf
+  /usr/lib/node_modules/npm …`: nothing uses it at runtime, and the base image's global npm
+  carried all the Node.js findings). `/app/THIRD_PARTY_NOTICES.txt` is generated in the deps
+  stage by `scripts/third-party-notices.js` from what `npm ci --omit=dev` installed (the root
+  lockfile also lists the portal's packages, which are not installed, so it reads installed
+  `package.json`s, not lockfile entries).
+
 The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a
 file because compose interprets `${...}` in an inline script as its own syntax.
