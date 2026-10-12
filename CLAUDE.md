@@ -1084,6 +1084,24 @@ test passes against the very crash it is meant to catch.
 `protocol-robustness.test.ts` spawns `src/cli.ts` through ts-node
 (transpile-only) rather than `dist/`, so it never races the MCP suite's `tsc`.
 
+### JSON-RPC 2.0 Compliance (issue #357)
+
+`iris connect`'s frame handling (src/protocol.ts) follows the spec. Private backlog item
+P1.25; criteria derived from the spec and #357's comments.
+
+- **Parse error** -> `-32700`, id null (it used to be dropped; still charged first, #342).
+- **Invalid Request** -> `-32600`: `jsonrpc` must be `"2.0"`, `method` a string, `id` (when
+  present) a string, number or null. The id is echoed only when it is one of those.
+- **Notifications** (no `id` member) run and get **no reply**, error or not. A test request
+  without an `id` is therefore never answered: give every test request an id.
+- **`toRpcError(thrown)`**: a thrown value with an integer `code` and string `message` keeps
+  them (the server's own `{ code: -32000, … }` refusals, `-32029`). Anything else, including
+  a Node error whose `code` is a string, is `-32603 Internal error` with no detail; the
+  message goes to the log (`rpc handler failed`).
+- **`serializeResponse`**: a result `JSON.stringify` cannot handle becomes a `-32603` frame
+  for the same id instead of silence.
+- **Batches** are still answered `-32600`: #528.
+
 ### RPC Server Limits (issue #338)
 
 `startServer(port, { limits })` takes any subset of `ServerLimits`; the rest come
