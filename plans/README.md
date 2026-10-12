@@ -188,7 +188,7 @@ production.
 | `P1.19` | [#298](https://github.com/frankbria/iris/issues/298) | Vision provider detection and Ollama timeouts | — | DONE (#521) |
 | `P1.20` | [#299](https://github.com/frankbria/iris/issues/299) | AI cache and ledger hygiene: memory-tier TTL, index name collision | — | DONE (#524) |
 | `P1.21` | [#353](https://github.com/frankbria/iris/issues/353) | Agent policy: action validation | — | DONE (#525) |
-| `P1.22` | [#354](https://github.com/frankbria/iris/issues/354) | Agent policy: apply flags on every execution path | P0.7 (#334), P1.21 (#353) | TODO |
+| `P1.22` | [#354](https://github.com/frankbria/iris/issues/354) | Agent policy: apply flags on every execution path | P0.7 (#334), P1.21 (#353) | DONE (#533) |
 | `P1.23` | [#355](https://github.com/frankbria/iris/issues/355) | Vision prompts: content framing | — | DONE (#526) |
 | `P1.24` | [#356](https://github.com/frankbria/iris/issues/356) | Local history store improvements | — | DONE (#527) |
 | `P1.25` | [#357](https://github.com/frankbria/iris/issues/357) | RPC server: JSON-RPC compliance and error responses | P0.2 (#330) | DONE (#529) |
