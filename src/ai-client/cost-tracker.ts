@@ -315,6 +315,8 @@ export class CostTracker {
    * Initialize database schema
    */
   private initializeDatabase(): void {
+    // Index names are prefixed: they are global to a SQLite file, and the vision cache
+    // may share this one (#299). migrations/002_ai_cache_cost.sql uses the same names.
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS cost_tracking (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -330,8 +332,8 @@ export class CostTracker {
         pending INTEGER NOT NULL DEFAULT 0
       );
 
-      CREATE INDEX IF NOT EXISTS idx_timestamp ON cost_tracking(timestamp);
-      CREATE INDEX IF NOT EXISTS idx_provider_model ON cost_tracking(provider, model);
+      CREATE INDEX IF NOT EXISTS idx_cost_timestamp ON cost_tracking(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_cost_provider_model ON cost_tracking(provider, model);
     `);
 
     // Idempotent upgrade: databases created before token columns existed get
