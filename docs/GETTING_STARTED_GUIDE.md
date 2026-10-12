@@ -948,7 +948,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install dependencies
         run: |
@@ -999,7 +999,7 @@ jobs:
 docker run -it --rm \
   -v $(pwd):/workspace \
   -w /workspace \
-  node:18 \
+  node:24 \
   bash -c "
     git clone --depth 1 https://github.com/frankbria/iris.git /tmp/iris &&
     (cd /tmp/iris && npm ci && npm run build && npm link) &&
