@@ -343,6 +343,15 @@ plans/
   - `SmartAIVisionClient` rethrows `ModelUnavailableError` instead of stepping to the next vendor — that swallow is what made a retired model read as "all providers failed". Text clients resolve via `createResolvedAIClient()`; `loadConfig()` stays synchronous
   - `CostTracker` prices a model with no exact row by its family (#243), but only when the rest of the ID is one snapshot suffix (`-20260514`, `-2024-08-06`, `-latest`): a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) or dated snapshot gets its family's rate, while a variant (`gpt-4o-realtime-preview`, `gpt-4oz`) does not, because variants are priced differently. A snapshot that kept a different price needs its own row (`gpt-4o-2024-05-13`). Anything unmatched is charged the dearest registered rate per field (including `setPricing` rows), recorded with `estimated = 1` on its ledger row, and warned about once per pair. It used to record $0, which a budget breaker never trips on. A model dearer than every registered row still under-reports until it gets one. Free providers (Ollama) stay $0 for every model
 
+### Audit Log Page (issue #541)
+
+`/audit` in the portal shows the org's `audit_log` (#361) to owners and admins (`isManager(role)`
+in `lib/org.ts`, the one owner-or-admin check; members see "Only owners and admins…").
+`src/audit-reads.ts` (`auditPage`) is lean, like `run-reads`: one org's entries, newest first,
+paged by the identity id (`nextCursor`; a cursor it did not make is `InvalidAuditCursorError`,
+shown as a link back), the actor's name and email by a left join (gone users show their id),
+strings through `redactStrings`. Retention of the log is still the owner's decision (#541).
+
 ### Workspaces and the Portal (issue #247)
 
 The root `package.json` declares `"workspaces": ["apps/*"]`. The IRIS package stays
