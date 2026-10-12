@@ -7,8 +7,10 @@ import { type Kysely, sql } from 'kysely';
  * have no row and are not counted.
  */
 const STATEMENTS = [
+  // Cascade: the 7-year tombstone deletion removes the org row, and accounting rows of a
+  // purge that is still pending must not block it (codex review).
   `create table artifact_objects (
-     org_id text not null references organization (id),
+     org_id text not null references organization (id) on delete cascade,
      key text not null,
      bytes bigint not null check (bytes >= 0),
      created_at timestamptz not null default now(),

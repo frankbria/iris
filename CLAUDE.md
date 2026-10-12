@@ -1479,11 +1479,14 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 `artifactStorageBytes` (free 1 GB, pro 20 GB, team 100 GB) is enforced and shown.
 
 - **Usage is recorded beside each write**: `quotaArtifacts(orgStore, db, orgId, limit)` wraps an
-  org's store; `put` checks the recorded total (a replaced key counts its new size only),
-  refuses with `StorageQuotaExceededError` before anything is stored, then upserts the row.
+  org's store; `put` reserves the row first, in one statement with the check (a replaced key
+  counts its new size only; over the quota it refuses with `StorageQuotaExceededError` and
+  nothing is stored), then writes the object, and gives the reservation back if the write
+  fails: a crash in between overcounts, never undercounts (codex review). The org FK cascades,
+  so the 7-year tombstone deletion is not blocked by a purge still pending.
   `deletePrefix` forgets the matching rows, and offboarding's purge queue calls
-  `forgetArtifacts` after each prefix it deletes. ponytail: check, then write; concurrent
-  writes can overshoot by their total.
+  `forgetArtifacts` after each prefix it deletes. ponytail: concurrent writes can each
+  reserve against the same total, so they can overshoot by their sum.
 - **Where it bites**: a visual job submit is refused with **402** `{ error: 'Storage quota
   reached', limit, used }` when the org is at the quota (inside `enqueue`, like
   `runsPerMonth`; a11y jobs store nothing); a running visual job's write past it fails the job

@@ -109,6 +109,47 @@ const VISUAL: VisualJobParams = {
     expect(await storageUsage(db, 'org-a')).toBe(400);
   });
 
+  // Codex review: recorded before the write, so a crash after it cannot undercount.
+  it('reserves before writing, and gives the reservation back when the write fails', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const slow = { ...orgArtifacts(store, 'org-a') };
+    slow.put = async (k, b, t) => {
+      await held;
+      return orgArtifacts(store, 'org-a').put(k, b, t);
+    };
+    const writing = quotaArtifacts(slow, db, 'org-a', 1_000).put(
+      key('org-a', 'slow'),
+      bytes(300),
+      'image/png',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await storageUsage(db, 'org-a')).toBe(300); // counted while in flight
+    release();
+    await writing;
+
+    const failing = { ...orgArtifacts(store, 'org-a') };
+    failing.put = async () => {
+      throw new Error('bucket unavailable');
+    };
+    await expect(
+      quotaArtifacts(failing, db, 'org-a', 1_000).put(
+        key('org-a', 'lost'),
+        bytes(200),
+        'image/png',
+      ),
+    ).rejects.toThrow('bucket unavailable');
+    expect(await storageUsage(db, 'org-a')).toBe(300); // the failed write's row is gone
+  });
+
+  it("lets the org's 7-year tombstone deletion through (codex review)", async () => {
+    await sql`insert into organization (id, name, slug, "createdAt")
+      values ('org-gone', 'gone', 'gone', now())`.execute(db);
+    await quota('org-gone', 1_000).put(key('org-gone', 'one'), bytes(10), 'image/png');
+    await sql`delete from organization where id = 'org-gone'`.execute(db);
+    expect(await storageUsage(db, 'org-gone')).toBe(0);
+  });
+
   it('forgets what a purge deletes', async () => {
     const a = quota('org-a', 1_000);
     await a.put(key('org-a', 'one'), bytes(300), 'image/png');
