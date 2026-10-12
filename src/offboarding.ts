@@ -85,7 +85,7 @@ export async function listCollectableBaselines(
  * Superseded baselines (#475): an approval repoints the project's baseline and the old image
  * stays while a run links it. One goes once it is not current, no remaining run's result
  * links it, and it is older than run retention. An org with a visual job queued or running
- * is skipped: that job may still record a link to it. Returns how many went.
+ * is skipped: that job may still record a link to it. Returns how many went and failed.
  * ponytail: only objects with an `artifact_objects` row (#315) are found; images stored
  * before #315 stay until their org is purged.
  */
@@ -93,7 +93,7 @@ async function collectSupersededBaselines(
   db: Kysely<unknown>,
   artifacts: ArtifactStore,
   now: Date,
-): Promise<number> {
+): Promise<{ collected: number; failed: number }> {
   const cutoff = retentionCutoff(now);
   const rows = await listCollectableBaselines(db, now);
   let collected = 0;
@@ -121,8 +121,7 @@ async function collectSupersededBaselines(
       log('error', 'baseline collection failed', { orgId: org_id, err: (err as Error).message });
     }
   }
-  if (failed.length) throw new Error(`${failed.length} baseline image(s) could not be deleted`);
-  return collected;
+  return { collected, failed: failed.length };
 }
 
 export function offboarding(db: Kysely<unknown>) {
@@ -450,9 +449,15 @@ export function offboarding(db: Kysely<unknown>) {
           })
         : 0;
 
-      const baselinesCollected = artifacts
-        ? await step('baselines', 0, () => collectSupersededBaselines(db, artifacts, now))
-        : 0;
+      // What was deleted is reported even when some deletions failed (codex review): the
+      // failures are retried by a later pass and named in `failures`.
+      const baselines = artifacts
+        ? await step('baselines', { collected: 0, failed: 0 }, () =>
+            collectSupersededBaselines(db, artifacts, now),
+          )
+        : { collected: 0, failed: 0 };
+      if (baselines.failed) failures.push('baselines');
+      const baselinesCollected = baselines.collected;
 
       const report = {
         orgsPurged,

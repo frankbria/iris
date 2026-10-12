@@ -437,19 +437,20 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
   });
 
   it('lists only baselines old enough, each judged by its own row (#475, codex review)', async () => {
-    await user('ivy');
-    await org('org-age', 'ivy', new Date());
+    await user('iona');
+    await org('org-agecheck', 'iona', new Date());
     const [old, fresh] = ['old', 'fresh'].map((name) =>
-      baselineKey({ orgId: 'org-age', projectId: 'p', name: name + '--abc' }),
+      baselineKey({ orgId: 'org-agecheck', projectId: 'p', name: name + '--abc' }),
     );
     await sql`insert into artifact_objects (org_id, key, bytes, created_at) values
-      ('org-age', ${old}, 1, now() - interval '100 days'), ('org-age', ${fresh}, 1, now())`.execute(
+      ('org-agecheck', ${old}, 1, now() - interval '100 days'), ('org-agecheck', ${fresh}, 1, now())`.execute(
       db,
     );
     const listed = (await listCollectableBaselines(db, new Date()))
-      .filter((r) => r.org_id === 'org-age')
+      .filter((r) => r.org_id === 'org-agecheck')
       .map((r) => r.key);
     expect(listed).toEqual([old]);
+    await sql`delete from artifact_objects where org_id = 'org-agecheck'`.execute(db);
   });
 
   it('one superseded baseline that cannot be deleted does not stop the others (#475)', async () => {
@@ -471,6 +472,8 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
       try {
         const report = await offboarding(db).runRetention({ artifacts: store });
         expect(report.failures).toContain('baselines');
+        // What did go is still reported (codex review).
+        expect(report.baselinesCollected).toBe(1);
         expect(await store.get(keys[1])).toBeNull();
         expect(await store.get(keys[0])).not.toBeNull();
         expect(await count('artifact_objects', `key = '${keys[1]}'`)).toBe(0);
