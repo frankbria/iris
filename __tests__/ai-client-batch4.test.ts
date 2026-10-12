@@ -12,7 +12,7 @@ import {
   SmartClientConfig,
 } from '../src/ai-client';
 import { AIResponseRejectedError } from '../src/ai-client/base';
-import { BudgetExceededError } from '../src/ai-client/cost-tracker';
+import { BudgetExceededError, toMicros } from '../src/ai-client/cost-tracker';
 import { AIClientFactory } from '../src/ai-client/factory';
 import { DEFAULT_MODELS, ModelUnavailableError } from '../src/ai-client/models';
 import { ImagePreprocessor } from '../src/ai-client/preprocessor';
@@ -807,6 +807,60 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         try {
           const id = upgraded.reserve('openai', 'gpt-4o');
           expect(upgraded.settle(id)).toBe(0.002);
+        } finally {
+          upgraded.close();
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+    });
+
+    describe('money in integer micro-dollars (#318)', () => {
+      it('converts USD to micros, rounding a paid fraction up and float noise away', () => {
+        expect(toMicros(0)).toBe(0);
+        expect(toMicros(2.5e-5)).toBe(25); // 2.5e-5 * 1e6 is 25.000000000000004 in floats
+        expect(toMicros(1.5e-7)).toBe(1); // a paid call never records $0
+        expect(toMicros(0.002)).toBe(2_000);
+        expect(toMicros(-1)).toBe(0);
+        expect(toMicros(Number.NaN)).toBe(0);
+      });
+
+      it('sums exactly: ten $0.10 calls are $1.00, not 0.9999999999999999', () => {
+        tracker.setPricing('openai', 'dime-model', 0.1);
+        for (let i = 0; i < 10; i++) tracker.trackOperation('openai', 'dime-model', false);
+        expect([...Array(10)].reduce((t: number) => t + 0.1, 0)).not.toBe(1); // what REAL sums gave
+        expect(tracker.getStats().totalCost).toBe(1);
+        expect(tracker.getStats().costByModel['dime-model']).toBe(1);
+        expect(tracker.getDailyCost()).toBe(1);
+      });
+
+      it('backfills a ledger written before the column, and counts what an older release adds', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-micros-'));
+        const file = path.join(dir, 'ledger.db');
+        const old = new Database(file);
+        old.exec(`CREATE TABLE cost_tracking (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL,
+          provider TEXT NOT NULL, model TEXT NOT NULL, operation TEXT NOT NULL,
+          cost REAL NOT NULL, cached INTEGER NOT NULL DEFAULT 0)`);
+        const insertOld = old.prepare(
+          `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost) VALUES (?, 'openai', 'gpt-4o', 'vision-analysis', 0.1)`,
+        );
+        for (let i = 0; i < 5; i++) insertOld.run(Date.now());
+        old.close();
+
+        const upgraded = new CostTracker(file);
+        try {
+          const raw = new Database(file);
+          expect(
+            raw.prepare('SELECT COUNT(*) AS n FROM cost_tracking WHERE cost_micros = 100000').get(),
+          ).toEqual({ n: 5 });
+          // An older release on the same data dir writes `cost` only.
+          raw
+            .prepare(
+              `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost) VALUES (?, 'openai', 'gpt-4o', 'vision-analysis', 0.1)`,
+            )
+            .run(Date.now());
+          raw.close();
+          expect(upgraded.getStats().totalCost).toBe(0.6);
         } finally {
           upgraded.close();
           fs.rmSync(dir, { recursive: true, force: true });
