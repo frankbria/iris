@@ -887,8 +887,12 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
         page,
         'rerender-id',
       );
-      const dialog = result.interactions.find((i) => i.key === 'Escape' && i.target.includes('#d'));
-      expect(dialog).toMatchObject({ success: false, actualBehavior: 'Still visible' });
+      // Judged on the wrapper, the first dialog in DOM order (#491): what replaced it is
+      // still open in its place, so it failed, and the replacement is not tested again.
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([
+        expect.objectContaining({ success: false, actualBehavior: 'Still visible' }),
+      ]);
       expect(result.passed).toBe(false);
     });
 
@@ -983,6 +987,80 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       );
       const escape = result.interactions.filter((i) => i.key === 'Escape');
       expect(escape.map((i) => i.success)).toEqual([false]);
+    });
+
+    // #491 fixture 1: the open re-render changes classes and drops a nested dialog, so
+    // the page-wide count falls 2 -> 1. The outer dialog is still open where it was.
+    it('fails an open re-render that dropped a nested dialog (#491)', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div id="host"><div role="dialog" class="sheet"><button>Ok</button>
+          <div role="dialog" id="inner"><button>Inner</button></div></div></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          document.getElementById('host').innerHTML =
+            '<div role="dialog" class="sheet shaking"><button>Ok</button></div>';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'nested-rerender',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape).toEqual([
+        expect.objectContaining({ success: false, actualBehavior: 'Still visible' }),
+      ]);
+    });
+
+    // #491 fixture 4: Escape closes the tested dialog while another opens in the same place.
+    // The count is unchanged (1 -> 1); the new one has another name, so A closed. B is then
+    // tested on its own.
+    it('passes a dialog that closed while another opened in its place (#491)', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title>
+        <style>[role=dialog]{position:fixed;top:10px;left:10px;width:300px;height:120px}</style>
+        </head><body>
+        <div id="host"><div role="dialog" aria-label="Settings"><button>Ok</button></div></div>
+        <script>let step = 0; document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          step++;
+          document.getElementById('host').innerHTML = step === 1
+            ? '<div role="dialog" aria-label="Discard changes?"><button>Yes</button></div>'
+            : '';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'replaced-by-another',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => i.success)).toEqual([true, true]);
+      expect(result.passed).toBe(true);
+    });
+
+    // #491 review of the first cut: two id-less stacked dialogs; Escape removes A and B slides
+    // up into A's box. B has other text, so it is not A re-rendered: A closed, and B is
+    // tested on its own (it ignores Escape).
+    it('does not take a dialog that slid into the gap for the one that closed (#491)', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title></head><body>
+        <div role="dialog" class="sheet"><button>First</button></div>
+        <div role="dialog" class="sheet"><button>Second</button></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          const first = document.querySelector('[role=dialog]');
+          if (first && first.textContent.includes('First')) first.remove();
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'slide-up',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => i.success)).toEqual([true, false]);
     });
 
     it('does not fail a dialog that an earlier Escape already closed', async () => {

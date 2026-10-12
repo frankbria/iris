@@ -59,60 +59,189 @@ export interface KeyboardInteraction {
   timestamp: Date;
 }
 
+/** What counts as a dialog for the Escape check and the dialog count. */
+const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]';
+
 /**
- * In-page: is the marked element visible (null when it is gone), and how many
- * dismissible elements are visible. A string-free function is fine here: the a11y
- * modules are excluded from coverage instrumentation (see jest.config.ts).
+ * In-page: how many dialogs are showing (visible and not inert). A string-free function is
+ * fine here: the a11y modules are excluded from coverage instrumentation (jest.config.ts).
  */
-const DISMISSIBLE_STATE = ({
-  selector,
-  id,
-  tag,
-  cls,
-}: {
-  selector: string;
-  id: string | null;
-  tag: string;
-  cls: string;
-}): { marked: boolean | null; same: boolean | null; visibleCount: number } => {
-  const isVisible = (el: Element) => {
+const VISIBLE_DIALOGS = (selector: string): number => {
+  const showing = (el: Element) => {
     const style = getComputedStyle(el);
     return (
       style.display !== 'none' &&
       style.visibility !== 'hidden' &&
-      Element.prototype.getClientRects.call(el).length > 0
+      Element.prototype.getClientRects.call(el).length > 0 &&
+      !Element.prototype.closest.call(el, '[inert]')
     );
   };
-  const all = Array.from(
-    document.querySelectorAll('[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]'),
-  );
-  const marked = document.querySelector(selector);
-  // A re-render that replaced the node: the same dialog is the element with its id, or,
-  // without one, the dismissible element with its tag and exact class list (what the old
-  // `TAG.class` selector found). With neither, it cannot be told apart: null.
-  let same: boolean | null = null;
-  if (id) {
-    const byId = document.getElementById(id);
-    same = !!byId && isVisible(byId);
-  } else if (cls) {
-    // Tag + exact class list is weak evidence: it may show the dialog is still open (a
-    // visible match), never that it closed. A hidden template or a sibling sharing the
-    // classes must not establish dismissal; anything short of a visible match is unknown,
-    // and the visible count decides.
-    const stillOpen = all.some(
-      (el) =>
-        el.tagName === tag &&
-        (Element.prototype.getAttribute.call(el, 'class') ?? '').trim() === cls &&
-        isVisible(el),
+  return Array.from(document.querySelectorAll(selector)).filter(showing).length;
+};
+
+/** How a dialog is recognised after Escape (#491): its id, else place, name and text. */
+interface DialogPlace {
+  id: string | null;
+  rect: { x: number; y: number; width: number };
+  name: string;
+  text: string;
+}
+
+/**
+ * In-page, before Escape (#491): the first showing dialog not yet tested, in DOM order. It
+ * is marked tested (`attr="value"`), focus is put inside it (Escape goes to the focused
+ * element; a handler on the dialog never sees a key sent to <body>), and its label, box and
+ * name are returned. `null` when every showing dialog has been tested.
+ */
+const PICK_DIALOG = ({
+  selector,
+  attr,
+  value,
+}: {
+  selector: string;
+  attr: string;
+  value: string;
+}): (DialogPlace & { label: string }) | null => {
+  // Through Element.prototype: a <form>'s named controls shadow its methods and properties
+  // (`<input name="setAttribute">`), which threw and ended the run.
+  const get = (el: Element, name: string) => Element.prototype.getAttribute.call(el, name);
+  const showing = (el: Element) => {
+    const style = getComputedStyle(el);
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      Element.prototype.getClientRects.call(el).length > 0 &&
+      !Element.prototype.closest.call(el, '[inert]')
     );
-    same = stillOpen ? true : null;
+  };
+  const dialog = Array.from(document.querySelectorAll(selector)).find(
+    (el) => showing(el) && !Element.prototype.hasAttribute.call(el, attr),
+  );
+  if (!dialog) return null;
+  Element.prototype.setAttribute.call(dialog, attr, value);
+
+  const inside = () =>
+    !!document.activeElement && Node.prototype.contains.call(dialog, document.activeElement);
+  const focus = (el: Element) => {
+    // An SVG <a> or dialog is not an HTMLElement: its focus() is SVGElement's.
+    try {
+      (el instanceof SVGElement ? SVGElement : HTMLElement).prototype.focus.call(
+        el as HTMLElement & SVGElement,
+      );
+    } catch {
+      // not focusable this way
+    }
+  };
+  if (!inside()) {
+    // The first control that really takes focus: a hidden or inert one silently does not.
+    const candidates = Element.prototype.querySelectorAll.call(
+      dialog,
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]),' +
+        ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    for (const candidate of Array.from(candidates)) {
+      focus(candidate);
+      if (inside()) break;
+    }
   }
+  if (!inside()) {
+    if (!Element.prototype.hasAttribute.call(dialog, 'tabindex'))
+      Element.prototype.setAttribute.call(dialog, 'tabindex', '-1');
+    focus(dialog);
+  }
+
+  const name = (el: Element): string => {
+    const label = get(el, 'aria-label');
+    if (label) return label.trim();
+    const ids = (get(el, 'aria-labelledby') ?? '').split(/\s+/).filter(Boolean);
+    const labelled = ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
+    if (labelled.trim()) return labelled.trim();
+    const heading = Element.prototype.querySelector.call(el, 'h1, h2, h3, h4, h5, h6');
+    return (heading?.textContent ?? '').trim();
+  };
+  const box = Element.prototype.getBoundingClientRect.call(dialog);
+  const id = get(dialog, 'id');
+  const firstClass = (get(dialog, 'class') ?? '').trim().split(/\s+/)[0];
   return {
-    marked: marked ? isVisible(marked) : null,
-    same,
-    visibleCount: all.filter(isVisible).length,
+    label: dialog.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
+    id,
+    rect: { x: box.x, y: box.y, width: box.width },
+    name: name(dialog),
+    text: (dialog.textContent ?? '').replace(/\s+/g, ' ').trim(),
   };
 };
+
+/**
+ * In-page, after Escape (#491): is the tested dialog still open? It is when its own node is
+ * still showing. Otherwise, a dialog with an id is open while an element with that id shows.
+ * An id-less one is open when a showing dialog took its place (same left, top and width;
+ * height may change with its content), its name, and text that contains or is contained in
+ * its own: a re-render that replaced the node. That replacement is marked tested, so it is
+ * not judged twice. A dialog that opened elsewhere, under another name, or that slid up
+ * into the gap with other text, is a different dialog: the tested one closed.
+ * ponytail: text containment is the tie-breaker for id-less re-renders; a replacement whose
+ * text merely contains the old dialog's reads as the same dialog.
+ */
+const STILL_OPEN = ({
+  selector,
+  attr,
+  value,
+  place,
+}: {
+  selector: string;
+  attr: string;
+  value: string;
+  place: DialogPlace;
+}): boolean => {
+  const showing = (el: Element) => {
+    const style = getComputedStyle(el);
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      Element.prototype.getClientRects.call(el).length > 0 &&
+      !Element.prototype.closest.call(el, '[inert]')
+    );
+  };
+  const get = (el: Element, name: string) => Element.prototype.getAttribute.call(el, name);
+  const name = (el: Element): string => {
+    const label = get(el, 'aria-label');
+    if (label) return label.trim();
+    const ids = (get(el, 'aria-labelledby') ?? '').split(/\s+/).filter(Boolean);
+    const labelled = ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
+    if (labelled.trim()) return labelled.trim();
+    const heading = Element.prototype.querySelector.call(el, 'h1, h2, h3, h4, h5, h6');
+    return (heading?.textContent ?? '').trim();
+  };
+  const own = document.querySelector(`[${attr}="${value}"]`);
+  if (own && showing(own)) return true;
+  const mark = (el: Element) => Element.prototype.setAttribute.call(el, attr, `${value}-again`);
+  if (place.id) {
+    const byId = document.getElementById(place.id);
+    if (!byId || !showing(byId)) return false;
+    mark(byId);
+    return true;
+  }
+  const near = (a: number, b: number) => Math.abs(a - b) <= 2;
+  const text = (el: Element) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const replacement = Array.from(document.querySelectorAll(selector)).find((el) => {
+    if (el === own || !showing(el)) return false;
+    const box = Element.prototype.getBoundingClientRect.call(el);
+    const t = text(el);
+    return (
+      near(box.x, place.rect.x) &&
+      near(box.y, place.rect.y) &&
+      near(box.width, place.rect.width) &&
+      name(el) === place.name &&
+      (t.includes(place.text) || place.text.includes(t))
+    );
+  });
+  if (!replacement) return false;
+  mark(replacement);
+  return true;
+};
+
+/** At most this many dialogs are tested with Escape on one page. */
+const MAX_ESCAPE_DIALOGS = 50;
 
 /**
  * An evaluate that died because the page navigated (a dialog whose Escape handler sends
@@ -120,9 +249,6 @@ const DISMISSIBLE_STATE = ({
  */
 const destroyedByNavigation = (error: unknown): boolean =>
   error instanceof Error && /Execution context was destroyed|navigat/i.test(error.message);
-
-/** A probe that matches no marker: DISMISSIBLE_STATE then only counts visible dialogs. */
-const NO_PROBE = { selector: '[data-iris-none]', id: null, tag: '', cls: '' };
 
 /**
  * KeyboardTester handles keyboard navigation and accessibility testing
@@ -157,7 +283,7 @@ export class KeyboardTester {
       const startUrl = page.url();
       const dialogsBefore =
         this.config.testTrapDetection && this.config.testEscapeHandling
-          ? (await page.evaluate(DISMISSIBLE_STATE, NO_PROBE)).visibleCount
+          ? await page.evaluate(VISIBLE_DIALOGS, DIALOG_SELECTOR)
           : 0;
 
       // Test 1: Focus order
@@ -234,7 +360,7 @@ export class KeyboardTester {
           } catch {
             // Fall back to the current DOM.
           }
-          const dialogsNow = (await page.evaluate(DISMISSIBLE_STATE, NO_PROBE)).visibleCount;
+          const dialogsNow = await page.evaluate(VISIBLE_DIALOGS, DIALOG_SELECTOR);
           if (dialogsNow < dialogsBefore) {
             passed = false;
             interactions.push({
@@ -792,148 +918,49 @@ export class KeyboardTester {
   /**
    * Test escape key handling for dismissible components
    */
+  /**
+   * Escape on each dialog (#491): the first showing one not yet tested, re-found after every
+   * key, since an Escape may close, re-render or open dialogs. It is focused, sent Escape, and
+   * judged by its own node, or by a replacement in its place under its name. Identity is
+   * never inferred from class lists or the page-wide count.
+   */
   private async testEscapeHandling(page: Page): Promise<KeyboardInteraction[]> {
     const interactions: KeyboardInteraction[] = [];
-
-    // Find dismissible components. Visibility deliberately avoids offsetParent:
-    // it is null for position:fixed elements, which describes most real modals,
-    // so those were skipped here and silently recorded as passing Escape handling.
-    const nonce = randomBytes(4).toString('hex');
-    const dismissibleElements = await page.evaluate((nonce) => {
-      const isVisible = (el: Element) => {
-        const style = getComputedStyle(el);
-        return (
-          style.display !== 'none' &&
-          style.visibility !== 'hidden' &&
-          Element.prototype.getClientRects.call(el).length > 0
-        );
-      };
-
-      const elements = document.querySelectorAll(
-        '[role="dialog"], [role="alertdialog"], .modal, [aria-modal="true"]',
-      );
-      // Addressed by a marker of ours, as in arrow navigation (#285).
-      return Array.from(elements).map((el, i) => {
-        Element.prototype.setAttribute.call(el, `data-iris-kbd-${nonce}`, `escape-${i}`);
-        // Through Element.prototype: a <form>'s named controls shadow its methods and
-        // properties (`<input name="setAttribute">`), which threw and ended the run.
-        const attr = (name: string) => Element.prototype.getAttribute.call(el, name);
-        const id = attr('id');
-        const firstClass = (attr('class') ?? '').trim().split(/\s+/)[0];
-        return {
-          selector: `[data-iris-kbd-${nonce}="escape-${i}"]`,
-          id,
-          tag: el.tagName,
-          cls: (attr('class') ?? '').trim(),
-          label: el.tagName + (id ? `#${id}` : '') + (firstClass ? `.${firstClass}` : ''),
-          visible: isVisible(el),
-        };
+    const attr = 'data-iris-kbd-' + randomBytes(4).toString('hex');
+    const outcome = (target: string, actualBehavior: string, success: boolean) =>
+      interactions.push({
+        key: 'Escape',
+        target,
+        expectedBehavior: 'Modal/dialog closes on Escape',
+        actualBehavior,
+        success,
+        timestamp: new Date(),
       });
-    }, nonce);
 
     try {
-      for (const element of dismissibleElements) {
-        if (!element.visible) continue;
-
+      for (let n = 0; n < MAX_ESCAPE_DIALOGS; n++) {
+        const value = 'escape-' + n;
+        const picked = await page.evaluate(PICK_DIALOG, {
+          selector: DIALOG_SELECTOR,
+          attr,
+          value,
+        });
+        if (!picked) break;
         try {
-          const probe = {
-            selector: element.selector,
-            id: element.id,
-            tag: element.tag,
-            cls: element.cls,
-          };
-          const before = await page.evaluate(DISMISSIBLE_STATE, probe);
-          // Already dismissed by an earlier candidate's Escape (a .modal wrapper and its
-          // inner [role=dialog], stacked modals closed by one handler): nothing to test.
-          // Skip a candidate that is gone before its turn: our node hidden or removed and
-          // nothing identifies a replacement (an id, or tag + class that is still showing).
-          // Testing it instead would press Escape on whatever else is showing and record a
-          // failure against an element that no longer exists (a .modal wrapper and its
-          // inner panel closed together beside a persistent chat dialog). A re-render that
-          // changes an id-less dialog's markup before its turn is then not tested: proper
-          // Escape semantics (topmost focused dialog) are #286, which has that fixture.
-          if (!(before.marked ?? before.same ?? false)) continue;
-          // Escape goes to the focused element. After the reload nothing inside the dialog
-          // has focus, and a handler on the dialog itself never sees a key sent to <body>.
-          await page.evaluate((selector) => {
-            const dialog = document.querySelector(selector);
-            if (!dialog) return;
-            const inside = () =>
-              !!document.activeElement &&
-              Node.prototype.contains.call(dialog, document.activeElement);
-            if (inside()) return; // keep a control the page focused itself
-            // The first one that really takes focus: a hidden or inert one silently does not.
-            const candidates = Element.prototype.querySelectorAll.call(
-              dialog,
-              'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]),' +
-                ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-            );
-            for (const candidate of Array.from(candidates)) {
-              // An SVG <a> is not an HTMLElement: its focus() is SVGElement's.
-              try {
-                (candidate instanceof SVGElement ? SVGElement : HTMLElement).prototype.focus.call(
-                  candidate as HTMLElement & SVGElement,
-                );
-              } catch {
-                continue; // not focusable this way: try the next one
-              }
-              if (inside()) return;
-            }
-            if (!Element.prototype.hasAttribute.call(dialog, 'tabindex')) {
-              Element.prototype.setAttribute.call(dialog, 'tabindex', '-1');
-            }
-            // An SVG dialog's focus() is SVGElement's, as for the candidates above.
-            (dialog instanceof SVGElement ? SVGElement : HTMLElement).prototype.focus.call(
-              dialog as HTMLElement & SVGElement,
-            );
-          }, element.selector);
           await page.keyboard.press('Escape');
-          const after = await page.evaluate(DISMISSIBLE_STATE, probe).catch((error: unknown) => {
-            if (!destroyedByNavigation(error)) throw error;
-            return null; // Escape left the page: dismissed
-          });
-          if (after === null) {
-            interactions.push({
-              key: 'Escape',
-              target: element.label,
-              expectedBehavior: 'Modal/dialog closes on Escape',
-              actualBehavior: 'Closed (the page navigated)',
-              success: true,
-              timestamp: new Date(),
+          const open = await page
+            .evaluate(STILL_OPEN, { selector: DIALOG_SELECTOR, attr, value, place: picked })
+            .catch((error: unknown) => {
+              if (!destroyedByNavigation(error)) throw error;
+              return null; // Escape left the page: dismissed
             });
-            break; // the remaining candidates were on the page it left
+          if (open === null) {
+            outcome(picked.label, 'Closed (the page navigated)', true);
+            break; // the remaining dialogs were on the page it left
           }
-
-          // Our marked element still there: its own visibility decides. Gone (a handler
-          // that replaced the node, as a framework re-render does): an element with its
-          // id decides, as the id lookup did before markers; with no id, dismissed only if
-          // fewer dismissible elements are visible now. A bare null check read a
-          // replaced-but-open dialog as closed. ponytail: the count is a heuristic for
-          // id-less re-renders; Escape semantics proper are #491.
-          const stillVisible =
-            after.marked !== null
-              ? after.marked
-              : after.same !== null
-                ? after.same
-                : after.visibleCount >= before.visibleCount;
-
-          interactions.push({
-            key: 'Escape',
-            target: element.label,
-            expectedBehavior: 'Modal/dialog closes on Escape',
-            actualBehavior: stillVisible ? 'Still visible' : 'Closed',
-            success: !stillVisible,
-            timestamp: new Date(),
-          });
+          outcome(picked.label, open ? 'Still visible' : 'Closed', !open);
         } catch {
-          interactions.push({
-            key: 'Escape',
-            target: element.label,
-            expectedBehavior: 'Modal/dialog closes on Escape',
-            actualBehavior: 'Failed to test',
-            success: false,
-            timestamp: new Date(),
-          });
+          outcome(picked.label, 'Failed to test', false);
         }
       }
     } finally {
@@ -941,13 +968,11 @@ export class KeyboardTester {
       // replace the results collected so far.
       try {
         await page.evaluate(
-          (nonce) =>
+          (name) =>
             document
-              .querySelectorAll(`[data-iris-kbd-${nonce}]`)
-              .forEach((el) =>
-                Element.prototype.removeAttribute.call(el, `data-iris-kbd-${nonce}`),
-              ),
-          nonce,
+              .querySelectorAll('[' + name + ']')
+              .forEach((el) => Element.prototype.removeAttribute.call(el, name)),
+          attr,
         );
       } catch {
         // Cleanup only.

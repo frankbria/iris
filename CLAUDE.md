@@ -244,7 +244,14 @@ plans/
   same-origin iframes); the same stop twice in a row is pressed through (a cross-origin
   frame or closed shadow root). The Escape check focuses inside each dialog before Escape. The Escape check reloads
   the page (`load`, failure tolerated) when the trap check pressed Escape, since that closed
-  every Escape-dismissible dialog first. Escape identity after a re-render is #491
+  every Escape-dismissible dialog first. **Escape is judged per dialog (#491)**: each round
+  re-finds the first showing (not inert), untested dialog in DOM order, marks and focuses it,
+  presses Escape, and asks whether *it* is still open: its own node showing; else, with an
+  id, an element with that id showing; else a showing dialog in its place (left, top, width
+  within 2 px; height may change), with its name (`aria-label`, `aria-labelledby`, first
+  heading) and text containing or contained in its own (a re-render), which is marked tested
+  too. No class lists and no page-wide count: a dialog that opened elsewhere, under another
+  name, or slid into the gap with other text is a different dialog. At most 50 per page
 - **The a11y runner isolates pages (#287).** A page that fails (navigation, timeout, a check
   that throws on hostile markup) is that page's result with `error` and an empty axe
   result; the other pages still run. `summary.pagesErrored` counts them, and an errored page
