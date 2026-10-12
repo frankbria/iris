@@ -106,11 +106,12 @@ async function reserveCredit(
 ): Promise<string | null> {
   return db.transaction().execute(async (tx) => {
     await sql`select pg_advisory_xact_lock(hashtext(${'managed-ai:' + orgId}))`.execute(tx);
-    // Stale rows of this org go here: nothing else sweeps them. A held row (a billed call
-    // with no usage row) stays and counts for its month; earlier months' go.
+    // Stale rows of this org go here: nothing else sweeps them. A live row expires with its
+    // TTL, whatever the month (a call started before midnight is still in flight after it);
+    // a held row (a billed call with no usage row) counts for its month only.
     await sql`delete from managed_ai_reservations where org_id = ${orgId} and (
       (not held and created_at < now() - make_interval(mins => ${RESERVATION_TTL_MINUTES}))
-      or created_at < date_trunc('month', now() at time zone 'UTC') at time zone 'UTC')`.execute(
+      or (held and created_at < date_trunc('month', now() at time zone 'UTC') at time zone 'UTC'))`.execute(
       tx,
     );
     const { rows } = await sql<{ reserved: string }>`

@@ -52,7 +52,7 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
     u.pathname = `/${dbName}`;
     db = createPostgresDb(u.toString());
     await migrateToLatest(db);
-    for (const org of ['org-m', 'org-b', 'org-x', 'org-r', 'org-big', 'org-held']) {
+    for (const org of ['org-m', 'org-b', 'org-x', 'org-r', 'org-big', 'org-held', 'org-mid']) {
       await sql`insert into organization (id, name, slug, "createdAt") values (${org}, ${org}, ${org}, now())`.execute(
         db,
       );
@@ -184,6 +184,23 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
     const second = await resolve({ orgId: 'org-held' });
     expect(second?.billingMode).toBe('managed');
     expect(await resolve({ orgId: 'org-held' })).toBeNull(); // 8 + 1 held + 1 in flight
+  });
+
+  // Codex review: a call started before midnight UTC is still in flight after it, so a
+  // live reservation ends only with its TTL; the month change drops held ones only.
+  it('ages live reservations by their TTL and held ones by the month (#482)', async () => {
+    await orgEntitlements(db).setPlan('org-mid', 'pro');
+    await orgAiSettings(db).set('org-mid', 'managed', 'user:u6');
+    const lastMonth = sql`date_trunc('month', now() at time zone 'UTC') at time zone 'UTC' - interval '1 hour'`;
+    await sql`insert into managed_ai_reservations (org_id, amount_usd, created_at, held) values
+      ('org-mid', 1, now() - interval '5 minutes', false),
+      ('org-mid', 2, now() - interval '11 minutes', false),
+      ('org-mid', 4, ${lastMonth}, true)`.execute(db);
+    const first = await resolver(MANAGED, () => 1)({ orgId: 'org-mid' }); // runs the cleanup
+    await first?.release?.();
+    const left = await sql<{ amount_usd: string }>`select amount_usd from managed_ai_reservations
+      where org_id = 'org-mid' order by amount_usd`.execute(db);
+    expect(left.rows.map((r) => Number(r.amount_usd))).toEqual([1]);
   });
 
   it("prices the worst case at the provider's dearest rates plus the request size (#482)", () => {
