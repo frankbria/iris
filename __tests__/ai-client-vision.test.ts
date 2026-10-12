@@ -17,6 +17,7 @@ import {
   OllamaVisionClient,
 } from '../src/ai-client/vision';
 import { AIResponseRejectedError } from '../src/ai-client/base';
+import { resetModelProbeCache } from '../src/ai-client/models';
 
 // --- OpenAI SDK mock ---
 const mockOpenAICreate = jest.fn();
@@ -93,6 +94,9 @@ describe('vision clients', () => {
 
       const payload = mockOpenAICreate.mock.calls[0][0];
       expect(payload.model).toBe('gpt-4o');
+      // Not the deprecated max_tokens, which the o-series refuses (#298).
+      expect(payload.max_completion_tokens).toBe(1000);
+      expect(payload).not.toHaveProperty('max_tokens');
       const userContent = payload.messages.find((m: { role: string }) => m.role === 'user').content;
       const imageParts = userContent.filter((p: { type: string }) => p.type === 'image_url');
       expect(imageParts).toHaveLength(2);
@@ -186,8 +190,13 @@ describe('vision clients', () => {
     it('reports availability and vision support from model + key', async () => {
       expect(await new OpenAIVisionClient(config).isAvailable()).toBe(true);
       expect(new OpenAIVisionClient(config).supportsVision()).toBe(true);
+      // o1-mini takes no images; o1 does, which the old `gpt-4` name match denied (#298).
       expect(
-        new OpenAIVisionClient({ provider: 'openai', apiKey: 'k', model: 'o1' }).supportsVision(),
+        new OpenAIVisionClient({
+          provider: 'openai',
+          apiKey: 'k',
+          model: 'o1-mini',
+        }).supportsVision(),
       ).toBe(false);
       expect(
         await new OpenAIVisionClient({ provider: 'openai', model: 'gpt-4o' }).isAvailable(),
@@ -529,17 +538,22 @@ describe('vision clients', () => {
       expect((global.fetch as jest.Mock).mock.calls).toHaveLength(1);
     });
 
-    it('isAvailable() true only when a llava-family model is present', async () => {
+    // #298: the configured model's own answer, not "is any llava pulled". The probe is
+    // cached, so each case starts clean.
+    it('isAvailable() asks Ollama about the configured model', async () => {
+      resetModelProbeCache();
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ models: [{ name: 'llava:latest' }] }),
+        json: async () => ({ capabilities: ['completion', 'vision'] }),
       });
       expect(await new OllamaVisionClient(config).isAvailable()).toBe(true);
-
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ models: [{ name: 'mistral' }] }),
+      expect((global.fetch as jest.Mock).mock.calls[0][0]).toBe(`${config.endpoint}/api/show`);
+      expect(JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body)).toEqual({
+        model: 'llava',
       });
+
+      resetModelProbeCache();
+      global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 404 });
       expect(await new OllamaVisionClient(config).isAvailable()).toBe(false);
     });
   });

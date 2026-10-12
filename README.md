@@ -219,6 +219,9 @@ iris visual-diff \
 
 # Or pick the provider explicitly. Ollama runs locally and needs no API key.
 iris visual-diff --pages "http://localhost:8080/" --semantic --provider ollama
+
+# And the vision model: any model that accepts images (default: the provider's vision default)
+iris visual-diff --pages "http://localhost:8080/" --semantic --provider ollama --ai-model llama3.2-vision
 ```
 
 **Accessibility Testing:**
@@ -273,8 +276,8 @@ changed:
 | A hot edit loop | capped at 50 AI calls per session (`--max-ai-calls <n>`) |
 
 Provider resolution matches `visual-diff --semantic`: auto-detected from the
-environment, or pick one with `--provider openai|anthropic|ollama`. Ollama runs
-locally and needs no key. A missing key is reported **before** the watcher
+environment, or pick one with `--provider openai|anthropic|ollama`, and the vision
+model with `--ai-model <id>`. Ollama runs locally and needs no key. A missing key is reported **before** the watcher
 starts, not on your first save.
 
 **Honest about latency.** The PRD target is feedback within 2 seconds. In practice
@@ -862,6 +865,14 @@ So a key in the environment and a model in the config file work together, and a
 applies only while its own provider is active — exporting `OPENAI_MODEL` cannot
 leak into an Anthropic session.
 
+These choose the **text** model (`iris run`). Visual analysis (`visual-diff --semantic`,
+`watch --feedback`) needs a model that accepts images and takes it from `--ai-model <id>`;
+without it, each provider's vision default is used (`gpt-4o`, `claude-sonnet-5`, `llava`).
+IRIS knows which OpenAI families see (`gpt-4o`, `gpt-4.1`, `gpt-5`, `o1`/`o3`/`o4`, not
+`gpt-3.5` or `o1-mini`); for Ollama it asks the daemon (`/api/show` capabilities, so
+`llama3.2-vision`, `gemma3` or `qwen2.5vl` work) and checks that the model is pulled. That
+check gives up after 2 seconds and is reused for a minute.
+
 #### Model availability is checked, not assumed
 
 Before a request goes out, IRIS asks the provider which models it currently
@@ -1030,6 +1041,7 @@ Options:
   --semantic              Enable AI semantic analysis
   --provider <name>       AI provider for --semantic: openai|anthropic|ollama
                           (default: auto-detected from environment)
+  --ai-model <id>         Vision model for --semantic (default: the provider's vision default)
   --threshold <value>     Pixel threshold 0-1 (default: 0.1)
   --devices <list>        Devices: desktop,tablet,mobile (default: desktop)
   --format <type>         Output: html|json|junit|markdown (default: html)

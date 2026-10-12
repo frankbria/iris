@@ -57,6 +57,117 @@ export const DEFAULT_MODELS: Record<ModelKind, Record<ModelProvider, string>> = 
 };
 
 /**
+ * Model families that accept images, by id prefix (#298). Capability used to be a
+ * name guess (`gpt-4` for OpenAI, `llava`/`bakllava` for Ollama), which skipped
+ * `gpt-4.1`, `gpt-5`, `o3`, `llama3.2-vision`, `gemma3` and kept the text-only `gpt-4`.
+ * OpenAI's model list carries no capability field, so this table is the source there;
+ * Ollama reports `capabilities` from `/api/show`, which wins when present
+ * ({@link ollamaModelCapabilities}). Every Claude model sees, so Anthropic has no entry.
+ */
+const VISION_MODEL_PREFIXES: Record<'openai' | 'ollama', string[]> = {
+  openai: [
+    'gpt-4o',
+    'chatgpt-4o',
+    'gpt-4.1',
+    'gpt-4.5',
+    'gpt-4-turbo',
+    'gpt-4-vision',
+    'gpt-5',
+    'o1',
+    'o3',
+    'o4',
+  ],
+  ollama: [
+    'llava',
+    'bakllava',
+    'llama3.2-vision',
+    'llama4',
+    'gemma3',
+    'qwen2.5vl',
+    'qwen2-vl',
+    'minicpm-v',
+    'moondream',
+    'granite3.2-vision',
+    'mistral-small3',
+  ],
+};
+
+/** Variants inside a vision family that take no images (`o1-mini`, `gpt-4o-audio-preview`). */
+const NOT_VISION = /^o[13]-mini|-(?:audio|realtime|transcribe|tts|search)/;
+
+/** Whether a model accepts images, by the table above (#298). */
+export function isVisionModel(provider: ModelProvider, model: string): boolean {
+  if (provider === 'anthropic') return true;
+  // Ollama names may carry a namespace (`library/llava:13b`); the family is the last part.
+  const id = model.slice(model.lastIndexOf('/') + 1).toLowerCase();
+  return VISION_MODEL_PREFIXES[provider].some((p) => id.startsWith(p)) && !NOT_VISION.test(id);
+}
+
+/**
+ * Ollama answers an availability probe within this, or counts as down (#298). It runs
+ * before an analysis, so a daemon that accepts and never answers must not hold the run.
+ */
+const OLLAMA_PROBE_TIMEOUT_MS = 2000;
+
+/**
+ * How long a probe's answer stands. Not the whole session, unlike {@link probeCache}: a
+ * daemon started after the first check (a long `iris watch`) should be found again.
+ */
+const OLLAMA_PROBE_TTL_MS = 60_000;
+
+const ollamaProbes = new Map<string, { at: number; reply: Promise<unknown> }>();
+
+/**
+ * One cached, bounded request to a local Ollama: its JSON body, or `null` when it did not
+ * answer 2xx within {@link OLLAMA_PROBE_TIMEOUT_MS}. The promise is cached, so concurrent
+ * analyses share one request. `performance.now()`, not `Date.now()`: the WSL2 clock steps
+ * backward (#190).
+ */
+function probeOllama(endpoint: string, path: '/api/tags' | '/api/show', model?: string) {
+  const url = `${endpoint.replace(/\/$/, '')}${path}`;
+  const key = `${url}|${model ?? ''}`;
+  const now = performance.now();
+  const hit = ollamaProbes.get(key);
+  if (hit && now - hit.at < OLLAMA_PROBE_TTL_MS) return hit.reply;
+  const init: RequestInit = model
+    ? {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model }),
+      }
+    : {};
+  // AbortSignal.timeout, not fetchWithTimeout: that clears its timer once the headers
+  // arrive, and a body that stalls would then hold the probe forever (codex review, #298).
+  const reply = fetch(url, { ...init, signal: AbortSignal.timeout(OLLAMA_PROBE_TIMEOUT_MS) })
+    // The body read is inside the same timeout; a body that is cut off or not JSON is no answer.
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  ollamaProbes.set(key, { at: now, reply });
+  return reply;
+}
+
+/** Whether an Ollama daemon answers at `endpoint` (cached, bounded). */
+export async function ollamaReachable(endpoint: string): Promise<boolean> {
+  return (await probeOllama(endpoint, '/api/tags')) !== null;
+}
+
+/**
+ * What Ollama says `model` can do: its `capabilities` (`['completion', 'vision']`), `[]`
+ * when this Ollama is too old to report them, or `null` when the model is not pulled or
+ * the daemon did not answer.
+ */
+export async function ollamaModelCapabilities(
+  endpoint: string,
+  model: string,
+): Promise<string[] | null> {
+  const info = (await probeOllama(endpoint, '/api/show', model)) as {
+    capabilities?: unknown;
+  } | null;
+  if (info === null) return null;
+  return Array.isArray(info.capabilities) ? info.capabilities.map(String) : [];
+}
+
+/**
  * A requested model that the provider does not serve.
  *
  * Distinct from a generic `Error` so `SmartAIVisionClient` can refuse to swallow
@@ -108,6 +219,7 @@ const probeCache = new Map<string, Promise<string[] | null>>();
 /** Drop the session cache. Exported for tests; nothing in `src/` calls it. */
 export function resetModelProbeCache(): void {
   probeCache.clear();
+  ollamaProbes.clear();
 }
 
 /**

@@ -683,6 +683,27 @@ describe('CLI Commands', () => {
 
       expect(watchFiles.mock.calls[0][2]?.blockPrivateHosts).toBe(true);
     });
+
+    test('passes --ai-model to the --feedback classifier (#298)', async () => {
+      const watchFiles = stubWatchFiles();
+
+      await runCli([
+        'node',
+        'iris',
+        'watch',
+        '.',
+        '--feedback',
+        '--provider',
+        'ollama',
+        '--ai-model',
+        'llama3.2-vision',
+      ]);
+
+      expect(watchFiles.mock.calls[0][2]?.ai).toMatchObject({
+        provider: 'ollama',
+        model: 'llama3.2-vision',
+      });
+    });
   });
 
   // Issue #113: `run` emitted only emoji-decorated human text, so no AI assistant

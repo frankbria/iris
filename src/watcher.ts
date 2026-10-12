@@ -45,6 +45,8 @@ export interface WatchOptions {
   /** Provider/key for the classifier, resolved by the caller (see cli.ts). */
   ai?: {
     provider: AIProvider;
+    /** Vision model (`--ai-model`); unset is the provider's vision default (#298). */
+    model?: string;
     apiKey?: string;
     endpoint?: string;
     credentials?: ProviderCredentials;
@@ -172,6 +174,7 @@ export class FileWatcher {
     if (!this.classifier) {
       this.classifier = new AIVisualClassifier({
         provider: this.options.ai.provider,
+        model: this.options.ai.model,
         apiKey: this.options.ai.apiKey,
         baseURL: this.options.ai.endpoint,
         credentials: this.options.ai.credentials,
