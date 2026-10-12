@@ -47,7 +47,8 @@ export function envSecrets(env: NodeJS.ProcessEnv = process.env): SecretSource {
   return (name) => {
     const value = env[`IRIS_SECRET_${name}`];
     const origin = env[`IRIS_SECRET_ORIGIN_${name}`];
-    if (value === undefined || !origin) return value;
+    // Set but empty is a malformed binding (PR bot), not an unbound value.
+    if (value === undefined || origin === undefined) return value;
     const parsed = httpOrigin(origin);
     // A malformed binding fails the fill (in resolveFillText), never unbinds the value.
     return { value, origin: parsed ?? `invalid:IRIS_SECRET_ORIGIN_${name}` };

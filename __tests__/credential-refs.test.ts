@@ -95,10 +95,16 @@ describe('credential references', () => {
       IRIS_SECRET_ORIGIN_PW: 'https://shop.example/any/path',
       IRIS_SECRET_BAD: SECRET,
       IRIS_SECRET_ORIGIN_BAD: 'not a url',
+      IRIS_SECRET_EMPTY: SECRET,
+      IRIS_SECRET_ORIGIN_EMPTY: '',
     });
     expect(source('PW')).toEqual({ value: SECRET, origin: 'https://shop.example' });
     expect(() => resolveFillText('{{secret:BAD}}', source, 'https://shop.example')).toThrow(
       /IRIS_SECRET_ORIGIN_BAD is not an http\(s\) origin/,
+    );
+    // PR bot: an empty binding (an unset variable in a template) fails too, never unbinds.
+    expect(() => resolveFillText('{{secret:EMPTY}}', source, 'https://shop.example')).toThrow(
+      /IRIS_SECRET_ORIGIN_EMPTY/,
     );
   });
 
@@ -150,6 +156,7 @@ describe('credential references', () => {
           <textarea id="notes" readonly></textarea>
           <label>Code <input id="short" maxlength="6"></label>
           <label>Renamed <input id="renames" maxlength="6" oninput="this.id = 'renamed'"></label>
+          <input name="dup"><input name="dup">
           <p id="done" hidden>Signed in</p>
         </body>`);
       });
@@ -404,6 +411,50 @@ describe('credential references', () => {
       expect(await page.locator('#renames').count()).toBe(0); // positive control: renamed
       await ex.refreshFieldValues();
       expect(ex.redactSecrets(`Renamed: ${SECRET.slice(0, 6)}`)).toBe('Renamed: <redacted>');
+    });
+
+    // PR bot: a reference fill keeps page.fill's strict mode: two matches type nothing.
+    it('refuses a reference fill whose selector matches two fields', async () => {
+      const r = await executor().executeAction(
+        { type: 'fill', selector: 'input[name=dup]', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: SECRET }),
+      );
+      expect(r.success).toBe(false);
+      expect(r.error).toMatch(/strict mode violation/);
+      expect(
+        await page
+          .locator('input[name=dup]')
+          .evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value)),
+      ).toEqual(['', '']);
+    });
+
+    // PR bot: a value seen once stays cut, though a later read of the field misses it.
+    it('keeps a field value it read once, after the field changes', async () => {
+      const ex = executor();
+      await ex.executeAction(
+        { type: 'fill', selector: '#short', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: SECRET }),
+      );
+      await ex.refreshFieldValues();
+      await page.fill('#short', 'other');
+      await ex.refreshFieldValues();
+      expect(ex.redactSecrets(`Code: ${SECRET.slice(0, 6)}`)).toBe('Code: <redacted>');
+    });
+
+    // PR bot: the screenshot mask covers a field holding a truncated value too.
+    it('masks a field that holds only a prefix of the value', async () => {
+      const ex = executor();
+      await ex.executeAction(
+        { type: 'fill', selector: '#short', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: SECRET }),
+      );
+      await ex.refreshFieldValues();
+      const masked = await ex.secretFields(page);
+      const ids = await Promise.all(masked!.map((f) => f.getAttribute('id')));
+      expect(ids).toContain('short');
     });
 
     // #513: a field that keeps only a prefix (maxlength) shows a value the scrub never saw.

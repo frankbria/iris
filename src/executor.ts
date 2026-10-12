@@ -257,8 +257,12 @@ export class ActionExecutor {
   /** The page each kept handle belongs to, so one close listener per page releases them. */
   private readonly secretFieldPages = new WeakMap<ElementHandle, Page>();
   private readonly watchedPages = new WeakSet<Page>();
-  /** What those fields held at the last `refreshFieldValues`, cut by `redactSecrets` too. */
-  private fieldValues = new Set<string>();
+  /**
+   * Everything those fields were seen holding, cut by `redactSecrets` too.
+   * ponytail: kept for the executor's life like `resolvedSecrets`, so it grows with each
+   * distinct value seen; cap it if one session ever reads thousands.
+   */
+  private readonly fieldValues = new Set<string>();
   /** Policy handles kept for those readers, not disposed after their action. */
   private readonly retainedHandles = new WeakSet<ElementHandle>();
 
@@ -465,12 +469,13 @@ export class ActionExecutor {
     secrets: SecretSource,
     target?: ElementHandle,
   ): Promise<void> {
+    // Strict, like page.fill (PR bot): two matches refuse rather than type into the first.
     const handle =
       target ??
       (await page
         .locator(action.selector)
-        .first()
         .elementHandle({ timeout: this.options.timeout ?? EXECUTOR_DEFAULTS.timeout }));
+    if (!handle) throw new Error(`No element matches ${action.selector}`);
     let value: string;
     try {
       ({ value } = resolveFillText(action.text, secrets, await effectiveOrigin(handle)));
@@ -523,7 +528,8 @@ export class ActionExecutor {
    * Reads what the fields filled from credential references hold now (#513), so the next
    * `redactSecrets` cuts that too: call it before reading the page for a model. Values
    * shorter than `MIN_SECRET_LENGTH` are not cut (they would cut every match); a field that
-   * cannot be read (gone, detached) is skipped. Each read is bounded.
+   * cannot be read (gone, detached) is skipped. Each read is bounded. Values read earlier
+   * stay (PR bot): a read that times out must not un-redact what the page may still show.
    */
   async refreshFieldValues(): Promise<void> {
     const held = await Promise.all(this.secretFieldHandles.map((h) => readField(h)));
@@ -531,9 +537,9 @@ export class ActionExecutor {
     const gone = this.secretFieldHandles.filter((_, i) => held[i] === null);
     this.secretFieldHandles = this.secretFieldHandles.filter((_, i) => held[i] !== null);
     for (const handle of gone) void handle.dispose().catch(() => undefined);
-    this.fieldValues = new Set(
-      held.filter((v): v is string => v !== null && v.trim().length >= MIN_SECRET_LENGTH),
-    );
+    for (const v of held) {
+      if (v !== null && v.trim().length >= MIN_SECRET_LENGTH) this.fieldValues.add(v);
+    }
   }
 
   /**
@@ -547,7 +553,9 @@ export class ActionExecutor {
    * must not take a screenshot it cannot mask.
    */
   async secretFields(page: Page): Promise<Locator[] | null> {
-    if (this.resolvedSecrets.size === 0) return [];
+    // What the fields were seen holding too (PR bot): a maxlength field shows a prefix.
+    const secrets = [...this.resolvedSecrets, ...this.fieldValues];
+    if (secrets.length === 0) return [];
     // Every frame (PR bot): a fill can target a field inside an iframe, and the screenshot
     // renders it.
     const lists = await withPageTimeout(
@@ -573,7 +581,7 @@ export class ActionExecutor {
     const held = await Promise.all(
       fields.map((field) =>
         read(field).then(
-          (value) => [...this.resolvedSecrets].some((secret) => value.includes(secret)),
+          (value) => secrets.some((secret) => value.includes(secret)),
           () => true,
         ),
       ),
