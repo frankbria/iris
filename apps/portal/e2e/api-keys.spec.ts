@@ -127,8 +127,17 @@ test("a member sees the org's keys but cannot create or revoke them", async ({
     0
   )
   await expect(
-    them.getByText("Only owners and admins can create or revoke keys.")
+    them.getByText(
+      "Only owners and admins can create, rename, disable or revoke keys."
+    )
   ).toBeVisible()
+  // #412: no rename or disable controls either.
+  await expect(them.getByRole("button", { name: "Rename deploy" })).toHaveCount(
+    0
+  )
+  await expect(
+    them.getByRole("button", { name: "Disable deploy" })
+  ).toHaveCount(0)
 
   // The server refuses too, not only the page.
   const create = await theirs.request.post("/api/auth/api-key/create", {
@@ -143,7 +152,51 @@ test("a member sees the org's keys but cannot create or revoke them", async ({
   })
   expect(revoke.status()).toBe(403)
   expect((await revoke.json()).code).toBe("INSUFFICIENT_API_KEY_PERMISSIONS")
+  const disable = await theirs.request.post("/api/auth/api-key/update", {
+    headers: sameOrigin,
+    data: { keyId, enabled: false },
+  })
+  expect(disable.status()).toBe(403)
+  expect((await disable.json()).code).toBe("INSUFFICIENT_API_KEY_PERMISSIONS")
   await theirs.close()
+})
+
+test("an owner renames a key, disables it and enables it again (#412)", async ({
+  page,
+  context,
+}) => {
+  const owner = unique()
+  await signUpVerified(context.request, owner, "Ren")
+  await logIn(page, owner, PASSWORD)
+  await expect(page).toHaveURL(/\/dashboard$/)
+  await page.goto("/api-keys")
+  await page.getByLabel("Name").fill("ci")
+  await page.getByRole("button", { name: "Create key" }).click()
+  const keys = page.getByRole("list", { name: "Keys" })
+  await expect(keys).toContainText("ci")
+  const enabledOf = async (name: string) =>
+    (
+      await sql<{ enabled: boolean }>(
+        `select enabled from apikey where name = $1 and "referenceId" =
+           (select "organizationId" from member where "userId" = (select id from "user" where email = $2))`,
+        [name, owner]
+      )
+    )[0]?.enabled
+
+  await page.getByRole("button", { name: "Rename ci" }).click()
+  await page.getByLabel("New name for ci").fill("deploy")
+  await page.getByRole("button", { name: "Save name" }).click()
+  await expect(keys).toContainText("deploy")
+  expect(await enabledOf("deploy")).not.toBe(false)
+
+  // Disabled: shown in words, and the row says so; BetterAuth then refuses the key.
+  await page.getByRole("button", { name: "Disable deploy" }).click()
+  await expect(keys.getByText("disabled", { exact: true })).toBeVisible()
+  expect(await enabledOf("deploy")).toBe(false)
+
+  await page.getByRole("button", { name: "Enable deploy" }).click()
+  await expect(keys.getByText("disabled", { exact: true })).toHaveCount(0)
+  expect(await enabledOf("deploy")).toBe(true)
 })
 
 test("another org cannot list, create in or revoke an org's keys", async ({

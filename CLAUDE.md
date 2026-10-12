@@ -618,6 +618,12 @@ The portal page is `/api-keys`.
   removal's `revokeKeysCreatedBy`, and `revokeIfCreatorLeft`, run after each create's
   audit row is committed (codex review): a removal racing a create either sees that row
   or leaves no membership for the re-check to find.
+- **Rename and disable on `/api-keys` (#412)**: owners and admins get Rename and a
+  Disable/Enable toggle (`authClient.apiKey.update`, `name` / `enabled`); everyone sees a
+  "disabled" marker. Disabling is the reversible kill switch, revoking the final one. A
+  disabled key fails verification (`KEY_DISABLED`, a 401 at the API, `api-key-auth.test.ts`);
+  BetterAuth refuses members (`INSUFFICIENT_API_KEY_PERMISSIONS`), and #361's hook audits
+  each update with the fields it changed.
 - `enableSessionForAPIKeys` stays off: a key must never become a portal session.
 - **Do not let `npm install -w @iris/portal` pick the package's latest version.** It
   nested a second `better-auth` under `apps/portal`. Pin the range the root uses and

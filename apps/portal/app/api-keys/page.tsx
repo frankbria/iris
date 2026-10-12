@@ -3,6 +3,7 @@ import Link from "next/link"
 
 import {
   CreateApiKeyForm,
+  KeyControls,
   RevokeApiKeyButton,
 } from "@/components/api-key-forms"
 import { getAuth } from "@/lib/auth"
@@ -52,8 +53,21 @@ export default async function ApiKeysPage() {
               <span className="text-muted-foreground">
                 created {when(k.createdAt)}, last used {when(k.lastRequest)}
               </span>
+              {/* State in words, for everyone (#412); a disabled key fails verification. */}
+              {k.enabled === false && (
+                <span className="rounded border px-1.5 text-xs font-medium">
+                  disabled
+                </span>
+              )}
               {manager && (
-                <RevokeApiKeyButton keyId={k.id} name={k.name ?? k.id} />
+                <>
+                  <KeyControls
+                    keyId={k.id}
+                    name={k.name ?? k.id}
+                    enabled={k.enabled !== false}
+                  />
+                  <RevokeApiKeyButton keyId={k.id} name={k.name ?? k.id} />
+                </>
               )}
             </li>
           ))}
@@ -66,7 +80,7 @@ export default async function ApiKeysPage() {
         <CreateApiKeyForm organizationId={org.id} />
       ) : (
         <p className="text-sm text-muted-foreground">
-          Only owners and admins can create or revoke keys.
+          Only owners and admins can create, rename, disable or revoke keys.
         </p>
       )}
     </main>
