@@ -247,6 +247,19 @@ async function askCredentials(
   }
 }
 
+/**
+ * The credentials a request's AI calls run with: `undefined` is the process configuration
+ * (local mode), `null` is no AI. In hosted mode an omitted source is no AI too, never the
+ * operator's keys: a caller that forgets them must not spend the process-wide ones (ADR
+ * 0001 §5). A lazy source is asked here, so call this only once the model is needed.
+ */
+export async function resolveCredentials(
+  source: CredentialsSource | undefined,
+): Promise<AICredentials | null | undefined> {
+  if (typeof source === 'function') return askCredentials(source);
+  return source === undefined && isHostedMode() ? null : source;
+}
+
 async function translateWithAI(
   instruction: string,
   context: { url?: string } | undefined,
@@ -257,14 +270,7 @@ async function translateWithAI(
   },
 ): Promise<TranslationResult> {
   // Asked for only now, after patterns failed: a lookup can cost a database read.
-  // In hosted mode, omitting credentials is no AI too, never the operator's keys: a
-  // caller that forgets them must not spend the process-wide ones (ADR 0001 §5).
-  const credentials =
-    typeof scope.credentials === 'function'
-      ? await askCredentials(scope.credentials)
-      : scope.credentials === undefined && isHostedMode()
-        ? null
-        : scope.credentials;
+  const credentials = await resolveCredentials(scope.credentials);
   if (credentials === null) {
     return {
       actions: [],

@@ -1,4 +1,5 @@
 import { recordAudit } from '../audit-log';
+import { revokeIfCreatorLeft, revokeKeysCreatedBy } from '../member-keys';
 import { apiKey } from '@better-auth/api-key';
 import { betterAuth, type BetterAuthOptions } from 'better-auth';
 import { APIError, createAuthMiddleware, getIP, getSessionFromCtx } from 'better-auth/api';
@@ -213,6 +214,7 @@ export function createAuth(
       }),
       after: createAuthMiddleware(async (ctx) => {
         if (API_KEY_WRITES.has(ctx.path)) return auditKeyWrite(ctx, rest.database);
+        if (MEMBER_WRITES.has(ctx.path)) return afterMemberWrite(ctx, rest.database);
         if (ctx.path === '/organization/create')
           return undoOrgCreateOverFreeLimit(ctx, rest.database);
         if (ctx.path !== '/sign-up/email') return;
@@ -324,6 +326,70 @@ async function rememberDeletedKeyOrg(
   if (rows[0]?.org) deletedKeyOrgs.set(keyId, rows[0].org);
 }
 
+/** BetterAuth's member endpoints that change who is in an org, or their role (#408). */
+const MEMBER_WRITES = new Set([
+  '/organization/remove-member',
+  '/organization/leave',
+  '/organization/update-member-role',
+]);
+
+/**
+ * A member removed, gone or given another role (#408), audited with the user who did it.
+ * A member who leaves the org, or is removed, takes the API keys they created with them:
+ * keys belong to the org and outlive their creator (#340), and only #361's audit log says
+ * who that was. Keys made before #361 have no creator on record and stay. A role change
+ * revokes nothing. Logged on failure, not thrown: the membership change already happened.
+ */
+async function afterMemberWrite(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  const returned = ctx.context.returned as
+    { member?: MemberRow; userId?: string; organizationId?: string; role?: string } | undefined;
+  // Remove answers { member }, leave and role change the member row; a refusal, an error.
+  const member = ctx.path === '/organization/remove-member' ? returned?.member : returned;
+  if (!member?.userId || !member.organizationId) return;
+  const session = await getSessionFromCtx(ctx);
+  const actor = { userId: session?.user.id ?? null };
+  const orgId = member.organizationId;
+  const target = `user:${member.userId}`;
+  const db = termsDb(database);
+  try {
+    if (ctx.path === '/organization/update-member-role') {
+      await recordAudit(db, {
+        orgId,
+        actor,
+        action: 'member.role',
+        target,
+        metadata: { role: member.role },
+      });
+      return;
+    }
+    const action = ctx.path === '/organization/leave' ? 'member.leave' : 'member.remove';
+    await db.transaction().execute(async (tx) => {
+      const revoked = await revokeKeysCreatedBy(tx, orgId, member.userId!, actor, action);
+      await recordAudit(tx, {
+        orgId,
+        actor,
+        action,
+        target,
+        metadata: { revokedKeys: revoked.length },
+      });
+    });
+  } catch (err) {
+    log('error', 'failed to record a membership change', {
+      action: ctx.path,
+      err: String((err as Error)?.message ?? err),
+    });
+  }
+}
+
+interface MemberRow {
+  userId?: string;
+  organizationId?: string;
+  role?: string;
+}
+
 /**
  * An org key created, changed or revoked, with the user who did it (#361, from #340: the
  * key row records no creator). Never the key: create's response carries the plaintext, and
@@ -356,12 +422,20 @@ async function auditKeyWrite(
     action: `api_key.${verb}`,
     target: `key:${keyId}`,
     ...(fields && { metadata: { fields } }),
-  }).catch((err) =>
-    log('error', 'failed to record audit entry', {
-      action: `api_key.${verb}`,
-      err: String(err?.message ?? err),
-    }),
-  );
+  })
+    // After the audit row is committed: a removal racing this create either saw that row
+    // or left no membership for this check to find (#408).
+    .then(() =>
+      verb === 'create'
+        ? revokeIfCreatorLeft(termsDb(database), orgId, session.user.id, keyId)
+        : false,
+    )
+    .catch((err) =>
+      log('error', 'failed to record audit entry', {
+        action: `api_key.${verb}`,
+        err: String(err?.message ?? err),
+      }),
+    );
 }
 
 /**

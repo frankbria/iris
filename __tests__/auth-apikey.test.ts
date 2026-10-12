@@ -183,6 +183,37 @@ const PASSWORD = 'correct-horse-battery-staple';
   )).rows;
   r.auditHasPlaintext = JSON.stringify((await pool.query('select * from audit_log')).rows).includes(ka.key);
 
+  // #408: a member removed or leaving takes the keys they created; a role change is audited.
+  const erin = await join(alice, 'erin', 'admin');
+  const ke = await create(erin, A, 'erin-ci');
+  const kept = await create(alice, A, 'alice-ci');
+  const frank = await join(alice, 'frank', 'admin');
+  const kf = await create(frank, A, 'frank-ci');
+  const memberId = async (email) =>
+    (await auth.api.getFullOrganization({ headers: alice, query: { organizationId: A } }))
+      .members.find((m) => m.user.email === email).id;
+  r.members = {
+    soleOwnerLeaves: await attempt(() => auth.api.leaveOrganization({ headers: alice, body: { organizationId: A } })),
+    memberRemoves: await attempt(() =>
+      auth.api.removeMember({ headers: carol, body: { memberIdOrEmail: 'erin@iris.test', organizationId: A } })),
+    remove: await attempt(() =>
+      auth.api.removeMember({ headers: alice, body: { memberIdOrEmail: 'erin@iris.test', organizationId: A } })),
+    leave: await attempt(() => auth.api.leaveOrganization({ headers: frank, body: { organizationId: A } })),
+    promote: await attempt(async () =>
+      auth.api.updateMemberRole({ headers: alice, body: { memberId: await memberId('carol@iris.test'), role: 'admin', organizationId: A } })),
+    erinKey: (await verify(ke.key)).valid,
+    frankKey: (await verify(kf.key)).valid,
+    keptKey: (await verify(kept.key)).valid,
+    erinReadsA: await attempt(() => auth.api.getFullOrganization({ headers: erin, query: { organizationId: A } })),
+  };
+  r.ids.erin = await uid(erin);
+  r.ids.frank = await uid(frank);
+  r.ids.carol = await uid(carol);
+  Object.assign(r.ids, { ke: ke.id, kf: kf.id });
+  r.memberAudit = (await pool.query(
+    "select actor_user_id, action, target, metadata from audit_log where action like 'member.%' or (action = 'api_key.delete' and metadata ? 'reason') order by id",
+  )).rows;
+
   r.A = A;
   r.B = B;
   r.ka = ka.id;
@@ -333,6 +364,54 @@ const PASSWORD = 'correct-horse-battery-staple';
       entry(r.A, alice, 'api_key.delete', kk),
     ]);
     expect(r.auditHasPlaintext).toBe(false);
+  });
+
+  it('revokes the keys of a member who is removed or leaves, and audits it (#408)', () => {
+    const { alice, carol, erin, frank, ke, kf } = r.ids;
+    expect(r.members).toEqual({
+      soleOwnerLeaves: 'YOU_CANNOT_LEAVE_THE_ORGANIZATION_AS_THE_ONLY_OWNER',
+      memberRemoves: 'YOU_ARE_NOT_ALLOWED_TO_DELETE_THIS_MEMBER',
+      remove: 'ok',
+      leave: 'ok',
+      promote: 'ok',
+      erinKey: false,
+      frankKey: false,
+      keptKey: true,
+      erinReadsA: expect.any(String),
+    });
+    expect(r.members.erinReadsA).not.toBe('ok');
+    expect(r.memberAudit).toEqual([
+      {
+        actor_user_id: alice,
+        action: 'api_key.delete',
+        target: `key:${ke}`,
+        metadata: { reason: 'member.remove' },
+      },
+      {
+        actor_user_id: alice,
+        action: 'member.remove',
+        target: `user:${erin}`,
+        metadata: { revokedKeys: 1 },
+      },
+      {
+        actor_user_id: frank,
+        action: 'api_key.delete',
+        target: `key:${kf}`,
+        metadata: { reason: 'member.leave' },
+      },
+      {
+        actor_user_id: frank,
+        action: 'member.leave',
+        target: `user:${frank}`,
+        metadata: { revokedKeys: 1 },
+      },
+      {
+        actor_user_id: alice,
+        action: 'member.role',
+        target: `user:${carol}`,
+        metadata: { role: 'admin' },
+      },
+    ]);
   });
 
   it('a revoked key stops verifying and leaves the list', () => {
