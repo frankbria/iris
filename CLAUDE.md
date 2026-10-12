@@ -2124,6 +2124,8 @@ upgrade transaction; the cache would need one added).
 - `resolveBudget()` (src/config.ts): `IRIS_DAILY_BUDGET_USD` / `IRIS_MONTHLY_BUDGET_USD`
   > `budget` in `~/.iris/config.json` > `DEFAULT_BUDGET_LIMITS` ($10 / $200), per field.
   Malformed values throw. An explicit `costConfig` passed to the client still wins.
+  `createCostTracker(dbPath, budget?)` fills omitted limits the same way (#365); with both
+  limits given it never reads `resolveBudget()`, so a malformed variable cannot throw there.
 - Container: compose sets `IRIS_DATA_DIR: /data`, the only durable writable path
   under the read-only root filesystem.
 - Under Jest, `process.env.HOME` does not move `os.homedir()` (the env is a copy);
