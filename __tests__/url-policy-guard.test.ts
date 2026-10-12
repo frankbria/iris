@@ -103,6 +103,8 @@ describe('URL policy guard', () => {
               `<button id="many" onclick="for (let i = 0; i < ${MAX_POPUPS_PER_CONTEXT + 2}; i++) window.open('/final?popup=' + i)">many</button>` +
               // Opens one popup past the cap, then a popup FROM that one (#337 review).
               `<button id="blank" onclick="for (let i = 0; i < ${MAX_POPUPS_PER_CONTEXT}; i++) window.open('/final?popup=' + i); window.open()">blank</button>` +
+              // URL-less popups from a popup that then closes: orphans no request reveals (#379).
+              `<button id="orphan" onclick="const w = window.open(''); for (let i = 0; i < 4; i++) w.open(''); w.close(); for (let i = 0; i < 4; i++) window.open('', '_blank', 'noopener')">orphan</button>` +
               `<button id="nested" onclick="let w; for (let i = 0; i <= ${MAX_POPUPS_PER_CONTEXT}; i++) w = window.open('/final?popup=' + i); w.open('/to-offsite-tab')">nested</button>`,
           ),
         );
@@ -768,6 +770,32 @@ describe('URL policy guard', () => {
       expect(requestLog).not.toContain('/to-offsite-tab');
       expect(offsiteLog).not.toContain('/escaped');
       expect(context.pages()).toHaveLength(1 + MAX_POPUPS_PER_CONTEXT);
+    }, 60_000);
+
+    it('takes the popup cap from the policy (#379)', async () => {
+      await installUrlPolicyGuard(p, { maxPopups: 2 });
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      await p.click('#many');
+      await p.waitForTimeout(3000);
+
+      expect(requestLog.filter((u) => u.startsWith('/final?popup='))).toHaveLength(2);
+      expect(context.pages()).toHaveLength(3);
+    }, 60_000);
+
+    // Both constructions of the #337 residual: URL-less popups whose opener closes at
+    // once, and noopener ones. Today Playwright still reports their opener, so the guard
+    // install closes them; the opener-less branch (isOverCap) covers the race where it
+    // does not. Either way the bound holds, which is what this pins.
+    it('bounds URL-less over-cap popups, whatever happened to their opener (#379)', async () => {
+      await installUrlPolicyGuard(p, { maxPopups: 1 });
+      await guardedGoto(p, `${origin}/popup-source`);
+
+      await p.click('#orphan');
+      await p.waitForTimeout(3000);
+
+      // The page and at most one popup, never the eight over-cap ones.
+      expect(context.pages().length).toBeLessThanOrEqual(2);
     }, 60_000);
   });
 

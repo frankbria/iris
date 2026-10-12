@@ -957,6 +957,15 @@ Constraints that are easy to break:
   it right after refusing its first request. Never `Target.closeTarget` at
   `targetCreated`: closing a target Playwright is still attaching to stalled the
   opening click in 2 of 3 runs. Its guard install also closes it (`page.close()`).
+- **The cap is the policy's `maxPopups`** (#379), default `MAX_POPUPS_PER_CONTEXT`; the
+  RPC sets it from `ServerLimits.maxPopupsPerSession` (`clampLaunchOptions` puts it on the
+  executor's `urlPolicy`). The browser net reads it from the opener's live policy. An
+  opener-less page the net marked over the cap is closed at the context's `'page'` event
+  (`isOverCap`: a CDP target lookup, skipped while nothing is over the cap): with no URL it
+  makes no request to refuse, and with no opener no guard closes it. Not a page count:
+  `'page'` events arrive out of creation order, and a count closed a legitimate popup.
+  Today Playwright reports the opener even after it closed, or with `noopener`, so that
+  branch is the fallback for the race; the test pins the bound.
 - A pinned origin now refuses **every** cross-origin request, images and fonts
   included: an image URL is a write channel for a filled-in secret. The explicit
   allowance is `--allow-cross-origin`.
@@ -1116,6 +1125,14 @@ dials the address it vetted, so a rebinding resolver gets no second lookup.
   `PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK` is set.
 - `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`: UDP cannot be proxied,
   and STUN to an internal host:port otherwise goes straight out.
+- **Bounded (#379)**: a lookup (`lookupTimeoutMs`, 10 s), the upstream connect
+  (`connectTimeoutMs`, 10 s) and an upstream connection with no traffic either way
+  (`idleTimeoutMs`, 5 min) end with a 504. `dial()` destroys the socket with a `Refusal`;
+  the forward path reports `socket.errored`, since `http.request` says only "socket hang
+  up". Tests fake a black hole with `Object.assign(new net.Socket(), { connecting: true })`:
+  a never-connected socket rejects writes at once, and a real TEST-NET address is dropped
+  on one network and unreachable at once on another. On WSL the "502 when the vetted
+  address refuses" test now gets this 504 (#382's blackhole) instead of hanging.
 - Tests substitute DNS and dialing through `hostedEgressProxy({ lookup, connect })`,
   called before the first launch in the registry. `connect` sends the one "public"
   test address (`8.8.8.8`) to a local server, so every refusal has a positive control

@@ -1,4 +1,5 @@
 import WebSocket, { WebSocketServer } from 'ws';
+import { MAX_POPUPS_PER_CONTEXT } from './url-policy-guard';
 import { createServer, IncomingMessage, STATUS_CODES } from 'http';
 import { handleJobsRequest, type ApiJobs, type RunReader } from './jobs-api';
 import type { ArtifactStore } from './artifact-store';
@@ -258,6 +259,11 @@ export interface ServerLimits {
   maxRetryAttempts: number;
   maxRetryDelayMs: number;
   maxSlowMoMs: number;
+  /**
+   * Live popups a session's page may hold (#337, #379); a page past this many plus one is
+   * closed. Default `MAX_POPUPS_PER_CONTEXT`.
+   */
+  maxPopupsPerSession: number;
   /** Ping interval; a peer that has not answered the previous ping is terminated. */
   heartbeatIntervalMs: number;
   /**
@@ -288,6 +294,7 @@ export const DEFAULT_SERVER_LIMITS: Readonly<ServerLimits> = Object.freeze({
   maxRetryAttempts: 5,
   maxRetryDelayMs: 10_000,
   maxSlowMoMs: 1_000,
+  maxPopupsPerSession: MAX_POPUPS_PER_CONTEXT,
   heartbeatIntervalMs: 30_000,
   keyRequestsPerMinute: 120,
   orgRequestsPerMinute: 300,
@@ -1314,6 +1321,7 @@ function clampLaunchOptions(
       headless: true,
       slowMo: Math.min(options.browserOptions?.slowMo ?? 0, limits.maxSlowMoMs),
     },
+    urlPolicy: { maxPopups: limits.maxPopupsPerSession },
   };
 }
 

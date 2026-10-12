@@ -353,3 +353,100 @@ describe('egress proxy: hostile or broken upstreams', () => {
     }
   });
 });
+
+describe('egress proxy: timeouts (#379)', () => {
+  /** A proxy with short bounds; `site.test` is served locally, the rest per test. */
+  async function bounded(overrides: {
+    lookup?: (host: string) => Promise<string[]>;
+    connect?: (address: string, port: number) => net.Socket;
+  }): Promise<{ proxy: EgressProxy; port: number }> {
+    const p = await startEgressProxy({
+      lookup: async (host) => (host === 'site.test' ? [PUBLIC] : ['8.8.4.4']),
+      connect: (_address, port) => net.connect({ host: '127.0.0.1', port }),
+      lookupTimeoutMs: 300,
+      connectTimeoutMs: 300,
+      idleTimeoutMs: 300,
+      ...overrides,
+    });
+    return { proxy: p, port: Number(new URL(p.url).port) };
+  }
+
+  /** The proxy's answer to a raw request, or 'closed' when it only closes the socket. */
+  async function ask(port: number, request: string): Promise<string> {
+    const client = net.connect(port, '127.0.0.1');
+    client.on('error', () => {});
+    let data = '';
+    client.on('data', (chunk) => (data += chunk));
+    await once(client, 'connect');
+    client.write(request);
+    await once(client, 'close');
+    return data.split('\r\n')[0] || 'closed';
+  }
+
+  it('answers 504 when the resolver stalls', async () => {
+    const { proxy: p, port } = await bounded({ lookup: () => new Promise(() => {}) });
+    try {
+      expect(await ask(port, 'GET http://stall.test/ HTTP/1.1\r\nHost: stall.test\r\n\r\n')).toBe(
+        'HTTP/1.1 504 Gateway Timeout',
+      );
+      expect(await ask(port, 'CONNECT stall.test:443 HTTP/1.1\r\nHost: stall.test\r\n\r\n')).toBe(
+        'HTTP/1.1 504 Gateway Timeout',
+      );
+    } finally {
+      await p.close();
+    }
+  });
+
+  it('answers 504 when the address is black-holed (the connect never completes)', async () => {
+    // A socket left mid-connect, as a dropped SYN leaves it: writes are buffered for a
+    // 'connect' that never comes. A real black-holed address is host-dependent (dropped
+    // on one network, ENETUNREACH at once on another), so the state is set directly.
+    const pending = () => Object.assign(new net.Socket(), { connecting: true });
+    const { proxy: p, port } = await bounded({ connect: pending });
+    try {
+      expect(await ask(port, 'GET http://hole.test/ HTTP/1.1\r\nHost: hole.test\r\n\r\n')).toBe(
+        'HTTP/1.1 504 Gateway Timeout',
+      );
+      expect(await ask(port, 'CONNECT hole.test:443 HTTP/1.1\r\nHost: hole.test\r\n\r\n')).toBe(
+        'HTTP/1.1 504 Gateway Timeout',
+      );
+    } finally {
+      await p.close();
+    }
+  });
+
+  it('closes a tunnel with no traffic, and keeps one that has traffic', async () => {
+    const up = net.createServer((socket) => socket.on('data', (d) => socket.write(d)));
+    up.listen(0, '127.0.0.1');
+    await once(up, 'listening');
+    const upPort = (up.address() as AddressInfo).port;
+    const { proxy: p, port } = await bounded({});
+    try {
+      const open = async () => {
+        const client = net.connect(port, '127.0.0.1');
+        client.on('error', () => {});
+        await once(client, 'connect');
+        client.write(`CONNECT quiet.test:${upPort} HTTP/1.1\r\nHost: quiet.test\r\n\r\n`);
+        await once(client, 'data'); // 200 Connection Established
+        return client;
+      };
+      // Busy: an echo every 100 ms keeps it open past the 300 ms bound.
+      const busy = await open();
+      for (let i = 0; i < 8; i++) {
+        busy.write('ping');
+        await once(busy, 'data');
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(busy.destroyed).toBe(false);
+      busy.destroy();
+      // Quiet: closed by the proxy.
+      const quiet = await open();
+      const t0 = performance.now();
+      await once(quiet, 'close');
+      expect(performance.now() - t0).toBeLessThan(5_000);
+    } finally {
+      await p.close();
+      up.close();
+    }
+  });
+});
