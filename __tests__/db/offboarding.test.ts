@@ -11,7 +11,7 @@ import { Kysely, sql } from 'kysely';
 import { Client } from 'pg';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
-import { offboarding, OffboardingError } from '../../src/offboarding';
+import { listCollectableBaselines, offboarding, OffboardingError } from '../../src/offboarding';
 import { orgSuspensions } from '../../src/org-suspension';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -434,6 +434,22 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('lists only baselines old enough, each judged by its own row (#475, codex review)', async () => {
+    await user('ivy');
+    await org('org-age', 'ivy', new Date());
+    const [old, fresh] = ['old', 'fresh'].map((name) =>
+      baselineKey({ orgId: 'org-age', projectId: 'p', name: name + '--abc' }),
+    );
+    await sql`insert into artifact_objects (org_id, key, bytes, created_at) values
+      ('org-age', ${old}, 1, now() - interval '100 days'), ('org-age', ${fresh}, 1, now())`.execute(
+      db,
+    );
+    const listed = (await listCollectableBaselines(db, new Date()))
+      .filter((r) => r.org_id === 'org-age')
+      .map((r) => r.key);
+    expect(listed).toEqual([old]);
   });
 
   it('one superseded baseline that cannot be deleted does not stop the others (#475)', async () => {

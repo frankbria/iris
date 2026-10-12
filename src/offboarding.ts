@@ -49,14 +49,36 @@ function collectableSql(
   key: string | RawBuilder<unknown>,
   cutoff: RawBuilder<unknown>,
 ): RawBuilder<boolean> {
-  return sql<boolean>`exists (select 1 from artifact_objects o
-      where o.org_id = ${orgId} and o.key = ${key} and o.created_at < ${cutoff})
+  // `aged`, not `o`: the candidate query passes `o.org_id`/`o.key` from its own row, and a
+  // reused alias would compare the inner row with itself (codex review).
+  return sql<boolean>`exists (select 1 from artifact_objects aged
+      where aged.org_id = ${orgId} and aged.key = ${key} and aged.created_at < ${cutoff})
     and not exists (select 1 from visual_baselines b
       where b.org_id = ${orgId} and b.object_key = ${key})
     and not exists (select 1 from run_results r
       where r.org_id = ${orgId} and r.result->'artifacts'->>'baseline' = ${key})
     and not exists (select 1 from runs j where j.org_id = ${orgId}
       and j.kind = 'visual' and j.status in ('queued', 'running'))`;
+}
+
+const retentionCutoff = (now: Date) =>
+  sql`${now}::timestamptz - make_interval(days => ${RUN_RETENTION_DAYS})`;
+
+/**
+ * Up to 500 superseded baseline images the retention pass may delete (#475), in random
+ * order: objects that keep failing cannot fill every batch and starve the rest (codex
+ * review). ponytail: no attempt tracking; add an attempted_at if failures ever need ordering.
+ */
+export async function listCollectableBaselines(
+  db: Kysely<unknown>,
+  now: Date,
+): Promise<{ org_id: string; key: string }[]> {
+  const { rows } = await sql<{ org_id: string; key: string }>`
+    select o.org_id, o.key from artifact_objects o
+    where o.key ~ '^org/[^/]+/project/[^/]+/baselines/'
+      and ${collectableSql(sql.ref('o.org_id'), sql.ref('o.key'), retentionCutoff(now))}
+    order by random() limit 500`.execute(db);
+  return rows;
 }
 
 /**
@@ -72,15 +94,8 @@ async function collectSupersededBaselines(
   artifacts: ArtifactStore,
   now: Date,
 ): Promise<number> {
-  const cutoff = sql`${now}::timestamptz - make_interval(days => ${RUN_RETENTION_DAYS})`;
-  // Random order: objects that keep failing cannot fill every batch and starve the rest
-  // (codex review). ponytail: no attempt tracking; add an attempted_at if a failure pattern
-  // ever needs ordering.
-  const { rows } = await sql<{ org_id: string; key: string }>`
-    select o.org_id, o.key from artifact_objects o
-    where o.key ~ '^org/[^/]+/project/[^/]+/baselines/'
-      and ${collectableSql(sql.ref('o.org_id'), sql.ref('o.key'), cutoff)}
-    order by random() limit 500`.execute(db);
+  const cutoff = retentionCutoff(now);
+  const rows = await listCollectableBaselines(db, now);
   let collected = 0;
   const failed: string[] = [];
   for (const { org_id, key } of rows) {
