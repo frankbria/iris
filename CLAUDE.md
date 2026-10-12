@@ -246,7 +246,8 @@ plans/
   the page (`load`, failure tolerated) when the trap check pressed Escape, since that closed
   every Escape-dismissible dialog first. **Escape is judged per dialog (#491)**: each round
   re-finds the first showing (not inert), untested dialog in DOM order, marks and focuses it,
-  presses Escape, and asks whether *it* is still open: its own node showing; else, with an
+  presses Escape, and asks whether *it* is still open: while its own node is in the document,
+  that node's visibility decides; once it is gone, with an
   id, an element with that id showing; else a showing dialog in its place (left, top, width
   within 2 px; height may change), with its name (`aria-label`, `aria-labelledby`, first
   heading) and text containing or contained in its own (a re-render), which is marked tested

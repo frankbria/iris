@@ -1063,6 +1063,30 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
       expect(escape.map((i) => i.success)).toEqual([true, false]);
     });
 
+    // Codex review: Escape hides (not removes) the focused dialog. Its own node decides;
+    // an overlapping look-alike must neither make it read as open nor go untested.
+    it('judges a hidden dialog by its own node, not a look-alike beside it (#491)', async () => {
+      await load(
+        page,
+        `<!doctype html><html lang="en"><head><title>t</title>
+        <style>[role=dialog]{position:fixed;top:10px;left:10px;width:300px;height:120px}</style>
+        </head><body>
+        <div role="dialog"><button>Ok</button></div>
+        <div role="dialog"><button>Ok</button></div>
+        <script>document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return;
+          const d = document.activeElement && document.activeElement.closest('[role=dialog]');
+          if (d) d.style.display = 'none';
+        });</script></body></html>`,
+      );
+      const result = await new KeyboardTester({ ...config, testEscapeHandling: true }).run(
+        page,
+        'look-alikes',
+      );
+      const escape = result.interactions.filter((i) => i.key === 'Escape');
+      expect(escape.map((i) => i.success)).toEqual([true, true]);
+    });
+
     it('does not fail a dialog that an earlier Escape already closed', async () => {
       await load(
         page,

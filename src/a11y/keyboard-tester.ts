@@ -172,8 +172,8 @@ const PICK_DIALOG = ({
 };
 
 /**
- * In-page, after Escape (#491): is the tested dialog still open? It is when its own node is
- * still showing. Otherwise, a dialog with an id is open while an element with that id shows.
+ * In-page, after Escape (#491): is the tested dialog still open? While its own node is in the
+ * document, that node's visibility decides. Once it is gone, a dialog with an id is open while an element with that id shows.
  * An id-less one is open when a showing dialog took its place (same left, top and width;
  * height may change with its content), its name, and text that contains or is contained in
  * its own: a re-render that replaced the node. That replacement is marked tested, so it is
@@ -213,7 +213,9 @@ const STILL_OPEN = ({
     return (heading?.textContent ?? '').trim();
   };
   const own = document.querySelector(`[${attr}="${value}"]`);
-  if (own && showing(own)) return true;
+  // Still in the document: its own visibility decides, whatever looks like it nearby (codex
+  // review). Only a node that is gone is looked for elsewhere.
+  if (own) return showing(own);
   const mark = (el: Element) => Element.prototype.setAttribute.call(el, attr, `${value}-again`);
   if (place.id) {
     const byId = document.getElementById(place.id);
@@ -224,7 +226,7 @@ const STILL_OPEN = ({
   const near = (a: number, b: number) => Math.abs(a - b) <= 2;
   const text = (el: Element) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
   const replacement = Array.from(document.querySelectorAll(selector)).find((el) => {
-    if (el === own || !showing(el)) return false;
+    if (!showing(el)) return false;
     const box = Element.prototype.getBoundingClientRect.call(el);
     const t = text(el);
     return (
