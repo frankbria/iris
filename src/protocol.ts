@@ -1,3 +1,4 @@
+import type { AuditEntry } from './audit-log';
 import WebSocket, { WebSocketServer } from 'ws';
 import { MAX_POPUPS_PER_CONTEXT } from './url-policy-guard';
 import { createServer, IncomingMessage, STATUS_CODES } from 'http';
@@ -503,6 +504,8 @@ export function startServer(
      * each AI call its translations make. Local connections record nothing.
      */
     usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
+    /** Hosted: writes a tenant audit entry (#361): session start and end. Failures are logged. */
+    audit?: (entry: AuditEntry) => Promise<void>;
     /**
      * How often an open tenant session's browser minutes are written (#263), so a
      * crash or a forced restart loses at most one interval, and a session spanning a
@@ -544,9 +547,34 @@ export function startServer(
   const verified = new WeakMap<IncomingMessage, Principal>();
   /** Upgrades whose key is still being verified; they count against the connection cap. */
   let verifying = 0;
+  /** Shutting down (#309): readiness answers 503, new upgrades and requests are refused. */
+  let draining = false;
+  /** RPC messages and REST requests being handled; a drain waits for them to reach zero. */
+  let inFlight = 0;
 
   // One listener for both: the WebSocket upgrade, and the job REST API (#267).
   const server = createServer((req, res) => {
+    // Liveness and readiness (#309), before auth and logging: probes run every few seconds,
+    // and a hosted deployment has no shared token to authenticate one with (#341).
+    if (req.method === 'GET' && (req.url === '/health/live' || req.url === '/health/ready')) {
+      const ready = req.url === '/health/live' || !draining;
+      res.writeHead(ready ? 200 : 503, {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+      });
+      res.end(JSON.stringify({ status: ready ? 'ok' : 'draining' }));
+      return;
+    }
+    // Draining: no new REST work either (a job queued now would outlive the shutdown).
+    if (draining) {
+      res.writeHead(503, { 'content-type': 'application/json', 'retry-after': '1' });
+      res.end(JSON.stringify({ error: 'Server is shutting down' }));
+      return;
+    }
+    // In flight until answered: a drain waits for a REST request admitted before it began
+    // (its key check is async) as it does for an RPC message.
+    inFlight++;
+    res.on('close', () => inFlight--);
     // One line per REST request, with the id echoed back so a client can quote it (#275).
     const t0 = performance.now();
     // Ours is always generated (a client's could collide with another's); a safe
@@ -639,6 +667,7 @@ export function startServer(
         log('info', 'connection refused', { reason, status });
         done(false, status, message);
       };
+      if (draining) return refuse(503, 'Server is shutting down', 'draining');
       if (origin && !allowedOrigins.includes(origin)) {
         return refuse(403, 'Origin not allowed', 'origin');
       }
@@ -660,6 +689,8 @@ export function startServer(
           // and its 'connection' handler registers it in `tenants` before returning,
           // so the org count below cannot miss a client admitted a moment earlier.
           verifying--;
+          // The drain may have begun while the key was being checked.
+          if (draining) return refuse(503, 'Server is shutting down', 'draining');
           if (!principal) return refuse(401, 'Unauthorized', 'invalid_key');
           // A valid key of a suspended org (#348): 403, never the operator's reason.
           if (principal === 'suspended') return refuse(403, 'Organization suspended', 'suspended');
@@ -726,8 +757,24 @@ export function startServer(
         }),
       );
   };
-  const meterMinutes = (_principal: Principal) => (session: BrowserSession) =>
+  /** A tenant audit entry (#361); best effort: the session goes on if the write fails. */
+  const audit = (entry: AuditEntry): void => {
+    void options?.audit?.(entry).catch((err: unknown) =>
+      log('error', 'failed to record audit entry', {
+        action: entry.action,
+        err: errMessage(err),
+      }),
+    );
+  };
+  const meterMinutes = (principal: Principal) => (session: BrowserSession) => {
     billMinutes(session, Date.now());
+    audit({
+      orgId: principal.orgId,
+      actor: { apiKeyId: principal.keyId },
+      action: 'session.end',
+      target: `session:${session.id}`,
+    });
+  };
   const checkpoint = setInterval(
     () => {
       const now = Date.now();
@@ -859,7 +906,7 @@ export function startServer(
       if (ws.readyState === WebSocket.OPEN) ws.send(serializeResponse(res));
     };
 
-    ws.on('message', async (data) => {
+    const handleMessage = async (data: WebSocket.RawData) => {
       // Per request (#275): an id for its log line, and the start of its latency.
       const t0 = performance.now();
       const requestId = randomUUID();
@@ -936,6 +983,10 @@ export function startServer(
       let refused = false;
 
       try {
+        // Draining (#309): what is in flight finishes, nothing new starts.
+        if (draining) {
+          throw { code: -32000, message: 'Server is shutting down', refused: true };
+        }
         switch (req.method) {
           case 'executeCommand': {
             const parsed = ExecuteCommandParams.safeParse(req.params);
@@ -1024,6 +1075,14 @@ export function startServer(
               );
               sessions.set(ws, session);
               log('info', 'session started', { sessionId: session.id, ...who(principal) });
+              if (principal) {
+                audit({
+                  orgId: principal.orgId,
+                  actor: { apiKeyId: principal.keyId },
+                  action: 'session.start',
+                  target: `session:${session.id}`,
+                });
+              }
               return {
                 success: true,
                 // Says what happened. This used to claim "Browser launched
@@ -1191,6 +1250,15 @@ export function startServer(
         },
         !closed,
       );
+    };
+    // Counted for a drain (#309): it waits until every request in flight is answered.
+    ws.on('message', async (data) => {
+      inFlight++;
+      try {
+        await handleMessage(data);
+      } finally {
+        inFlight--;
+      }
     });
 
     ws.on('close', () => {
@@ -1237,7 +1305,30 @@ export function startServer(
     closed = true;
   });
 
+  drainers.set(wss, async (deadlineMs) => {
+    draining = true;
+    const end = performance.now() + deadlineMs;
+    // Upgrades still in their key check too: each gets its 503 once the check ends,
+    // rather than a reset when the close destroys its socket.
+    while ((inFlight > 0 || verifying > 0) && performance.now() < end) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return inFlight === 0 && verifying === 0;
+  });
+
   return wss;
+}
+
+const drainers = new WeakMap<WebSocketServer, (deadlineMs: number) => Promise<boolean>>();
+
+/**
+ * Begin a graceful shutdown (#309): readiness answers 503, new connections and new requests
+ * are refused, and the promise resolves once every request in flight has been answered,
+ * true, or when `deadlineMs` passes first, false. The caller then closes the server, which
+ * ends the sessions and their browsers.
+ */
+export function drainServer(wss: WebSocketServer, deadlineMs: number): Promise<boolean> {
+  return drainers.get(wss)?.(deadlineMs) ?? Promise.resolve(true);
 }
 
 /**

@@ -86,6 +86,37 @@ jobs:
           tags: iris:ci
           cache-from: type=gha,scope=iris
           cache-to: type=gha,mode=max,scope=iris
+      # Image scan and SBOM (#360), for both images. Trivy runs from its own image, pinned
+      # by digest, not through a third-party action. Each image is copied out of Docker once,
+      # into a CycloneDX SBOM (uploaded below); both checks then read the SBOM, so a large
+      # image is not copied three times. A fixable CRITICAL finding fails the build; fixable
+      # HIGH ones are listed, not fatal: most come with the upstream base image and clear
+      # when Dependabot bumps its digest.
+      - name: Scan the images and write their SBOMs
+        env:
+          TRIVY: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+        run: |
+          mkdir -p sbom
+          trivy() {
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -e TRIVY_SKIP_VERSION_CHECK=true \
+              -v trivy-cache:/root/.cache -v "$PWD/sbom:/out" "$TRIVY" "$@"
+          }
+          # Every image is scanned (and its SBOM written) before the gate fails the step.
+          failed=0
+          for image in iris:ci iris-portal:ci; do
+            sbom="/out/${image%%:*}.cdx.json"
+            trivy image --timeout 15m --format cyclonedx --output "$sbom" "$image"
+            trivy sbom --severity HIGH --ignore-unfixed --exit-code 0 "$sbom"
+            trivy sbom --severity CRITICAL --ignore-unfixed --exit-code 1 "$sbom" || failed=1
+          done
+          exit "$failed"
+      # Also when the gate above failed: that is when the SBOM is wanted (codex review).
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-sboms
+          path: sbom/*.cdx.json
+          if-no-files-found: warn
       # The S3-compatible artifact store (#257), as in docker-compose.dev.yml. A step,
       # not a service container: services cannot pass the server its command line.
       - name: Start SeaweedFS

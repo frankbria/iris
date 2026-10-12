@@ -1,3 +1,4 @@
+import { recordAudit, type AuditActor } from '../audit-log';
 import { sql, type Kysely } from 'kysely';
 import type { AICredentials } from '../ai-client/credentials';
 import { openProviderKey, sealProviderKey, type Keyring, type StoredProvider } from './crypto';
@@ -41,21 +42,47 @@ function validate(provider: StoredProvider, apiKey: string): void {
  */
 export function providerKeyStore(db: Kysely<unknown>, keyring: Keyring) {
   return {
-    /** Save or replace the org's key for a provider. */
-    async set(orgId: string, provider: StoredProvider, apiKey: string): Promise<void> {
+    /** Save or replace the org's key for a provider, audited (#361: never the key). */
+    async set(
+      orgId: string,
+      provider: StoredProvider,
+      apiKey: string,
+      actor: AuditActor = {},
+    ): Promise<void> {
       validate(provider, apiKey);
       const ciphertext = sealProviderKey(apiKey, { orgId, provider }, keyring);
-      await sql`
-        insert into provider_keys (org_id, provider, ciphertext)
-        values (${orgId}, ${provider}, ${ciphertext})
-        on conflict (org_id, provider)
-        do update set ciphertext = excluded.ciphertext, updated_at = now()`.execute(db);
+      await db.transaction().execute(async (tx) => {
+        const { rows } = await sql<{ inserted: boolean }>`
+          insert into provider_keys (org_id, provider, ciphertext)
+          values (${orgId}, ${provider}, ${ciphertext})
+          on conflict (org_id, provider)
+          do update set ciphertext = excluded.ciphertext, updated_at = now()
+          returning (xmax = 0) as inserted`.execute(tx);
+        await recordAudit(tx, {
+          orgId,
+          actor,
+          action: 'provider_key.save',
+          target: `provider:${provider}`,
+          metadata: { replaced: !rows[0]?.inserted },
+        });
+      });
     },
 
-    async remove(orgId: string, provider: StoredProvider): Promise<void> {
-      await sql`delete from provider_keys where org_id = ${orgId} and provider = ${provider}`.execute(
-        db,
-      );
+    /** Remove the org's key for a provider; audited only when there was one. */
+    async remove(orgId: string, provider: StoredProvider, actor: AuditActor = {}): Promise<void> {
+      await db.transaction().execute(async (tx) => {
+        const { rows } = await sql`
+          delete from provider_keys where org_id = ${orgId} and provider = ${provider}
+          returning provider`.execute(tx);
+        if (rows.length > 0) {
+          await recordAudit(tx, {
+            orgId,
+            actor,
+            action: 'provider_key.remove',
+            target: `provider:${provider}`,
+          });
+        }
+      });
     },
 
     async list(orgId: string): Promise<ProviderKeySummary[]> {
@@ -98,9 +125,18 @@ export function providerKeyStore(db: Kysely<unknown>, keyring: Keyring) {
           keyring,
         );
         // updated_at is untouched: the key did not change, and it orders which vendor is used.
-        await sql`update provider_keys set ciphertext = ${resealed} where id = ${row.id}`.execute(
-          db,
-        );
+        // Audited per key, in the same transaction (#361): an operator action on the org's data.
+        await db.transaction().execute(async (tx) => {
+          await sql`update provider_keys set ciphertext = ${resealed} where id = ${row.id}`.execute(
+            tx,
+          );
+          await recordAudit(tx, {
+            orgId: row.org_id,
+            action: 'provider_key.rewrap',
+            target: `provider:${row.provider}`,
+            metadata: { masterKey: keyring.current.id },
+          });
+        });
       }
       return rows.length;
     },

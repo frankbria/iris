@@ -1,3 +1,4 @@
+import { actorFrom, recordAudit } from '../audit-log';
 import { sql, type Kysely } from 'kysely';
 import type { AICredentials } from '../ai-client/credentials';
 import { readSecretEnv } from '../secret-env';
@@ -47,11 +48,20 @@ export function orgAiSettings(db: Kysely<unknown>) {
         select mode from org_ai_settings where org_id = ${orgId}`.execute(db);
       return rows[0]?.mode ?? 'byok';
     },
+    /** `actor` is `user:<id>` or `key:<id>`, kept as `updated_by` and audited (#361). */
     async set(orgId: string, mode: AiMode, actor: string): Promise<void> {
       if (mode !== 'byok' && mode !== 'managed') throw new Error(`Unknown AI mode: ${mode}`);
-      await sql`insert into org_ai_settings (org_id, mode, updated_by) values (${orgId}, ${mode}, ${actor})
-        on conflict (org_id) do update set mode = excluded.mode,
-          updated_by = excluded.updated_by, updated_at = now()`.execute(db);
+      await db.transaction().execute(async (tx) => {
+        await sql`insert into org_ai_settings (org_id, mode, updated_by) values (${orgId}, ${mode}, ${actor})
+          on conflict (org_id) do update set mode = excluded.mode,
+            updated_by = excluded.updated_by, updated_at = now()`.execute(tx);
+        await recordAudit(tx, {
+          orgId,
+          actor: actorFrom(actor),
+          action: 'ai_mode.set',
+          metadata: { mode },
+        });
+      });
     },
   };
 }

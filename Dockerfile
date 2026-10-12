@@ -17,7 +17,7 @@
 # toolchain never reaches the shipped image: better-sqlite3 has no prebuilt
 # binary for this platform and needs node-gyp, which the Playwright base image
 # has no `make` for.
-FROM mcr.microsoft.com/playwright:v1.63.0-noble AS deps
+FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27 AS deps
 
 WORKDIR /app
 RUN apt-get update \
@@ -35,10 +35,14 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts \
     && npm rebuild better-sqlite3 \
     && npm cache clean --force
+# Third-party notices (#360): each production dependency the image ships, with its
+# license text, generated from what was just installed.
+COPY scripts/third-party-notices.js ./scripts/
+RUN node scripts/third-party-notices.js . > THIRD_PARTY_NOTICES.txt
 
 # --- build ------------------------------------------------------------------
 # Full dependency tree (TypeScript et al.) purely to produce dist/.
-FROM mcr.microsoft.com/playwright:v1.63.0-noble AS build
+FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27 AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -51,13 +55,14 @@ COPY src ./src
 RUN npm run build
 
 # --- runtime ----------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.63.0-noble AS runtime
+FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27 AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/THIRD_PARTY_NOTICES.txt ./THIRD_PARTY_NOTICES.txt
 COPY --from=build /app/dist ./dist
 COPY docker/healthcheck.js ./docker/healthcheck.js
 
@@ -65,6 +70,9 @@ COPY docker/healthcheck.js ./docker/healthcheck.js
 # Docker seeds a new, empty named volume from this directory, owner included;
 # left to Docker it is created root-owned and pwuser cannot write the database.
 RUN install -d -o pwuser -g pwuser /data
+# npm is not used at runtime (the entrypoint, healthcheck and migrations run on node), and
+# the base image's global npm carried every Node.js finding of the image scan (#360).
+RUN rm -rf /usr/lib/node_modules/npm /usr/bin/npm /usr/bin/npx
 
 # `pwuser` (uid 1001) ships with the base image and owns the browser cache.
 # Running as root would be gratuitous for a process that only serves a socket.

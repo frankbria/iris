@@ -121,6 +121,13 @@ const PASSWORD = 'correct-horse-battery-staple';
   r.ownerRevoke = await attempt(() => revoke(alice, ka.id));
   r.afterRevoke = (await verify(ka.key)).valid;
   r.listAfter = (await list(alice, A)).map((k) => k.id);
+  // #361 (codex): a refused delete racing a successful one must not cost it its audit entry.
+  const kc = await create(alice, A, 'race');
+  r.race = await Promise.all([
+    attempt(() => revoke(carol, kc.id)),
+    attempt(() => revoke(alice, kc.id)),
+    attempt(() => revoke(carol, kc.id)),
+  ]);
 
   // #344: provider keys use the same roles: owners and admins manage, members read.
   const can = async (headers, organizationId, action) =>
@@ -164,7 +171,17 @@ const PASSWORD = 'correct-horse-battery-staple';
   };
   await new Promise((res) => setTimeout(res, 5));
   await susp(A, 'unsuspend');
+  r.rename = await attempt(() =>
+    auth.api.updateApiKey({ headers: alice, body: { keyId: kk.id, name: 'renamed' } }));
   r.suspended.afterUnsuspend = await attempt(() => revoke(alice, kk.id));
+
+  // #361: every key write that happened is audited with the acting user; refusals are not.
+  const uid = async (h) => (await auth.api.getSession({ headers: h })).user.id;
+  r.ids = { alice: await uid(alice), bob: await uid(bob), dave: await uid(dave), kb: kb.id, kd: kd.id, kk: kk.id, kc: kc.id };
+  r.audit = (await pool.query(
+    "select org_id, actor_user_id, actor_api_key_id, action, target, metadata from audit_log where action like 'api_key.%' order by created_at, id",
+  )).rows;
+  r.auditHasPlaintext = JSON.stringify((await pool.query('select * from audit_log')).rows).includes(ka.key);
 
   r.A = A;
   r.B = B;
@@ -287,6 +304,35 @@ const PASSWORD = 'correct-horse-battery-staple';
       newOrgUnaffected: 'ok',
       afterUnsuspend: 'ok',
     });
+  });
+
+  it('audits each key write with the acting user, never the key, and no refused write (#361)', () => {
+    const { alice, bob, dave, kb, kc, kd, kk } = r.ids;
+    const entry = (org: string, user: string, action: string, key: string, metadata = null) => ({
+      org_id: org,
+      actor_user_id: user,
+      actor_api_key_id: null,
+      action,
+      target: `key:${key}`,
+      metadata,
+    });
+    expect(r.rename).toBe('ok');
+    expect(r.race[1]).toBe('ok');
+    expect(r.audit).toEqual([
+      entry(r.A, alice, 'api_key.create', r.ka),
+      entry(r.A, dave, 'api_key.create', kd),
+      entry(r.A, dave, 'api_key.delete', kd),
+      entry(r.B, bob, 'api_key.create', kb),
+      entry(r.A, alice, 'api_key.delete', r.ka),
+      entry(r.A, alice, 'api_key.create', kc),
+      entry(r.A, alice, 'api_key.delete', kc),
+      entry(r.A, alice, 'api_key.create', kk),
+      // The suspension's refused writes are absent; bob's key in his own org is not.
+      expect.objectContaining({ org_id: r.B, actor_user_id: bob, action: 'api_key.create' }),
+      entry(r.A, alice, 'api_key.update', kk, { fields: ['name'] } as any),
+      entry(r.A, alice, 'api_key.delete', kk),
+    ]);
+    expect(r.auditHasPlaintext).toBe(false);
   });
 
   it('a revoked key stops verifying and leaves the list', () => {

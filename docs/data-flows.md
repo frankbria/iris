@@ -127,8 +127,8 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `audit_log`: org, `actor_user_id`, `actor_api_key_id` (plain ids, no foreign keys, so an entry outlives its actor), action, target, `metadata jsonb`, time. |
 | Purpose | An org's audit trail (#361). |
 | Where | Postgres, `0001_initial.ts`. |
-| Status | **One action is recorded so far**: a visual baseline approval (`visual_baseline.approve`, #463), with the approving user or API key id, the run and result, and the project, page and device (`src/visual-baselines.ts`). Everything else is #361. Update this entry as #361 adds actions. |
-| Retention | Deleted when the org is purged. Otherwise **undecided** until #361 defines what is recorded. |
+| Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463). No URL, page content or typed value is recorded. |
+| Retention | Deleted when the org is purged; a deleted user's id is removed from their entries (#349). Otherwise **undecided**. |
 
 ### AI cost ledger
 

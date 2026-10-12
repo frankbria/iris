@@ -88,6 +88,7 @@ src/
 ├── offboarding.ts         # Org soft delete/restore/purge to tombstone, user deletion, daily retention, AI-state purge (#349)
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
 ├── artifact-store.ts      # ArtifactStore: filesystem (local) + S3 (hosted, SeaweedFS in dev/CI/staging); tenant-first keys, signed URLs (#257)
+├── audit-log.ts           # recordAudit(): tenant audit entries, on the change's own transaction (#361)
 ├── visual-baselines.ts    # Project baselines (orgBaselines) and audited approval, no runner imports: API + portal (#268, #463)
 ├── run-reads.ts           # Read-only run queries (types, keyset cursor, listPage, get): no runner imports, so the portal can use it (#270)
 ├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
@@ -594,8 +595,8 @@ The portal page is `/api-keys`.
 - **The plugin's own limiter is off.** Its default is 10 verifications per day, and
   `create` copies the setting onto each key row (`rateLimitEnabled`, `rateLimitMax`).
   Per-key limits are #342's. Rows created now carry `rateLimitEnabled = false`.
-- **Revoke deletes the row.** The key stops verifying at once. A deleted key leaves no
-  record; the audit log is #361.
+- **Revoke deletes the row.** The key stops verifying at once; the audit log keeps
+  `api_key.delete` with the user who did it (#361).
 - **A key outlives its creator's membership.** It belongs to the org and records no
   creator, so after removing an admin, rotate the keys they could have copied.
 - `enableSessionForAPIKeys` stays off: a key must never become a portal session.
@@ -679,8 +680,8 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   of its own are applied (an older release on a newer schema), and refuses when it also
   has pending ones (branched off before the newer release). Kysely alone throws
   "corrupted migrations" for both.
-- **Health**: iris-api `GET /` -> 404 (the job API, before auth; the token check cannot
-  authenticate in hosted mode, #309). Portal `/api/health` (dynamic, `no-store`): 200 only
+- **Health**: iris-api `GET /health/ready` -> 200 (unauthenticated, 503 while draining;
+  #309). Portal `/api/health` (dynamic, `no-store`): 200 only
   when getAuth() builds, the master key loads and `select 1` answers; 503 with no detail.
   Worker: `probeDatabase()` at startup (exit 3), heartbeat file written per poll and every
   30s during a job (`IRIS_WORKER_HEARTBEAT_FILE`), compose fails it at 180s.
@@ -881,6 +882,17 @@ break and expensive to rediscover:
   red until the other is in the same PR. Locally, without the buildx plugin, build with
   `DOCKER_BUILDKIT=0 docker build -t iris:local .` (BuildKit without buildx fails, and a
   docker-container builder does not load the image).
+
+- **Supply chain (#360).** Every `FROM` in `Dockerfile` and `Dockerfile.portal` is pinned by
+  digest (`tag@sha256:…`; Dependabot's docker entry bumps both). CI writes a CycloneDX SBOM per
+  image with a digest-pinned Trivy (one image copy, `--timeout 15m`; the default timed out on
+  this host), scans the SBOM, fails on a fixable CRITICAL, lists fixable HIGH, and uploads the
+  SBOMs as the `image-sboms` artifact. The runtime image has no npm (`rm -rf
+  /usr/lib/node_modules/npm …`: nothing uses it at runtime, and the base image's global npm
+  carried all the Node.js findings). `/app/THIRD_PARTY_NOTICES.txt` is generated in the deps
+  stage by `scripts/third-party-notices.js` from what `npm ci --omit=dev` installed (the root
+  lockfile also lists the portal's packages, which are not installed, so it reads installed
+  `package.json`s, not lockfile entries).
 
 The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a
@@ -1137,6 +1149,12 @@ dials the address it vetted, so a rebinding resolver gets no second lookup.
   called before the first launch in the registry. `connect` sends the one "public"
   test address (`8.8.8.8`) to a local server, so every refusal has a positive control
   that goes through the same proxy. A refused target must leave no hit on the server.
+- **QUIC is off under the fixed proxy (#375)**: no WebTransport session and no HTTP/3
+  fetch sends a UDP datagram in hosted mode, even with `--origin-to-force-quic-on`; local
+  mode sends them (the negative controls). So no `--disable-quic` is added. The probes
+  switch off Chromium's local-network checks (in both modes), which otherwise refuse a
+  public page's connection to loopback and made the first probe send nothing either way;
+  a test appends such switches by wrapping the isolated registry's `chromium.launch`.
 - Not covered: a container-level egress firewall, and names Chromium resolves for DNS
   prefetch (a lookup, no connection).
 
@@ -1161,6 +1179,27 @@ quoting the page. Both report writers route every interpolation through
   element/token sequence. Substring checks pass on half-escaped documents.
 - Writing `\u....` escapes through a tool call can land as the raw character on
   disk. Check with `cat -A` when editing a regex or fixture that uses them.
+
+### Graceful Shutdown and Readiness (issue #309)
+
+- **`GET /health/live` and `GET /health/ready`** on the `iris connect` listener, answered
+  before auth, logging and the job routes: probes run every few seconds, and hosted mode has
+  no shared token to authenticate a probe with (#341). Live is 200 while the process serves;
+  ready is 503 while draining. Production's compose healthcheck probes readiness (it used to
+  infer health from `GET /` answering 404).
+- **SIGTERM drains** (`drainServer(wss, ms)`, src/protocol.ts): readiness turns 503, new
+  upgrades get 503 (re-checked after an async key check), new REST requests 503 (no job is
+  queued during shutdown), new requests on open sockets `-32000 Server is shutting down`, and it
+  resolves once every message in flight has been answered (a counter around the message
+  handler), or at the deadline (`DRAIN_DEADLINE_MS` = 12 s in cli.ts). Then the sockets
+  close and the sessions' browsers with them; 5 s later a forced exit. `stop_grace_period`
+  (20 s) must exceed both; `container-config.test.ts` reads the constant. A second signal
+  exits at once.
+- **`iris-mcp` exits on SIGTERM, SIGINT and stdin EOF** (the SDK does neither), closing the
+  server with a 2 s cap; Playwright closes its browsers on exit.
+- Tests: `graceful-shutdown.test.ts` (in process, and real processes for `iris connect` and
+  `iris-mcp`). A test that runs `iris connect`'s SIGINT handler with a mocked server must let
+  the drain's promise settle before asserting.
 
 ### RPC Server Error Policy (issue #330)
 
@@ -1384,6 +1423,30 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   for a plan without it.
 - Not enforced yet, no hosted surface: agent turns (CLI-only, #428), vision calls (hosted
   jobs run no AI), storage (#315).
+
+### Tenant Audit Log (issue #361)
+
+`src/audit-log.ts`: `recordAudit(db, { orgId, actor, action, target?, metadata? })` into
+`audit_log` (migration 0001). What is recorded is listed in `docs/data-flows.md`.
+
+- **Written on the change's own transaction** (`tx`), so neither commits without the other.
+  A store that changes something audited takes the actor (`AuditActor`: `userId` /
+  `apiKeyId`, plain ids with no foreign keys); `actorFrom()` reads the `user:<id>` /
+  `key:<id>` form `updated_by` already uses.
+- **Never a secret**: a provider key's entry names the provider, an API key's its id; an
+  update records the field names it changed, not their values. Tests assert the plaintext
+  is absent from every row.
+- **API keys are audited by BetterAuth hooks**: the after hook on `/api-key/*` takes the
+  org from the plugin's response, except for delete (the response is `{ success }` and the
+  row is gone), whose org the before hook looks up by key id and passes in a module-level
+  map (a key's org never changes; only a successful delete removes the entry, so a refused
+  concurrent delete cannot take it). A refused write leaves no entry. A failed write is logged, not thrown: the key change
+  already happened.
+- **RPC sessions** are audited through `startServer({ audit })` (hosted `iris connect` wires
+  it), best effort: a failed write is logged and the session goes on.
+- `rewrapAll()` writes one `provider_key.rewrap` per key, in that key's update transaction,
+  with no actor (an operator ran it) and the sealing master key id.
+- There is no read surface yet (portal page or API): only the table.
 
 ### Managed AI Credits (issue #479)
 
