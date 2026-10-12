@@ -338,7 +338,7 @@ export class CostTracker {
    */
   private initializeDatabase(): void {
     // Index names are prefixed: they are global to a SQLite file, and the vision cache
-    // may share this one (#299). migrations/002_ai_cache_cost.sql uses the same names.
+    // may share this one (#299).
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS cost_tracking (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
