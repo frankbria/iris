@@ -30,13 +30,13 @@ describe('Translator', () => {
 
   describe('translateSync (legacy)', () => {
     it('should translate click commands', () => {
-      const result = translateSync('click submit');
-      expect(result).toEqual([{ type: 'click', selector: 'submit' }]);
+      const result = translateSync('click #submit');
+      expect(result).toEqual([{ type: 'click', selector: '#submit' }]);
     });
 
     it('should translate fill commands', () => {
-      const result = translateSync('fill email with test@example.com');
-      expect(result).toEqual([{ type: 'fill', selector: 'email', text: 'test@example.com' }]);
+      const result = translateSync('fill #email with test@example.com');
+      expect(result).toEqual([{ type: 'fill', selector: '#email', text: 'test@example.com' }]);
     });
 
     it('should translate navigate commands', () => {
@@ -62,17 +62,17 @@ describe('Translator', () => {
     });
 
     it('should use pattern matching for simple click commands', async () => {
-      const result = await translate('click submit');
+      const result = await translate('click #submit');
 
-      expect(result.actions).toEqual([{ type: 'click', selector: 'submit' }]);
+      expect(result.actions).toEqual([{ type: 'click', selector: '#submit' }]);
       expect(result.method).toBe('pattern');
       expect(result.confidence).toBe(0.9);
     });
 
     it('should use enhanced pattern matching', async () => {
       const tests = [
-        { input: 'press submit', expected: 'submit' },
-        { input: 'tap login', expected: 'login' },
+        { input: 'press #submit', expected: '#submit' },
+        { input: 'tap .login', expected: '.login' },
       ];
 
       for (const test of tests) {
@@ -84,9 +84,13 @@ describe('Translator', () => {
 
     it('should use enhanced fill patterns', async () => {
       const tests = [
-        { input: 'enter john into name', selector: 'name', text: 'john' },
-        { input: 'type password in password-field', selector: 'password-field', text: 'password' },
-        { input: 'input hello to message', selector: 'message', text: 'hello' },
+        { input: 'enter john into #name', selector: '#name', text: 'john' },
+        {
+          input: 'type password in #password-field',
+          selector: '#password-field',
+          text: 'password',
+        },
+        { input: 'input hello to [name=message]', selector: '[name=message]', text: 'hello' },
       ];
 
       for (const test of tests) {
@@ -152,7 +156,9 @@ describe('Translator', () => {
       expect(result.actions).toEqual([]);
       expect(result.method).toBe('ai');
       expect(result.confidence).toBe(0);
-      expect(result.reasoning).toBe('AI translation failed: API key missing');
+      expect(result.reasoning).toMatch(
+        /^No pattern matched, and AI translation is not configured \(API key missing\)/,
+      );
       // No AI configured is not an outage: nothing was asked.
       expect(result.error).toBeUndefined();
     });
@@ -218,6 +224,68 @@ describe('Translator', () => {
         context: { url: 'https://example.com' },
       });
     });
+  });
+});
+
+// Issue #297: the pattern path handed prose straight to Playwright as a selector
+// ("click submit" -> page.click("submit")) or as a URL ("go to the pricing page").
+describe('prose is not a selector or a URL (issue #297)', () => {
+  const { translateSync } = require('../src/translator');
+
+  it.each([
+    'click submit',
+    'click the login button',
+    'press Sign in',
+    'tap login',
+    'fill email with test@example.com',
+    'enter john into the name field',
+    'type hello in search box',
+    'go to the pricing page',
+    'open settings',
+    'navigate to example.com',
+    'verify the error banner is hidden',
+    'click Submit.',
+    'click Note: save',
+    'click Yes, please',
+  ])('%s -> no pattern actions', (instruction) => {
+    expect(translateSync(instruction)).toEqual([]);
+  });
+
+  it.each([
+    ['click #submit-button', '#submit-button'],
+    ['click .btn.primary', '.btn.primary'],
+    ['click button.primary', 'button.primary'],
+    ['click input[name="q"]', 'input[name="q"]'],
+    ['click [data-testid=save]', '[data-testid=save]'],
+    ['click form > button', 'form > button'],
+    ['click li:nth-child(2) a.link', 'li:nth-child(2) a.link'],
+    ['click button:has-text("Sign in")', 'button:has-text("Sign in")'],
+    ['click text=Sign in', 'text=Sign in'],
+    ['click role=button[name="Sign in"]', 'role=button[name="Sign in"]'],
+    ['click data-testid=submit', 'data-testid=submit'],
+    ['click //button[@id="go"]', '//button[@id="go"]'],
+    ['click #menu >> text=Logout', '#menu >> text=Logout'],
+    ['click *', '*'],
+    ['click #save, button, a', '#save, button, a'],
+    ['click div>a', 'div>a'],
+    ['click li+li', 'li+li'],
+    ['click h2~p', 'h2~p'],
+    ['click div >a', 'div >a'],
+    ['click #nav +li', '#nav +li'],
+  ])('%s keeps the selector %s', (instruction, selector) => {
+    expect(translateSync(instruction)).toEqual([{ type: 'click', selector }]);
+  });
+
+  it.each(['https://example.com/a?b=c', 'http://localhost:3000', 'file:///tmp/x.html'])(
+    'navigate to %s keeps the URL',
+    (url) => {
+      expect(translateSync(`navigate to ${url}`)).toEqual([{ type: 'navigate', url }]);
+    },
+  );
+
+  it('sends prose to the AI path', async () => {
+    const result = await translate('click submit');
+    expect(result.method).toBe('ai');
   });
 });
 

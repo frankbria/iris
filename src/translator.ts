@@ -83,6 +83,43 @@ export function translateSync(instruction: string): Action[] {
   return translateWithPatterns(instruction).actions;
 }
 
+/** A whole target that is a selector as written: `text=Sign in`, `role=button`, `//button`. */
+const ENGINE_OR_XPATH = /^(?:[a-z][\w-]*=\S|\(?\/\/)/i;
+
+/**
+ * One whitespace-separated CSS token with selector syntax: a combinator, spaced or not
+ * (`div>a`, `div >a`; `>>` chains to an
+ * engine selector such as `text=Logout`), `#id`, `.class`, `[attr]`, `:pseudo` or `*`.
+ */
+const SELECTOR_TOKEN =
+  /^(?:>>?|\+|~)$|[\w\])"'][>+~]|^[>+~]\S|[#.][a-z_-]|\[|:[a-z-]|\*|^[a-z][\w-]*=\S/i;
+
+/**
+ * Whether a pattern's target may go to Playwright as a selector (#297). Prose does not:
+ * `click submit` became `page.click("submit")`, a CSS type selector no page has. Accepted:
+ * an engine selector or XPath, or CSS with at least one token of selector syntax and only
+ * bare identifiers beside it. So `form > button` is a selector, and `the login button` or a
+ * bare `submit` (even a tag name) is prose for the AI.
+ */
+function looksLikeSelector(target: string): boolean {
+  if (ENGINE_OR_XPATH.test(target)) return true;
+  // Quoted strings and bracket/paren contents may hold anything, spaces included.
+  const tokens = target
+    .replace(/"[^"]*"|'[^']*'|\[[^\]]*\]|\([^)]*\)/g, (m) => m[0] + m.at(-1))
+    // A selector list (`#save, button`) splits at its commas too.
+    .split(/[\s,]+/)
+    .filter(Boolean);
+  return (
+    tokens.some((t) => SELECTOR_TOKEN.test(t)) &&
+    tokens.every((t) => SELECTOR_TOKEN.test(t) || /^[a-z][\w-]*$/i.test(t))
+  );
+}
+
+/** A navigate target must be an absolute URL, as the executor requires; else it is prose. */
+function looksLikeUrl(target: string): boolean {
+  return !/\s/.test(target) && URL.canParse(target);
+}
+
 function translateWithPatterns(instruction: string): TranslationResult {
   const trimmed = instruction.trim();
 
@@ -91,7 +128,7 @@ function translateWithPatterns(instruction: string): TranslationResult {
 
   for (const pattern of clickPatterns) {
     const match = pattern.exec(trimmed);
-    if (match) {
+    if (match && looksLikeSelector(match[1])) {
       return {
         actions: [{ type: 'click', selector: match[1] }],
         method: 'pattern',
@@ -106,7 +143,7 @@ function translateWithPatterns(instruction: string): TranslationResult {
 
   for (const pattern of fillPatterns) {
     const match = pattern.exec(trimmed);
-    if (match) {
+    if (match && looksLikeSelector(match[1])) {
       return {
         actions: [{ type: 'fill', selector: match[1], text: match[2] }],
         method: 'pattern',
@@ -125,7 +162,7 @@ function translateWithPatterns(instruction: string): TranslationResult {
 
   for (const pattern of fillPatterns2) {
     const match = pattern.exec(trimmed);
-    if (match) {
+    if (match && looksLikeSelector(match[2])) {
       return {
         actions: [{ type: 'fill', selector: match[2], text: match[1] }],
         method: 'pattern',
@@ -155,7 +192,8 @@ function translateWithPatterns(instruction: string): TranslationResult {
 
   for (const { pattern, kind } of assertPatterns) {
     const match = pattern.exec(trimmed);
-    if (match) {
+    // An element_absent target is a selector (page.locator); the others are text or a URL part.
+    if (match && (kind !== 'element_absent' || looksLikeSelector(match[1]))) {
       return {
         actions: [{ type: 'assert', kind, target: match[1], description: trimmed }],
         method: 'pattern',
@@ -170,7 +208,7 @@ function translateWithPatterns(instruction: string): TranslationResult {
 
   for (const pattern of navPatterns) {
     const match = pattern.exec(trimmed);
-    if (match) {
+    if (match && looksLikeUrl(match[1])) {
       return {
         actions: [{ type: 'navigate', url: match[1] }],
         method: 'pattern',
@@ -246,7 +284,10 @@ async function translateWithAI(
         actions: [],
         method: 'ai',
         confidence: 0,
-        reasoning: `AI translation failed: ${configErrors.join(', ')}`,
+        reasoning:
+          `No pattern matched, and AI translation is not configured (${configErrors.join(', ')}). ` +
+          'Without AI, name the element or page: click #submit, fill #email with x, ' +
+          'navigate to https://example.com',
       };
     }
 
