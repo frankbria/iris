@@ -940,7 +940,8 @@ listed in the body of the PR that closed #353, for checking against it.
   action timeout (what the click would wait), so a control rendered late is read, not
   skipped; one that never appears is refused as "not found" (it would have timed out in the
   executor). A read that fails after the element was found (it detached, a read timed out)
-  refuses too: a failed read is not an absent attribute. A refusal never ran, so it does not clear the goal verdict (#351); a test that
+  refuses too: a failed read is not an absent attribute. A refusal never ran, so it does
+  not clear the goal verdict (#351); a test that
   needs a failing click uses a real but disabled element. The page controls what is read,
   so a hostile page can still label a destructive control blandly; this narrows the
   selector-only gap, it does not close it.
