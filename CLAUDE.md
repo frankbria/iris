@@ -714,6 +714,12 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   min on a blackhole).
 - **uid 1001 everywhere.** The portal image runs as `portal` (1001) like pwuser, so the
   deploy writes every app secret file once, owned by 1001. `pg_password` is 70.
+- **Optional settings reach the containers through the deploy job (#549)**: object storage
+  (`IRIS_S3_*` to iris, worker and portal) and managed AI (`IRIS_MANAGED_AI_*` to iris) come
+  from the `production` environment. Compose passes each as `${NAME:-}` (empty is unset to
+  the services' own readers), the two secret files are always written (empty when unused,
+  so the mounts exist), and `settings.env` names a `_FILE` path only when its secret was
+  given: a `_FILE` var set without the rest would be a partial config (exit 3).
 - **`_FILE` secrets go through `readSecretEnv()`** (src/secret-env.ts): `resolveDatabaseUrl`,
   `resolveKeyring`, `hostedServices`' `BETTER_AUTH_SECRET`, and the portal's
   `BETTER_AUTH_SECRET` / `SMTP_URL`. Do not add another reader.
