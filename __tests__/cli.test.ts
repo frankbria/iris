@@ -242,7 +242,7 @@ describe('CLI Commands', () => {
       const errors: string[] = [];
       jest.spyOn(console, 'error').mockImplementation((...a) => void errors.push(a.join(' ')));
       await runCli(['node', 'iris', 'connect', '--rate-per-key', '60']);
-      expect(errors.join('\n')).toMatch(/--rate-per-key.*no effect without IRIS_HOSTED/);
+      expect(errors.join('\n')).toMatch(/without IRIS_HOSTED.*no effect: --rate-per-key\./);
     });
 
     it('does not warn when no hosted-only flag is given', async () => {

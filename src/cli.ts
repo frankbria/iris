@@ -1145,9 +1145,7 @@ function warnStartupConfig(options: ConnectOptions, suppliedToken: string | unde
       .filter(([key]) => options[key as keyof typeof HOSTED_ONLY_FLAGS] !== undefined)
       .map(([, flag]) => flag);
     if (given.length > 0) {
-      console.error(
-        `Warning: ${given.join(', ')} have no effect without IRIS_HOSTED (API-key mode).`,
-      );
+      console.error(`Warning: without IRIS_HOSTED (API-key mode), no effect: ${given.join(', ')}.`);
     }
   }
   if (suppliedToken && suppliedToken.length < MIN_TOKEN_CHARS) {
