@@ -538,7 +538,18 @@ Write/Edit, not as a pre-push afterthought.
 - **The `pkill -f` self-match hit again** (exit 144, a `pkill -f "[j]est __tests__/x"` whose own command line also held `jest __tests__/x`). Kill by PID from `pgrep`, or never put the pattern's text elsewhere on the same command line.
 - **WebSocket clients in a test must be closed**: `wss.close()` waits for them, and an unclosed client hung a whole test file (#354) with no failing assertion.
 - **README prose is executed**: `readme-run-examples.test.ts` (#297) runs every line holding `iris run "…"`. Describe an example in prose without that form.
-- **A click whose effect is a `fetch` can be cut off when the CLI exits right after it**; a test that counts the effect on a server should use `navigator.sendBeacon` (it survives the page going away). Passed locally, failed in CI.
+- **A click whose effect is a `fetch` can be cut off when the CLI exits right after it.** `navigator.sendBeacon` was not enough either: CI dropped a queued beacon when Chromium closed (#309's run). Use a synchronous XHR in the handler: it completes before `Input.dispatchMouseEvent` returns, so before the click resolves.
 - **This box has no buildx plugin**: `DOCKER_BUILDKIT=1 docker build` fails, and `-q | tail` hid it. Build with `DOCKER_BUILDKIT=0`, and check the image exists before testing it.
 - **Reviewer quotas run out mid-day** (GLM, then codex); Kimi stalled twice. Working several issues in parallel worktrees, each waiting for the next reviewer window, kept the loop moving without skipping the cross-family review.
 - **An "(anonymous)" function always reads as new to `crap_gate.py`** (name-based): a large legacy handler touched by one line blocks unless recorded as debt with the reason.
+
+## 2026-10-12 — #360, #309, #361, #375, #379
+
+- **BetterAuth runs `after` hooks for failed requests too.** State handed from a before hook to an after hook (#361's keyId→org map) must not be consumed by the failed request, or a concurrent successful one loses it. Consume only on success, or key it so sharing is harmless.
+- **A drain must count everything that can still answer**: RPC messages, REST requests (async key check before the drain check passes) and upgrades still in verification. Each one a reviewer found was a different counter (#309, three review rounds).
+- **Chromium's local-network checks hide QUIC probes.** A public or route-fulfilled page sends nothing to loopback in either mode, which made #375's first probe inconclusive. Switch `LocalNetworkAccessChecks` (and the PNA features) off in both modes so the proxy is the only difference.
+- **`jest.isolateModules` gives the registry its own `playwright`**: a spy on `chromium.launch` must be installed inside the same `isolateModules` callback as the `require('../src/browser')` it should affect.
+- **A count-based page cap closes the wrong page**: `'page'` events arrive out of creation order, so closing "the page that made the count too high" hit a legitimate popup 3/3 times (#379). Identify the over-cap target (CDP `Target.getTargetInfo` against the browser net's set) instead.
+- **Fake a black-holed connect with `Object.assign(new net.Socket(), { connecting: true })`.** A never-connected socket rejects writes at once ("Socket is closed"), and a real TEST-NET address is dropped on some networks and unreachable at once on others.
+- **`http.request` reports "socket hang up" for a socket destroyed with a specific error**; read `socket.errored` for the real reason.
+- **`bash -e` in a CI loop stops at the first failing item**: collect failures (`|| failed=1`) and `exit "$failed"` after the loop when every item must still run (both images scanned, both SBOMs written).
