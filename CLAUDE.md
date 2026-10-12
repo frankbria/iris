@@ -990,7 +990,18 @@ listed in the body of the PR that closed #353, for checking against it.
   needs a failing click uses a real but disabled element. The page controls what is read,
   so a hostile page can still label a destructive control blandly; this narrows the
   selector-only gap, it does not close it.
-- One-shot `iris run` and the RPC do not apply agent policy at all yet: #354.
+- **Every model-proposed plan runs under it (#354)**: `planPolicy(modelProposed, flags)`
+  gives an AI plan (the agent loop, one-shot `iris run` with `translation.method === 'ai'`,
+  an RPC `instruction` the AI translated) the agent defaults relaxed by `--allow*` / the RPC
+  `policy` param (zod `.strict()`); a plan the caller wrote (pattern translation, explicit
+  RPC `actions`) gets only a requested `allow`, or no policy. `checkPlannedAction` (both
+  checks) and `pinPage` (request-level pin) are the shared path; `startOriginOf` takes the
+  requested URL, then the page, then the plan's first navigation. The RPC applies the
+  per-action checks only (`executeUnderPolicy` in protocol.ts): the request-level guard
+  would stay on the session's page for later requests. `iris watch --execute` applies it to
+  an AI plan with the pin off (`allowCrossOrigin`: the page is the watched `file://`, which has
+  no origin), so the destructive checks remain; `watch` has no `--allow*` flags. Private
+  backlog item P1.22.
 
 ### Retries Never Repeat a Side Effect (issue #296)
 

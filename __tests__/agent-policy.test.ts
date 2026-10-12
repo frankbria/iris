@@ -187,6 +187,21 @@ describe('origin pinning', () => {
   });
 });
 
+describe('a navigation into the pinned origin from a fresh page (#354)', () => {
+  // Codex review: a one-shot AI plan starts on about:blank, and the drift check refused
+  // even the navigation that reaches the start origin.
+  it('is allowed from about:blank', () => {
+    expect(check({ type: 'navigate', url: `${HOME}/start` }, {}, 'about:blank').allowed).toBe(true);
+  });
+
+  it('does not let anything else run there, or navigate elsewhere', () => {
+    expect(check({ type: 'click', selector: '#a' }, {}, 'about:blank').allowed).toBe(false);
+    expect(
+      check({ type: 'navigate', url: 'https://evil.example/' }, {}, 'about:blank').allowed,
+    ).toBe(false);
+  });
+});
+
 describe('destructive-target policy', () => {
   it.each([
     ['delete', '#delete-account'],

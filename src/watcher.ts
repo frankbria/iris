@@ -6,6 +6,7 @@ import { describeAction } from './actions';
 import { initializeDatabase, insertTestRun } from './db';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
 import { guardedGoto } from './url-policy-guard';
+import { checkPlannedAction, planPolicy } from './agent-policy';
 import { Page } from 'playwright';
 import { VisualCaptureEngine } from './visual/capture';
 import { VisualDiffEngine } from './visual/diff';
@@ -648,6 +649,12 @@ export class FileWatcher {
           this.logger.log(`   🌐 Navigating to ${fileUrl}`);
           await guardedGoto(this.page, fileUrl);
 
+          // An AI plan runs under the agent policy, as on every path (#354). The page is
+          // the changed file (`file://`), which has no origin to pin to, so the origin pin
+          // is off and the destructive checks remain; `watch` has no --allow* flags, and a
+          // literal instruction (a pattern plan) is the user's own, as in `iris run`.
+          const policy = planPolicy(result.method === 'ai', { allowCrossOrigin: true });
+
           // Execute each action and report progress
           for (let i = 0; i < result.actions.length; i++) {
             const action = result.actions[i];
@@ -655,7 +662,17 @@ export class FileWatcher {
               `   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`,
             );
 
-            const execResult = await this.executor.executeAction(action, this.page);
+            const verdict = policy
+              ? await checkPlannedAction(action, policy, this.page, null)
+              : { allowed: true };
+            const execResult: ExecutionResult = verdict.allowed
+              ? await this.executor.executeAction(action, this.page)
+              : {
+                  success: false,
+                  action,
+                  error: `Refused by agent policy: ${verdict.reason}`,
+                  duration: 0,
+                };
             executionResults.push(execResult);
 
             if (execResult.success) {

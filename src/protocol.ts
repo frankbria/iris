@@ -18,7 +18,14 @@ import type { AICredentials } from './ai-client/credentials';
 import type { UsageEvent } from './billing/usage';
 import type { SettledAICall } from './ai-client/factory';
 import { errMessage, log } from './log';
-import { mapSecrets } from './credential-refs';
+import { mapSecrets, type SecretSource } from './credential-refs';
+import {
+  checkPlannedAction,
+  planPolicy,
+  startOriginOf,
+  type AgentPolicy,
+  type PolicyFlags,
+} from './agent-policy';
 import { metrics, REQUEST_BUCKETS } from './metrics';
 
 export interface JsonRpcRequest {
@@ -77,6 +84,17 @@ const ExecuteBrowserActionParams = z.object({
   // Values for this request's `{{secret:NAME}}` fills (#352): the only source on
   // the RPC, never the server's environment; not stored, not logged.
   secrets: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/), z.string()).optional(),
+  // The run's policy flags (#354), as the CLI's --allow / --allow-cross-origin /
+  // --allow-destructive. An AI-translated plan runs under the agent's defaults, which
+  // these relax; explicit `actions` are the client's own, restricted by `allow` only.
+  policy: z
+    .object({
+      allow: z.array(z.enum(['click', 'fill', 'navigate', 'assert'])).optional(),
+      allowCrossOrigin: z.boolean().optional(),
+      allowDestructive: z.boolean().optional(),
+    })
+    .strict()
+    .optional(),
 });
 
 export interface JsonRpcResponse {
@@ -1048,7 +1066,7 @@ export function startServer(
               res.error = { code: -32602, message: 'Invalid params' };
               break;
             }
-            const { instruction, actions, url, secrets } = parsed.data;
+            const { instruction, actions, url, secrets, policy } = parsed.data;
             const startedAt = new Date();
 
             // Shared: actions still run concurrently with each other, but never
@@ -1072,6 +1090,7 @@ export function startServer(
                 limits.maxActionsPerRequest,
                 { aiCredentials: options?.aiCredentials, usage: options?.usage },
                 secrets ?? {},
+                policy,
               );
             });
             if (principal && options?.history) {
@@ -1328,6 +1347,38 @@ function createBrowserSession(
 /**
  * Execute browser actions using the session's ActionExecutor
  */
+/**
+ * Run a plan action by action, each checked by the agent policy first (#354); a refusal is
+ * a failed result carrying the reason, and the action never runs. Per action only: the
+ * request-level origin guard (`pinPage`) is not installed, because an RPC page outlives the
+ * request and the guard would stay on it for the session's later requests.
+ */
+async function executeUnderPolicy(
+  session: BrowserSession,
+  actions: Action[],
+  policy: AgentPolicy,
+  url: string | undefined,
+  secrets: SecretSource,
+): Promise<ExecutionResult[]> {
+  const page = session.page!;
+  const startOrigin = startOriginOf(url, page.url(), actions);
+  const results: ExecutionResult[] = [];
+  for (const action of actions) {
+    const verdict = await checkPlannedAction(action, policy, page, startOrigin);
+    results.push(
+      verdict.allowed
+        ? await session.executor.executeAction(action, page, secrets)
+        : {
+            success: false,
+            action,
+            error: `Refused by agent policy: ${verdict.reason}`,
+            duration: 0,
+          },
+    );
+  }
+  return results;
+}
+
 async function executeBrowserActions(
   session: BrowserSession,
   instruction: string | undefined,
@@ -1339,6 +1390,7 @@ async function executeBrowserActions(
     usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
   } = {},
   secrets: Record<string, string> = {},
+  policyFlags: PolicyFlags = {},
 ): Promise<{
   success: boolean;
   results: ExecutionResult[];
@@ -1481,12 +1533,11 @@ async function executeBrowserActions(
       }
     }
 
-    // Execute the actions
-    const results = await session.executor.executeActions(
-      actionsToExecute,
-      session.page,
-      mapSecrets(secrets),
-    );
+    // Execute the actions, under the policy a model's plan carries (#354).
+    const policy = planPolicy(translationResult?.method === 'ai', policyFlags);
+    const results = policy
+      ? await executeUnderPolicy(session, actionsToExecute, policy, url, mapSecrets(secrets))
+      : await session.executor.executeActions(actionsToExecute, session.page, mapSecrets(secrets));
 
     const success = results.every((result) => result.success);
 

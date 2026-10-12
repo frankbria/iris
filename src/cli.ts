@@ -9,6 +9,7 @@ import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-o
 import type { AIProvider } from './visual/ai-classifier';
 import type { TranslationResult } from './translator';
 import { describeAction } from './actions';
+import type { ExecutionResult } from './executor';
 import { wcagTags } from './a11y/wcag';
 
 /**
@@ -80,18 +81,18 @@ program
   )
   .option(
     '--allow <types>',
-    'Restrict --agent to these action types (comma-separated: click,fill,navigate,assert)',
+    'Restrict the run to these action types (comma-separated: click,fill,navigate,assert)',
     (v) =>
       v.split(',').map((t) => parseEnumOption(t, ['click', 'fill', 'navigate', 'assert'], 'allow')),
   )
   .option(
     '--allow-cross-origin',
-    'Let --agent leave the starting origin, and load cross-origin assets (off by default: an agent that wanders onto another authenticated site, or a page that beacons a filled-in value out through an image URL, is the risk)',
+    'Let an AI-planned run (--agent, or a plan the AI translated) leave the starting origin and load cross-origin assets (off by default: an agent that wanders onto another authenticated site, or a page that beacons a filled-in value out through an image URL, is the risk)',
     false,
   )
   .option(
     '--allow-destructive',
-    'Let --agent act on targets that read as destructive (delete, remove, reset, …)',
+    'Let an AI-planned run act on targets that read as destructive (delete, remove, reset, …)',
     false,
   )
   .option(
@@ -340,6 +341,26 @@ program
               say('   Launching visible browser with developer tools...');
             }
 
+            // The agent's policy applies to any plan a model proposed, here as in --agent
+            // (#354); a pattern-translated plan is the user's own, with only --allow.
+            const { planPolicy, startOriginOf, pinPage, checkPlannedAction } =
+              await import('./agent-policy');
+            const policy = planPolicy(result.method === 'ai', {
+              allow: options.allow,
+              allowCrossOrigin: options.allowCrossOrigin,
+              allowDestructive: options.allowDestructive,
+            });
+            const startOrigin = policy ? startOriginOf(startUrl, page.url(), result.actions) : null;
+            if (policy && !(await pinPage(page, policy, startOrigin))) {
+              console.error(
+                '❌ Refusing to run an AI-planned run with no starting origin to pin to: pass --url, or --allow-cross-origin',
+              );
+              status = 'error';
+              // The browser is already up: close it, or the CLI hangs on it (codex).
+              await executor.cleanup();
+              return;
+            }
+
             // Open the starting page first, otherwise every non-navigate action
             // runs against about:blank (issue #112). Routed through executeAction
             // so the URL policy applies to the user-supplied URL. Skipped when the
@@ -365,7 +386,17 @@ program
               const action = result.actions[i];
               say(`   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`);
 
-              const execResult = await executor.executeAction(action, page);
+              const verdict = policy
+                ? await checkPlannedAction(action, policy, page, startOrigin)
+                : { allowed: true };
+              const execResult: ExecutionResult = verdict.allowed
+                ? await executor.executeAction(action, page)
+                : {
+                    success: false,
+                    action,
+                    error: `Refused by agent policy: ${verdict.reason}`,
+                    duration: 0,
+                  };
               executionResults.push(execResult);
 
               if (execResult.success) {
