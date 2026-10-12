@@ -32,3 +32,16 @@ updates:
         patterns: ["*"]
       minor-and-patch:
         update-types: ["minor", "patch"]
+  # The Playwright base image (Dockerfile) and the portal's node image (#306). The
+  # Playwright tag and the playwright npm package must move together, and
+  # container-config.test.ts fails CI while they differ: a bump of either one alone
+  # stays red until the other half is added to the same PR.
+  - package-ecosystem: docker
+    cooldown:
+      default-days: 14
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 7
+    directory: /
+    schedule:
+      interval: weekly
