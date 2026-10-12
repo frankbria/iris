@@ -120,6 +120,16 @@ is processed in Chromium's memory for the duration of the job.
 | Access | Operators. |
 | Retention | While the user exists. When the user is deleted, a database trigger (migration 0010) replaces `user_id` with a SHA-256 of it (`user_hash`, `pseudonymised_at`): the document, version, time and IP are kept **7 years** for disputes, then deleted. |
 
+### User bans
+
+| | |
+|---|---|
+| Data | `user_suspensions`: user, action (`suspend` / `unsuspend`), the operator's **reason** and actor name, time. |
+| Purpose | Operator account bans (#457): a banned user cannot sign in. |
+| Where | Postgres, `0016_user_suspensions.ts`; `src/org-suspension.ts`. |
+| Access | Operators (`iris admin ban-user | unban-user | user-status`). Never shown to the user. |
+| Retention | While the user exists; deleted with the user (cascade). |
+
 ### Audit log
 
 | | |
@@ -127,7 +137,7 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `audit_log`: org, `actor_user_id`, `actor_api_key_id` (plain ids, no foreign keys, so an entry outlives its actor), action, target, `metadata jsonb`, time. |
 | Purpose | An org's audit trail (#361). |
 | Where | Postgres, `0001_initial.ts`. |
-| Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`); member removed, left or given a role (`member.remove|leave|role`, the member's user id, and the keys revoked with them); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463). No URL, page content or typed value is recorded. |
+| Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`); member removed, left or given a role (`member.remove|leave|role`, the member's user id, and the keys revoked with them); keys revoked by a user ban (`api_key.delete`, reason `user banned`, no actor); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463). No URL, page content or typed value is recorded. |
 | Retention | Deleted when the org is purged; a deleted user's id is removed from their entries (#349). Otherwise **undecided**. |
 
 ### Artifact storage usage

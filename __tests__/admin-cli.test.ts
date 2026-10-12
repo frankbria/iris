@@ -144,6 +144,43 @@ describe('iris admin refusals', () => {
     expect(rows[0].n).toBe('2');
   }, 120_000);
 
+  test('ban-user, unban-user, user-status by email or id (#457)', async () => {
+    await sql`insert into "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+      values ('user-b', 'B', 'b@iris.test', true, now(), now())`.execute(db);
+    await sql`insert into session (id, token, "userId", "expiresAt", "createdAt", "updatedAt")
+      values ('s-b', 'tok-b', 'user-b', now() + interval '1 day', now(), now())`.execute(db);
+
+    const ban = await iris(
+      ['admin', 'ban-user', 'B@iris.test', '--reason', 'abuse report #7', '--actor', 'alice'],
+      env,
+    );
+    expect(ban).toMatchObject({ code: 0, stdout: 'user B@iris.test is now banned\n' });
+    expect(JSON.parse(ban.stderr.trim().split('\n').pop()!)).toMatchObject({
+      msg: 'user suspended',
+      userId: 'user-b',
+      actor: 'alice',
+    });
+    const { rows } = await sql`select 1 from session where "userId" = 'user-b'`.execute(db);
+    expect(rows).toHaveLength(0);
+
+    const again = await iris(['admin', 'ban-user', 'user-b', '--reason', 'dup'], env);
+    expect(again.stdout).toBe('user user-b is already banned; nothing recorded\n');
+    const unban = await iris(['admin', 'unban-user', 'user-b', '--reason', 'appeal'], env);
+    expect(unban).toMatchObject({ code: 0, stdout: 'user user-b is now active\n' });
+
+    const status = await iris(['admin', 'user-status', 'b@iris.test'], env);
+    const lines = status.stdout.trim().split('\n');
+    expect(lines[0]).toBe('user b@iris.test: active');
+    expect(lines.slice(1)).toEqual([
+      expect.stringMatching(/ {2}suspend {4}by alice: abuse report #7$/),
+      expect.stringMatching(/ {2}unsuspend {2}by deployer: appeal$/),
+    ]);
+
+    const unknown = await iris(['admin', 'ban-user', 'nobody@iris.test', '--reason', 'x'], env);
+    expect(unknown.code).toBe(1);
+    expect(unknown.stderr).toMatch(/No user with id or email "nobody@iris.test"/);
+  }, 180_000);
+
   test('sudo names the operator, not root', async () => {
     const r = await iris(['admin', 'suspend-org', 'org-a', '--reason', 'x'], {
       ...env,

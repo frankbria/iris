@@ -16,7 +16,12 @@ import {
 import { recordCurrentAcceptance } from '../legal/acceptance';
 import { ACCEPTED_TERMS } from '../legal/versions';
 import { log, type LogLevel } from '../log';
-import { suspendedSql } from '../org-suspension';
+import {
+  revokeIfCreatorBanned,
+  suspendedSql,
+  userBannedLocked,
+  userSuspensions,
+} from '../org-suspension';
 import { FREE_ORGS_PER_USER, freeOrgLimitReached, retractOrg } from '../billing/plans';
 
 /** One outgoing account email: verification or password reset. */
@@ -232,10 +237,16 @@ export function createAuth(
     databaseHooks: {
       session: {
         create: {
-          before: async (session) => ({
+          before: async (session) => {
+            await refuseBannedUser(rest.database, session.userId);
             // Defined below `auth`, whose API it needs; the hook only runs at sign-in.
-            data: { ...session, activeOrganizationId: await activeOrgFor(session.userId) },
-          }),
+            return {
+              data: { ...session, activeOrganizationId: await activeOrgFor(session.userId) },
+            };
+          },
+          // A ban that committed after the check above, before the insert, deleted the
+          // user's sessions without this one (codex review): look again under its lock.
+          after: (session) => dropIfBanned(rest.database, session),
         },
       },
     },
@@ -301,6 +312,29 @@ export function createAuth(
     return org.id;
   };
   return auth;
+}
+
+/**
+ * Every session is created through `session.create.before`, so a banned user (#457) gets
+ * none: sign-in is refused, and with it everything a session reaches (invitations too).
+ */
+async function refuseBannedUser(
+  database: BetterAuthOptions['database'],
+  userId: string,
+): Promise<void> {
+  if (await userSuspensions(termsDb(database)).isSuspended(userId)) {
+    throw new APIError('FORBIDDEN', { code: 'USER_BANNED', message: 'This account is suspended' });
+  }
+}
+
+async function dropIfBanned(
+  database: BetterAuthOptions['database'],
+  session: { id: string; userId: string },
+): Promise<void> {
+  const db = termsDb(database);
+  if (!(await userBannedLocked(db, session.userId))) return;
+  await sql`delete from session where id = ${session.id}`.execute(db);
+  throw new APIError('FORBIDDEN', { code: 'USER_BANNED', message: 'This account is suspended' });
 }
 
 /** The api-key plugin's endpoints that change an org's keys. */
@@ -427,7 +461,9 @@ async function auditKeyWrite(
     // or left no membership for this check to find (#408).
     .then(() =>
       verb === 'create'
-        ? revokeIfCreatorLeft(termsDb(database), orgId, session.user.id, keyId)
+        ? revokeIfCreatorLeft(termsDb(database), orgId, session.user.id, keyId).then(
+            (left) => left || revokeIfCreatorBanned(termsDb(database), orgId, session.user.id),
+          )
         : false,
     )
     .catch((err) =>
