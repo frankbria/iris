@@ -1,4 +1,4 @@
-import { Browser, Page, errors } from 'playwright';
+import { Browser, Locator, Page, errors } from 'playwright';
 import { Action } from './translator';
 import {
   launchBrowser,
@@ -264,6 +264,26 @@ export class ActionExecutor {
    */
   redactSecrets(text: string): string {
     return scrubValues(text, this.resolvedSecrets);
+  }
+
+  /**
+   * The fields on `page` that hold a value this executor typed from a credential reference
+   * (#352), for a screenshot to mask (#312): a field that is not `type=password` shows it.
+   * Bounded: the first 100 fields, each read for at most a second; one that cannot be read
+   * is masked, since it might hold one.
+   */
+  async secretFields(page: Page): Promise<Locator[]> {
+    if (this.resolvedSecrets.size === 0) return [];
+    const fields = (await page.locator('input, textarea').all()).slice(0, 100);
+    const held = await Promise.all(
+      fields.map((field) =>
+        field.inputValue({ timeout: 1_000 }).then(
+          (value) => this.resolvedSecrets.has(value),
+          () => true,
+        ),
+      ),
+    );
+    return fields.filter((_, i) => held[i]);
   }
 
   /**

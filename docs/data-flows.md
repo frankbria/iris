@@ -94,7 +94,7 @@ is processed in Chromium's memory for the duration of the job.
 
 | | |
 |---|---|
-| Data | `usage_events`: org, run, kind (`browser_minutes`, `text_call`, `vision_call`, `agent_turn`, `a11y_job`, `visual_job`), quantity, unit cost, billing mode, estimated flag, idempotency key. No content. |
+| Data | `usage_events`: org, run, kind (`browser_minutes`, `text_call`, `vision_call`, `agent_turn`, `a11y_job`, `visual_job`, `observation`), quantity, unit cost, billing mode, estimated flag, idempotency key. No content. |
 | Purpose | Metering and billing (#263). |
 | Where | Postgres, `0001`, `0003`; `src/billing/usage.ts`. |
 | Access | Operators; the org's own usage view (#271, pending). |
@@ -154,6 +154,10 @@ is processed in Chromium's memory for the duration of the job.
 
 The local CLI writes screenshots, diffs and baselines under `<artifactsDir>/runs/<runId>/`
 and `.iris/baselines` on the user's own machine (`src/visual/artifacts.ts`, #343).
+
+The RPC `observe` method (#312) sends a viewport screenshot and an ARIA snapshot of the
+session's page to the connected client and stores neither; fields filled from a credential
+reference are masked in the screenshot and cut from the snapshot.
 
 The hosted service stores them for visual jobs (#268, `src/visual/hosted-job.ts`) in a
 private S3-compatible bucket (`src/artifact-store.ts`, #257):

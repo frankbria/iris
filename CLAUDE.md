@@ -70,7 +70,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268; 0012: artifact purges, #472)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268; 0012: artifact purges, #472; 0013: org AI settings, #479; 0014: observation usage, #312)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── credential-refs.ts     # {{secret:NAME}} fill values: sources, resolve at fill time, scrub (#352)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
@@ -1352,10 +1352,29 @@ They apply only to connections with a principal; local mode is untouched.
 - Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`
   (real Postgres, spawned hosted `iris connect`, keys made through BetterAuth).
 
+### RPC `observe` (issue #312)
+
+The network client's eyes: `observe` (params `{ screenshot?: boolean }`, `.strict()`) answers
+`{ snapshot, screenshot? | screenshotOmitted? }` for the session's page (`observeSession` in
+src/protocol.ts).
+
+- **`snapshot` is `observePage()`'s digest**, the one the agent loop plans against (URL, title,
+  ARIA snapshot, capped at `MAX_DIGEST_CHARS`), with `executor.redactSecrets()` applied before
+  the cap.
+- **The screenshot is a viewport JPEG (quality 70), base64**, with every field holding a value
+  typed from a `{{secret:NAME}}` reference masked (`executor.secretFields(page)`: the first 100
+  `input`/`textarea`, a field that cannot be read is masked too). Over
+  `MAX_OBSERVE_SCREENSHOT_BYTES` (1 MiB) it is left out with `screenshotOmitted`.
+- **No page yet is a refusal** (`-32000`): observing never launches a browser.
+- **Metered**: one `observation` usage row per call for a tenant connection (platform usage:
+  no billing mode, no unit cost), best effort like browser minutes. Nothing is stored: the
+  screenshot goes to the client only.
+
 ### Billable Usage Ledger (issue #263)
 
 - **`usage_events`** (migration 0003): kinds `browser_minutes`, `text_call`,
-  `vision_call`, `agent_turn`, `a11y_job`, `visual_job`; `unit_cost_usd` (the provider
+  `vision_call`, `agent_turn`, `a11y_job`, `visual_job`, and `observation` (0014, #312);
+  `unit_cost_usd` (the provider
   cost of one unit, AI only) and `estimated` (#243). `billing_mode` (`byok`/`managed`)
   is **required on AI kinds and must be null on platform kinds**, a check constraint,
   because the plan prices platform usage (#260). `(org_id, idempotency_key)` is unique,
