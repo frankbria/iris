@@ -226,9 +226,14 @@ production.
 | `P2.15` | [#412](https://github.com/frankbria/iris/issues/412) | Portal: rename and disable API keys | P0.23 (#340) | DONE (#559) |
 | `P2.19` | [#457](https://github.com/frankbria/iris/issues/457) | Account-level bans (user suspension) | P1 (#348) | DONE (#560) |
 | `P2.20` | [#475](https://github.com/frankbria/iris/issues/475) | Collect superseded visual baseline images | P1 (#472) | DONE (#561) |
+| `P2.22` | [#482](https://github.com/frankbria/iris/issues/482) | Reserve managed AI credit before the call, in Postgres | P1 (#479) | DONE (#567) |
 | `P2.21` | [#476](https://github.com/frankbria/iris/issues/476) | Re-sweep a purged org's object prefix after in-flight jobs | P1 (#472) | DONE (#563) |
 | `P2.23` | [#491](https://github.com/frankbria/iris/issues/491) | Keyboard tester: judge Escape on the dialog under test | P1 (#286) | DONE (#566) |
 | `P2.24` | [#498](https://github.com/frankbria/iris/issues/498) | Hosted a11y results: needs-review count per page | P1 (#290) | DONE (#562) |
+| `P2.25` | [#504](https://github.com/frankbria/iris/issues/504) | Assertions that pass before the page settles (element_absent, url_matches) | — | DONE (#568) |
+| `P2.27` | [#520](https://github.com/frankbria/iris/issues/520) | OpenAI o-series: omit temperature | — | DONE (#572) |
+| `P2.28` | [#522](https://github.com/frankbria/iris/issues/522) | fetchWithTimeout covers the response body | — | DONE (#574) |
+| `P2.30` | [#528](https://github.com/frankbria/iris/issues/528) | RPC server: JSON-RPC batch requests (decided: not supported) | — | DONE (#575) |
 
 ### P3 — Polish / test trust / hygiene
 
