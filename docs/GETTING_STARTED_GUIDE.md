@@ -607,48 +607,13 @@ EOF
 chmod +x tests/run-a11y-test.sh
 ```
 
-### Step 4: Create IRIS Configuration
+### Step 4: Options
 
-**Create `.irisrc` configuration file:**
-
-```bash
-cat > .irisrc << 'EOF'
-{
-  "visual": {
-    "threshold": 0.1,
-    "devices": ["desktop", "tablet", "mobile"],
-    "baseline": {
-      "strategy": "branch",
-      "reference": "main"
-    },
-    "capture": {
-      "waitForFonts": true,
-      "disableAnimations": true,
-      "stabilizationDelay": 500
-    },
-    "comparison": {
-      "ignoreAntialiasing": true
-    }
-  },
-  "accessibility": {
-    "wcagLevel": "AA",
-    "includeKeyboard": true,
-    "includeScreenReader": true,
-    "failureThreshold": {
-      "critical": true,
-      "serious": true,
-      "moderate": false,
-      "minor": false
-    }
-  },
-  "reporting": {
-    "format": "html",
-    "outputDir": ".iris/reports",
-    "includePassedTests": false
-  }
-}
-EOF
-```
+IRIS reads no project config file. The scripts above pass every option as a flag
+(`--threshold`, `--devices`, `--baseline`, `--tags`, `--fail-on`, ...); see
+`iris visual-diff --help` and `iris a11y --help`. Captures always wait for web fonts,
+disable animations and settle for 500 ms. Only AI provider, watch and budget settings
+live in `~/.iris/config.json` (see the README's Configuration section).
 
 ### Step 5: Initial Git Commit
 
@@ -753,7 +718,7 @@ cd tests
 
 **What Happens:**
 1. Starts local HTTP server
-2. Runs axe-core WCAG 2.1 AA/AAA scans
+2. Runs axe-core WCAG 2.2 AA scans (2.0 and 2.1 rules included; the default `--tags`)
 3. Tests keyboard navigation (Tab order, focus traps)
 4. Simulates screen reader (ARIA labels, landmarks, headings)
 5. Generates detailed HTML report
@@ -857,18 +822,14 @@ cat > ~/.iris/config.json << 'EOF'
 {
   "ai": {
     "provider": "openai",
-    "apiKey": "sk-your-key-here",
-    "model": "gpt-4-vision-preview"
-  },
-  "visual": {
-    "semantic": {
-      "enabled": true,
-      "confidence": 0.7
-    }
+    "apiKey": "sk-your-key-here"
   }
 }
 EOF
 ```
+
+Only `ai`, `watch` and `budget` are read from this file. AI analysis of a visual
+diff is switched on per run with `--semantic` (below), not here.
 
 ### Run Visual Test with AI Analysis
 
@@ -1151,7 +1112,7 @@ iris visual-diff \
 **What You Can Test Now:**
 - Visual regressions across pages
 - Responsive design (multi-device)
-- WCAG 2.1 AA/AAA compliance
+- WCAG 2.2 AA/AAA compliance
 - Keyboard navigation
 - Screen reader compatibility
 - AI-powered change analysis

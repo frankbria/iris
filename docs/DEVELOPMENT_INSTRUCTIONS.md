@@ -596,51 +596,20 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 # Database
 export IRIS_DB_PATH="./.iris/iris.sqlite"
 
-# Visual Testing
-export IRIS_BASELINE_DIR="./.iris/baselines"
-export IRIS_ARTIFACTS_DIR="./.iris/artifacts"
+# Data directory: history, the AI cost ledger and the vision cache (#241)
+export IRIS_DATA_DIR="./.iris"
 ```
 
 ### Configuration File
 
-Create `iris.config.json`:
+`~/.iris/config.json` (or `IRIS_CONFIG_PATH`) is read for these sections only;
+visual and accessibility options are CLI flags:
 
 ```json
 {
-  "ai": {
-    "provider": "openai",
-    "model": "gpt-4-vision-preview",
-    "temperature": 0.1,
-    "maxTokens": 1000
-  },
-  "visual": {
-    "enabled": true,
-    "baselineBranch": "main",
-    "diffThreshold": 0.1,
-    "semanticAnalysis": {
-      "enabled": true,
-      "provider": "openai"
-    },
-    "capture": {
-      "viewport": { "width": 1920, "height": 1080 },
-      "fullPage": true,
-      "stabilization": {
-        "delay": 500,
-        "waitForFonts": true,
-        "disableAnimations": true
-      }
-    }
-  },
-  "accessibility": {
-    "enabled": true,
-    "axe": {
-      "tags": ["wcag2a", "wcag2aa", "wcag21aa"]
-    },
-    "failureThreshold": {
-      "critical": true,
-      "serious": true
-    }
-  }
+  "ai": { "provider": "openai", "model": "gpt-4o-mini" },
+  "watch": { "patterns": ["**/*.{ts,tsx,js,jsx}"], "debounceMs": 1000 },
+  "budget": { "dailyLimit": 10, "monthlyLimit": 200 }
 }
 ```
 

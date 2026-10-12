@@ -82,6 +82,10 @@ As a developer, I want to use my own AI API keys, so that I have control over my
 
 The system supports configuration of API keys for various AI providers without requiring a centralized service.
 
+**Status:** Shipped locally (environment variables, `~/.iris/config.json`). In the hosted
+service an org stores its own provider keys, encrypted at rest (#344), or uses IRIS's
+managed credits (#479); the hosted API never reads the operator's environment keys.
+
 **Success Criteria:**
 
 - Support for environment variables (OPENAI_API_KEY, ANTHROPIC_API_KEY)

@@ -293,39 +293,15 @@ chmod +x tests/run-demo.sh
 echo "✅ Test scripts created"
 echo ""
 
-# Step 5: Create configuration
-echo "⚙️  Step 5: Creating IRIS configuration..."
-
-cat > .irisrc << 'EOF'
-{
-  "visual": {
-    "threshold": 0.1,
-    "devices": ["desktop"],
-    "capture": {
-      "waitForFonts": true,
-      "disableAnimations": true,
-      "stabilizationDelay": 500
-    }
-  },
-  "accessibility": {
-    "wcagLevel": "AA",
-    "includeKeyboard": true
-  }
-}
-EOF
-
-echo "✅ Configuration created"
-echo ""
-
-# Step 6: Initial commit
-echo "📝 Step 6: Creating initial Git commit..."
+# Step 5: Initial commit
+echo "📝 Step 5: Creating initial Git commit..."
 git add .
 git commit -m "Initial commit: IRIS demo project" > /dev/null 2>&1 || echo "Already committed"
 echo "✅ Git repository initialized"
 echo ""
 
-# Step 7: Run tests
-echo "🧪 Step 7: Running demo tests..."
+# Step 6: Run tests
+echo "🧪 Step 6: Running demo tests..."
 echo ""
 sleep 1
 
