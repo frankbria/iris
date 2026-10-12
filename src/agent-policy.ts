@@ -16,6 +16,7 @@ import type { ElementHandle, Locator, Page } from 'playwright';
 import type { Action } from './actions';
 import { isWithinPinnedOrigin } from './url-policy';
 import { installUrlPolicyGuard } from './url-policy-guard';
+import { withPageTimeout } from './page-timeout';
 
 export type ActionType = Action['type'];
 
@@ -293,9 +294,13 @@ async function elementWords(
     return null;
   }
   if (!handle) return null;
+  // Bounded (codex review, #530): a handle's reads take no timeout, unlike a locator's,
+  // so a hung renderer would stall the check. A read that times out is unread: refused.
+  const bounded = (read: Promise<string | null>) =>
+    withPageTimeout(read.catch(unread), UNREAD, READ_TIMEOUT_MS);
   const reads = await Promise.all([
-    ...NAMING_ATTRIBUTES.map((name) => handle.getAttribute(name).catch(unread)),
-    handle.textContent().catch(unread),
+    ...NAMING_ATTRIBUTES.map((name) => bounded(handle.getAttribute(name))),
+    bounded(handle.textContent()),
   ]);
   if (reads.includes(UNREAD)) {
     await handle.dispose().catch(() => undefined);

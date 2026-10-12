@@ -604,6 +604,19 @@ describe('agent loop', () => {
           expect(verdict.reason).toMatch(/could not be read/);
         });
 
+        // Codex review (#530): handle reads take no timeout of their own.
+        it('refuses when a read of the element never answers', async () => {
+          const body = (await page.$('body'))!;
+          const handle = Object.getPrototypeOf(body);
+          await body.dispose();
+          jest.spyOn(handle, 'textContent').mockImplementation(() => new Promise(() => {}));
+
+          const verdict = await checkResolvedTarget({ type: 'click', selector: '#x1' }, {}, page);
+
+          expect(verdict.allowed).toBe(false);
+          expect(verdict.reason).toMatch(/could not be read/);
+        });
+
         it('refuses, as not found, a selector that never matches', async () => {
           scriptAI([[{ type: 'click', selector: '#not-here' }]]);
           const execute = jest.spyOn(executor, 'executeAction');
