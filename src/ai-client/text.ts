@@ -10,7 +10,7 @@ import {
   redactFenceMarkers,
 } from './base';
 import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
-import { isReasoningModel, ollamaReachable } from './models';
+import { ollamaReachable, openAISampling } from './models';
 import { hostedLog } from '../log';
 
 /**
@@ -102,7 +102,7 @@ ${pageData}`;
               { role: 'user', content: userPrompt },
             ],
             // The o-series refuses anything but the default temperature (#520).
-            ...(!isReasoningModel(this.config.model) && { temperature: 0.1 }),
+            ...openAISampling(this.config.model),
             // max_tokens is deprecated for OpenAI chat completions (#298).
             max_completion_tokens: 1000,
           }),

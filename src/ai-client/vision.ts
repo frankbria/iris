@@ -11,7 +11,7 @@ import {
   AIVisionResponse,
 } from './base';
 import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
-import { DEFAULT_MODELS, isReasoningModel, isVisionModel, ollamaModelCapabilities } from './models';
+import { DEFAULT_MODELS, openAISampling, isVisionModel, ollamaModelCapabilities } from './models';
 import { AIVisionResponseSchema } from './types';
 
 /**
@@ -171,6 +171,7 @@ export class OpenAIVisionClient extends BaseAIVisionClient {
       const baselineType = detectImageMimeType(request.baseline);
       const currentType = detectImageMimeType(request.current);
       const diffType = request.diff ? detectImageMimeType(request.diff) : undefined;
+      const model = this.config.model || DEFAULT_MODELS.vision.openai;
 
       const systemPrompt = `You are an expert at analyzing visual differences in web UIs for regression testing.
 
@@ -214,7 +215,7 @@ Compare the baseline (first image) with the current (second image) and identify 
       const response = await withRetry(
         () =>
           openai.chat.completions.create({
-            model: this.config.model || DEFAULT_MODELS.vision.openai,
+            model,
             messages: [
               { role: 'system', content: systemPrompt },
               {
@@ -250,9 +251,7 @@ Compare the baseline (first image) with the current (second image) and identify 
               },
             ],
             // The o-series refuses anything but the default temperature (#520).
-            ...(!isReasoningModel(this.config.model || DEFAULT_MODELS.vision.openai) && {
-              temperature: 0.1,
-            }),
+            ...openAISampling(model),
             // max_tokens is deprecated for OpenAI chat completions and refused by the
             // o-series (#298).
             max_completion_tokens: 1000,

@@ -103,6 +103,11 @@ export function isReasoningModel(model: string): boolean {
   return /^o\d(?:$|-)/i.test(model);
 }
 
+/** The sampling options an OpenAI request may carry for `model` (#520). */
+export function openAISampling(model: string): { temperature?: number } {
+  return isReasoningModel(model) ? {} : { temperature: 0.1 };
+}
+
 /** Whether a model accepts images, by the table above (#298). */
 export function isVisionModel(provider: ModelProvider, model: string): boolean {
   if (provider === 'anthropic') return true;
