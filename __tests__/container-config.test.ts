@@ -418,7 +418,6 @@ describe('image supply chain (issue #360)', () => {
 });
 
 describe('third-party notices script (issue #360)', () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { notices, productionPackages } = require('../scripts/third-party-notices.js');
 
   it('lists every installed production dependency with its license text', () => {
