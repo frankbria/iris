@@ -1852,6 +1852,10 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   batched delete, paginated) and removes an entry only once its objects are gone. A
   failure is reported (exit 3) and retried next pass. Without `IRIS_S3_*` the queue waits.
   Baselines stay until the org is purged (older runs link them).
+  A purged org's `org/<org>/` is queued once more a day after the purge (#476: a visual job
+  running at the purge can still write; its finish is refused), marked by
+  `org_deletions.resweep_done` (migration 0017). `purged_at` is the pass's `now`, not the
+  database clock, so tests cross the day with the injected clock.
 - **Not purged**: live orgs' AI ledger rows (no period decided).
 
 ### BYOK Provider Keys (issue #344)
