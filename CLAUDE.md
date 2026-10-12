@@ -1351,7 +1351,9 @@ They apply only to connections with a principal; local mode is untouched.
   `unit_cost_usd` (`usage_events_ai_cost_check`). A key already recorded is skipped and
   logged (`returning`), so a reused key cannot hide an event silently.
 - **Writers not yet wired**: vision calls (hosted visual jobs run no AI) and agent
-  turns (#428, the agent loop is CLI-only).
+  turns: `runAgentLoop` takes the request's `{ orgId, credentials, onUsage, secrets }`
+  since #428 (credentials resolved by `resolveCredentials()`, shared with `translate()`:
+  omitted is no AI under IRIS_HOSTED), but no hosted surface runs it yet.
 
 ### Plans and Entitlements (issue #260)
 
@@ -1404,7 +1406,7 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   (`api-key-auth.test.ts`).
 - **`byokAllowed`**: `managedAiResolver()` (src/billing/managed-ai.ts, #479) returns no stored key
   for a plan without it.
-- Not enforced yet, no hosted surface: agent turns (CLI-only, #428), vision calls (hosted
+- Not enforced yet, no hosted surface: agent turns (the loop takes a scope, #428; nothing hosted runs it), vision calls (hosted
   jobs run no AI), storage (#315).
 
 ### Tenant Audit Log (issue #361)

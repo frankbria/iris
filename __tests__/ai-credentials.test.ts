@@ -15,13 +15,24 @@ import { configFromCredentials } from '../src/ai-client/credentials';
 import { createSmartClient, SmartAIVisionClient } from '../src/ai-client';
 import { AIClientFactory } from '../src/ai-client/factory';
 import { ImagePreprocessor } from '../src/ai-client/preprocessor';
+import { chromium, type Browser, type Page } from 'playwright';
+import { createServer, type Server } from 'http';
+import type { AddressInfo } from 'net';
+import * as path from 'path';
+import Database from 'better-sqlite3';
+import { runAgentLoop } from '../src/agent-loop';
+import { ActionExecutor } from '../src/executor';
+import { mapSecrets } from '../src/credential-refs';
+import type { SettledAICall } from '../src/ai-client/factory';
 
 const calls: Array<{ vendor: string; apiKey: string }> = [];
-const plan = JSON.stringify({
+const CLICK_PLAN = JSON.stringify({
   actions: [{ type: 'click', selector: '#go' }],
   confidence: 0.9,
   reasoning: 'ok',
 });
+/** What the fake vendors answer; the agent-loop tests set their own. */
+let plan = CLICK_PLAN;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 jest.mock('openai', () => ({
@@ -61,6 +72,7 @@ const NEEDS_AI = 'make sure the order total is shown';
 
 beforeEach(() => {
   calls.length = 0;
+  plan = CLICK_PLAN;
   // The operator's own keys, which no tenant request may use.
   process.env.OPENAI_API_KEY = 'sk-process';
   process.env.ANTHROPIC_API_KEY = 'sk-ant-process';
@@ -270,5 +282,120 @@ describe('SmartAIVisionClient with injected credentials', () => {
     await expect(smart.analyzeVisualDiff(request)).rejects.toThrow();
     // Other vendors have no credential of their own here, so none is contacted.
     expect(visionCalls).toEqual(['openai:sk-tenant']);
+  });
+});
+
+describe('the agent loop takes the request scope (#428)', () => {
+  let browser: Browser;
+  let site: Server;
+  let page: Page;
+  let origin = '';
+
+  beforeAll(async () => {
+    site = createServer((_req, res) => {
+      res.setHeader('content-type', 'text/html');
+      res.end(
+        '<!doctype html><title>Login</title><button id="go">Go</button>' +
+          '<label>Password <input id="pw" type="password"></label>',
+      );
+    });
+    await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
+    origin = `http://127.0.0.1:${(site.address() as AddressInfo).port}/`;
+    browser = await chromium.launch();
+  }, 60_000);
+
+  afterAll(async () => {
+    await browser?.close();
+    await new Promise((resolve) => site.close(resolve));
+  });
+
+  beforeEach(async () => {
+    page = await browser.newPage();
+    page.setDefaultTimeout(2_000);
+    await page.goto(origin);
+  });
+
+  afterEach(async () => {
+    await page?.close();
+    delete process.env.IRIS_SECRET_PW;
+  });
+
+  const run = (extra: Partial<Parameters<typeof runAgentLoop>[0]>) =>
+    runAgentLoop({
+      instruction: NEEDS_AI,
+      executor: new ActionExecutor(),
+      page,
+      startUrl: origin,
+      maxTurns: 1,
+      ...extra,
+    });
+
+  it("runs its turns with the injected key, charged to the org's ledger and usage", async () => {
+    const settled: SettledAICall[] = [];
+    const result = await run({
+      orgId: 'org-agent',
+      credentials: { provider: 'openai', apiKey: 'sk-tenant-agent' },
+      onUsage: (call) => {
+        settled.push(call);
+      },
+    });
+    expect(result.turns).toBe(1);
+    expect(calls).toEqual([{ vendor: 'openai', apiKey: 'sk-tenant-agent' }]);
+    expect(settled.map((c) => c.operation)).toEqual(['agent_turn']);
+    const ledger = new Database(
+      path.join(process.env.IRIS_DATA_DIR!, 'cache', 'cost-tracking.db'),
+      { readonly: true },
+    );
+    try {
+      const rows = ledger
+        .prepare(`select org_id, operation from cost_tracking where operation = 'agent_turn'`)
+        .all();
+      expect(rows).toEqual([{ org_id: 'org-agent', operation: 'agent_turn' }]);
+    } finally {
+      ledger.close();
+    }
+  });
+
+  it('with credentials: null, asks no model and ends in error', async () => {
+    const result = await run({ credentials: null });
+    expect(calls).toEqual([]);
+    expect(result.terminationReason).toBe('error');
+  });
+
+  it('in hosted mode, omitted credentials are no AI, never the process keys', async () => {
+    process.env.IRIS_HOSTED = '1';
+    try {
+      let hostedLoop!: typeof runAgentLoop;
+      jest.isolateModules(() => {
+        hostedLoop = require('../src/agent-loop').runAgentLoop;
+      });
+      const result = await hostedLoop({
+        instruction: NEEDS_AI,
+        executor: new ActionExecutor(),
+        page,
+        startUrl: origin,
+        maxTurns: 1,
+        orgId: 'org-forgot-creds',
+      });
+      expect(calls).toEqual([]);
+      expect(result.terminationReason).toBe('error');
+    } finally {
+      delete process.env.IRIS_HOSTED;
+    }
+  });
+
+  it("fills {{secret:NAME}} from the request's values, not the process environment", async () => {
+    process.env.IRIS_SECRET_PW = 'from-the-server-env';
+    plan = JSON.stringify({
+      actions: [{ type: 'fill', selector: '#pw', text: '{{secret:PW}}' }],
+      confidence: 0.9,
+    });
+    const result = await run({
+      credentials: { provider: 'openai', apiKey: 'sk-tenant-agent' },
+      secrets: mapSecrets({ PW: 'from-the-request' }),
+    });
+    expect(result.results[0]).toMatchObject({ success: true });
+    expect(await page.inputValue('#pw')).toBe('from-the-request');
+    expect(JSON.stringify(result)).not.toContain('from-the-request');
   });
 });
