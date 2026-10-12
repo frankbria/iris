@@ -279,5 +279,7 @@ async function elementWords(target: Locator): Promise<string | null> {
     target.textContent(timeout).catch(unread),
   ]);
   if (reads.includes(UNREAD)) return null;
-  return reads.filter(Boolean).join(' ').slice(0, 2000);
+  // Matched whole, not capped: a cap let a long benign title push "Delete account" out of
+  // reach (codex review). The pattern is linear, run once per action.
+  return reads.filter(Boolean).join(' ');
 }

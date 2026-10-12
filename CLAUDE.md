@@ -931,8 +931,8 @@ listed in the body of the PR that closed #353, for checking against it.
   selects `#delete-account`.
 - **`checkResolvedTarget(action, policy, page)`** runs in the agent loop right after
   `checkAction` allows a click or fill. It reads the element the selector resolves to
-  (`aria-label`, `title`, `id`, `name`, `value`, `placeholder`, `alt`, text content;
-  2000 chars in all) and applies the same destructive-term match. It uses Playwright's
+  (`aria-label`, `title`, `id`, `name`, `value`, `placeholder`, `alt`, text content, matched
+  whole) and applies the same destructive-term match. It uses Playwright's
   `getAttribute`/`textContent`, not `locator.evaluate`: a page function would need to be
   a string under `--coverage`, and a string arrow passed to `locator.evaluate` is
   evaluated as an expression that returns the function, never calling it (`undefined`).

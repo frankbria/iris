@@ -554,6 +554,18 @@ describe('agent loop', () => {
         // Codex review: an element found and then detached (or a read that times out) made
         // every read fail; the failures were dropped as absent attributes and the action was
         // allowed. A read that fails refuses, like an element that is not there.
+        it('reads the whole element, so long metadata cannot push the word out of reach', async () => {
+          await page.evaluate(
+            `document.querySelector('form button:nth-of-type(2)').setAttribute('title', 'x'.repeat(5000))`,
+          );
+          const verdict = await checkResolvedTarget(
+            { type: 'click', selector: 'form button:nth-of-type(2)' },
+            {},
+            page,
+          );
+          expect(verdict.reason).toMatch(/looks destructive \("Delete"\)/);
+        });
+
         it('refuses when the element is found but cannot be read', async () => {
           const locator = Object.getPrototypeOf(page.locator('body'));
           const detached = () => Promise.reject(new Error('Element is not attached to the DOM'));
