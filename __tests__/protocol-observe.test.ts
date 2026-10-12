@@ -23,6 +23,12 @@ const PAGE = `<!doctype html><html lang="en"><head><title>Sign in</title>
 width: 400px; height: 60px; font-size: 24px; border: 0; background: #fff; color: #000 }</style>
 </head><body><label>User <input id="user" type="text"></label><h1 style="margin-top: 120px">Welcome</h1></body></html>`;
 
+/** A contenteditable target, which a fill also types into (codex review). */
+const EDITABLE = `<!doctype html><html lang="en"><head><title>Note</title>
+<style>body { margin: 0; background: #fff } #note { position: absolute; left: 0; top: 0;
+width: 400px; height: 60px; font-size: 24px; color: #000 }</style>
+</head><body><div id="note" contenteditable="true" aria-label="Note"></div></body></html>`;
+
 let site: Server;
 let siteUrl = '';
 let wss: WebSocketServer;
@@ -30,9 +36,9 @@ let url = '';
 const usage: Array<{ orgId: string; events: UsageEvent[] }> = [];
 
 beforeAll(async () => {
-  site = createServer((_req, res) => {
+  site = createServer((req, res) => {
     res.setHeader('content-type', 'text/html');
-    res.end(PAGE);
+    res.end(req.url === '/note' ? EDITABLE : PAGE);
   });
   await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
   siteUrl = `http://127.0.0.1:${(site.address() as AddressInfo).port}/`;
@@ -126,6 +132,30 @@ it('returns the snapshot and a masked screenshot, without the typed credential, 
       ['org-a', 'observation'],
       ['org-a', 'observation'],
     ]);
+  } finally {
+    ws.close();
+  }
+}, 60_000);
+
+it('masks a credential typed into a contenteditable element too', async () => {
+  const { ws, call } = await session();
+  try {
+    await call('launchBrowser');
+    const acted = await call('executeBrowserAction', {
+      actions: [
+        { type: 'navigate', url: `${siteUrl}note` },
+        { type: 'fill', selector: '#note', text: '{{secret:PW}}' },
+      ],
+      secrets: { PW: SECRET },
+    });
+    expect(acted.result).toMatchObject({ success: true });
+    const { result } = await call('observe');
+    expect(result.snapshot).not.toContain(SECRET);
+    const { data, info } = await sharp(Buffer.from(result.screenshot, 'base64'))
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const i = (30 * info.width + 200) * info.channels;
+    expect([data[i] > 200, data[i + 1] < 60, data[i + 2] > 200]).toEqual([true, true, true]);
   } finally {
     ws.close();
   }

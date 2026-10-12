@@ -1363,7 +1363,9 @@ src/protocol.ts).
   the cap.
 - **The screenshot is a viewport JPEG (quality 70), base64**, with every field holding a value
   typed from a `{{secret:NAME}}` reference masked (`executor.secretFields(page)`: the first 100
-  `input`/`textarea`, a field that cannot be read is masked too). Over
+  `input`/`textarea`/contenteditable elements whose value contains one; a field that cannot
+  be read is masked too). `observe` runs under the gate's exclusive side (`gate.write`), so
+  no fill can land between choosing the mask and the capture (codex review). Over
   `MAX_OBSERVE_SCREENSHOT_BYTES` (1 MiB) it is left out with `screenshotOmitted`.
 - **No page yet is a refusal** (`-32000`): observing never launches a browser.
 - **Metered**: one `observation` usage row per call for a tenant connection (platform usage:

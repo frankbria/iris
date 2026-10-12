@@ -1195,7 +1195,9 @@ export function startServer(
               res.error = { code: -32602, message: 'Invalid params' };
               break;
             }
-            res.result = await gate.read(async () => {
+            // Exclusive (codex review): an action running alongside could fill a credential
+            // after the mask was chosen and before the capture.
+            res.result = await gate.write(async () => {
               const session = sessions.get(ws);
               if (!session?.page || session.page.isClosed()) {
                 throw {

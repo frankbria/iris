@@ -269,16 +269,24 @@ export class ActionExecutor {
   /**
    * The fields on `page` that hold a value this executor typed from a credential reference
    * (#352), for a screenshot to mask (#312): a field that is not `type=password` shows it.
-   * Bounded: the first 100 fields, each read for at most a second; one that cannot be read
-   * is masked, since it might hold one.
+   * A fill can target an `input`, a `textarea` or a contenteditable element (codex review),
+   * and a field holding the value among other text still shows it. Bounded: the first 100
+   * fields, each read for at most a second; one that cannot be read is masked, since it
+   * might hold one.
    */
   async secretFields(page: Page): Promise<Locator[]> {
     if (this.resolvedSecrets.size === 0) return [];
-    const fields = (await page.locator('input, textarea').all()).slice(0, 100);
+    const fields = (
+      await page.locator('input, textarea, [contenteditable]:not([contenteditable="false"])').all()
+    ).slice(0, 100);
+    const read = (field: Locator) =>
+      field
+        .inputValue({ timeout: 1_000 })
+        .catch(() => field.textContent({ timeout: 1_000 }).then((text) => text ?? ''));
     const held = await Promise.all(
       fields.map((field) =>
-        field.inputValue({ timeout: 1_000 }).then(
-          (value) => this.resolvedSecrets.has(value),
+        read(field).then(
+          (value) => [...this.resolvedSecrets].some((secret) => value.includes(secret)),
           () => true,
         ),
       ),
