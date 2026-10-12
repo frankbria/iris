@@ -8,7 +8,8 @@
  *
  * A stand-in OpenAI always plans `click form button:nth-of-type(2)`. On the local site that
  * button is "Delete account", and clicking it POSTs /delete, which the site counts: the
- * count is what shows whether the click really happened.
+ * count is what shows whether the click really happened. A beacon, not fetch: the CLI
+ * exits right after the click, and closing the browser can abort a fetch in flight.
  */
 
 import { spawn } from 'child_process';
@@ -24,13 +25,12 @@ import { startServer } from '../src/protocol';
 const REPO_ROOT = path.resolve(__dirname, '..');
 const PAGE = `<!doctype html><html lang="en"><head><title>Account</title></head><body>
 <form onsubmit="return false">
-  <button type="button" onclick="fetch('/save', { method: 'POST' })">Save</button>
-  <button type="button" onclick="fetch('/delete', { method: 'POST' })">Delete account</button>
+  <button type="button" onclick="navigator.sendBeacon('/save')">Save</button>
+  <button type="button" onclick="navigator.sendBeacon('/delete')">Delete account</button>
 </form></body></html>`;
-const PLAN = {
-  actions: [{ type: 'click', selector: 'form button:nth-of-type(2)' }],
-  confidence: 0.9,
-};
+const DESTRUCTIVE = [{ type: 'click', selector: 'form button:nth-of-type(2)' }];
+/** What the stand-in model plans; a test may set it. */
+let plannedActions: object[] = DESTRUCTIVE;
 
 let site: Server;
 let vendor: Server;
@@ -55,7 +55,15 @@ beforeAll(async () => {
       res.setHeader('content-type', 'application/json');
       res.end(
         JSON.stringify({
-          choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(PLAN) } }],
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({ actions: plannedActions, confidence: 0.9 }),
+              },
+            },
+          ],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
       );
@@ -72,6 +80,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   deletes = 0;
+  plannedActions = DESTRUCTIVE;
 });
 
 /** Wait a beat for a click's fetch to reach the site. */
@@ -170,6 +179,24 @@ describe('one-shot iris run (#354)', () => {
     await settled();
     expect(clickResult(result).success).toBe(true);
     expect(deletes).toBe(1);
+  }, 60_000);
+
+  // Codex review: a plan that starts by navigating reaches its start origin from a fresh page.
+  it('runs an AI plan that starts by navigating, with no --url', async () => {
+    plannedActions = [
+      { type: 'navigate', url: siteUrl },
+      { type: 'assert', kind: 'text_visible', target: 'Save' },
+    ];
+    const result = await irisRun(['open the account page'], null);
+    expect(result.results.map((r) => r.success)).toEqual([true, true]);
+  }, 60_000);
+
+  // Codex review: the refusal used to return with the browser still open, so the CLI hung.
+  it('refuses an AI plan with no origin to pin to, and exits', async () => {
+    plannedActions = [{ type: 'click', selector: '#a' }];
+    const result = await irisRun(['click something'], null);
+    expect(result.status).toBe('error');
+    expect(result.results).toEqual([]);
   }, 60_000);
 
   it('applies --allow to a pattern plan too', async () => {

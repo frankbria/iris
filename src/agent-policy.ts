@@ -175,7 +175,11 @@ export function checkAction(
     // Same predicate the request-layer guard uses, so the two layers cannot
     // disagree — they did once, and an http→https upgrade would load fine and
     // then have every action on it refused.
-    if (!isWithinPinnedOrigin(currentUrl, startOrigin)) {
+    // A navigation into the pinned origin is let through from anywhere: it is how a fresh
+    // page (about:blank) reaches the start origin, and it cannot leak (codex, #354). Every
+    // other action on an off-origin page is refused.
+    const intoPinned = action.type === 'navigate' && isWithinPinnedOrigin(action.url, startOrigin);
+    if (!intoPinned && !isWithinPinnedOrigin(currentUrl, startOrigin)) {
       return {
         allowed: false,
         reason: `page is on ${originOf(currentUrl) ?? 'an opaque origin'}, not the starting origin ${startOrigin} — refusing to act off-origin`,

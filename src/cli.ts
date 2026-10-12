@@ -356,6 +356,8 @@ program
                 '❌ Refusing to run an AI-planned run with no starting origin to pin to: pass --url, or --allow-cross-origin',
               );
               status = 'error';
+              // The browser is already up: close it, or the CLI hangs on it (codex).
+              await executor.cleanup();
               return;
             }
 

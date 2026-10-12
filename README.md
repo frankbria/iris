@@ -686,7 +686,7 @@ The same policy covers **every plan a model proposed**, not only `--agent` (#354
 `iris run` whose instruction the AI translated, and an RPC `executeBrowserAction` whose
 `instruction` the AI translated (relaxed with a `policy` param:
 `{ "allow": [...], "allowCrossOrigin": true, "allowDestructive": true }`). A plan you wrote
-yourself (a pattern-translated `iris run "click #delete-row"`, or explicit RPC `actions`) is
+yourself (a pattern-translated instruction such as `click #delete-row`, or explicit RPC `actions`) is
 yours: only `--allow` / `policy.allow` restricts it. On the RPC the checks are per action;
 the request-level origin pin is not installed, because a session's page outlives the request.
 
