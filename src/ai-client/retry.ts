@@ -86,19 +86,18 @@ export async function withRetry<T>(
 }
 
 /**
- * `fetch` with a hard timeout enforced via `AbortController`, so a hung server
- * cannot block the process indefinitely.
+ * `fetch` with a hard timeout that also covers reading the body (#522), so a hung server
+ * cannot block the process indefinitely, before or after its headers.
  */
 export async function fetchWithTimeout(
   url: string,
   init: RequestInit = {},
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+  // AbortSignal.timeout stays armed while the caller reads the body (#522): clearing a timer
+  // once fetch() resolved stopped at the headers, so a stalled body hung the call. It
+  // rejects with a `TimeoutError`, which isTransientError retries like an abort.
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  return fetch(url, { ...init, signal });
 }

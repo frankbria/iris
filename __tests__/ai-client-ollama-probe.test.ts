@@ -9,7 +9,7 @@
 
 import { createServer, Server, IncomingMessage } from 'http';
 import type { AddressInfo } from 'net';
-import { isVisionModel, resetModelProbeCache } from '../src/ai-client/models';
+import { isVisionModel, listModels, resetModelProbeCache } from '../src/ai-client/models';
 import { OllamaVisionClient, OpenAIVisionClient } from '../src/ai-client/vision';
 import { OllamaTextClient } from '../src/ai-client/text';
 
@@ -180,6 +180,53 @@ describe('Ollama probes (#298)', () => {
     const endpoint = await serve(stalls);
     expect(await vision(endpoint, 'llava').isAvailable()).toBe(false);
   }, 6_000);
+
+  // #522: fetchWithTimeout used to stop timing at the headers, so a body that never came
+  // held the call forever. A body timeout is transient, retried like one before headers.
+  it('times out and retries an analysis whose response body stalls', async () => {
+    let requests = 0;
+    const endpoint = await serve(
+      createServer((_req, res) => {
+        requests++;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.write('{"response":"');
+      }),
+    );
+    const client = new OllamaVisionClient({
+      provider: 'ollama',
+      endpoint,
+      model: 'llava',
+      timeout: 300,
+      retryConfig: { maxRetries: 1, initialDelayMs: 10, maxDelayMs: 10, backoffMultiplier: 1 },
+    } as never);
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    await expect(
+      client.analyzeVisualDiff({ baseline: png, current: png } as never),
+    ).rejects.toThrow();
+    expect(requests).toBe(2); // retried once, as a transient failure
+  }, 10_000);
+
+  it('the model probe answers null when the listing body stalls', async () => {
+    const endpoint = await serve(
+      createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.write('{"models":[');
+      }),
+    );
+    const before = process.env.IRIS_MODEL_PROBE;
+    process.env.IRIS_MODEL_PROBE = '1';
+    resetModelProbeCache();
+    try {
+      expect(await listModels('ollama', { endpoint })).toBeNull();
+    } finally {
+      if (before === undefined) delete process.env.IRIS_MODEL_PROBE;
+      else process.env.IRIS_MODEL_PROBE = before;
+      resetModelProbeCache();
+    }
+  }, 10_000);
 
   it('the text client only needs the daemon up', async () => {
     const endpoint = await serve(fakeOllama({}));

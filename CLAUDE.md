@@ -307,7 +307,7 @@ plans/
   the **configured** model (it used to accept any pulled llava): `capabilities` decides, the table
   only when an old Ollama reports none, and a 404 (not pulled) is unavailable
 - **Ollama probes are bounded and cached (#298).** `probeOllama` (models.ts): 2 s timeout
-  (`AbortSignal.timeout`, which also covers the body; `fetchWithTimeout` stops at the headers, #522), answer
+  (`AbortSignal.timeout`, which also covers the body; `fetchWithTimeout` uses it too since #522, so every Ollama call and the model probe give up on a stalled body), answer
   (promise) cached 60 s per URL and model, `performance.now()` (#190). Text `isAvailable()` is
   `ollamaReachable()` (`/api/tags`, daemon up only: a 503 from the model must still reach the
   caller, `cli-run-exit.test.ts`). `resetModelProbeCache()` clears it too; a test that mocks
