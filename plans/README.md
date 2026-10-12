@@ -198,7 +198,7 @@ production.
 | `P1.29` | [#360](https://github.com/frankbria/iris/issues/360) | Container image: pinning, scanning, SBOM, notices | P1.27 (#306) | DONE (#537) |
 | `P1.30` | [#309](https://github.com/frankbria/iris/issues/309) | Graceful shutdown: drain in-flight work, readiness signal, MCP shutdown | P0.12 (#240) | DONE (#538) |
 | `P1.31` | [#361](https://github.com/frankbria/iris/issues/361) | Audit log of tenant actions | P0.26 (#254) | DONE (#539) |
-| `P1.32` | [#311](https://github.com/frankbria/iris/issues/311) | Docs truth pass for the hosted product | P0.3 (#231), P0.45 (#273) | TODO |
+| `P1.32` | [#311](https://github.com/frankbria/iris/issues/311) | Docs truth pass for the hosted product | P0.3 (#231), P0.45 (#273) | DONE (#547) |
 | `P1.33` | [#375](https://github.com/frankbria/iris/issues/375) | Hosted egress: prove WebTransport and QUIC cannot bypass the proxy | P0.9 (#336) | DONE (#540) |
 | `P1.34` | [#376](https://github.com/frankbria/iris/issues/376) | Container egress firewall for the hosted deployment | P0.9 (#336), P1.33 (#375), P0.59 (#440) | TODO |
 | `P1.35` | [#379](https://github.com/frankbria/iris/issues/379) | Egress proxy timeouts, configurable popup cap, per-session page cap | P0.11 (#338) | DONE (#542) |
@@ -215,7 +215,7 @@ production.
 | `P2.4` | [#315](https://github.com/frankbria/iris/issues/315) | Per-plan artifact storage quota | P0.29 (#257), P0.37 (#346) | TODO |
 | `P2.5` | [#316](https://github.com/frankbria/iris/issues/316) | Zero-downtime deploys | P0.45 (#273), P1.30 (#309), P0.59 (#440) | TODO |
 | `P2.6` | [#317](https://github.com/frankbria/iris/issues/317) | Public status page | P0.47 (#275) | TODO |
-| `P2.7` | [#318](https://github.com/frankbria/iris/issues/318) | Store money as integer micro-units | P0.35 (#263) | TODO |
+| `P2.7` | [#318](https://github.com/frankbria/iris/issues/318) | Store money as integer micro-units | P0.35 (#263) | DONE (#552) |
 | `P2.8` | [#319](https://github.com/frankbria/iris/issues/319) | Watcher: `--execute` targets and nested ignore globs | — | TODO |
 | `P2.9` | [#320](https://github.com/frankbria/iris/issues/320) | npm package publish-readiness | — | TODO |
 | `P2.10` | [#321](https://github.com/frankbria/iris/issues/321) | Local SQLite: real migration runner or delete dead migrations | P0.20 (#248) | TODO |
