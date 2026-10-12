@@ -57,7 +57,7 @@ function parseFailOn(value: string): Record<string, boolean> | string {
  * `--allow-asset-origin` (#378), repeatable: each value becomes its exact origin, so a path
  * or trailing slash cannot make an entry that never matches. http(s) only.
  */
-function collectOrigin(value: string, previous: string[]): string[] {
+function collectOrigin(value: string, previous: string[] = []): string[] {
   let origin: string;
   try {
     const url = new URL(value);
@@ -111,7 +111,6 @@ program
     '--allow-asset-origin <origin>',
     'Under the origin pin, also load images, fonts, stylesheets, media and scripts from this origin (repeatable). Never a page, frame, fetch or beacon there',
     collectOrigin,
-    [] as string[],
   )
   .option(
     '--allow-destructive',
