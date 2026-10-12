@@ -186,7 +186,7 @@ production.
 | `P1.17` | [#296](https://github.com/frankbria/iris/issues/296) | Do not auto-retry non-idempotent clicks and fills | — | DONE (#516) |
 | `P1.18` | [#297](https://github.com/frankbria/iris/issues/297) | Pattern translator: stop turning prose into CSS selectors | — | DONE (#517) |
 | `P1.19` | [#298](https://github.com/frankbria/iris/issues/298) | Vision provider detection and Ollama timeouts | — | DONE (#521) |
-| `P1.20` | [#299](https://github.com/frankbria/iris/issues/299) | AI cache and ledger hygiene: memory-tier TTL, index name collision | — | TODO |
+| `P1.20` | [#299](https://github.com/frankbria/iris/issues/299) | AI cache and ledger hygiene: memory-tier TTL, index name collision | — | DONE (#524) |
 | `P1.21` | [#353](https://github.com/frankbria/iris/issues/353) | Agent policy: action validation | — | TODO |
 | `P1.22` | [#354](https://github.com/frankbria/iris/issues/354) | Agent policy: apply flags on every execution path | P0.7 (#334), P1.21 (#353) | TODO |
 | `P1.23` | [#355](https://github.com/frankbria/iris/issues/355) | Vision prompts: content framing | — | TODO |

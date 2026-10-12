@@ -524,3 +524,10 @@ Write/Edit, not as a pre-push afterthought.
 - **`fetchWithTimeout` stops timing when the headers arrive.** The body read (`response.json()`) is unbounded for every caller; codex found it on the new probe. Use `AbortSignal.timeout()` where the body must be bounded too, and do not add a `.catch(() => ({}))` after `json()`: it turns the timeout's abort into "answered" (#522 for the shared helper).
 - **A demo env that resets `HOME` also hides Playwright's browsers.** Pass `PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright` from the real home.
 - **The CRAP gate cannot measure functions holding nested template literals or an inline commander option type.** Hoisting the inner template into a variable (same string) and moving the action's option type to an interface made them measurable. Check with `crap --cc-only` early, before reviewers read the tree.
+
+## 2026-10-12 — #299
+
+- **lizard (the CRAP gate) misreads a TypeScript method named `get(` or `set(`** as an accessor and loses the rest of the class; every function after it goes unmeasured. Confirmed by renaming on a scratch copy. Do not rename a public API for the tool: report the lines as unmeasured in the PR. A line-by-line delete bisect (one lizard run per deleted line) found it in a minute.
+- **A `node_modules` symlink to the main checkout breaks `tsc` in a worktree** (TS7056 in src/auth/config.ts: the types resolve through the real path). Jest runs, the typecheck does not; use `npm ci`.
+- **Cross-family reviewers run out**: GLM, then codex, hit their quotas on the same day. opencode with `-m kimi-code-plan-global/kimi-for-coding` is the next fallback and gave a full review.
+- **A demo script outside the repo cannot go through `ts-node file.ts`** (TS5109 from the project tsconfig). Write it as `.js` and load the TypeScript sources with `TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register script.js`.
