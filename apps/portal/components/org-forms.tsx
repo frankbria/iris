@@ -133,3 +133,145 @@ export function OrgSwitcher({
     </div>
   )
 }
+
+/**
+ * An owner's or admin's controls for one member (#408): their role, and removing them.
+ * The org id the page rendered is sent, as `InviteForm` does. BetterAuth checks the
+ * caller's role and refuses the sole owner; the page does not offer those cases.
+ */
+export function MemberControls({
+  organizationId,
+  memberId,
+  email,
+  role,
+  roles,
+  keys,
+}: {
+  organizationId: string
+  memberId: string
+  email: string
+  role: string
+  /** The roles this viewer may give: an admin cannot make an owner. */
+  roles: string[]
+  /** Live API keys this member created, which removing them revokes. */
+  keys: number
+}) {
+  const router = useRouter()
+  const { busy, error, run } = useAuthAction(explain)
+  const [confirming, setConfirming] = useState(false)
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <select
+        aria-label={`Role of ${email}`}
+        className={`${selectClass} w-auto`}
+        defaultValue={role}
+        disabled={busy}
+        onChange={async (event) => {
+          const select = event.currentTarget
+          const ok = await run(() =>
+            authClient.organization.updateMemberRole({
+              organizationId,
+              memberId,
+              role: select.value as "member" | "admin" | "owner",
+            })
+          )
+          if (ok) router.refresh()
+          else select.value = role
+        }}
+      >
+        {roles.map((r) => (
+          <option key={r} value={r}>
+            {r}
+          </option>
+        ))}
+      </select>
+      {confirming ? (
+        <>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={busy}
+            onClick={async () => {
+              const ok = await run(() =>
+                authClient.organization.removeMember({
+                  organizationId,
+                  memberIdOrEmail: memberId,
+                })
+              )
+              if (ok) router.refresh()
+            }}
+          >
+            Confirm removing {email}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setConfirming(false)}
+          >
+            Cancel
+          </Button>
+          {keys > 0 && (
+            <span className="text-sm text-muted-foreground">
+              This also revokes the {keys} API {keys === 1 ? "key" : "keys"}{" "}
+              they created.
+            </span>
+          )}
+        </>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => setConfirming(true)}
+        >
+          Remove {email}
+        </Button>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** Leaves the org the page showed (#408); the session then moves to another org. */
+export function LeaveOrgButton({
+  organizationId,
+  keys,
+}: {
+  organizationId: string
+  keys: number
+}) {
+  const router = useRouter()
+  const { busy, error, run } = useAuthAction(explain)
+  return (
+    <div className="flex flex-col gap-2">
+      {keys > 0 && (
+        <p className="text-sm text-muted-foreground">
+          Leaving also revokes the {keys} API {keys === 1 ? "key" : "keys"} you
+          created here.
+        </p>
+      )}
+      <Button
+        variant="outline"
+        className="w-fit"
+        disabled={busy}
+        onClick={async () => {
+          const ok = await run(() =>
+            authClient.organization.leave({ organizationId })
+          )
+          if (ok) router.push("/dashboard")
+        }}
+      >
+        Leave this organization
+      </Button>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
