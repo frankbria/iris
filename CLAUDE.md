@@ -847,6 +847,19 @@ alerts".
   restart, which is how the cap is reached. `logger` and the hook are PATH/file stubs.
   ~90 s on a loaded WSL daemon.
 
+### npm Package (issue #320)
+
+- **Not published yet; install from source.** The npm name `iris-suite` is reserved by the
+  owner; its 0.0.1 is an empty placeholder. `version` stays 0.0.1 until the first real release.
+- **`npm run build` cleans `dist/` first**, and npm's `prepare` runs it before every pack and
+  publish (it ran even with `--ignore-scripts` in npm 10.9 here), so deleted code cannot ship
+  as stale output.
+- **CI runs `npm run check:pack`** (`scripts/check-pack.js`, rules unit-tested): the
+  `npm pack --dry-run` listing must hold every `bin`/`main` target, nothing outside `files`,
+  and no `dist/*.js|.d.ts|.js.map` without a `src/*.ts`.
+- `better-auth` (and the hosted server code) ships in the CLI package; a CLI-only install pays
+  for it. Accepted until the package is published; a split server package is the option then.
+
 ### Container Deployment (issue #192)
 
 `Dockerfile`, `.dockerignore`, `docker-compose.staging.yml` and

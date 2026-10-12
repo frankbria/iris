@@ -952,7 +952,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm install -g iris-suite
+          # IRIS is not on npm yet: build it from source.
+          git clone --depth 1 https://github.com/frankbria/iris.git /tmp/iris
+          (cd /tmp/iris && npm ci && npm run build && npm link)
           npm install
 
       - name: Start test server
@@ -999,7 +1001,8 @@ docker run -it --rm \
   -w /workspace \
   node:18 \
   bash -c "
-    npm install -g iris-suite &&
+    git clone --depth 1 https://github.com/frankbria/iris.git /tmp/iris &&
+    (cd /tmp/iris && npm ci && npm run build && npm link) &&
     python3 -m http.server 8080 --directory pages &
     sleep 2 &&
     iris visual-diff --pages 'http://localhost:8080/homepage.html' --format junit &&

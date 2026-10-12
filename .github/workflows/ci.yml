@@ -50,6 +50,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
+      # What a publish would ship (#320): npm's prepare rebuilds dist clean, then the
+      # tarball must hold every entry point and no build output without a source.
+      - run: npm run check:pack
       # Tests launch a real browser; install Chromium + its OS deps first.
       - run: npx playwright install --with-deps chromium
       # age encrypts the backups in backup-script.test.ts (#274), as on the box.
