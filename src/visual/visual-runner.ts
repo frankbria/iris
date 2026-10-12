@@ -8,7 +8,7 @@
 import type { Browser } from 'playwright';
 import { launchBrowser, newHardenedContext } from '../browser';
 import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
-import { VisualCaptureEngine } from './capture';
+import { VisualCaptureEngine, FREEZE_ANIMATIONS_CSS } from './capture';
 import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
 import { AIVisualClassifier } from './ai-classifier';
@@ -385,17 +385,7 @@ export class VisualTestRunner {
       }
 
       if (this.config.capture.stabilization.disableAnimations) {
-        await addStyleTagBounded(
-          page,
-          `
-            *, *::before, *::after {
-              animation-duration: 0s !important;
-              animation-delay: 0s !important;
-              transition-duration: 0s !important;
-              transition-delay: 0s !important;
-            }
-          `,
-        );
+        await addStyleTagBounded(page, FREEZE_ANIMATIONS_CSS);
       }
 
       if (this.config.capture.stabilization.delay > 0) {
