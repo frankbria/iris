@@ -354,3 +354,25 @@ describe('Dockerfile.portal (issue #273)', () => {
     expect(ignore).toMatch(/^\*\*\/node_modules$/m);
   });
 });
+
+describe('image base tag and dependency updates (issue #306)', () => {
+  /** The playwright version npm installed, from the lockfile, not a range. */
+  const installed = JSON.parse(read('package-lock.json')).packages['node_modules/playwright']
+    .version as string;
+
+  it('every Playwright base image in the Dockerfile matches the installed playwright', () => {
+    const tags = [
+      ...read('Dockerfile').matchAll(/^FROM mcr\.microsoft\.com\/playwright:v([^\s-]+)-/gm),
+    ].map((m) => m[1]);
+    // Three stages (deps, build, runtime), so a match can never be vacuous. The library and
+    // the bundled browsers are matched pairs (Dockerfile header): a bump of one without the
+    // other breaks the image in ways that look like application bugs.
+    expect(tags).toHaveLength(3);
+    expect(new Set(tags)).toEqual(new Set([installed]));
+  });
+
+  it('Dependabot watches the Docker base images', () => {
+    const dependabot = read('.github/dependabot.yml');
+    expect(dependabot).toMatch(/- package-ecosystem: docker\n/);
+  });
+});

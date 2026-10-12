@@ -861,6 +861,21 @@ break and expensive to rediscover:
   var (`docker inspect` shows env). It is a bind mount, so the host file's owner
   and mode apply: readable by uid 1001, inside a 0700 directory.
 
+- **The image is built and run on every push and PR (#306)**, not only by the staging
+  deploy. CI's `build` job builds `iris:ci` and `__tests__/iris-image.test.ts`
+  (`IRIS_TEST_IMAGE`, required under CI) runs it from `docker-compose.staging.yml`
+  **unchanged** (copied with the seccomp profile and throwaway secrets into a temp project
+  directory, image tagged `ghcr.io/frankbria/iris:ci-<pid>` via `IRIS_TAG`): `healthy`,
+  sandboxed `launchBrowser()` via `docker exec`, the negative control (Docker's default
+  seccomp must fail with "Chromium could not start its sandbox"), `touch /data/probe` as uid
+  1001, and no `next`/`react`/`@hugeicons` in the image. The compose file fixes
+  `container_name: iris-staging` and `127.0.0.1:4000`, so both must be free.
+  `container-config.test.ts` fails when a Dockerfile Playwright tag differs from the
+  lockfile's `playwright`, and Dependabot has a `docker` entry: a bump of either alone stays
+  red until the other is in the same PR. Locally, without the buildx plugin, build with
+  `DOCKER_BUILDKIT=0 docker build -t iris:local .` (BuildKit without buildx fails, and a
+  docker-container builder does not load the image).
+
 The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a
 file because compose interprets `${...}` in an inline script as its own syntax.
