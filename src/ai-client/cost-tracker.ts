@@ -236,6 +236,22 @@ const SNAPSHOT_SUFFIX = /^-(\d{8}|\d{4}-\d{2}-\d{2}|latest)$/;
 export const RESERVATION_CEILING: TokenUsage = { inputTokens: 8000, outputTokens: 1000 };
 
 /**
+ * The most one managed AI call can cost (#482): the reservation ceiling (#244) plus one input
+ * token per request character, at the provider's dearest registered rates. Not the default
+ * model's: a retired default is replaced by a successor at call time (#184), which may cost
+ * more (codex review). Over-reserving only trims concurrency at the edge of the credit.
+ */
+export function managedCallEstimateUsd(provider: 'openai' | 'anthropic', inputChars = 0): number {
+  const rows = DEFAULT_PRICING.filter((p) => p.provider === provider);
+  const input = Math.max(...rows.map((p) => p.costPerInputToken ?? 0));
+  const output = Math.max(...rows.map((p) => p.costPerOutputToken ?? 0));
+  return (
+    (RESERVATION_CEILING.inputTokens + Math.max(0, inputChars)) * input +
+    RESERVATION_CEILING.outputTokens * output
+  );
+}
+
+/**
  * A paid call refused before it was made: spend plus the calls already in
  * flight has reached a budget limit.
  */
