@@ -630,7 +630,8 @@ these until it is. Nothing writes artifacts until hosted visual jobs (#268).
 
 Orgs that choose **IRIS credits** on `/provider-keys` make AI calls on IRIS's own vendor
 key, up to their plan's monthly credit; then their own key, if they stored one. Set on the
-`iris` service (and the worker, once hosted jobs make AI calls):
+`iris` service (and the worker, once hosted jobs make AI calls). The production compose
+file does not pass these yet (#549):
 
 | Variable | Value |
 | --- | --- |
