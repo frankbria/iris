@@ -20,7 +20,7 @@ import { Client } from 'pg';
 import { createPostgresDb } from '../src/db/postgres';
 import { migrateToLatest } from '../src/db/migrate';
 import { hostedEgressProxy } from '../src/egress-proxy';
-import { postgresJobs } from '../src/history-store';
+import { postgresHistory, postgresJobs } from '../src/history-store';
 import { startServer, type Authenticator, type Principal } from '../src/protocol';
 import { JOB_TIMED_OUT, processNextA11yJob } from '../src/worker';
 import { openBrowsers } from '../src/browser';
@@ -37,6 +37,11 @@ const PUBLIC = '8.8.8.8';
 // An <img> with no alt text: a critical axe violation.
 const PAGE =
   '<!doctype html><html lang="en"><head><title>t</title></head><body><main><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></main></body></html>';
+
+// Text over a gradient: axe cannot compute its contrast, so color-contrast is "needs review"
+// (axe's `incomplete`, #290/#498), not a violation.
+const REVIEW_PAGE =
+  '<!doctype html><html lang="en"><head><title>t</title></head><body><main><p style="background: linear-gradient(#fff, #000); color: #888">Low contrast maybe</p></main></body></html>';
 
 (ADMIN_URL ? describe : describe.skip)('hosted a11y job API, end to end', () => {
   const dbName = `iris_e2e_${process.pid}_${randomBytes(4).toString('hex')}`;
@@ -87,7 +92,7 @@ const PAGE =
       seen.push(`${req.headers.host} ${req.url}`);
       if (req.url === '/hold') return; // never answers: a page that never finishes loading
       res.setHeader('content-type', 'text/html');
-      res.end(PAGE);
+      res.end(req.url === '/review' ? REVIEW_PAGE : PAGE);
     });
     site.listen(0, '127.0.0.1');
     await once(site, 'listening');
@@ -111,7 +116,7 @@ const PAGE =
         }),
     });
 
-    server = startServer(0, { authenticate, jobs: postgresJobs(db) });
+    server = startServer(0, { authenticate, jobs: postgresJobs(db), runs: postgresHistory(db) });
     await once(server, 'listening');
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
@@ -257,6 +262,19 @@ const PAGE =
     const next = await submit([`http://site.test:${sitePort}/page`]);
     expect((await processNextA11yJob(postgresJobs(db)))?.id).toBe(next);
   }, 60_000);
+
+  it('stores and returns a needs-review count per page (#498)', async () => {
+    const id = await submit([`http://site.test:${sitePort}/review`]);
+    await processNextA11yJob(postgresJobs(db));
+    const run = await (await api('GET', `/v1/jobs/${id}`)).json();
+    const result = run.results[0].result;
+    // The Results API returns the same stored result.
+    const detail = await (await api('GET', `/v1/runs/${id}`)).json();
+    expect(detail.results[0].result).toEqual(result);
+    expect(result.needsReview).toBeGreaterThanOrEqual(1);
+    expect(result.needsReviewRules).toContain('color-contrast');
+    expect(result.violations).toEqual({ critical: 0, serious: 0, moderate: 0, minor: 0 });
+  }, 120_000);
 
   it('an empty queue is a no-op', async () => {
     expect(await processNextA11yJob(postgresJobs(db))).toBeNull();

@@ -189,6 +189,7 @@ const a11yRun = {
         result: {
           violations: { critical: 1, serious: 0, moderate: 0, minor: 1 },
           keyboardPassed: true,
+          needsReview: 0,
           screenReaderPassed: true,
           score: expect.any(Number),
         },

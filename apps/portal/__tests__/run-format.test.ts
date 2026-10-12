@@ -31,6 +31,23 @@ describe("describeResult", () => {
     ).toBe("score 100 · no violations")
   })
 
+  it("an a11y page with rules axe could not decide: needs review (#498)", () => {
+    expect(
+      describeResult("a11y", {
+        url: "https://c.example/",
+        passed: true,
+        result: {
+          score: 100,
+          violations: {},
+          needsReview: 2,
+          needsReviewRules: ["color-contrast", "aria-hidden-focus"],
+        },
+      }).detail
+    ).toBe(
+      "score 100 · no violations · 2 need review (color-contrast, aria-hidden-focus)"
+    )
+  })
+
   it("an RPC action: its description and error", () => {
     expect(
       describeResult("rpc", {

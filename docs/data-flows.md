@@ -80,7 +80,7 @@ Sign-in rate limits are counted per client IP in the portal process's memory (Be
 
 | | |
 |---|---|
-| Data | `runs`: kind (`a11y`, `visual`, `rpc`), status, timestamps, the API key that started it, a summary, `params` (a11y jobs: target **URLs**, WCAG level, fail-on levels), a bounded error message. `run_results`: per page or action, the URL, pass/fail and a result object. a11y stores violation **counts** per impact, keyboard/screen-reader pass flags and a score, not axe's HTML snippets. An RPC action is stored as `describeAction()` (never what a `fill` typed); a navigate URL loses its `user:password@`; errors are cut to 500 characters. |
+| Data | `runs`: kind (`a11y`, `visual`, `rpc`), status, timestamps, the API key that started it, a summary, `params` (a11y jobs: target **URLs**, WCAG level, fail-on levels), a bounded error message. `run_results`: per page or action, the URL, pass/fail and a result object. a11y stores violation **counts** per impact, keyboard/screen-reader pass flags, a score and a needs-review count with up to 20 axe rule ids (#498), not axe's HTML snippets. An RPC action is stored as `describeAction()` (never what a `fill` typed); a navigate URL loses its `user:password@`; errors are cut to 500 characters. |
 | Purpose | The queue for `iris worker` (#267, #435) and the org's run history (#254). |
 | Where | Postgres, migrations `0001`, `0002`, `0004`, `0005`; `src/history-store.ts`, `src/jobs-api.ts`, `src/worker.ts`. |
 | Access | Everyone in the org (that is why credentials in URLs are refused with a 400 and typed values are never stored). Operators. |
