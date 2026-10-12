@@ -171,6 +171,16 @@ describe('Ollama probes (#298)', () => {
     ).toBe(false);
   }, 6_000);
 
+  // Codex review: the timer must cover the body too, not just the headers.
+  it('gives up on a daemon that sends headers and then stalls the body', async () => {
+    const stalls = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"capabilities":["vis');
+    });
+    const endpoint = await serve(stalls);
+    expect(await vision(endpoint, 'llava').isAvailable()).toBe(false);
+  }, 6_000);
+
   it('the text client only needs the daemon up', async () => {
     const endpoint = await serve(fakeOllama({}));
     expect(

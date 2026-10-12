@@ -136,9 +136,11 @@ function probeOllama(endpoint: string, path: '/api/tags' | '/api/show', model?: 
         body: JSON.stringify({ model }),
       }
     : {};
-  const reply = fetchWithTimeout(url, init, OLLAMA_PROBE_TIMEOUT_MS)
-    // A 2xx whose body is not JSON still means the daemon is up.
-    .then((r) => (r.ok ? r.json().catch(() => ({})) : null))
+  // AbortSignal.timeout, not fetchWithTimeout: that clears its timer once the headers
+  // arrive, and a body that stalls would then hold the probe forever (codex review, #298).
+  const reply = fetch(url, { ...init, signal: AbortSignal.timeout(OLLAMA_PROBE_TIMEOUT_MS) })
+    // The body read is inside the same timeout; a body that is cut off or not JSON is no answer.
+    .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
   ollamaProbes.set(key, { at: now, reply });
   return reply;
