@@ -763,8 +763,9 @@ function firstRuns(
 ): StoredRun[] {
   const runs: StoredRun[] = [];
   for (const row of rows) {
+    if (runs.length >= limit) break;
     const run = toRun(row);
-    if (run && runs.push(run) >= limit) break;
+    if (run) runs.push(run);
   }
   return runs;
 }

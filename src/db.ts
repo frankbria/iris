@@ -60,7 +60,8 @@ export interface A11yTestResult {
  * data and cost history. ':memory:' and other special paths have no real dir.
  */
 export function ensureDatabaseDir(dbPath: string): void {
-  if (dbPath === ':memory:') return;
+  // In-memory and anonymous temporary databases ('' to better-sqlite3) have no file.
+  if (dbPath === ':memory:' || dbPath === '') return;
   const dbDir = path.dirname(dbPath);
   if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });

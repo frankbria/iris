@@ -99,6 +99,8 @@ describe('ordering is deterministic (#356)', () => {
     expect((await store.list({ limit: 1 })).map((r) => r.id)).toEqual([newest]);
     expect((await store.list()).map((r) => r.id)).toEqual([newest, oldest]);
     expect((await store.get(oldest))?.results.map((r) => r.url)).toEqual(['/old']);
+    // Codex review: a zero limit is no runs, as before and as the hosted store.
+    expect(await store.list({ limit: 0 })).toEqual([]);
     expect(await store.get('999999')).toBeNull();
     expect(await store.get('not-a-number')).toBeNull();
   });
@@ -120,6 +122,16 @@ describe('database files are private to their owner (#356)', () => {
     open(file);
 
     expect(mode(file)).toBe(0o600);
+  });
+
+  // Codex review: '' is better-sqlite3's anonymous temporary database, like ':memory:'.
+  it.each(['', ':memory:'])('opens a database with no file (%p) without creating one', (file) => {
+    const db = initializeDatabase(file);
+    try {
+      expect(getTestRuns(db)).toEqual([]);
+    } finally {
+      db.close();
+    }
   });
 
   it('leaves the mode of an existing file alone', () => {
