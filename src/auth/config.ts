@@ -306,9 +306,10 @@ const API_KEY_WRITES = new Set(['/api-key/create', '/api-key/update', '/api-key/
 
 /**
  * The org of a key being deleted, by key id, looked up before the plugin deletes the row:
- * after it, nothing names the org the audit entry belongs to (#361). Removed when read.
- * ponytail: per process, and an entry whose delete throws before the after hook stays (one
- * small string per failed delete of a real key); a BetterAuth request context would replace it.
+ * after it, nothing names the org the audit entry belongs to (#361). A key's org never
+ * changes, so concurrent deletes of one key share the entry safely; only the delete that
+ * succeeded removes it (a refused one must not take it from the one that succeeds).
+ * ponytail: a refused delete of a real key leaves its entry (one small string per key).
  */
 const deletedKeyOrgs = new Map<string, string>();
 
@@ -339,8 +340,9 @@ async function auditKeyWrite(
   const deleting = ctx.path === '/api-key/delete';
   const keyId = deleting ? (typeof body.keyId === 'string' ? body.keyId : undefined) : returned?.id;
   const orgId = deleting ? keyId && deletedKeyOrgs.get(keyId) : returned?.referenceId;
+  if (deleting && returned?.success !== true) return;
   if (deleting && keyId) deletedKeyOrgs.delete(keyId);
-  if (!session || !keyId || !orgId || (deleting && returned?.success !== true)) return;
+  if (!session || !keyId || !orgId) return;
   const verb = ctx.path.slice('/api-key/'.length);
   const fields =
     verb === 'update'

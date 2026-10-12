@@ -1384,7 +1384,8 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - **API keys are audited by BetterAuth hooks**: the after hook on `/api-key/*` takes the
   org from the plugin's response, except for delete (the response is `{ success }` and the
   row is gone), whose org the before hook looks up by key id and passes in a module-level
-  map. A refused write leaves no entry. A failed write is logged, not thrown: the key change
+  map (a key's org never changes; only a successful delete removes the entry, so a refused
+  concurrent delete cannot take it). A refused write leaves no entry. A failed write is logged, not thrown: the key change
   already happened.
 - **RPC sessions** are audited through `startServer({ audit })` (hosted `iris connect` wires
   it), best effort: a failed write is logged and the session goes on.
