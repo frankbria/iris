@@ -93,6 +93,10 @@ export interface JsonRpcResponse {
 const isRpcId = (id: unknown): id is string | number | null =>
   id === null || typeof id === 'string' || typeof id === 'number';
 
+/** A frame shaped as a notification: a JSON object with no `id` member (§4.1). */
+const isNotification = (value: unknown): boolean =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) && !('id' in value);
+
 /** Whether `value` is not a JSON-RPC 2.0 request object (#357). */
 function invalidRequest(value: Record<string, unknown>): boolean {
   return (
@@ -849,15 +853,19 @@ export function startServer(
         );
         if (wait > 0) {
           const id = (parsed as { id?: unknown } | null)?.id;
-          reply({
-            jsonrpc: '2.0',
-            id: typeof id === 'string' || typeof id === 'number' ? id : null,
-            error: {
-              code: RATE_LIMITED,
-              message: 'Rate limit exceeded',
-              data: { retryAfterMs: wait },
-            },
-          });
+          // A notification gets no reply, a rate refusal included (§4.1, #357); it is still
+          // charged and logged.
+          if (!isNotification(parsed)) {
+            reply({
+              jsonrpc: '2.0',
+              id: typeof id === 'string' || typeof id === 'number' ? id : null,
+              error: {
+                code: RATE_LIMITED,
+                message: 'Rate limit exceeded',
+                data: { retryAfterMs: wait },
+              },
+            });
+          }
           refusal(rpcMethod(parsed), 'rate_limited', t0, { ...requestFields, code: RATE_LIMITED });
           return;
         }
@@ -892,7 +900,7 @@ export function startServer(
       }
       const req = parsed as JsonRpcRequest;
       // No `id` member: a notification. It runs, and gets no reply, error or not (§4.1).
-      const notification = !('id' in req);
+      const notification = isNotification(req);
 
       const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id ?? null };
       let refused = false;

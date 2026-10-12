@@ -1092,7 +1092,8 @@ P1.25; criteria derived from the spec and #357's comments.
 - **Parse error** -> `-32700`, id null (it used to be dropped; still charged first, #342).
 - **Invalid Request** -> `-32600`: `jsonrpc` must be `"2.0"`, `method` a string, `id` (when
   present) a string, number or null. The id is echoed only when it is one of those.
-- **Notifications** (no `id` member) run and get **no reply**, error or not. A test request
+- **Notifications** (no `id` member) run and get **no reply**, error or not, a `-32029` rate
+  refusal included (it is still charged and logged). A test request
   without an `id` is therefore never answered: give every test request an id.
 - **`toRpcError(thrown)`**: a thrown value with an integer `code` and string `message` keeps
   them (the server's own `{ code: -32000, … }` refusals, `-32029`). Anything else, including
