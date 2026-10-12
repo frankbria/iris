@@ -205,6 +205,21 @@ describe('assert action execution', () => {
       expect(await urlMatches('/?next=cart', 'cart')).toBe(false);
     }, 30_000);
 
+    // Codex review: a hash route's own query is not part of the route.
+    it("judges a hash route by its path, not the route's query", async () => {
+      const { urlMatches } = await import('../src/executor');
+      expect(
+        urlMatches(
+          new URL('https://app.test/#/login?next=/checkout-complete'),
+          'checkout-complete',
+        ),
+      ).toBe(false);
+      expect(
+        urlMatches(new URL('https://app.test/#/checkout-complete?order=123'), 'checkout-complete'),
+      ).toBe(true);
+      expect(urlMatches(new URL('https://app.test/#!/cart'), 'cart')).toBe(true);
+    });
+
     it('fails when the path is absent', async () => {
       expect(
         (await run({ type: 'assert', kind: 'url_matches', target: '/checkout' })).success,

@@ -136,12 +136,16 @@ function matchesHost(url: URL, target: string): boolean {
   return rest.length === 0 || pathWithin(url.pathname, '/' + rest.join('/'));
 }
 
-/** Any other token: whole segments of the path, or of a hash route (`#/checkout`). */
+/**
+ * Any other token: whole segments of the path, or of a hash route (`#/checkout`) without
+ * the route's own query (codex review).
+ */
 function matchesSegments(url: URL, target: string): boolean {
   const segments = (s: string) => '/' + s.split('/').filter(Boolean).join('/') + '/';
   const token = segments(target);
   return (
-    segments(url.pathname).includes(token) || segments(url.hash.replace(/^#!?/, '')).includes(token)
+    segments(url.pathname).includes(token) ||
+    segments(url.hash.replace(/^#!?/, '').split('?')[0]).includes(token)
   );
 }
 
