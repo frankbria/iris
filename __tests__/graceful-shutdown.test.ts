@@ -15,6 +15,7 @@ import { createServer, Server } from 'http';
 import type { AddressInfo } from 'net';
 import * as path from 'path';
 import WebSocket, { type WebSocketServer } from 'ws';
+import type { ApiJobs } from '../src/jobs-api';
 import { drainServer, startServer } from '../src/protocol';
 
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -145,6 +146,43 @@ describe('an upgrade whose key check ends after the drain began (#309)', () => {
       release();
       const [, response] = await answered;
       expect(response.statusCode).toBe(503);
+    } finally {
+      await new Promise((resolve) => wss.close(resolve));
+    }
+  });
+});
+
+describe('a REST request whose key check spans the drain start (#309)', () => {
+  it('is answered before the drain resolves', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const wss = startServer(0, {
+      authenticate: {
+        verify: async () => {
+          await held;
+          return null; // answered 401: what matters is that it is answered
+        },
+        recheck: async () => true,
+      },
+      jobs: { forOrg: () => ({}) as ApiJobs }, // never reached: the key is refused
+    });
+    await once(wss, 'listening');
+    const { port } = wss.address() as AddressInfo;
+    try {
+      const answer = fetch(`http://127.0.0.1:${port}/v1/a11y/jobs`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer iris_test', 'content-type': 'application/json' },
+        body: '{}',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200)); // the check is under way
+      let drained = false;
+      const drain = drainServer(wss, 5_000).then((ok) => (drained = ok));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(drained).toBe(false); // still waiting for the request
+      release();
+      expect((await answer).status).toBe(401);
+      await drain;
+      expect(drained).toBe(true);
     } finally {
       await new Promise((resolve) => wss.close(resolve));
     }

@@ -539,7 +539,7 @@ export function startServer(
   let verifying = 0;
   /** Shutting down (#309): readiness answers 503, new upgrades and requests are refused. */
   let draining = false;
-  /** RPC messages being handled; a drain waits for them to reach zero. */
+  /** RPC messages and REST requests being handled; a drain waits for them to reach zero. */
   let inFlight = 0;
 
   // One listener for both: the WebSocket upgrade, and the job REST API (#267).
@@ -561,6 +561,10 @@ export function startServer(
       res.end(JSON.stringify({ error: 'Server is shutting down' }));
       return;
     }
+    // In flight until answered: a drain waits for a REST request admitted before it began
+    // (its key check is async) as it does for an RPC message.
+    inFlight++;
+    res.on('close', () => inFlight--);
     // One line per REST request, with the id echoed back so a client can quote it (#275).
     const t0 = performance.now();
     // Ours is always generated (a client's could collide with another's); a safe
