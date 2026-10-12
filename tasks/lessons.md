@@ -553,3 +553,13 @@ Write/Edit, not as a pre-push afterthought.
 - **Fake a black-holed connect with `Object.assign(new net.Socket(), { connecting: true })`.** A never-connected socket rejects writes at once ("Socket is closed"), and a real TEST-NET address is dropped on some networks and unreachable at once on others.
 - **`http.request` reports "socket hang up" for a socket destroyed with a specific error**; read `socket.errored` for the real reason.
 - **`bash -e` in a CI loop stops at the first failing item**: collect failures (`|| failed=1`) and `exit "$failed"` after the loop when every item must still run (both images scanned, both SBOMs written).
+
+## 2026-10-12 — #408, #428, #442, #549, #312, #315, #318, #319, #320, #321, #322, #323, #378
+
+- **A step that fails before `cd worktree && …; git commit` runs git in the main checkout.** A Python edit failed, the `&&` chain skipped the `cd`, and `git add`/`commit` ran on the user's local `main`, committing their uncommitted CLAUDE.md (the push was refused, non-fast-forward). Use `git -C <worktree>` and push branches by name. Recovered with `git reset --soft HEAD~1 && git restore --staged CLAUDE.md`.
+- **A heredoc whose body contains its own delimiter line ends early**, and bash runs the rest as commands. Python strings holding `EOF` lines must be written to a script file, not piped through `<<'EOF'`.
+- **A bare `git add -A` in a worktree committed the copied `.claude/quartermaster/crap.json`** (#538); a tracked copy then blocks merges wherever the untracked file exists. Stage with `':!.claude'`.
+- **`npm pack` runs `prepare` even with `--ignore-scripts`** (npm 10.9): a stale file planted in dist vanished because the build ran. A clean build in `build` plus `prepare` is the guarantee; the pack check's stale rule is the guard.
+- **In one picomatch array a `!pattern` matches everything outside it**, so `['dist/**', '!dist/public/**']` ignored nearly every file. Gitignore semantics need two matchers (ignored by a positive, kept by a negative), and directories must not be pruned while negations exist.
+- **Codex keeps finding the lifecycle edges**: FK cascade vs. tombstones, reserve-before-write vs. crash, cancel signals for work that outlives a deadline, a concurrent refused request consuming shared state (BetterAuth after hooks run on errors too). Ask those four questions of any new table, ledger or hook before review.
+- **A private-backlog issue with no comments has no checkable criteria** (#362, #363): comment the measured state and candidate readings, label `needs-owner`, move on.
