@@ -531,3 +531,14 @@ Write/Edit, not as a pre-push afterthought.
 - **A `node_modules` symlink to the main checkout breaks `tsc` in a worktree** (TS7056 in src/auth/config.ts: the types resolve through the real path). Jest runs, the typecheck does not; use `npm ci`.
 - **Cross-family reviewers run out**: GLM, then codex, hit their quotas on the same day. opencode with `-m kimi-code-plan-global/kimi-for-coding` is the next fallback and gave a full review.
 - **A demo script outside the repo cannot go through `ts-node file.ts`** (TS5109 from the project tsconfig). Write it as `.js` and load the TypeScript sources with `TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register script.js`.
+
+## 2026-10-12 — #353, #355–#358, #306, #354
+
+- **A security check fails open wherever it "could not check".** Codex found four in a row on the agent policy (#353): a timeout read as "not found = allowed", read errors dropped as absent attributes, a length cap that cut the decisive word, and a decoder applied to text that is not CSS. For any allow/deny check, list every path where it cannot decide (timeout, error, truncation, wrong input class) and make each one refuse, with a test, before review.
+- **The `pkill -f` self-match hit again** (exit 144, a `pkill -f "[j]est __tests__/x"` whose own command line also held `jest __tests__/x`). Kill by PID from `pgrep`, or never put the pattern's text elsewhere on the same command line.
+- **WebSocket clients in a test must be closed**: `wss.close()` waits for them, and an unclosed client hung a whole test file (#354) with no failing assertion.
+- **README prose is executed**: `readme-run-examples.test.ts` (#297) runs every line holding `iris run "…"`. Describe an example in prose without that form.
+- **A click whose effect is a `fetch` can be cut off when the CLI exits right after it**; a test that counts the effect on a server should use `navigator.sendBeacon` (it survives the page going away). Passed locally, failed in CI.
+- **This box has no buildx plugin**: `DOCKER_BUILDKIT=1 docker build` fails, and `-q | tail` hid it. Build with `DOCKER_BUILDKIT=0`, and check the image exists before testing it.
+- **Reviewer quotas run out mid-day** (GLM, then codex); Kimi stalled twice. Working several issues in parallel worktrees, each waiting for the next reviewer window, kept the loop moving without skipping the cross-family review.
+- **An "(anonymous)" function always reads as new to `crap_gate.py`** (name-based): a large legacy handler touched by one line blocks unless recorded as debt with the reason.
