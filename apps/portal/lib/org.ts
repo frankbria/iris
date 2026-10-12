@@ -73,5 +73,9 @@ export const requireOrg = cache(async function requireOrg() {
 })
 
 /** Whether an operator has suspended the org (#348). One indexed query. */
+/** Owner or admin: BetterAuth keeps several roles as one comma string (`admin,owner`). */
+export const isManager = (role: string) =>
+  role.split(",").some((r) => r === "owner" || r === "admin")
+
 export const orgIsSuspended = (orgId: string) =>
   orgSuspensions(getDb()).isSuspended(orgId)

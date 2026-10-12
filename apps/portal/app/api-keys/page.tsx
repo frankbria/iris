@@ -8,7 +8,7 @@ import {
 } from "@/components/api-key-forms"
 import { getAuth } from "@/lib/auth"
 import { SuspendedBanner } from "@/components/contact-link"
-import { requireOrg } from "@/lib/org"
+import { isManager, requireOrg } from "@/lib/org"
 
 const when = (date: Date | string | null) =>
   date
@@ -29,7 +29,7 @@ export default async function ApiKeysPage() {
     query: { organizationId: org.id },
   })
   // A member may hold several roles, stored comma-separated.
-  const manager = role.split(",").some((r) => r === "owner" || r === "admin")
+  const manager = isManager(role)
   return (
     <main className="flex min-h-svh flex-col gap-6 p-6">
       {suspended && <SuspendedBanner />}
