@@ -130,3 +130,93 @@ export function RevokeApiKeyButton({
     </>
   )
 }
+
+/**
+ * Renames a key, and disables or re-enables it (#412): a reversible kill switch, e.g.
+ * while a possible leak is investigated, where revoking is final. BetterAuth refuses
+ * members (`INSUFFICIENT_API_KEY_PERMISSIONS`) and suspended orgs (#348).
+ */
+export function KeyControls({
+  keyId,
+  name,
+  enabled,
+}: {
+  keyId: string
+  name: string
+  enabled: boolean
+}) {
+  const router = useRouter()
+  const { busy, error, run } = useAuthAction(explain)
+  const [renaming, setRenaming] = useState(false)
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {renaming ? (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={async (event) => {
+            event.preventDefault()
+            const newName = text(new FormData(event.currentTarget), "name")
+            const ok = await run(() =>
+              authClient.apiKey.update({ keyId, name: newName })
+            )
+            if (ok) {
+              setRenaming(false)
+              router.refresh()
+            }
+          }}
+        >
+          <Label htmlFor={`rename-${keyId}`} className="sr-only">
+            New name for {name}
+          </Label>
+          <Input
+            id={`rename-${keyId}`}
+            name="name"
+            defaultValue={name}
+            required
+            className="h-7 w-40"
+          />
+          <Button type="submit" size="sm" disabled={busy}>
+            Save name
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setRenaming(false)}
+          >
+            Cancel
+          </Button>
+        </form>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          aria-label={`Rename ${name}`}
+          onClick={() => setRenaming(true)}
+        >
+          Rename
+        </Button>
+      )}
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={busy}
+        aria-label={`${enabled ? "Disable" : "Enable"} ${name}`}
+        onClick={async () => {
+          const ok = await run(() =>
+            authClient.apiKey.update({ keyId, enabled: !enabled })
+          )
+          if (ok) router.refresh()
+        }}
+      >
+        {enabled ? "Disable" : "Enable"}
+      </Button>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
