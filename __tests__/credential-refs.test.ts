@@ -51,6 +51,31 @@ describe('credential references', () => {
       },
     );
 
+    // #513: a credential can be bound to the origin it belongs to.
+    it('resolves a bound reference on its own origin only, naming it when refused', () => {
+      const bound = mapSecrets({
+        LOGIN_PW: { value: SECRET, origin: 'https://shop.example/login' },
+      });
+      expect(resolveFillText('{{secret:LOGIN_PW}}', bound, 'https://shop.example')).toEqual({
+        value: SECRET,
+        fromReference: true,
+      });
+      for (const origin of ['https://evil.example', 'http://shop.example', 'null', undefined]) {
+        expect(() => resolveFillText('{{secret:LOGIN_PW}}', bound, origin)).toThrow(
+          /\{\{secret:LOGIN_PW\}\} is bound to https:\/\/shop\.example/,
+        );
+      }
+    });
+
+    // #513: a value this short cannot be kept out of results without cutting every match.
+    it('refuses a value shorter than 4 characters, naming the reference only', () => {
+      const short = mapSecrets({ PIN: '123' });
+      expect(() => resolveFillText('{{secret:PIN}}', short)).toThrow(
+        /\{\{secret:PIN\}\}.*at least 4/,
+      );
+      expect(() => resolveFillText('{{secret:PIN}}', short)).not.toThrow(/123/);
+    });
+
     it('does not resolve inherited object keys', () => {
       expect(() => resolveFillText('{{secret:constructor}}', mapSecrets({}))).toThrow(
         CredentialReferenceError,
@@ -62,6 +87,19 @@ describe('credential references', () => {
     const source = envSecrets({ IRIS_SECRET_PW: 'a', PW: 'b' });
     expect(source('PW')).toBe('a');
     expect(source('OTHER')).toBeUndefined();
+  });
+
+  it('envSecrets binds a value to IRIS_SECRET_ORIGIN_<NAME>, as an origin (#513)', () => {
+    const source = envSecrets({
+      IRIS_SECRET_PW: SECRET,
+      IRIS_SECRET_ORIGIN_PW: 'https://shop.example/any/path',
+      IRIS_SECRET_BAD: SECRET,
+      IRIS_SECRET_ORIGIN_BAD: 'not a url',
+    });
+    expect(source('PW')).toEqual({ value: SECRET, origin: 'https://shop.example' });
+    expect(() => resolveFillText('{{secret:BAD}}', source, 'https://shop.example')).toThrow(
+      /IRIS_SECRET_ORIGIN_BAD is not an http\(s\) origin/,
+    );
   });
 
   // An ARIA snapshot collapses whitespace; Playwright's call log splits lines with ANSI codes.
@@ -110,6 +148,7 @@ describe('credential references', () => {
           <input id="mirror" oninput="this.setAttribute('value', this.value)">
           <div id="cover" style="position:fixed;inset:0;display:none"></div>
           <textarea id="notes" readonly></textarea>
+          <label>Code <input id="short" maxlength="6"></label>
           <p id="done" hidden>Signed in</p>
         </body>`);
       });
@@ -259,6 +298,51 @@ describe('credential references', () => {
     });
 
     // The digest is an ARIA snapshot, and it shows what a field holds.
+    it('refuses a fill bound to another origin, typing nothing (#513)', async () => {
+      const r = await executor().executeAction(
+        { type: 'fill', selector: '#pw', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: { value: SECRET, origin: 'https://elsewhere.example' } }),
+      );
+      expect(r.success).toBe(false);
+      expect(r.error).toMatch(/\{\{secret:LOGIN_PW\}\} is bound to https:\/\/elsewhere\.example/);
+      expect(await page.inputValue('#pw')).toBe('');
+      // Positive control: bound to this page's origin, it is typed.
+      const ok = await executor().executeAction(
+        { type: 'fill', selector: '#pw', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: { value: SECRET, origin } }),
+      );
+      expect(ok.success).toBe(true);
+      expect(await page.inputValue('#pw')).toBe(SECRET);
+    });
+
+    // #513: a field that keeps only a prefix (maxlength) shows a value the scrub never saw.
+    it('the agent loop never shows what a filled field holds, even a prefix', async () => {
+      process.env.IRIS_SECRET_LOGIN_PW = SECRET;
+      const translateInstruction = jest
+        .fn()
+        .mockResolvedValueOnce({
+          actions: [{ type: 'fill', selector: '#short', text: '{{secret:LOGIN_PW}}' }],
+          confidence: 0.9,
+        })
+        .mockResolvedValue({ actions: [], confidence: 0 });
+      jest
+        .spyOn(aiClient, 'createResolvedAIClient')
+        .mockResolvedValue({ translateInstruction, isAvailable: async () => true } as never);
+
+      await runAgentLoop({
+        instruction: 'enter the code',
+        executor: executor(),
+        page,
+        maxTurns: 2,
+      });
+
+      const prefix = SECRET.slice(0, 6);
+      expect(await page.inputValue('#short')).toBe(prefix); // positive control: truncated
+      expect(JSON.stringify(translateInstruction.mock.calls)).not.toContain(prefix);
+    });
+
     it('the agent loop never shows the model a resolved value', async () => {
       process.env.IRIS_SECRET_LOGIN_PW = SECRET;
       const translateInstruction = jest

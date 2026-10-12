@@ -1168,6 +1168,21 @@ reference.
   from references) before the model sees it.
 - No org vault: hosted fills arrive over the RPC from a client that holds its credentials. A
   vault would be one more `SecretSource`. `IRIS_SECRET_*` is scrubbed by `jest.setup.ts`.
+- **Hardening (#513)**:
+  - **Origin binding**: a source may return `{ value, origin }`
+    (`IRIS_SECRET_ORIGIN_<NAME>` locally; an RPC `secrets` entry `{ value, origin }`, zod-checked
+    URL). `resolveFillText(text, source, pageOrigin)` refuses a bound reference unless the
+    field's frame (the target handle's `ownerFrame()`, else the page) has exactly that http(s)
+    origin; an unknown or opaque origin is refused. A malformed env binding fails the fill,
+    never unbinds the value.
+  - **Redaction by element**: the executor remembers each field it filled from a reference
+    (a locator in the field's frame, not the handle, which the caller disposes) and
+    `refreshFieldValues()` re-reads what they hold, so `redactSecrets` also cuts a
+    `maxlength` prefix or a page rewrite of the value. The agent loop and RPC `observe` call it
+    before reading the page. Values under 4 characters read back are not cut.
+  - **Short values**: under `MIN_SECRET_LENGTH` (4) a reference is refused at fill time,
+    naming the reference only: cutting a 1-3 character value would cut every match of it
+    from errors and digests. A short non-secret value is filled literally.
 
 ### Hung Pages and Provider Failures (issue #293)
 

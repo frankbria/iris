@@ -15,6 +15,7 @@ import { isHostedMode } from './hosted';
 import {
   CredentialReferenceError,
   envSecrets,
+  MIN_SECRET_LENGTH,
   looksLikeReference,
   noSecrets,
   resolveFillText,
@@ -80,6 +81,16 @@ export interface PageContext {
 /** Timing defaults for an option the caller leaves unset. The RPC server clamps these too (#338). */
 export const EXECUTOR_DEFAULTS = { retryAttempts: 3, retryDelay: 1000, timeout: 30000 } as const;
 
+/** What a field holds now (input value, else its text), read for at most a second. */
+async function readField(field: Locator): Promise<string> {
+  const value = await withPageTimeout(
+    field.inputValue().catch(() => field.textContent().then((t) => t ?? '')),
+    '',
+    1_000,
+  );
+  return value;
+}
+
 /**
  * ActionExecutor handles the execution of translated actions with retry logic,
  * error handling, and browser lifecycle management.
@@ -96,6 +107,13 @@ export class ActionExecutor {
   private launching: Promise<Browser> | null = null;
   /** Values this executor typed from credential references (#352), for `redactSecrets`. */
   private readonly resolvedSecrets = new Set<string>();
+  /**
+   * The fields it typed them into (#513), read again by `refreshFieldValues`: a field can
+   * hold a form of the value the scrub never saw (a `maxlength` prefix, a page rewrite).
+   */
+  private readonly secretFieldReaders: Array<() => Promise<string>> = [];
+  /** What those fields held at the last `refreshFieldValues`, cut by `redactSecrets` too. */
+  private fieldValues = new Set<string>();
 
   constructor(options: ActionExecutorOptions = {}) {
     this.options = {
@@ -279,7 +297,18 @@ export class ActionExecutor {
    * so anything read back from the page must pass through this before a model.
    */
   redactSecrets(text: string): string {
-    return scrubValues(text, this.resolvedSecrets);
+    return scrubValues(text, [...this.resolvedSecrets, ...this.fieldValues]);
+  }
+
+  /**
+   * Reads what the fields filled from credential references hold now (#513), so the next
+   * `redactSecrets` cuts that too: call it before reading the page for a model. Values
+   * shorter than `MIN_SECRET_LENGTH` are not cut (they would cut every match); a field that
+   * cannot be read (gone, detached) is skipped. Each read is bounded.
+   */
+  async refreshFieldValues(): Promise<void> {
+    const held = await Promise.all(this.secretFieldReaders.map((read) => read().catch(() => '')));
+    this.fieldValues = new Set(held.filter((v) => v.trim().length >= MIN_SECRET_LENGTH));
   }
 
   /**
@@ -415,9 +444,18 @@ export class ActionExecutor {
 
       case 'fill': {
         // Resolved here and nowhere else: the action (and so the result, history
-        // and the model's view of prior actions) keeps the reference (#352).
-        const { value, fromReference } = resolveFillText(action.text, secrets);
-        if (fromReference) this.resolvedSecrets.add(value);
+        // and the model's view of prior actions) keeps the reference (#352). The
+        // origin is the field's frame's, for a reference bound to one (#513).
+        const frame = target ? await target.ownerFrame() : null;
+        const url = frame ? frame.url() : page.url();
+        const origin = URL.canParse(url) ? new URL(url).origin : undefined;
+        const { value, fromReference } = resolveFillText(action.text, secrets, origin);
+        if (fromReference) {
+          this.resolvedSecrets.add(value);
+          // A locator in the field's frame, not the handle: the caller disposes that.
+          const field = (frame ?? page).locator(action.selector).first();
+          this.secretFieldReaders.push(() => readField(field));
+        }
         await (target ? target.fill(value) : typeText(page, action.selector, value));
         break;
       }

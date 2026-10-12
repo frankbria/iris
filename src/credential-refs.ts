@@ -12,8 +12,25 @@
 const REFERENCE = /^\{\{secret:([A-Za-z_][A-Za-z0-9_]{0,63})\}\}$/;
 const REFERENCE_LIKE = /\{\{\s*secret\s*:/i;
 
-/** A credential name -> its value, or `undefined` when there is none. */
-export type SecretSource = (name: string) => string | undefined;
+/**
+ * A credential's value, optionally bound to the origin it belongs to (#513): a fill on a
+ * page or frame of another origin is refused. `origin` is as the source gave it; it is
+ * checked when the reference is resolved.
+ */
+export interface SecretEntry {
+  value: string;
+  origin?: string;
+}
+
+/** A credential name -> its value (or entry), or `undefined` when there is none. */
+export type SecretSource = (name: string) => string | SecretEntry | undefined;
+
+/**
+ * Shorter values are refused (#513): one or two characters cannot be cut from results
+ * without cutting every match of them from errors and the agent's page digest. A value
+ * that short is no secret; fill it literally.
+ */
+export const MIN_SECRET_LENGTH = 4;
 
 export class CredentialReferenceError extends Error {
   constructor(message: string) {
@@ -22,14 +39,31 @@ export class CredentialReferenceError extends Error {
   }
 }
 
-/** `IRIS_SECRET_<NAME>` from the environment: the local CLI's source. */
+/**
+ * `IRIS_SECRET_<NAME>` from the environment: the local CLI's source. `IRIS_SECRET_ORIGIN_<NAME>`
+ * binds it to an origin (#513).
+ */
 export function envSecrets(env: NodeJS.ProcessEnv = process.env): SecretSource {
-  return (name) => env[`IRIS_SECRET_${name}`];
+  return (name) => {
+    const value = env[`IRIS_SECRET_${name}`];
+    const origin = env[`IRIS_SECRET_ORIGIN_${name}`];
+    if (value === undefined || !origin) return value;
+    const parsed = httpOrigin(origin);
+    // A malformed binding fails the fill (in resolveFillText), never unbinds the value.
+    return { value, origin: parsed ?? `invalid:IRIS_SECRET_ORIGIN_${name}` };
+  };
 }
 
 /** A request's own map (own keys only, so `constructor` resolves to nothing). */
-export function mapSecrets(map: Record<string, string>): SecretSource {
+export function mapSecrets(map: Record<string, string | SecretEntry>): SecretSource {
   return (name) => (Object.hasOwn(map, name) ? map[name] : undefined);
+}
+
+/** `url`'s origin when it is an http(s) URL, else `null`. */
+function httpOrigin(url: string): string | null {
+  if (!URL.canParse(url)) return null;
+  const parsed = new URL(url);
+  return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : null;
 }
 
 export const noSecrets: SecretSource = () => undefined;
@@ -47,6 +81,8 @@ export function looksLikeReference(text: string): boolean {
 export function resolveFillText(
   text: string,
   source: SecretSource,
+  /** The origin of the page or frame being filled; checked against a binding (#513). */
+  pageOrigin?: string,
 ): { value: string; fromReference: boolean } {
   const match = REFERENCE.exec(text);
   if (!match) {
@@ -57,11 +93,41 @@ export function resolveFillText(
     }
     return { value: text, fromReference: false };
   }
-  const value = source(match[1]);
-  if (value === undefined) {
-    throw new CredentialReferenceError(`Unknown credential reference {{secret:${match[1]}}}`);
+  return { value: resolveReference(match[1], source, pageOrigin), fromReference: true };
+}
+
+/** The value `{{secret:name}}` stands for, checked against its binding and length (#513). */
+function resolveReference(name: string, source: SecretSource, pageOrigin?: string): string {
+  const found = source(name);
+  if (found === undefined) {
+    throw new CredentialReferenceError(`Unknown credential reference {{secret:${name}}}`);
   }
-  return { value, fromReference: true };
+  const { value, origin } = typeof found === 'string' ? { value: found, origin: undefined } : found;
+  if (origin !== undefined) checkOrigin(name, origin, pageOrigin);
+  if (value.length < MIN_SECRET_LENGTH) {
+    throw new CredentialReferenceError(
+      `{{secret:${name}}} must be at least ${MIN_SECRET_LENGTH} characters: a shorter value cannot be kept out of results`,
+    );
+  }
+  return value;
+}
+
+/** A bound reference resolves on its own origin only; an unknown page origin is refused. */
+function checkOrigin(name: string, bound: string, pageOrigin: string | undefined): void {
+  if (bound.startsWith('invalid:')) {
+    throw new CredentialReferenceError(`${bound.slice(8)} is not an http(s) origin`);
+  }
+  const want = httpOrigin(bound);
+  if (want === null) {
+    throw new CredentialReferenceError(
+      `{{secret:${name}}} is bound to an origin that is not http(s)`,
+    );
+  }
+  if (pageOrigin !== want) {
+    throw new CredentialReferenceError(
+      `{{secret:${name}}} is bound to ${want}; this field is on ${pageOrigin ?? 'an unknown origin'}`,
+    );
+  }
 }
 
 /**

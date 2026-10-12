@@ -219,7 +219,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     turns++;
 
     // The digest shows what fields hold: a value typed from a credential
-    // reference must not reach the model (#352).
+    // reference must not reach the model (#352), nor what such a field holds now (#513).
+    await executor.refreshFieldValues();
     const digest = await observePage(page, (text) => executor.redactSecrets(text));
     log(`turn ${turns}: observing (${digest.length} chars)`);
 

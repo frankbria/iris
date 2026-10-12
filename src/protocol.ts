@@ -20,7 +20,7 @@ import type { AICredentials } from './ai-client/credentials';
 import type { UsageEvent } from './billing/usage';
 import type { SettledAICall } from './ai-client/factory';
 import { errMessage, log } from './log';
-import { mapSecrets, type SecretSource } from './credential-refs';
+import { mapSecrets, type SecretEntry, type SecretSource } from './credential-refs';
 import {
   checkPlannedAction,
   planPolicy,
@@ -92,7 +92,13 @@ const ExecuteBrowserActionParams = z.object({
     .optional(),
   // Values for this request's `{{secret:NAME}}` fills (#352): the only source on
   // the RPC, never the server's environment; not stored, not logged.
-  secrets: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/), z.string()).optional(),
+  // A value, or a value bound to the origin it belongs to (#513).
+  secrets: z
+    .record(
+      z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/),
+      z.union([z.string(), z.object({ value: z.string(), origin: z.string().url() }).strict()]),
+    )
+    .optional(),
   // The run's policy flags (#354), as the CLI's --allow / --allow-cross-origin /
   // --allow-destructive. An AI-translated plan runs under the agent's defaults, which
   // these relax; explicit `actions` are the client's own, restricted by `allow` only.
@@ -1537,6 +1543,8 @@ async function observeSession(
   session.busy++;
   session.lastActivity = Date.now();
   try {
+    // What fields filled from references hold now is cut too (#513).
+    await session.executor.refreshFieldValues();
     const snapshot = await observePage(page, (text) => session.executor.redactSecrets(text));
     if (!withScreenshot) return { snapshot };
     const mask = await session.executor.secretFields(page);
@@ -1569,7 +1577,7 @@ async function executeBrowserActions(
     aiCredentials?: (principal: Principal) => Promise<TenantCredentials | null>;
     usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
   } = {},
-  secrets: Record<string, string> = {},
+  secrets: Record<string, string | SecretEntry> = {},
   policyFlags: PolicyFlags = {},
 ): Promise<{
   success: boolean;
