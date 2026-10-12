@@ -184,7 +184,7 @@ production.
 | `P1.15` | [#294](https://github.com/frankbria/iris/issues/294) | `iris run` exits non-zero on failure | — | DONE (#509) |
 | `P1.16` | [#352](https://github.com/frankbria/iris/issues/352) | Typed values: credential references | — | DONE (#512) |
 | `P1.17` | [#296](https://github.com/frankbria/iris/issues/296) | Do not auto-retry non-idempotent clicks and fills | — | DONE (#516) |
-| `P1.18` | [#297](https://github.com/frankbria/iris/issues/297) | Pattern translator: stop turning prose into CSS selectors | — | TODO |
+| `P1.18` | [#297](https://github.com/frankbria/iris/issues/297) | Pattern translator: stop turning prose into CSS selectors | — | DONE (#517) |
 | `P1.19` | [#298](https://github.com/frankbria/iris/issues/298) | Vision provider detection and Ollama timeouts | — | TODO |
 | `P1.20` | [#299](https://github.com/frankbria/iris/issues/299) | AI cache and ledger hygiene: memory-tier TTL, index name collision | — | TODO |
 | `P1.21` | [#353](https://github.com/frankbria/iris/issues/353) | Agent policy: action validation | — | TODO |

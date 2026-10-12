@@ -508,3 +508,12 @@ Write/Edit, not as a pre-push afterthought.
 - **Never run mutation checks while a reviewer is reading the tree.** opencode saw `src/executor.ts` change twice mid-review and had to clone to /tmp. Second time this happened (also #289). Finish mutation runs, commit, then start the reviewers.
 - **A side-effect bug needs outcome evidence, not call counts.** The demo counted orders on a local server (4 before, 1 after). When the failure cannot be produced on demand, wrap the real call (real effect, injected error) and say so.
 - **A committed demo must not name local paths.** `tasks/` is tracked now, and `repo-hygiene.test.ts` fails on a home directory. Write commands with `$SCRATCH` / `$REPO`-style placeholders and say what each holds, as the other demos do.
+
+## 2026-10-11 — #297
+
+- **Lessons above recurred again**: the `pkill -f` self-match (killed a showboat run whose own command line held the stub's name; use a PID file), Jest printing no per-test lines (`--json`), and ts-node at high load. Read this file at session start.
+- **The CRAP gate's config lives in the untracked `.claude/`, so a worktree has none.** Copy `crap.json` in. `quartermaster crap --lcov` is ignored while `crap.json` has a `coverageCommand` (it started the 17-minute full coverage run); for a change confined to one file, write a worktree-local `crap.json` with `"lcov"` pointing at a targeted run (`--collectCoverageFrom=<file>`).
+- **`crap_gate.py` cannot file debt in this repo**: it adds a `tech-debt` label that does not exist and a title without the `[PX.Y]` prefix. File the `crap-debt` issue by hand with a priority (#518).
+- **When the sidequest board MCP is disconnected, a hook refuses every Agent call.** The internal review then has to be done inline; say so in the PR body.
+- **The box is shared with other projects' suites.** A full local run here had 55 failures, all browser/Docker/spawned-process timeouts, at load 9-18 from another session's coverage run; every non-Docker file re-run alone passed except one visual-diff test that kept failing while the box stayed loaded. Check `pgrep -fa '[j]est'` for other projects before a full run; CI is the verdict when the box is busy.
+- **Selector-shaped heuristics need the reviewers.** Three review rounds each found one more valid CSS spelling the token rule dropped (selector lists, `div>a`, `div >a`). For a grammar gate, enumerate the grammar's separators (comma, each combinator in all four spacings) as test rows before review.
