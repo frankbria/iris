@@ -201,23 +201,12 @@ node ../../dist/cli.js visual-diff --pages "http://localhost:8080/sample-page.ht
 
 ## 🛠️ Configuration
 
-Each example includes an `.irisrc` configuration file:
+IRIS reads no project config file: each example sets its options with CLI flags.
 
-```json
-{
-  "visual": {
-    "threshold": 0.1,
-    "devices": ["desktop", "tablet", "mobile"],
-    "baseline": {
-      "strategy": "branch",
-      "reference": "main"
-    }
-  },
-  "accessibility": {
-    "tags": ["wcag2a", "wcag2aa"],
-    "failOn": ["critical", "serious"]
-  }
-}
+```bash
+iris visual-diff --threshold 0.1 --devices desktop,tablet,mobile \
+  --baseline main --baseline-strategy branch
+iris a11y --tags wcag2a,wcag2aa --fail-on critical,serious
 ```
 
 ---
@@ -227,11 +216,12 @@ Each example includes an `.irisrc` configuration file:
 ### Visual Testing
 ```
 .iris/
-├── baselines/          # Reference screenshots
-├── screenshots/
-│   ├── current/       # Latest captures
-│   └── diff/          # Difference images
-└── visual-report.html # HTML report
+├── baselines/<branch>/      # Reference screenshots, per baseline branch
+├── runs/<runId>/            # One directory per run (#343)
+│   ├── current/             # This run's captures
+│   ├── diff/                # Difference images
+│   └── baseline/
+└── reports/                 # visual-report-<time>.html when no --output is given
 ```
 
 ### Accessibility Testing
@@ -266,17 +256,14 @@ iris visual-diff --update-baseline
 # Install system fonts (Ubuntu/Debian)
 sudo apt-get install fonts-liberation
 
-# Enable font wait in .irisrc
-"stabilization": { "waitForFonts": true }
+# IRIS already waits for web fonts before each capture
 ```
 
 ### Flaky Tests
 ```bash
-# Increase stabilization delay
-"stabilization": { "delay": 1000 }
-
-# Disable animations
-"stabilization": { "disableAnimations": true }
+# Animations are disabled and the page settles for 500 ms before each capture.
+# Mask regions that still change (timestamps, ads):
+iris visual-diff --mask ".clock,.ad-slot"
 
 # Increase threshold
 iris visual-diff --threshold 0.15

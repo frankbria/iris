@@ -18,7 +18,6 @@ This example demonstrates IRIS accessibility testing with WCAG 2.1 AA compliance
 - `accessible-page.html` - Sample page with accessibility features
 - `inaccessible-page.html` - Sample page with common a11y issues
 - `test-a11y.sh` - Script to run accessibility tests
-- `.irisrc` - IRIS configuration for accessibility testing
 - `WCAG_GUIDE.md` - WCAG compliance quick reference
 
 ## Quick Start
@@ -61,24 +60,16 @@ chmod +x test-a11y.sh
 
 ## Configuration
 
-The `.irisrc` file configures accessibility testing:
+Accessibility testing is configured with `iris a11y` flags (IRIS reads no project
+config file):
 
-```json
-{
-  "accessibility": {
-    "tags": ["wcag2a", "wcag2aa", "wcag21aa"],
-    "failOn": ["critical", "serious"],
-    "keyboard": {
-      "testFocusOrder": true,
-      "testTrapDetection": true
-    },
-    "screenReader": {
-      "testAriaLabels": true,
-      "testLandmarkNavigation": true
-    }
-  }
-}
+```bash
+iris a11y --pages /accessible-page.html --base-url http://localhost:8080 \
+  --tags wcag2a,wcag2aa,wcag21aa --fail-on critical,serious --include-screenreader
 ```
+
+Keyboard checks (focus order, traps, arrow keys, Escape) run by default; skip them with
+`--no-include-keyboard`. `--include-screenreader` adds the ARIA label and landmark checks.
 
 ### WCAG Tags
 

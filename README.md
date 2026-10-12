@@ -31,6 +31,23 @@ The canonical way to integrate today is the CLI's JSON output; see
 [docs/integration-surfaces.md](docs/integration-surfaces.md) for why, and where the
 JSON-RPC server and MCP stand.
 
+### Local CLI or hosted service
+
+IRIS runs two ways, and most of this README is about the first.
+
+| | **Local CLI** (this package) | **Hosted service** ([ADR 0001](docs/adr/0001-hosted-architecture.md)) |
+|---|---|---|
+| What you run | `iris run`, `watch`, `visual-diff`, `a11y`, `connect`, and `iris-mcp` | Nothing: an org signs up in the portal and calls the API |
+| Interface | CLI (JSON output), MCP stdio, local `iris connect` with a shared token | REST `/v1/…` (a11y and visual-diff jobs, results) and JSON-RPC over WSS, with org API keys |
+| AI keys | Yours, from the environment or `~/.iris/config.json` | The org's own keys (BYOK, encrypted at rest) or IRIS's managed credits |
+| Storage | SQLite and files under `~/.iris` (or `IRIS_DATA_DIR`) | PostgreSQL per org; screenshots in private S3-compatible storage |
+| Baselines | Git branches | Per project, changed only by approval |
+| Browser safety | Your machine, your pages | Hardened Chromium behind an egress proxy that refuses private and metadata addresses |
+
+The hosted service is the same package run as `iris connect` and `iris worker` with
+`IRIS_HOSTED=1`, plus the portal in `apps/portal`. Operating it:
+[DEPLOYMENT.md](DEPLOYMENT.md).
+
 ### ✅ Phase 1 - Complete (Production-Ready)
 
 **Core Features Available:**
@@ -42,7 +59,7 @@ JSON-RPC server and MCP stand.
 - ✅ File watching with automatic re-execution
 - ✅ AI coding assistant integration via JSON-on-stdout CLI output
   ([see below](#using-iris-from-an-ai-assistant))
-- ⚠️ JSON-RPC protocol server — experimental/legacy, frozen
+- ⚠️ JSON-RPC protocol server — locally experimental; hosted, it is the API (ADR 0001)
   (see [docs/integration-surfaces.md](docs/integration-surfaces.md))
 - ✅ SQLite persistence for test runs and results
 - ✅ Multi-provider AI support (OpenAI/Anthropic/Ollama)
@@ -493,12 +510,11 @@ Container specifics worth knowing:
   runaway session from taking the host down with it. The compose file explains
   each value.
 
-> **Experimental / legacy — frozen.** A bespoke WebSocket protocol that no mainstream
-> AI assistant speaks. It keeps working and keeps its security fixes, but takes no new
-> features pending the MCP direction; two of its methods still return placeholder data
-> ([#80](https://github.com/frankbria/iris/issues/80)). For assistant integration use
-> the CLI contract below. Rationale:
-> [docs/integration-surfaces.md](docs/integration-surfaces.md).
+> **Locally: not the assistant path.** A bespoke WebSocket protocol that no mainstream
+> AI assistant speaks; for assistant integration use the CLI contract below. **Hosted:**
+> the same server is the hosted API (WSS and REST behind org API keys, with per-org
+> limits). Rationale: [docs/integration-surfaces.md](docs/integration-surfaces.md) and
+> [ADR 0001](docs/adr/0001-hosted-architecture.md).
 
 
 ### TLS ingress (hosted)
@@ -750,7 +766,7 @@ The report contains per-comparison results plus a `summary` with `totalCompariso
 `passed`, `failed`, and `severityCounts` (`breaking` / `moderate` / `minor`).
 Outcome is signalled by the exit code (`5` = regression detected).
 
-### `iris a11y --format json` — WCAG 2.1 AA audit
+### `iris a11y --format json` — WCAG 2.2 AA audit
 
 Same `--pages` / `--base-url` model as `visual-diff`.
 
@@ -944,49 +960,27 @@ The same map can be set explicitly in the config file:
 
 ### Config File
 
-Create `~/.iris/config.json`:
+`~/.iris/config.json` (or the file `IRIS_CONFIG_PATH` names) is read for three
+sections; anything else in it is ignored:
 ```json
 {
   "ai": {
     "provider": "openai",
     "model": "gpt-4o-mini"
   },
-  "visual": {
-    "threshold": 0.1,
-    "devices": ["desktop"],
-    "aiProvider": "openai"
-  },
-  "accessibility": {
-    "wcagLevel": "AA",
-    "includeKeyboard": true
-  },
   "watch": {
     "patterns": ["**/*.{ts,tsx,js,jsx}"],
     "debounceMs": 1000
-  }
-}
-```
-
-### Project-Level Config
-
-Create `.irisrc` in your project root:
-```json
-{
-  "visual": {
-    "threshold": 0.1,
-    "devices": ["desktop", "tablet", "mobile"],
-    "capture": {
-      "waitForFonts": true,
-      "disableAnimations": true,
-      "stabilizationDelay": 500
-    }
   },
-  "accessibility": {
-    "wcagLevel": "AA",
-    "includeKeyboard": true
+  "budget": {
+    "dailyLimit": 10,
+    "monthlyLimit": 200
   }
 }
 ```
+
+Visual and accessibility options are command-line flags (`iris visual-diff --help`,
+`iris a11y --help`); IRIS reads no project-level config file.
 
 ---
 
@@ -1164,7 +1158,7 @@ cd examples/accessibility-audit
 ```
 
 Demonstrates:
-- WCAG 2.1 AA compliance testing
+- WCAG 2.2 AA compliance testing (2.0, 2.1 and 2.2 A/AA rules)
 - Keyboard navigation validation
 - Screen reader simulation
 - Accessibility score reporting
@@ -1347,7 +1341,7 @@ gh issue view 71
 - Browser automation with Playwright
 - File watching and auto-execution
 - AI translation with multi-provider support
-- JSON-RPC protocol server (now frozen — see [docs/integration-surfaces.md](docs/integration-surfaces.md))
+- JSON-RPC protocol server (not the local assistant path; the hosted API, see [docs/integration-surfaces.md](docs/integration-surfaces.md))
 - SQLite persistence
 
 ### Phase 2 🚧 (In Progress)
@@ -1355,7 +1349,7 @@ gh issue view 71
 - ✅ AI semantic analysis (OpenAI, Claude, Ollama)
 - ✅ AI vision foundation with cost control and caching
 - ✅ Multi-device testing (desktop, tablet, mobile)
-- ✅ Accessibility validation (WCAG 2.1 AA/AAA)
+- ✅ Accessibility validation (WCAG 2.2 A/AA/AAA)
 - ✅ Keyboard navigation and screen reader testing
 - ✅ Git-integrated baseline management
 - ✅ Multi-format reporting (HTML, JSON, JUnit, Markdown)

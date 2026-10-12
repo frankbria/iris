@@ -1,6 +1,6 @@
 # Integration Surfaces — Decision Record
 
-**Status:** Accepted
+**Status:** Accepted. Decision 3 is superseded for the hosted product by [ADR 0001](adr/0001-hosted-architecture.md); see *Update — 2026-09-25* below.
 **Date:** 2026-07-23 (vision-alignment audit, Cycle 3)
 **Revisit trigger:** when the MCP spike ([plans/012](../plans/012-mcp-server-spike.md)) reports its verdict
 
@@ -25,6 +25,7 @@ assistant users at the one surface no assistant can consume.
 2. **MCP is the strategic assistant bridge.** It is the protocol the ecosystem
    actually converged on. [plans/012](../plans/012-mcp-server-spike.md) is the spike.
 3. **The WebSocket JSON-RPC server is legacy-experimental: frozen, not removed.**
+   *(Superseded for the hosted product, where it is the hosted API: see the 2026-09-25 update.)*
    It keeps working and keeps its security fixes, but takes no new features. The
    retire-or-invest decision is deliberately deferred until the MCP spike lands, so
    it is made with evidence rather than in advance.

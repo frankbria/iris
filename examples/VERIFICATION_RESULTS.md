@@ -11,7 +11,6 @@ October 12, 2025
 - README.md (4,322 bytes) - Comprehensive guide
 - sample-page.html (6,989 bytes) - Beautiful sample page
 - test-visual.sh (2,455 bytes) - Executable test script
-- .irisrc (555 bytes) - Configuration file
 
 **Features Demonstrated:**
 - Screenshot capture and comparison
@@ -34,7 +33,6 @@ October 12, 2025
 - README.md (6,846 bytes) - Multi-device testing guide
 - responsive-page.html (12,930 bytes) - Responsive sample page
 - test-multidevice.sh (3,910 bytes) - Multi-device test script
-- .irisrc (528 bytes) - Configuration with device settings
 
 **Features Demonstrated:**
 - Desktop (1920×1080) testing
@@ -59,7 +57,6 @@ October 12, 2025
 - accessible-page.html (13,422 bytes) - WCAG-compliant sample
 - inaccessible-page.html (2,953 bytes) - Common a11y issues
 - test-a11y.sh (968 bytes) - Accessibility test script
-- .irisrc (562 bytes) - A11y configuration
 
 **Features Demonstrated:**
 - WCAG 2.1 Level A and AA compliance
@@ -110,9 +107,8 @@ October 12, 2025
 - **README Files:** 5 (including main examples/README.md)
 - **Sample HTML Pages:** 5
 - **Test Scripts:** 3 (.sh files, all executable)
-- **Configuration Files:** 3 (.irisrc)
 - **Workflow Files:** 1 (GitHub Actions)
-- **Total Files:** 17+
+- **Total Files:** 14+
 
 ### Documentation Quality
 - **Comprehensive:** All READMEs include What/Why/How

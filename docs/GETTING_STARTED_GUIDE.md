@@ -607,48 +607,13 @@ EOF
 chmod +x tests/run-a11y-test.sh
 ```
 
-### Step 4: Create IRIS Configuration
+### Step 4: Options
 
-**Create `.irisrc` configuration file:**
-
-```bash
-cat > .irisrc << 'EOF'
-{
-  "visual": {
-    "threshold": 0.1,
-    "devices": ["desktop", "tablet", "mobile"],
-    "baseline": {
-      "strategy": "branch",
-      "reference": "main"
-    },
-    "capture": {
-      "waitForFonts": true,
-      "disableAnimations": true,
-      "stabilizationDelay": 500
-    },
-    "comparison": {
-      "ignoreAntialiasing": true
-    }
-  },
-  "accessibility": {
-    "wcagLevel": "AA",
-    "includeKeyboard": true,
-    "includeScreenReader": true,
-    "failureThreshold": {
-      "critical": true,
-      "serious": true,
-      "moderate": false,
-      "minor": false
-    }
-  },
-  "reporting": {
-    "format": "html",
-    "outputDir": ".iris/reports",
-    "includePassedTests": false
-  }
-}
-EOF
-```
+IRIS reads no project config file. The scripts above pass every option as a flag
+(`--threshold`, `--devices`, `--baseline`, `--tags`, `--fail-on`, ...); see
+`iris visual-diff --help` and `iris a11y --help`. Captures always wait for web fonts,
+disable animations and settle for 500 ms. Only AI provider, watch and budget settings
+live in `~/.iris/config.json` (see the README's Configuration section).
 
 ### Step 5: Initial Git Commit
 

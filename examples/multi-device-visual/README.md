@@ -14,7 +14,6 @@ This example demonstrates IRIS visual testing across multiple device types (desk
 
 - `responsive-page.html` - Responsive web page with breakpoints
 - `test-multidevice.sh` - Script to run multi-device tests
-- `.irisrc` - IRIS configuration with device settings
 - `RESULTS.md` - Expected test results guide
 
 ## Quick Start
@@ -66,22 +65,17 @@ IRIS tests these device viewports by default:
 
 ## Configuration
 
-The `.irisrc` file configures multi-device testing:
+Devices and concurrency are `iris visual-diff` flags (IRIS reads no project config
+file):
 
-```json
-{
-  "visual": {
-    "devices": ["desktop", "tablet", "mobile"],
-    "diff": {
-      "maxConcurrency": 3
-    }
-  }
-}
+```bash
+iris visual-diff --pages /responsive-page.html --base-url http://localhost:8080 \
+  --devices desktop,tablet,mobile --concurrency 3
 ```
 
 ### Concurrency Control
 
-The `maxConcurrency` setting controls how many devices are tested in parallel:
+`--concurrency` (default 3) controls how many comparisons run in parallel:
 
 - **Low (1-2)**: Conservative, good for limited resources
 - **Medium (3-4)**: Balanced performance and resource usage
