@@ -89,6 +89,7 @@ src/
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
 ├── artifact-store.ts      # ArtifactStore: filesystem (local) + S3 (hosted, SeaweedFS in dev/CI/staging); tenant-first keys, signed URLs (#257)
 ├── audit-log.ts           # recordAudit(): tenant audit entries, on the change's own transaction (#361)
+├── member-keys.ts         # A departing member's API keys revoked; create-time re-check (#408)
 ├── visual-baselines.ts    # Project baselines (orgBaselines) and audited approval, no runner imports: API + portal (#268, #463)
 ├── run-reads.ts           # Read-only run queries (types, keyset cursor, listPage, get): no runner imports, so the portal can use it (#270)
 ├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
@@ -610,7 +611,10 @@ The portal page is `/api-keys`.
   a BetterAuth after hook deletes the org's live keys they created and audits each
   (`api_key.delete`, `reason`). Keys made before #361 have no creator on record and stay;
   a role change revokes nothing. Other members may have copied a key, so rotate anyway
-  after an admin leaves on bad terms.
+  after an admin leaves on bad terms. `src/member-keys.ts` holds both halves: the
+  removal's `revokeKeysCreatedBy`, and `revokeIfCreatorLeft`, run after each create's
+  audit row is committed (codex review): a removal racing a create either sees that row
+  or leaves no membership for the re-check to find.
 - `enableSessionForAPIKeys` stays off: a key must never become a portal session.
 - **Do not let `npm install -w @iris/portal` pick the package's latest version.** It
   nested a second `better-auth` under `apps/portal`. Pin the range the root uses and

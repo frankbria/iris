@@ -383,20 +383,14 @@ const PASSWORD = 'correct-horse-battery-staple';
     expect(r.memberAudit).toEqual([
       {
         actor_user_id: alice,
-        action: 'member.remove',
-        target: `user:${erin}`,
-        metadata: { revokedKeys: 1 },
-      },
-      {
-        actor_user_id: alice,
         action: 'api_key.delete',
         target: `key:${ke}`,
         metadata: { reason: 'member.remove' },
       },
       {
-        actor_user_id: frank,
-        action: 'member.leave',
-        target: `user:${frank}`,
+        actor_user_id: alice,
+        action: 'member.remove',
+        target: `user:${erin}`,
         metadata: { revokedKeys: 1 },
       },
       {
@@ -404,6 +398,12 @@ const PASSWORD = 'correct-horse-battery-staple';
         action: 'api_key.delete',
         target: `key:${kf}`,
         metadata: { reason: 'member.leave' },
+      },
+      {
+        actor_user_id: frank,
+        action: 'member.leave',
+        target: `user:${frank}`,
+        metadata: { revokedKeys: 1 },
       },
       {
         actor_user_id: alice,

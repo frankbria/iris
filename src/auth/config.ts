@@ -1,4 +1,5 @@
 import { recordAudit } from '../audit-log';
+import { revokeIfCreatorLeft, revokeKeysCreatedBy } from '../member-keys';
 import { apiKey } from '@better-auth/api-key';
 import { betterAuth, type BetterAuthOptions } from 'better-auth';
 import { APIError, createAuthMiddleware, getIP, getSessionFromCtx } from 'better-auth/api';
@@ -366,27 +367,14 @@ async function afterMemberWrite(
     }
     const action = ctx.path === '/organization/leave' ? 'member.leave' : 'member.remove';
     await db.transaction().execute(async (tx) => {
-      const { rows } = await sql<{ id: string }>`
-        delete from apikey where "referenceId" = ${orgId} and id in (
-          select substr(target, 5) from audit_log
-          where org_id = ${orgId} and action = 'api_key.create' and actor_user_id = ${member.userId})
-        returning id`.execute(tx);
+      const revoked = await revokeKeysCreatedBy(tx, orgId, member.userId!, actor, action);
       await recordAudit(tx, {
         orgId,
         actor,
         action,
         target,
-        metadata: { revokedKeys: rows.length },
+        metadata: { revokedKeys: revoked.length },
       });
-      for (const { id } of rows) {
-        await recordAudit(tx, {
-          orgId,
-          actor,
-          action: 'api_key.delete',
-          target: `key:${id}`,
-          metadata: { reason: action },
-        });
-      }
     });
   } catch (err) {
     log('error', 'failed to record a membership change', {
@@ -434,12 +422,20 @@ async function auditKeyWrite(
     action: `api_key.${verb}`,
     target: `key:${keyId}`,
     ...(fields && { metadata: { fields } }),
-  }).catch((err) =>
-    log('error', 'failed to record audit entry', {
-      action: `api_key.${verb}`,
-      err: String(err?.message ?? err),
-    }),
-  );
+  })
+    // After the audit row is committed: a removal racing this create either saw that row
+    // or left no membership for this check to find (#408).
+    .then(() =>
+      verb === 'create'
+        ? revokeIfCreatorLeft(termsDb(database), orgId, session.user.id, keyId)
+        : false,
+    )
+    .catch((err) =>
+      log('error', 'failed to record audit entry', {
+        action: `api_key.${verb}`,
+        err: String(err?.message ?? err),
+      }),
+    );
 }
 
 /**
