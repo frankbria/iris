@@ -1555,9 +1555,20 @@ index; 0005: `attempts`, `claim_token`, `heartbeat_at`, #435), no broker (ADR 00
   finish's row lock). `runWorker` refuses `heartbeatMs * 2 >= staleMs`. Migration 0005
   sets `lock_timeout = 5s`: its exclusive lock on `runs` must not queue behind a long
   transaction while the old release serves. A browser that hangs while the worker's event
-  loop still beats is never reaped (#442). During a rollout, a pre-0005 worker finishes
+  loop still beats is never reaped; the job deadline ends it instead (#442, below). During a rollout, a pre-0005 worker finishes
   without a token check until it is recreated (seconds; usage stays idempotent).
   Polling, not LISTEN/NOTIFY.
+- **Every job has a deadline (#442)**: `jobDeadlineMs(job)` (src/worker.ts) is pages x
+  `A11Y_PAGE_BUDGET_MS` (120 s) + 60 s for a11y, `JOB_DEADLINE_MS` + 5 min for visual,
+  capped at `MAX_JOB_MS` (30 min). Past it, `processNextJob` closes every browser the
+  process holds (`openBrowsers()` in src/browser.ts, a registry `launchBrowser()` fills;
+  the worker runs one job at a time), each close bounded at 10 s, and fails the job with
+  `The job timed out` and no usage. The run's promise may settle later; it is ignored, and
+  the run's `AbortSignal` is aborted first: `runVisualJob` checks it before every artifact
+  write and before seeding a baseline (codex review), so a write blocked past the deadline
+  cannot be followed by a baseline for a job already failed.
+  The worker copies the runners' budgets rather than importing them (as `DEFAULT_STALE_MS`):
+  `job-deadline.test.ts` pins the copies.
 - **Tests**: set `process.env.IRIS_HOSTED = '1'` at the top of the file and start
   `hostedEgressProxy({ lookup, connect })` before the first launch; no isolateModules is
   needed, because the worker loads the runner lazily.
