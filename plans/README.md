@@ -224,6 +224,9 @@ production.
 | `P2.13` | [#363](https://github.com/frankbria/iris/issues/363) | Dependency audit gate | — | TODO |
 | `P2.14` | [#378](https://github.com/frankbria/iris/issues/378) | Agent mode: per-origin asset allowlist under a pinned origin | — | DONE (#558) |
 | `P2.15` | [#412](https://github.com/frankbria/iris/issues/412) | Portal: rename and disable API keys | P0.23 (#340) | DONE (#559) |
+| `P2.19` | [#457](https://github.com/frankbria/iris/issues/457) | Account-level bans (user suspension) | P1 (#348) | DONE (#560) |
+| `P2.21` | [#476](https://github.com/frankbria/iris/issues/476) | Re-sweep a purged org's object prefix after in-flight jobs | P1 (#472) | DONE (#563) |
+| `P2.24` | [#498](https://github.com/frankbria/iris/issues/498) | Hosted a11y results: needs-review count per page | P1 (#290) | DONE (#562) |
 
 ### P3 — Polish / test trust / hygiene
 

@@ -80,7 +80,7 @@ Sign-in rate limits are counted per client IP in the portal process's memory (Be
 
 | | |
 |---|---|
-| Data | `runs`: kind (`a11y`, `visual`, `rpc`), status, timestamps, the API key that started it, a summary, `params` (a11y jobs: target **URLs**, WCAG level, fail-on levels), a bounded error message. `run_results`: per page or action, the URL, pass/fail and a result object. a11y stores violation **counts** per impact, keyboard/screen-reader pass flags and a score, not axe's HTML snippets. An RPC action is stored as `describeAction()` (never what a `fill` typed); a navigate URL loses its `user:password@`; errors are cut to 500 characters. |
+| Data | `runs`: kind (`a11y`, `visual`, `rpc`), status, timestamps, the API key that started it, a summary, `params` (a11y jobs: target **URLs**, WCAG level, fail-on levels), a bounded error message. `run_results`: per page or action, the URL, pass/fail and a result object. a11y stores violation **counts** per impact, keyboard/screen-reader pass flags, a score and a needs-review count with up to 20 axe rule ids (#498), not axe's HTML snippets. An RPC action is stored as `describeAction()` (never what a `fill` typed); a navigate URL loses its `user:password@`; errors are cut to 500 characters. |
 | Purpose | The queue for `iris worker` (#267, #435) and the org's run history (#254). |
 | Where | Postgres, migrations `0001`, `0002`, `0004`, `0005`; `src/history-store.ts`, `src/jobs-api.ts`, `src/worker.ts`. |
 | Access | Everyone in the org (that is why credentials in URLs are refused with a 400 and typed values are never stored). Operators. |
@@ -120,6 +120,16 @@ is processed in Chromium's memory for the duration of the job.
 | Access | Operators. |
 | Retention | While the user exists. When the user is deleted, a database trigger (migration 0010) replaces `user_id` with a SHA-256 of it (`user_hash`, `pseudonymised_at`): the document, version, time and IP are kept **7 years** for disputes, then deleted. |
 
+### User bans
+
+| | |
+|---|---|
+| Data | `user_suspensions`: user, action (`suspend` / `unsuspend`), the operator's **reason** and actor name, time. |
+| Purpose | Operator account bans (#457): a banned user cannot sign in. |
+| Where | Postgres, `0016_user_suspensions.ts`; `src/org-suspension.ts`. |
+| Access | Operators (`iris admin ban-user | unban-user | user-status`). Never shown to the user. |
+| Retention | While the user exists; deleted with the user (cascade). |
+
 ### Audit log
 
 | | |
@@ -127,7 +137,7 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `audit_log`: org, `actor_user_id`, `actor_api_key_id` (plain ids, no foreign keys, so an entry outlives its actor), action, target, `metadata jsonb`, time. |
 | Purpose | An org's audit trail (#361). |
 | Where | Postgres, `0001_initial.ts`. |
-| Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`); member removed, left or given a role (`member.remove|leave|role`, the member's user id, and the keys revoked with them); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463). No URL, page content or typed value is recorded. |
+| Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`); member removed, left or given a role (`member.remove|leave|role`, the member's user id, and the keys revoked with them); keys revoked by a user ban (`api_key.delete`, reason `user banned`, no actor); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463). No URL, page content or typed value is recorded. |
 | Retention | Deleted when the org is purged; a deleted user's id is removed from their entries (#349). Otherwise **undecided**. |
 
 ### Artifact storage usage
@@ -178,7 +188,7 @@ private S3-compatible bucket (`src/artifact-store.ts`, #257):
 | Purpose | Visual regression testing: comparing a page with its approved look. |
 | Where | Bucket keys `org/<org>/project/<project>/run/<run uuid>/{current,diff}/<name>.png` and `org/<org>/project/<project>/baselines/<name>.png`. |
 | Access | The org's API keys, through run detail's signed URLs (5 minutes, at most 15; only that org's keys for that run, #460). The bucket is never public. |
-| Retention | Run images: with the run, **90 days** after it finishes; current baselines: until the org is purged; a replaced baseline image, once no remaining run links it and it is older than 90 days (#475; images stored before #315's accounting stay until the org is purged). The daily retention pass queues each prefix (`artifact_purges`, migration 0012) in the transaction that deletes its rows and deletes the objects when the container has `IRIS_S3_*`; a store failure is retried by the next pass (#472). |
+| Retention | Run images: with the run, **90 days** after it finishes; current baselines: until the org is purged; a replaced baseline image, once no remaining run links it and it is older than 90 days (#475; images stored before #315's accounting stay until the org is purged). The daily retention pass queues each prefix (`artifact_purges`, migration 0012) in the transaction that deletes its rows and deletes the objects when the container has `IRIS_S3_*`; a store failure is retried by the next pass (#472). A purged org's prefix is swept once more a day after the purge, for images a job already running at the purge wrote afterwards (#476). |
 | Third parties | The hosting / object-storage provider (#273). Not sent to an AI vendor: hosted visual jobs run no AI analysis yet. |
 
 ### Browser sessions

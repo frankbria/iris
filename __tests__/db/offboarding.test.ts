@@ -488,6 +488,49 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     }
   });
 
+  it("sweeps a purged org's prefix once more a day later: an in-flight job may have written (#476)", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-resweep-'));
+    const store = new FilesystemArtifactStore(root);
+    try {
+      const now = new Date();
+      await user('lena');
+      await org('org-late', 'lena', now);
+      const off = offboarding(db);
+      await off.requestOrgDeletion('org-late', { reason: 'x', actor: 'ops' });
+      expect((await off.runRetention({ now: at(now, 31), artifacts: store })).orgsPurged).toEqual([
+        'org-late',
+      ]);
+      // A job that was running at the purge writes afterwards (its finish is refused).
+      const late = runArtifactKey({
+        orgId: 'org-late',
+        projectId: 'shop',
+        runId: 'late-run',
+        kind: 'current',
+        name: 'home',
+      });
+      await store.put(late, Buffer.from('png'), 'image/png');
+      const queued = () => count('artifact_purges', "org_id = 'org-late'");
+
+      // Within the day: not yet.
+      await off.runRetention({ now: at(now, 31.5) });
+      expect(await queued()).toBe(0);
+      // A day after the purge: queued once (no store in this container, so it waits)...
+      await off.runRetention({ now: at(now, 32.5) });
+      expect(await queued()).toBe(1);
+      // ...and not again.
+      await off.runRetention({ now: at(now, 33) });
+      expect(await queued()).toBe(1);
+      // A container with the store drains it.
+      await off.runRetention({ now: at(now, 33), artifacts: store });
+      expect(await store.get(late)).toBeNull();
+      expect(await queued()).toBe(0);
+      await off.runRetention({ now: at(now, 40), artifacts: store });
+      expect(await queued()).toBe(0);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('a visual run with no string project, or an invalid queued prefix, stalls nothing', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-purge-'));
     try {

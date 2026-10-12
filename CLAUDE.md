@@ -70,7 +70,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268; 0012: artifact purges, #472; 0013: org AI settings, #479; 0014: observation usage, #312)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268; 0012: artifact purges, #472; 0013: org AI settings, #479; 0014: observation usage, #312; 0016: user bans, #457)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── credential-refs.ts     # {{secret:NAME}} fill values: sources, resolve at fill time, scrub (#352)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
@@ -262,7 +262,9 @@ plans/
   `wcag2a, wcag21a, wcag2aa, wcag21aa, wcag22aa`; axe tags a rule with the version that
   introduced it, so 2.0 tags alone skipped `autocomplete-valid` and `target-size`. axe's
   `incomplete` is "needs review": MCP `needsReview`, a CLI count, the HTML report and
-  JUnit `<system-out>`; never a failure. Hosted stored results do not carry it yet (#498)
+  JUnit `<system-out>`; never a failure. Hosted runs store it per page (#498:
+  `needsReview` count, up to 20 `needsReviewRules`, scanned pages only), shown by the
+  Results API and the portal run detail
 - **One a11y verdict per page (#288).** The runner sets `passed` and `failureReasons` on
   every result (`withVerdict`: axe violations at `--fail-on`, a failed keyboard or
   screen-reader check, or an error), and everything reads it: `summary.passed` (the exit
@@ -540,6 +542,20 @@ Operator suspension of an org, and the published contacts. Ops side: runbook "Ab
 - **`iris admin suspend-org|unsuspend-org <orgId> --reason … [--actor …]`** and
   `org-status`: hosted only (exit 2), exit 3 when the database is unreachable, 1 for an
   unknown org. Actor defaults to `$SUDO_USER`/`$USER`.
+- **User bans (#457)** reuse the same history code: `org-suspension.ts` is one core over a
+  `Subject` (table, id column, resolve, optional `onSuspend` in the same transaction);
+  `orgSuspensions` and `userSuspensions` (by id or email, `user_suspensions`, migration 0016,
+  user-scoped and cascading) are its two instances, with the same `suspend`/`unsuspend`
+  actions. A ban deletes the user's sessions and revokes the keys they created (#408's
+  `revokeKeysCreatedBy`) in that transaction; `createAuth()`'s `session.create.before`
+  refuses a banned user (`403 USER_BANNED`). Every session is made there, so invitations
+  (which need one) are covered too. There is no cookie cache: deleting the session rows
+  signs them out at once. `iris admin ban-user|unban-user|user-status`.
+  **Races (codex review)**: a sign-in or key creation can pass the check while a ban is
+  committing, so both recheck after their write under the ban's advisory lock
+  (`userBannedLocked`): `session.create.after` deletes the new session and refuses, and the
+  post-create key check (`revokeIfCreatorBanned`, after #408's `revokeIfCreatorLeft`)
+  revokes. Either the ban sees the committed row or the recheck sees the ban.
 - **Contacts are operator configuration**, never invented: `IRIS_SECURITY_CONTACT`,
   `IRIS_ABUSE_CONTACT`, `IRIS_SUPPORT_CONTACT` (`mailto:` or `https:`, validated;
   malformed throws). Unset shows a `[placeholder]` on `/contact`, and
@@ -1846,6 +1862,10 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   re-approval reusing the key is either seen as new or waits and writes the object again.
   Candidates are taken in random order, so failing ones cannot starve the rest; a failure
   is reported after the others are tried.
+  A purged org's `org/<org>/` is queued once more a day after the purge (#476: a visual job
+  running at the purge can still write; its finish is refused), marked by
+  `org_deletions.resweep_done` (migration 0017). `purged_at` is the pass's `now`, not the
+  database clock, so tests cross the day with the injected clock.
 - **Not purged**: live orgs' AI ledger rows (no period decided).
 
 ### BYOK Provider Keys (issue #344)

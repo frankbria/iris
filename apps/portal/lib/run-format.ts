@@ -35,10 +35,24 @@ export function describeResult(
       (i) => `${v[i]} ${i}`
     )
     const score = typeof r.score === "number" ? `score ${r.score}` : null
+    // axe's `incomplete` (#498): a page it could not fully decide is not shown as clean.
+    const n = typeof r.needsReview === "number" ? r.needsReview : 0
+    const rules = Array.isArray(r.needsReviewRules)
+      ? r.needsReviewRules.filter((x): x is string => typeof x === "string")
+      : []
+    const review =
+      n > 0
+        ? `${n} need${n === 1 ? "s" : ""} review` +
+          (rules.length ? ` (${rules.join(", ")})` : "")
+        : null
     return {
       subject: result.url ?? "(page)",
       outcome,
-      detail: [score, counts.length ? counts.join(", ") : "no violations"]
+      detail: [
+        score,
+        counts.length ? counts.join(", ") : "no violations",
+        review,
+      ]
         .filter(Boolean)
         .join(" · "),
     }
