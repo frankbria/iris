@@ -37,6 +37,10 @@ describe('assert action execution', () => {
         setTimeout(() => res.end('{"ok":false}'), 1500);
         return;
       }
+      if (req.url === '/slow-early') {
+        setTimeout(() => res.end('{}'), 500);
+        return;
+      }
       if (req.url === '/slower') {
         setTimeout(() => res.end('{"ok":false}'), 3000);
         return;
@@ -163,6 +167,17 @@ describe('assert action execution', () => {
       expect(r.success).toBe(false);
     }, 30_000);
 
+    // Codex review: a request that began before the executor's first action must not, by
+    // finishing, cancel out the count of a request an action started.
+    it('is not fooled by a request that started before tracking finishing early', async () => {
+      await page.goto(`${origin}/app`);
+      // In flight before any executor action: the page's own fetch, finishing after 500 ms.
+      await page.evaluate(() => void fetch('/slow-early').catch(() => undefined));
+      expect((await run({ type: 'click', selector: '#slower' })).success).toBe(true);
+      const r = await run({ type: 'assert', kind: 'element_absent', target: '.error-late' });
+      expect(r.success).toBe(false);
+    }, 30_000);
+
     it('fails when the element appears 1.5 s after the action', async () => {
       await page.goto(`${origin}/app`);
       expect((await run({ type: 'click', selector: '#later' })).success).toBe(true);
@@ -223,6 +238,13 @@ describe('assert action execution', () => {
     }, 30_000);
 
     // Codex review: a hash route's own query is not part of the route.
+    // Codex review: a whitespace-only target is no URL at all.
+    it('fails a target that is empty once trimmed', async () => {
+      const { urlMatches } = await import('../src/executor');
+      expect(urlMatches(new URL('https://app.test/'), '   ')).toBe(false);
+      expect(urlMatches(new URL('https://app.test/#/x'), '')).toBe(false);
+    });
+
     it("judges a hash route by its path, not the route's query", async () => {
       const { urlMatches } = await import('../src/executor');
       expect(

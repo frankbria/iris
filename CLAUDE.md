@@ -1123,7 +1123,8 @@ verdicts are not retried); retry tests that need a transient failure use `naviga
 
 - **`element_absent`** waits until no request has been in flight for 500 ms (at most
   `ABSENT_SETTLE_MS`, 5 s; a page that never idles is judged as it is), counted by the executor
-  from the first action it ran on the page (`trackRequests`). Not `networkidle`: Playwright
+  from the first action it ran on the page (`trackRequests`, by request identity: one that
+  began before tracking cannot cancel out a later one). Not `networkidle`: Playwright
   keeps that lifecycle state, so a page idle before a click read as settled while the click's
   request was in flight (codex review). Then it requires the element to stay absent for
   `ABSENT_WINDOW_MS` (2 s), whatever the action timeout. It used to glance for 1 s, so

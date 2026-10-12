@@ -1,4 +1,4 @@
-import { Browser, ElementHandle, Locator, Page, errors } from 'playwright';
+import { Browser, ElementHandle, Locator, Page, Request, errors } from 'playwright';
 import { Action } from './translator';
 import {
   launchBrowser,
@@ -88,17 +88,20 @@ const ABSENT_WINDOW_MS = 2000;
 const QUIET_MS = 500;
 
 /** Requests in flight per page, from the first action IRIS ran there (#504). */
-const inFlight = new WeakMap<Page, { count: number; quietSince: number }>();
+const inFlight = new WeakMap<Page, { requests: Set<Request>; quietSince: number }>();
 
 function trackRequests(page: Page): void {
   if (inFlight.has(page) || typeof page.on !== 'function') return; // mocked pages
-  const state = { count: 0, quietSince: performance.now() };
+  const state = { requests: new Set<Request>(), quietSince: performance.now() };
   inFlight.set(page, state);
-  const done = () => {
-    state.count = Math.max(0, state.count - 1);
-    if (state.count === 0) state.quietSince = performance.now();
+  // By identity, not a count: a request that began before tracking must not cancel out
+  // one an action started when it finishes (codex review).
+  const done = (request: Request) => {
+    if (state.requests.delete(request) && state.requests.size === 0) {
+      state.quietSince = performance.now();
+    }
   };
-  page.on('request', () => void state.count++);
+  page.on('request', (request) => void state.requests.add(request));
   page.on('requestfinished', done);
   page.on('requestfailed', done);
 }
@@ -109,7 +112,7 @@ async function waitForQuiet(page: Page, capMs: number): Promise<void> {
   if (!state) return;
   const deadline = performance.now() + capMs;
   while (performance.now() < deadline) {
-    if (state.count === 0 && performance.now() - state.quietSince >= QUIET_MS) return;
+    if (state.requests.size === 0 && performance.now() - state.quietSince >= QUIET_MS) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
@@ -133,6 +136,7 @@ function pathWithin(path: string, prefix: string): boolean {
  */
 export function urlMatches(url: URL, target: string): boolean {
   const t = target.trim();
+  if (t === '') return false; // no URL at all (codex review)
   if (/^https?:\/\//i.test(t)) return matchesAbsolute(url, t);
   if (t.startsWith('/')) return pathWithin(url.pathname, t);
   if (t.startsWith('#')) return url.hash.startsWith(t);
