@@ -1132,6 +1132,12 @@ dials the address it vetted, so a rebinding resolver gets no second lookup.
   called before the first launch in the registry. `connect` sends the one "public"
   test address (`8.8.8.8`) to a local server, so every refusal has a positive control
   that goes through the same proxy. A refused target must leave no hit on the server.
+- **QUIC is off under the fixed proxy (#375)**: no WebTransport session and no HTTP/3
+  fetch sends a UDP datagram in hosted mode, even with `--origin-to-force-quic-on`; local
+  mode sends them (the negative controls). So no `--disable-quic` is added. The probes
+  switch off Chromium's local-network checks (in both modes), which otherwise refuse a
+  public page's connection to loopback and made the first probe send nothing either way;
+  a test appends such switches by wrapping the isolated registry's `chromium.launch`.
 - Not covered: a container-level egress firewall, and names Chromium resolves for DNS
   prefetch (a lookup, no connection).
 

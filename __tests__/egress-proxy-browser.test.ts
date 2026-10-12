@@ -1,7 +1,8 @@
 /**
  * Hosted Chromium's traffic goes through the egress proxy (#336) — including
  * the requests the per-page CDP guard cannot see: dedicated and shared workers,
- * and WebSockets opened from them. WebRTC's non-proxied UDP is off.
+ * and WebSockets opened from them. WebRTC's non-proxied UDP is off, and QUIC
+ * (WebTransport, HTTP/3) sends nothing under the proxy (#375).
  *
  * Test strategy: real Chromium through `launchBrowser()`, with IRIS_HOSTED=1
  * read inside `jest.isolateModules`. The shared proxy is started first with a
@@ -54,8 +55,11 @@ beforeEach(() => {
   seen = [];
 });
 
-/** Launch through the real factory with IRIS_HOSTED set (or not) for a fresh registry. */
-async function launch(hosted: boolean): Promise<Browser> {
+/**
+ * Launch through the real factory with IRIS_HOSTED set (or not) for a fresh registry.
+ * `extraArgs` are appended to the factory's own Chromium arguments (test-only switches).
+ */
+async function launch(hosted: boolean, extraArgs: string[] = []): Promise<Browser> {
   const prev = process.env.IRIS_HOSTED;
   if (hosted) process.env.IRIS_HOSTED = '1';
   else delete process.env.IRIS_HOSTED;
@@ -63,6 +67,12 @@ async function launch(hosted: boolean): Promise<Browser> {
     let browserModule!: BrowserModule;
     let egress!: EgressModule;
     jest.isolateModules(() => {
+      // The registry's own playwright, the one src/browser.ts launches with.
+      const { chromium } = require('playwright') as typeof import('playwright');
+      const real = chromium.launch.bind(chromium);
+      jest
+        .spyOn(chromium, 'launch')
+        .mockImplementation((o) => real({ ...o, args: [...(o?.args ?? []), ...extraArgs] }));
       (require('../src/hosted') as HostedModule).isHostedMode();
       egress = require('../src/egress-proxy') as EgressModule;
       browserModule = require('../src/browser') as BrowserModule;
@@ -239,5 +249,71 @@ describe('WebRTC in hosted mode (#336)', () => {
 
   it('sends no non-proxied UDP', async () => {
     expect(await stunPackets(true)).toBe(0);
+  });
+});
+
+describe('QUIC in hosted mode (#375)', () => {
+  /**
+   * Chromium's local-network checks refuse a public page's connection to loopback, which
+   * hid every probe (#375: the first one sent no UDP even unproxied). They are switched
+   * off in both modes, so a loopback UDP socket stands in for a public QUIC server and
+   * the proxy is the only difference.
+   */
+  const NO_LOCAL_NETWORK_CHECKS =
+    '--disable-features=LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,' +
+    'PrivateNetworkAccessRespectPreflightResults';
+
+  /** UDP datagrams a page sends to a local socket while running `probe(port)`. */
+  async function datagrams(
+    hosted: boolean,
+    probe: (port: number) => string,
+    extraArgs: (port: number) => string[] = () => [],
+  ): Promise<number> {
+    const udp = dgram.createSocket('udp4');
+    let packets = 0;
+    udp.on('message', () => packets++);
+    udp.bind(0, '127.0.0.1');
+    await once(udp, 'listening');
+    const udpPort = udp.address().port;
+    const browser = await launch(hosted, [NO_LOCAL_NETWORK_CHECKS, ...extraArgs(udpPort)]);
+    try {
+      const page = await browser.newPage();
+      // A secure context (WebTransport requires one), served without the network.
+      await page.route('https://site.test/', (route) =>
+        route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>ok</title>' }),
+      );
+      await page.goto('https://site.test/');
+      await page.evaluate(`Promise.race([
+        (async () => { ${probe(udpPort)} })().catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ])`);
+      return packets;
+    } finally {
+      await browser.close();
+      udp.close();
+    }
+  }
+
+  /** A WebTransport session (HTTP/3 over QUIC) to the socket. */
+  const webTransport = (port: number) =>
+    `await new WebTransport('https://127.0.0.1:${port}/').ready;`;
+  /** A fetch that Chromium is told to make over QUIC (HTTP/3) only. */
+  const quicFetch = (port: number) => `await fetch('https://127.0.0.1:${port}/');`;
+  const forceQuic = (port: number) => [`--origin-to-force-quic-on=127.0.0.1:${port}`];
+
+  it('negative control: local mode opens WebTransport over UDP', async () => {
+    expect(await datagrams(false, webTransport)).toBeGreaterThan(0);
+  });
+
+  it('opens no WebTransport over UDP: a fixed proxy turns QUIC off', async () => {
+    expect(await datagrams(true, webTransport)).toBe(0);
+  });
+
+  it('negative control: local mode sends a forced-QUIC fetch over UDP', async () => {
+    expect(await datagrams(false, quicFetch, forceQuic)).toBeGreaterThan(0);
+  });
+
+  it('sends no QUIC for a fetch, even with QUIC forced on for the origin', async () => {
+    expect(await datagrams(true, quicFetch, forceQuic)).toBe(0);
   });
 });
