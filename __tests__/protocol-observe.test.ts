@@ -188,6 +188,31 @@ describe('executor.secretFields', () => {
     }
   }, 60_000);
 
+  it('masks a credential typed into a field inside an iframe (PR bot review)', async () => {
+    const page = await executor.createPage();
+    try {
+      await page.setContent(
+        '<!doctype html><title>Frame</title><iframe name="app" srcdoc="<input id=token aria-label=token>"></iframe>',
+      );
+      await page.frameLocator('iframe[name=app]').locator('#token').waitFor();
+      const filled = await executor.executeAction(
+        {
+          type: 'fill',
+          // The selector frameLocator() compiles to: a fill can reach a field inside an iframe.
+          selector: 'iframe[name=app] >> internal:control=enter-frame >> #token',
+          text: '{{secret:PW}}',
+        },
+        page,
+        mapSecrets({ PW: SECRET }),
+      );
+      expect(filled.success).toBe(true);
+      const masked = (await executor.secretFields(page))!;
+      expect(await Promise.all(masked.map((f) => f.getAttribute('id')))).toEqual(['token']);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+
   it('answers null for a page that does not answer, so no unmasked screenshot is taken', async () => {
     const page = await executor.createPage();
     try {

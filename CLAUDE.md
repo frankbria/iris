@@ -1376,7 +1376,7 @@ src/protocol.ts).
   the cap.
 - **The screenshot is a viewport JPEG (quality 70), base64**, with every field holding a value
   typed from a `{{secret:NAME}}` reference masked (`executor.secretFields(page)`: the first 100
-  `input`/`textarea`/contenteditable elements whose value contains one; a field that cannot
+  `input`/`textarea`/contenteditable elements, in every frame, whose value contains one; a field that cannot
   be read is masked too, and so is every field past the 100th, unread). Fields that cannot
   be listed (a hung page) mean no screenshot (`screenshotOmitted`), never an unmasked one; a
   screenshot that throws keeps the snapshot. The session is `busy` while observed (#240). `observe` runs under the gate's exclusive side (`gate.write`), so

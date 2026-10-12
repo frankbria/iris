@@ -294,11 +294,22 @@ export class ActionExecutor {
    */
   async secretFields(page: Page): Promise<Locator[] | null> {
     if (this.resolvedSecrets.size === 0) return [];
-    const all = await withPageTimeout(
-      page.locator('input, textarea, [contenteditable]:not([contenteditable="false"])').all(),
+    // Every frame (PR bot): a fill can target a field inside an iframe, and the screenshot
+    // renders it.
+    const lists = await withPageTimeout(
+      Promise.all(
+        page
+          .frames()
+          .map((frame) =>
+            frame
+              .locator('input, textarea, [contenteditable]:not([contenteditable="false"])')
+              .all(),
+          ),
+      ),
       null,
     );
-    if (all === null) return null;
+    if (lists === null) return null;
+    const all = lists.flat();
     const fields = all.slice(0, 100);
     const read = (field: Locator) =>
       field
