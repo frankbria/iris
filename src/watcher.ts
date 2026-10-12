@@ -643,7 +643,12 @@ export class FileWatcher {
     const target = this.executeTarget(event.path, fileUrl);
     // A changed .ts or .css is no page (#319): navigating Chromium to its source and
     // clicking there is what the README example used to do. Decided before translating,
-    // so nothing is paid for and no run is recorded (PR bot review).
+    // so nothing is paid for and no run is recorded (PR bot review). A deletion never runs
+    // either: the file is gone, and its plan would act on the stale reused page.
+    if (this.options.execute && event.type === 'unlink') {
+      this.logger.log(`⏭️  Not executed: ${event.path} was deleted.`);
+      return;
+    }
     if (this.options.execute && target === null) {
       this.logger.log(
         `⏭️  Not executed: ${event.path} is not a page. Pass --url (or set IRIS_BASE_URL) for the page to run against.`,
@@ -676,10 +681,7 @@ export class FileWatcher {
         return;
       }
 
-      // Execute actions if enabled. Skip execution entirely on unlink: the file is
-      // gone, so there is nothing to navigate to, and running translated DOM actions
-      // against the stale reused page would act on the previous file's content.
-      if (this.options.execute && event.type !== 'unlink' && target) {
+      if (this.options.execute && target) {
         this.logger.log('\n🚀 Executing actions in browser...');
 
         try {

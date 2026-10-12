@@ -538,6 +538,23 @@ describe('FileWatcher execute-mode runtime', () => {
     await watcher.stop();
   });
 
+  it('does not translate a deletion under --url either: nothing would run (PR bot review)', async () => {
+    const watcher = new FileWatcher({
+      execute: true,
+      debounceMs: 50,
+      url: 'http://localhost:3000',
+    });
+    await watcher.start();
+
+    unlinkCallback!('src/gone.ts');
+    await jest.advanceTimersByTimeAsync(60);
+
+    const { translate } = await import('../src/translator');
+    expect(translate).not.toHaveBeenCalled();
+    expect(mockPage.goto).not.toHaveBeenCalled();
+    await watcher.stop();
+  });
+
   it('opens a changed HTML file itself when no --url is set', async () => {
     const watcher = new FileWatcher({ execute: true, debounceMs: 50 });
     await watcher.start();
