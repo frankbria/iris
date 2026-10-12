@@ -517,3 +517,10 @@ Write/Edit, not as a pre-push afterthought.
 - **When the sidequest board MCP is disconnected, a hook refuses every Agent call.** The internal review then has to be done inline; say so in the PR body.
 - **The box is shared with other projects' suites.** A full local run here had 55 failures, all browser/Docker/spawned-process timeouts, at load 9-18 from another session's coverage run; every non-Docker file re-run alone passed except one visual-diff test that kept failing while the box stayed loaded. Check `pgrep -fa '[j]est'` for other projects before a full run; CI is the verdict when the box is busy.
 - **Selector-shaped heuristics need the reviewers.** Three review rounds each found one more valid CSS spelling the token rule dropped (selector lists, `div>a`, `div >a`). For a grammar gate, enumerate the grammar's separators (comma, each combinator in all four spacings) as test rows before review.
+
+## 2026-10-12 — #298
+
+- **The vision cache hides the vendor in a demo.** A second run over the same image pair is served from `<data dir>/cache` with no provider call, so the stand-in vendor's log stays empty and the demo looks broken. Delete the cache before each demo step that must reach the vendor.
+- **`fetchWithTimeout` stops timing when the headers arrive.** The body read (`response.json()`) is unbounded for every caller; codex found it on the new probe. Use `AbortSignal.timeout()` where the body must be bounded too, and do not add a `.catch(() => ({}))` after `json()`: it turns the timeout's abort into "answered" (#522 for the shared helper).
+- **A demo env that resets `HOME` also hides Playwright's browsers.** Pass `PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright` from the real home.
+- **The CRAP gate cannot measure functions holding nested template literals or an inline commander option type.** Hoisting the inner template into a variable (same string) and moving the action's option type to an interface made them measurable. Check with `crap --cc-only` early, before reviewers read the tree.
