@@ -98,8 +98,8 @@ jobs:
         run: |
           mkdir -p sbom
           trivy() {
-            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-              -v trivy-cache:/root/.cache -v "$PWD/sbom:/out" "$TRIVY" --skip-version-check "$@"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -e TRIVY_SKIP_VERSION_CHECK=true \
+              -v trivy-cache:/root/.cache -v "$PWD/sbom:/out" "$TRIVY" "$@"
           }
           for image in iris:ci iris-portal:ci; do
             sbom="/out/${image%%:*}.cdx.json"
