@@ -246,6 +246,7 @@ describe('prose is not a selector or a URL (issue #297)', () => {
     'verify the error banner is hidden',
     'click Submit.',
     'click Note: save',
+    'click Yes, please',
   ])('%s -> no pattern actions', (instruction) => {
     expect(translateSync(instruction)).toEqual([]);
   });
@@ -265,6 +266,7 @@ describe('prose is not a selector or a URL (issue #297)', () => {
     ['click //button[@id="go"]', '//button[@id="go"]'],
     ['click #menu >> text=Logout', '#menu >> text=Logout'],
     ['click *', '*'],
+    ['click #save, button, a', '#save, button, a'],
   ])('%s keeps the selector %s', (instruction, selector) => {
     expect(translateSync(instruction)).toEqual([{ type: 'click', selector }]);
   });

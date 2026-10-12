@@ -104,7 +104,9 @@ function looksLikeSelector(target: string): boolean {
   // Quoted strings and bracket/paren contents may hold anything, spaces included.
   const tokens = target
     .replace(/"[^"]*"|'[^']*'|\[[^\]]*\]|\([^)]*\)/g, (m) => m[0] + m.at(-1))
-    .split(/\s+/);
+    // A selector list (`#save, button`) splits at its commas too.
+    .split(/[\s,]+/)
+    .filter(Boolean);
   return (
     tokens.some((t) => SELECTOR_TOKEN.test(t)) &&
     tokens.every((t) => SELECTOR_TOKEN.test(t) || /^[a-z][\w-]*$/i.test(t))
