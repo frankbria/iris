@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { sql, type Kysely } from 'kysely';
+import { sql, type Kysely, type RawBuilder } from 'kysely';
 import { log } from './log';
 import { orgArtifacts, type ArtifactStore } from './artifact-store';
 import { forgetArtifacts } from './storage-quota';
@@ -37,8 +37,91 @@ export interface RetentionReport {
   termsDropped: number;
   /** Object-storage prefixes deleted this pass (#472). */
   artifactPrefixesPurged: number;
+  /** Superseded baseline images deleted this pass (#475). */
+  baselinesCollected: number;
   /** Steps that failed this pass (logged); non-empty makes the CLI exit 3. */
   failures: string[];
+}
+
+/** A superseded baseline image the retention pass may delete (#475). */
+function collectableSql(
+  orgId: string | RawBuilder<unknown>,
+  key: string | RawBuilder<unknown>,
+  cutoff: RawBuilder<unknown>,
+): RawBuilder<boolean> {
+  // `aged`, not `o`: the candidate query passes `o.org_id`/`o.key` from its own row, and a
+  // reused alias would compare the inner row with itself (codex review).
+  return sql<boolean>`exists (select 1 from artifact_objects aged
+      where aged.org_id = ${orgId} and aged.key = ${key} and aged.created_at < ${cutoff})
+    and not exists (select 1 from visual_baselines b
+      where b.org_id = ${orgId} and b.object_key = ${key})
+    and not exists (select 1 from run_results r
+      where r.org_id = ${orgId} and r.result->'artifacts'->>'baseline' = ${key})
+    and not exists (select 1 from runs j where j.org_id = ${orgId}
+      and j.kind = 'visual' and j.status in ('queued', 'running'))`;
+}
+
+const retentionCutoff = (now: Date) =>
+  sql`${now}::timestamptz - make_interval(days => ${RUN_RETENTION_DAYS})`;
+
+/**
+ * Up to 500 superseded baseline images the retention pass may delete (#475), in random
+ * order: objects that keep failing cannot fill every batch and starve the rest (codex
+ * review). ponytail: no attempt tracking; add an attempted_at if failures ever need ordering.
+ */
+export async function listCollectableBaselines(
+  db: Kysely<unknown>,
+  now: Date,
+): Promise<{ org_id: string; key: string }[]> {
+  const { rows } = await sql<{ org_id: string; key: string }>`
+    select o.org_id, o.key from artifact_objects o
+    where o.key ~ '^org/[^/]+/project/[^/]+/baselines/'
+      and ${collectableSql(sql.ref('o.org_id'), sql.ref('o.key'), retentionCutoff(now))}
+    order by random() limit 500`.execute(db);
+  return rows;
+}
+
+/**
+ * Superseded baselines (#475): an approval repoints the project's baseline and the old image
+ * stays while a run links it. One goes once it is not current, no remaining run's result
+ * links it, and it is older than run retention. An org with a visual job queued or running
+ * is skipped: that job may still record a link to it. Returns how many went and failed.
+ * ponytail: only objects with an `artifact_objects` row (#315) are found; images stored
+ * before #315 stay until their org is purged.
+ */
+async function collectSupersededBaselines(
+  db: Kysely<unknown>,
+  artifacts: ArtifactStore,
+  now: Date,
+): Promise<{ collected: number; failed: number }> {
+  const cutoff = retentionCutoff(now);
+  const rows = await listCollectableBaselines(db, now);
+  let collected = 0;
+  const failed: string[] = [];
+  for (const { org_id, key } of rows) {
+    try {
+      // Re-checked with its accounting row locked (codex review). Approval rewrites a key
+      // through that row (the quota reservation refreshes `created_at`), so it either
+      // committed before this check, which then finds it new or current, or waits for this
+      // delete and writes the object again afterwards.
+      const gone = await db.transaction().execute(async (tx) => {
+        await sql`select 1 from artifact_objects where org_id = ${org_id} and key = ${key}
+          for update`.execute(tx);
+        const { rows: still } = await sql<{ ok: boolean }>`
+          select ${collectableSql(org_id, key, cutoff)} as ok`.execute(tx);
+        if (!still[0].ok) return false;
+        await orgArtifacts(artifacts, org_id).delete(key);
+        await forgetArtifacts(tx, org_id, key);
+        return true;
+      });
+      if (gone) collected++;
+    } catch (err) {
+      // One object that cannot be deleted must not stop the rest (codex review).
+      failed.push(key);
+      log('error', 'baseline collection failed', { orgId: org_id, err: (err as Error).message });
+    }
+  }
+  return { collected, failed: failed.length };
 }
 
 /**
@@ -389,6 +472,16 @@ export function offboarding(db: Kysely<unknown>) {
           })
         : 0;
 
+      // What was deleted is reported even when some deletions failed (codex review): the
+      // failures are retried by a later pass and named in `failures`.
+      const baselines = artifacts
+        ? await step('baselines', { collected: 0, failed: 0 }, () =>
+            collectSupersededBaselines(db, artifacts, now),
+          )
+        : { collected: 0, failed: 0 };
+      if (baselines.failed) failures.push('baselines');
+      const baselinesCollected = baselines.collected;
+
       const report = {
         orgsPurged,
         tombstonesDropped,
@@ -397,6 +490,7 @@ export function offboarding(db: Kysely<unknown>) {
         verificationsDeleted,
         termsDropped,
         artifactPrefixesPurged,
+        baselinesCollected,
         failures,
       };
       log(failures.length ? 'error' : 'info', 'retention pass', {

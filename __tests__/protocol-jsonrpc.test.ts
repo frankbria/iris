@@ -83,6 +83,18 @@ describe('JSON-RPC 2.0 compliance (#357)', () => {
     });
   });
 
+  // #528: batches are not supported (decision in docs/integration-surfaces.md). A batch is
+  // one -32600 that says so; none of its elements runs or is answered.
+  it('answers a batch with one -32600 that says batches are not supported', async () => {
+    const [batch, after] = await exchange([`[${STATUS(1)},${STATUS(2)}]`, STATUS(3)], 2);
+    expect(batch).toEqual({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32600, message: 'Invalid Request', data: 'Batch requests are not supported' },
+    });
+    expect(after).toMatchObject({ id: 3, result: { status: 'ready' } });
+  });
+
   it('accepts string, number and null ids and echoes them', async () => {
     const replies = await exchange([STATUS('a'), STATUS(7), STATUS(null)], 3);
     expect(replies.map((r) => r.id)).toEqual(['a', 7, null]);

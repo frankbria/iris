@@ -244,7 +244,16 @@ plans/
   same-origin iframes); the same stop twice in a row is pressed through (a cross-origin
   frame or closed shadow root). The Escape check focuses inside each dialog before Escape. The Escape check reloads
   the page (`load`, failure tolerated) when the trap check pressed Escape, since that closed
-  every Escape-dismissible dialog first. Escape identity after a re-render is #491
+  every Escape-dismissible dialog first. **Escape is judged per dialog (#491)**: each round
+  re-finds the first showing (not inert), untested dialog in DOM order, marks and focuses it,
+  presses Escape, and asks whether *it* is still open: while its own node is in the document,
+  that node's visibility decides; once it is gone, with an
+  id, an element with that id showing; else a showing dialog in its place (left, top, width
+  within 2 px; height may change), with its name (`aria-label`, `aria-labelledby`, first
+  heading) and text containing or contained in its own (a re-render), which is marked tested
+  too. No class lists and no page-wide count: a dialog that opened elsewhere, under another
+  name, or slid into the gap with other text is a different dialog. At most 50 per page;
+  showing dialogs left untested past that are a failed `page` interaction, never a pass
 - **The a11y runner isolates pages (#287).** A page that fails (navigation, timeout, a check
   that throws on hostile markup) is that page's result with `error` and an empty axe
   result; the other pages still run. `summary.pagesErrored` counts them, and an errored page
@@ -298,14 +307,15 @@ plans/
   the **configured** model (it used to accept any pulled llava): `capabilities` decides, the table
   only when an old Ollama reports none, and a 404 (not pulled) is unavailable
 - **Ollama probes are bounded and cached (#298).** `probeOllama` (models.ts): 2 s timeout
-  (`AbortSignal.timeout`, which also covers the body; `fetchWithTimeout` stops at the headers, #522), answer
+  (`AbortSignal.timeout`, which also covers the body; `fetchWithTimeout` uses it too since #522, so every Ollama call and the model probe give up on a stalled body), answer
   (promise) cached 60 s per URL and model, `performance.now()` (#190). Text `isAvailable()` is
   `ollamaReachable()` (`/api/tags`, daemon up only: a 503 from the model must still reach the
   caller, `cli-run-exit.test.ts`). `resetModelProbeCache()` clears it too; a test that mocks
   `fetch` for the same endpoint twice must call it between cases
 - **OpenAI requests send `max_completion_tokens`**, not the deprecated `max_tokens` (#298);
-  Anthropic keeps `max_tokens` (its own API). The o-series still refuses `temperature: 0.1`
-  (#520)
+  Anthropic keeps `max_tokens` (its own API). The o-series refuses any `temperature` but the
+  default, so `isReasoningModel()` (`o1`/`o3`/`o4`, `-mini`, snapshots) drops it from both
+  OpenAI clients' requests (#520); other models keep 0.1
 - **`--ai-model <id>`** on `visual-diff` and `watch` is the vision model (`diff.aiModel`,
   `ai.model` -> `AIVisualClassifier`). `<PROVIDER>_MODEL` stays the text model
 - **Vision prompts frame page content (#355).** `visionContextBlock()` (src/ai-client/vision.ts)
@@ -1321,7 +1331,9 @@ P1.25; criteria derived from the spec and #357's comments.
   message goes to the log (`rpc handler failed`).
 - **`serializeResponse`**: a result `JSON.stringify` cannot handle becomes a `-32603` frame
   for the same id instead of silence.
-- **Batches** are still answered `-32600`: #528.
+- **Batches are not supported (#528, decided)**: an array is one `-32600` with `data`
+  "Batch requests are not supported", and none of its elements runs; the reasons are in
+  docs/integration-surfaces.md.
 
 ### RPC Server Limits (issue #338)
 
@@ -1865,7 +1877,17 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   last step drains it with `ArtifactStore.deletePrefix()` (filesystem rm, S3 list +
   batched delete, paginated) and removes an entry only once its objects are gone. A
   failure is reported (exit 3) and retried next pass. Without `IRIS_S3_*` the queue waits.
-  Baselines stay until the org is purged (older runs link them).
+  Current baselines stay until the org is purged. A replaced one (#475) is deleted by the
+  `baselines` step once it is older than 90 days, not any `visual_baselines.object_key`,
+  and no remaining `run_results.result->'artifacts'->>'baseline'`; an org with a visual job
+  queued or running is skipped that pass (it may still record a link). The inventory is
+  `artifact_objects` (#315), so images stored before it are not found; deletion is
+  `ArtifactStore.delete(key)` (S3 `DeleteObject`, filesystem `rm --force`).
+  Each candidate is re-checked and deleted with its `artifact_objects` row locked
+  (`for update`), and the quota write refreshes that row's `created_at` on a rewrite, so a
+  re-approval reusing the key is either seen as new or waits and writes the object again.
+  Candidates are taken in random order, so failing ones cannot starve the rest; a failure
+  is reported after the others are tried.
   A purged org's `org/<org>/` is queued once more a day after the purge (#476: a visual job
   running at the purge can still write; its finish is refused), marked by
   `org_deletions.resweep_done` (migration 0017). `purged_at` is the pass's `now`, not the

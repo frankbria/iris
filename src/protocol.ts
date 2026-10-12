@@ -979,10 +979,14 @@ export function startServer(
       // Valid JSON is not necessarily a request: `null`, `1`, `[]` and `"x"`
       // all parse. Reading `.id` off `null` used to throw here, outside every
       // try, and the rejected listener took the whole process — and every
-      // session in it — down (#330). Batches are not supported, so `[]` is
-      // rejected the same way.
+      // session in it — down (#330). Batches are not supported (#528, decision in
+      // docs/integration-surfaces.md): an array is one -32600 that says so, and none of
+      // its elements runs.
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        reply({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } });
+        const error = Array.isArray(parsed)
+          ? { code: -32600, message: 'Invalid Request', data: 'Batch requests are not supported' }
+          : { code: -32600, message: 'Invalid Request' };
+        reply({ jsonrpc: '2.0', id: null, error });
         refusal('unknown', 'client_error', t0, { ...requestFields, code: -32600 });
         return;
       }

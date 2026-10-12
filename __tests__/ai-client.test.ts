@@ -93,7 +93,21 @@ describe('AI Client', () => {
       // Not the deprecated max_tokens (#298).
       expect(mockCreate.mock.calls[0][0].max_completion_tokens).toBe(1000);
       expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('max_tokens');
+      expect(mockCreate.mock.calls[0][0].temperature).toBe(0.1);
     });
+
+    // #520: the o-series refuses any temperature but the default; the rest keep 0.1.
+    it.each(['o1', 'o3-mini', 'o4-mini-2025-04-16'])(
+      'sends no temperature to %s',
+      async (model) => {
+        mockCreate.mockResolvedValue({
+          choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
+        });
+        const client = createAIClient({ ...config, ai: { ...config.ai, model } });
+        await client.translateInstruction({ instruction: 'click the submit button' });
+        expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+      },
+    );
 
     it('should handle API errors gracefully', async () => {
       mockCreate.mockRejectedValue(new Error('API Error'));

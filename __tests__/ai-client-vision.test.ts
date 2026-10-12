@@ -71,6 +71,15 @@ describe('vision clients', () => {
   describe('OpenAIVisionClient', () => {
     const config: IrisConfig['ai'] = { provider: 'openai', apiKey: 'sk-test', model: 'gpt-4o' };
 
+    // #520: the o-series refuses any temperature but the default.
+    it('sends no temperature to an o-series model', async () => {
+      mockOpenAICreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify(parsed) } }],
+      });
+      await new OpenAIVisionClient({ ...config, model: 'o3' }).analyzeVisualDiff(request);
+      expect(mockOpenAICreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+    });
+
     it('throws when the apiKey is missing', async () => {
       const client = new OpenAIVisionClient({ provider: 'openai', model: 'gpt-4o' });
       await expect(client.analyzeVisualDiff(request)).rejects.toThrow(/OpenAI API key/i);
@@ -97,6 +106,7 @@ describe('vision clients', () => {
       // Not the deprecated max_tokens, which the o-series refuses (#298).
       expect(payload.max_completion_tokens).toBe(1000);
       expect(payload).not.toHaveProperty('max_tokens');
+      expect(payload.temperature).toBe(0.1);
       const userContent = payload.messages.find((m: { role: string }) => m.role === 'user').content;
       const imageParts = userContent.filter((p: { type: string }) => p.type === 'image_url');
       expect(imageParts).toHaveLength(2);
