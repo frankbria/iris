@@ -334,6 +334,19 @@ describe('request rate limits (#342)', () => {
   });
 
   // Codex review (#357): a notification never gets a reply, a rate refusal included.
+  // Codex final review: an object with no id that is not a valid request (`{}`) is an
+  // invalid request, not a notification, so its rate refusal is still answered.
+  test('a malformed object without an id still gets the rate refusal', async () => {
+    const url = await serve({ limits: { keyRequestsPerMinute: 1 } });
+    const a = await open(url, as('key-a'));
+    const replies: JsonRpcResponse[] = [];
+    a.on('message', (d) => replies.push(JSON.parse(d.toString())));
+    a.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getStatus' })); // spends the token
+    a.send('{}');
+    await eventually(() => replies.length === 2);
+    expect(replies[1]).toMatchObject({ id: null, error: { code: -32029 } });
+  });
+
   test('a notification over the rate is dropped without a reply, and still charged', async () => {
     const url = await serve({ limits: { keyRequestsPerMinute: 1 } });
     const a = await open(url, as('key-a'));

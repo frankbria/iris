@@ -93,10 +93,6 @@ export interface JsonRpcResponse {
 const isRpcId = (id: unknown): id is string | number | null =>
   id === null || typeof id === 'string' || typeof id === 'number';
 
-/** A frame shaped as a notification: a JSON object with no `id` member (§4.1). */
-const isNotification = (value: unknown): boolean =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) && !('id' in value);
-
 /** Whether `value` is not a JSON-RPC 2.0 request object (#357). */
 function invalidRequest(value: Record<string, unknown>): boolean {
   return (
@@ -104,6 +100,15 @@ function invalidRequest(value: Record<string, unknown>): boolean {
     typeof value.method !== 'string' ||
     ('id' in value && !isRpcId(value.id))
   );
+}
+
+/**
+ * A notification (§4.1): a valid request object with no `id` member. A malformed object
+ * without one (`{}`) is an invalid request, not a notification, and is answered (codex).
+ */
+function isNotification(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  return !('id' in value) && !invalidRequest(value as Record<string, unknown>);
 }
 
 /**
