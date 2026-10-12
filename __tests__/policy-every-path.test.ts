@@ -120,9 +120,11 @@ describe('planPolicy and startOriginOf (#354)', () => {
 });
 
 describe('one-shot iris run (#354)', () => {
+  /** `url` null runs with no --url: the plan's own navigation, or nothing, is the start. */
   function irisRun(
     args: string[],
-  ): Promise<{ results: Array<{ success: boolean; error?: string }> }> {
+    url: string | null = siteUrl,
+  ): Promise<{ status?: string; results: Array<{ success: boolean; error?: string }> }> {
     const proc = spawn(
       process.execPath,
       [
@@ -131,8 +133,7 @@ describe('one-shot iris run (#354)', () => {
         path.join(REPO_ROOT, 'src/cli.ts'),
         'run',
         '--json',
-        '--url',
-        siteUrl,
+        ...(url ? ['--url', url] : []),
         ...args,
       ],
       {
