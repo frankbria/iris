@@ -37,8 +37,41 @@ export interface RetentionReport {
   termsDropped: number;
   /** Object-storage prefixes deleted this pass (#472). */
   artifactPrefixesPurged: number;
+  /** Superseded baseline images deleted this pass (#475). */
+  baselinesCollected: number;
   /** Steps that failed this pass (logged); non-empty makes the CLI exit 3. */
   failures: string[];
+}
+
+/**
+ * Superseded baselines (#475): an approval repoints the project's baseline and the old image
+ * stays while a run links it. One goes once it is not current, no remaining run's result
+ * links it, and it is older than run retention. An org with a visual job queued or running
+ * is skipped: that job may still record a link to it. Returns how many went.
+ * ponytail: only objects with an `artifact_objects` row (#315) are found; images stored
+ * before #315 stay until their org is purged.
+ */
+async function collectSupersededBaselines(
+  db: Kysely<unknown>,
+  artifacts: ArtifactStore,
+  now: Date,
+): Promise<number> {
+  const cutoff = sql`${now}::timestamptz - make_interval(days => ${RUN_RETENTION_DAYS})`;
+  const { rows } = await sql<{ org_id: string; key: string }>`
+    select o.org_id, o.key from artifact_objects o
+    where o.key ~ '^org/[^/]+/project/[^/]+/baselines/' and o.created_at < ${cutoff}
+      and not exists (select 1 from visual_baselines b
+        where b.org_id = o.org_id and b.object_key = o.key)
+      and not exists (select 1 from run_results r
+        where r.org_id = o.org_id and r.result->'artifacts'->>'baseline' = o.key)
+      and not exists (select 1 from runs j where j.org_id = o.org_id
+        and j.kind = 'visual' and j.status in ('queued', 'running'))
+    limit 500`.execute(db);
+  for (const { org_id, key } of rows) {
+    await orgArtifacts(artifacts, org_id).delete(key);
+    await forgetArtifacts(db, org_id, key);
+  }
+  return rows.length;
 }
 
 export function offboarding(db: Kysely<unknown>) {
@@ -366,6 +399,10 @@ export function offboarding(db: Kysely<unknown>) {
           })
         : 0;
 
+      const baselinesCollected = artifacts
+        ? await step('baselines', 0, () => collectSupersededBaselines(db, artifacts, now))
+        : 0;
+
       const report = {
         orgsPurged,
         tombstonesDropped,
@@ -374,6 +411,7 @@ export function offboarding(db: Kysely<unknown>) {
         verificationsDeleted,
         termsDropped,
         artifactPrefixesPurged,
+        baselinesCollected,
         failures,
       };
       log(failures.length ? 'error' : 'info', 'retention pass', {

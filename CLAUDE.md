@@ -1835,7 +1835,12 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   last step drains it with `ArtifactStore.deletePrefix()` (filesystem rm, S3 list +
   batched delete, paginated) and removes an entry only once its objects are gone. A
   failure is reported (exit 3) and retried next pass. Without `IRIS_S3_*` the queue waits.
-  Baselines stay until the org is purged (older runs link them).
+  Current baselines stay until the org is purged. A replaced one (#475) is deleted by the
+  `baselines` step once it is older than 90 days, not any `visual_baselines.object_key`,
+  and no remaining `run_results.result->'artifacts'->>'baseline'`; an org with a visual job
+  queued or running is skipped that pass (it may still record a link). The inventory is
+  `artifact_objects` (#315), so images stored before it are not found; deletion is
+  `ArtifactStore.delete(key)` (S3 `DeleteObject`, filesystem `rm --force`).
 - **Not purged**: live orgs' AI ledger rows (no period decided).
 
 ### BYOK Provider Keys (issue #344)

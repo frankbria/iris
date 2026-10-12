@@ -191,6 +191,16 @@ describe('FilesystemArtifactStore', () => {
     await expect(orgArtifacts(store, 'o2').deletePrefix('org/o1/')).rejects.toThrow(/Invalid/);
   });
 
+  it('deletes one artifact; a missing one is no error (#475)', async () => {
+    const key = baselineKey({ orgId: 'o1', projectId: 'p', name: 'gone--abc' });
+    await store.put(key, Buffer.from('x'), 'image/png');
+    await store.delete(key);
+    expect(await store.get(key)).toBeNull();
+    await store.delete(key);
+    await expect(store.delete('../x.png')).rejects.toThrow(/Invalid artifact key/);
+    await expect(orgArtifacts(store, 'o2').delete(key)).rejects.toThrow(/Invalid/);
+  });
+
   it('gives the local file as the retrieval URL', async () => {
     const key = baselineKey({ orgId: 'o1', projectId: 'p1', name: 'n1' });
     await store.put(key, Buffer.from('x'), 'image/png');
@@ -314,6 +324,15 @@ if (!s3Configured) {
     expect(await store.get(keys[1004])).toBeNull();
     expect((await store.get(key))?.toString()).toBe('org A screenshot');
   }, 120_000);
+
+  it('deletes one object; a missing one is no error (#475)', async () => {
+    const one = baselineKey({ orgId: 'orgA', projectId: 'p', name: 'old--abc' });
+    await store.put(one, Buffer.from('x'), 'image/png');
+    await store.delete(one);
+    expect(await store.get(one)).toBeNull();
+    await store.delete(one);
+    expect((await store.get(key))?.toString()).toBe('org A screenshot');
+  });
 
   it('caps a signed URL at 15 minutes', async () => {
     expect(new URL(await store.signedUrl(key, 3600)).searchParams.get('X-Amz-Expires')).toBe('900');

@@ -96,5 +96,9 @@ export function quotaArtifacts(
       await forgetArtifacts(db, orgId, prefix);
       return n;
     },
+    async delete(key) {
+      await store.delete(key);
+      await sql`delete from artifact_objects where org_id = ${orgId} and key = ${key}`.execute(db);
+    },
   };
 }
