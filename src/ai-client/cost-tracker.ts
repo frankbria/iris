@@ -3,7 +3,6 @@ import { ensureDatabaseDir } from '../db';
 import { DEFAULT_BUDGET_LIMITS } from '../config';
 import { hostedLog } from '../log';
 import { dropLegacyIndexes } from './cache';
-import { DEFAULT_MODELS } from './models';
 
 /**
  * AI provider pricing configuration
@@ -237,30 +236,19 @@ const SNAPSHOT_SUFFIX = /^-(\d{8}|\d{4}-\d{2}-\d{2}|latest)$/;
 export const RESERVATION_CEILING: TokenUsage = { inputTokens: 8000, outputTokens: 1000 };
 
 /**
- * The worst-case USD cost of one call to `model` at `ceiling` (#482), from the default
- * pricing table. A model with no row is priced at the dearest registered rate per field, as
- * `CostTracker` charges an unpriced model (#243), so an estimate never under-reserves.
+ * The most one managed AI call can cost (#482): the reservation ceiling (#244) plus one input
+ * token per request character, at the provider's dearest registered rates. Not the default
+ * model's: a retired default is replaced by a successor at call time (#184), which may cost
+ * more (codex review). Over-reserving only trims concurrency at the edge of the credit.
  */
-export function worstCaseCallUsd(
-  provider: string,
-  model: string,
-  ceiling: TokenUsage = RESERVATION_CEILING,
-): number {
-  const priced = DEFAULT_PRICING.filter(
-    (p) => p.costPerInputToken !== undefined && p.costPerOutputToken !== undefined,
+export function managedCallEstimateUsd(provider: 'openai' | 'anthropic', inputChars = 0): number {
+  const rows = DEFAULT_PRICING.filter((p) => p.provider === provider);
+  const input = Math.max(...rows.map((p) => p.costPerInputToken ?? 0));
+  const output = Math.max(...rows.map((p) => p.costPerOutputToken ?? 0));
+  return (
+    (RESERVATION_CEILING.inputTokens + Math.max(0, inputChars)) * input +
+    RESERVATION_CEILING.outputTokens * output
   );
-  const row = priced.find((p) => p.provider === provider && p.model === model);
-  const input = row?.costPerInputToken ?? Math.max(...priced.map((p) => p.costPerInputToken!));
-  const output = row?.costPerOutputToken ?? Math.max(...priced.map((p) => p.costPerOutputToken!));
-  return ceiling.inputTokens * input + ceiling.outputTokens * output;
-}
-
-/**
- * The most one managed AI call can cost (#482): the reservation ceiling at the provider's
- * default text model, which is what a managed credential (no model of its own) runs.
- */
-export function managedCallEstimateUsd(provider: 'openai' | 'anthropic'): number {
-  return worstCaseCallUsd(provider, DEFAULT_MODELS.text[provider]);
 }
 
 /**

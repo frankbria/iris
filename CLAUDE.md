@@ -1601,8 +1601,10 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   under `pg_advisory_xact_lock(hashtext('managed-ai:' || org))` the resolver admits a managed
   call only when this month's managed spend + live reservations + the call's worst case fit
   the credit, and inserts a reservation at that worst case (`managedCallEstimateUsd`: the
-  cost tracker's `RESERVATION_CEILING` at the provider's default text model, priced by
-  `worstCaseCallUsd`; an unpriced model gets the dearest rates). The credential carries
+  cost tracker's `RESERVATION_CEILING` plus one input token per request character, which
+  the RPC server passes as `inputChars`, at the provider's **dearest** registered rates:
+  a retired default may be swapped for a pricier successor at call time, #184). The
+  credential carries
   `release()`; the RPC server strips it before `translate()` and runs it in a `finally`, after
   the settled usage row is written (`onUsage` is awaited). A row older than 10 minutes stops
   counting and is deleted at the org's next admission (a crashed call). The estimate is a

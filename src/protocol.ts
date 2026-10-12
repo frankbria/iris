@@ -513,7 +513,10 @@ export function startServer(
      * translation only, and the process-wide `*_API_KEY` is never used for it
      * (ADR 0001 §5). Local (token) connections keep the process configuration.
      */
-    aiCredentials?: (principal: Principal) => Promise<TenantCredentials | null>;
+    aiCredentials?: (
+      principal: Principal,
+      request?: { inputChars?: number },
+    ) => Promise<TenantCredentials | null>;
     /**
      * The usage ledger (#263): a tenant session's browser minutes when it ends, and
      * each AI call its translations make. Local connections record nothing.
@@ -1573,7 +1576,10 @@ async function executeBrowserActions(
   url: string | undefined,
   maxActions: number,
   tenant: {
-    aiCredentials?: (principal: Principal) => Promise<TenantCredentials | null>;
+    aiCredentials?: (
+      principal: Principal,
+      request?: { inputChars?: number },
+    ) => Promise<TenantCredentials | null>;
     usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
   } = {},
   secrets: Record<string, string> = {},
@@ -1632,7 +1638,9 @@ async function executeBrowserActions(
               credentials: async () => {
                 if (!tenant.aiCredentials) return null;
                 try {
-                  const resolved = await tenant.aiCredentials(principal);
+                  // The request's size, so a managed reservation covers a long one (#482).
+                  const inputChars = JSON.stringify({ instruction, url }).length;
+                  const resolved = await tenant.aiCredentials(principal, { inputChars });
                   if (!resolved) return null;
                   billingMode = resolved.billingMode;
                   const { release: free, ...credentials } = resolved;

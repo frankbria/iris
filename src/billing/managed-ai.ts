@@ -132,18 +132,22 @@ export function managedAiResolver(deps: {
   providerKeys: { credentialsFor(orgId: string): Promise<AICredentials | null> };
   managedKey: ManagedKey | null;
   /**
-   * Worst-case cost of one managed call, reserved before it (#482): hosted wiring passes
-   * `managedCallEstimateUsd` (src/ai-client/cost-tracker.ts). A parameter, not an import:
-   * the portal loads this module, and the cost tracker would bring SQLite into its bundle.
+   * Worst-case cost of one managed call of `inputChars` request characters, reserved before
+   * it (#482): hosted wiring passes `managedCallEstimateUsd` (src/ai-client/cost-tracker.ts).
+   * A parameter, not an import: the portal loads this module, and the cost tracker would
+   * bring SQLite into its bundle.
    */
-  estimateUsd: number;
-}): (principal: { orgId: string }) => Promise<ResolvedAI | null> {
+  estimateUsd: (inputChars: number) => number;
+}): (
+  principal: { orgId: string },
+  request?: { inputChars?: number },
+) => Promise<ResolvedAI | null> {
   const settings = orgAiSettings(deps.db);
-  const { estimateUsd } = deps;
-  return async ({ orgId }) => {
+  return async ({ orgId }, request) => {
     const [mode, plan] = await Promise.all([settings.get(orgId), deps.entitlements(orgId)]);
     if (mode === 'managed' && deps.managedKey) {
-      const id = await reserveCredit(deps.db, orgId, plan.managedAiCreditUsdPerMonth, estimateUsd);
+      const estimate = deps.estimateUsd(request?.inputChars ?? 0);
+      const id = await reserveCredit(deps.db, orgId, plan.managedAiCreditUsdPerMonth, estimate);
       if (id)
         return {
           provider: deps.managedKey.provider,

@@ -52,7 +52,7 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
     u.pathname = `/${dbName}`;
     db = createPostgresDb(u.toString());
     await migrateToLatest(db);
-    for (const org of ['org-m', 'org-b', 'org-x', 'org-r']) {
+    for (const org of ['org-m', 'org-b', 'org-x', 'org-r', 'org-big']) {
       await sql`insert into organization (id, name, slug, "createdAt") values (${org}, ${org}, ${org}, now())`.execute(
         db,
       );
@@ -66,7 +66,7 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
 
   const resolver = (
     managedKey = MANAGED as typeof MANAGED | null,
-    estimateUsd = managedCallEstimateUsd(MANAGED.provider),
+    estimateUsd = (inputChars: number) => managedCallEstimateUsd(MANAGED.provider, inputChars),
   ) =>
     managedAiResolver({
       db,
@@ -136,7 +136,7 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
     await orgEntitlements(db).setPlan('org-r', 'pro'); // $10
     await orgAiSettings(db).set('org-r', 'managed', 'user:u3');
     await spend('org-r', 7, 'managed'); // $3 left: three calls at a $1 worst case
-    const resolve = resolver(MANAGED, 1);
+    const resolve = resolver(MANAGED, () => 1);
     const results = await Promise.all([1, 2, 3, 4, 5].map(() => resolve({ orgId: 'org-r' })));
     const managed = results.filter((r) => r?.billingMode === 'managed');
     expect(managed).toHaveLength(3);
@@ -166,11 +166,27 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
     expect((await resolve({ orgId: 'org-r' }))?.billingMode).toBe('managed');
   });
 
-  it('prices the worst case from the managed provider default text model (#482)', () => {
-    // claude-haiku-4-5: 8000 input tokens at $1/M plus 1000 output at $5/M.
-    expect(managedCallEstimateUsd('anthropic')).toBeCloseTo(0.013, 6);
-    // gpt-4o-mini: 8000 at $0.15/M plus 1000 at $0.60/M.
-    expect(managedCallEstimateUsd('openai')).toBeCloseTo(0.0018, 6);
+  // Codex review: priced at the provider's dearest registered rates, because the model a
+  // call runs on may be a rescued successor of a retired default (#184); and the request's
+  // own size is added to the input ceiling, as the budget reservation does (#244).
+  it("prices the worst case at the provider's dearest rates plus the request size (#482)", () => {
+    // claude-opus-5: 8000 input tokens at $5/M plus 1000 output at $25/M.
+    expect(managedCallEstimateUsd('anthropic')).toBeCloseTo(0.065, 6);
+    expect(managedCallEstimateUsd('anthropic', 2000)).toBeCloseTo(0.075, 6);
+    // gpt-4o-2024-05-13: 8000 at $5/M plus 1000 at $15/M.
+    expect(managedCallEstimateUsd('openai')).toBeCloseTo(0.055, 6);
+  });
+
+  it('reserves more for a larger request (#482)', async () => {
+    await orgEntitlements(db).setPlan('org-big', 'pro'); // $10
+    await orgAiSettings(db).set('org-big', 'managed', 'user:u4');
+    await spend('org-big', 9.9, 'managed'); // $0.10 left
+    const resolve = resolver(MANAGED, (chars) => managedCallEstimateUsd('anthropic', chars));
+    // A short instruction fits; one of 100k characters (~$0.50 of input) does not.
+    const small = await resolve({ orgId: 'org-big' }, { inputChars: 100 });
+    expect(small?.billingMode).toBe('managed');
+    await small?.release?.();
+    expect(await resolve({ orgId: 'org-big' }, { inputChars: 100_000 })).toBeNull();
   });
 
   it('resolves the operator key from the environment, all or nothing', () => {
