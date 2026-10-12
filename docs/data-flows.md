@@ -134,7 +134,7 @@ is processed in Chromium's memory for the duration of the job.
 
 | | |
 |---|---|
-| Data | `cost_tracking` (SQLite): time, provider, model, operation, cost, token counts, pending/estimated flags, org id, run id. No prompt or response content. |
+| Data | `cost_tracking` (SQLite): time, provider, model, operation, cost (USD, and exact integer micro-dollars since #318), token counts, pending/estimated flags, org id, run id. No prompt or response content. |
 | Purpose | Budget circuit breaker and reservations before each AI call (#242, #244, #255). |
 | Where | `<IRIS_DATA_DIR>/cache/cost-tracking.db` (`src/ai-client/factory.ts`, `src/ai-client/smart-client.ts`, `src/ai-client/cost-tracker.ts`); in production the `iris-data` / `worker-data` volumes. |
 | Access | Operators. |
