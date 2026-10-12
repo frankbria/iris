@@ -16,7 +16,12 @@ import {
 import { recordCurrentAcceptance } from '../legal/acceptance';
 import { ACCEPTED_TERMS } from '../legal/versions';
 import { log, type LogLevel } from '../log';
-import { suspendedSql, userSuspensions } from '../org-suspension';
+import {
+  revokeIfCreatorBanned,
+  suspendedSql,
+  userBannedLocked,
+  userSuspensions,
+} from '../org-suspension';
 import { FREE_ORGS_PER_USER, freeOrgLimitReached, retractOrg } from '../billing/plans';
 
 /** One outgoing account email: verification or password reset. */
@@ -239,6 +244,9 @@ export function createAuth(
               data: { ...session, activeOrganizationId: await activeOrgFor(session.userId) },
             };
           },
+          // A ban that committed after the check above, before the insert, deleted the
+          // user's sessions without this one (codex review): look again under its lock.
+          after: (session) => dropIfBanned(rest.database, session),
         },
       },
     },
@@ -317,6 +325,16 @@ async function refuseBannedUser(
   if (await userSuspensions(termsDb(database)).isSuspended(userId)) {
     throw new APIError('FORBIDDEN', { code: 'USER_BANNED', message: 'This account is suspended' });
   }
+}
+
+async function dropIfBanned(
+  database: BetterAuthOptions['database'],
+  session: { id: string; userId: string },
+): Promise<void> {
+  const db = termsDb(database);
+  if (!(await userBannedLocked(db, session.userId))) return;
+  await sql`delete from session where id = ${session.id}`.execute(db);
+  throw new APIError('FORBIDDEN', { code: 'USER_BANNED', message: 'This account is suspended' });
 }
 
 /** The api-key plugin's endpoints that change an org's keys. */
@@ -443,7 +461,9 @@ async function auditKeyWrite(
     // or left no membership for this check to find (#408).
     .then(() =>
       verb === 'create'
-        ? revokeIfCreatorLeft(termsDb(database), orgId, session.user.id, keyId)
+        ? revokeIfCreatorLeft(termsDb(database), orgId, session.user.id, keyId).then(
+            (left) => left || revokeIfCreatorBanned(termsDb(database), orgId, session.user.id),
+          )
         : false,
     )
     .catch((err) =>

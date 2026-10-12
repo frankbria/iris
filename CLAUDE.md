@@ -549,6 +549,11 @@ Operator suspension of an org, and the published contacts. Ops side: runbook "Ab
   refuses a banned user (`403 USER_BANNED`). Every session is made there, so invitations
   (which need one) are covered too. There is no cookie cache: deleting the session rows
   signs them out at once. `iris admin ban-user|unban-user|user-status`.
+  **Races (codex review)**: a sign-in or key creation can pass the check while a ban is
+  committing, so both recheck after their write under the ban's advisory lock
+  (`userBannedLocked`): `session.create.after` deletes the new session and refuses, and the
+  post-create key check (`revokeIfCreatorBanned`, after #408's `revokeIfCreatorLeft`)
+  revokes. Either the ban sees the committed row or the recheck sees the ban.
 - **Contacts are operator configuration**, never invented: `IRIS_SECURITY_CONTACT`,
   `IRIS_ABUSE_CONTACT`, `IRIS_SUPPORT_CONTACT` (`mailto:` or `https:`, validated;
   malformed throws). Unset shows a `[placeholder]` on `/contact`, and

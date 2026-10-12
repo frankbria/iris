@@ -92,6 +92,34 @@ const PASSWORD = 'correct-horse-battery-staple';
   r.signInAfterUnban = await attempt(() => signIn('bob@iris.test'));
   r.history = (await bans.history(bobId)).map((e) => e.action + ':' + e.actor + ':' + e.reason);
   r.status = (await bans.status('bob@iris.test')).suspended;
+  // Races (codex review): a ban that commits while a sign-in or a key creation is under
+  // way. The ban is held open, its lock taken, as the ban transaction holds it.
+  const holdBan = async (userId) => {
+    const c = await pool.connect();
+    await c.query('begin');
+    await c.query('select pg_advisory_xact_lock(hashtext($1))', ['user_suspensions:' + userId]);
+    await c.query("insert into user_suspensions (user_id, action, reason, actor) values ($1, 'suspend', 'race', 'ops')", [userId]);
+    await c.query('delete from session where "userId" = $1', [userId]);
+    return async () => { await c.query('commit'); c.release(); };
+  };
+  const dave = await user('dave');
+  const daveId = await idOf('dave@iris.test');
+  const D = await active(dave);
+  let commit = await holdBan(daveId);
+  const racingSignIn = attempt(() => signIn('dave@iris.test'));
+  await new Promise((res) => setTimeout(res, 1500));
+  await commit();
+  r.raceSignIn = await racingSignIn;
+  r.raceSessions = (await pool.query('select count(*)::int as n from session where "userId" = $1', [daveId])).rows[0].n;
+  await bans.unsuspend(daveId, { reason: 'race done', actor: 'ops' });
+  const dave2 = await signIn('dave@iris.test');
+  commit = await holdBan(daveId);
+  const racingKey = auth.api.createApiKey({ headers: dave2, body: { organizationId: D, name: 'racer' } });
+  await new Promise((res) => setTimeout(res, 1500));
+  await commit();
+  const racer = await racingKey.catch((e) => e);
+  r.raceKey = racer && racer.key ? (await auth.api.verifyApiKey({ body: { key: racer.key } })).valid : 'not created';
+
   r.unknown = await bans.suspend('nobody@iris.test', by).then(() => 'ok', (e) => e instanceof UnknownUserError);
   r.blankReason = await bans.suspend(bobId, { reason: ' ', actor: 'ops' }).then(() => 'ok', (e) => e.message);
   // Deleting the user drops their history with them (user-scoped, cascade).
@@ -185,6 +213,15 @@ const PASSWORD = 'correct-horse-battery-staple';
       'suspend:ops:spam from this account',
       'unsuspend:ops:appeal granted',
     ]);
+  });
+
+  it('a ban committed during a sign-in leaves no session (codex review)', () => {
+    expect(r.raceSignIn).toBe('USER_BANNED');
+    expect(r.raceSessions).toBe(0);
+  });
+
+  it('a ban committed during a key creation revokes that key (codex review)', () => {
+    expect(r.raceKey).not.toBe(true);
   });
 
   it('refuses an unknown user and a blank reason', () => {

@@ -189,6 +189,29 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
   };
 }
 
+/**
+ * Whether the user is banned, read under the ban's own lock (#457, codex review). A write
+ * committed before this call is either seen by a ban in progress (its session delete or
+ * key revocation) or waits here for that ban and sees it.
+ */
+export async function userBannedLocked(db: Kysely<unknown>, userId: string): Promise<boolean> {
+  return db.transaction().execute(async (tx) => {
+    await sql`select pg_advisory_xact_lock(hashtext(${USER.table + ':' + userId}))`.execute(tx);
+    const { rows } = await sql<{ s: boolean }>`select ${latestSql(USER, userId)} as s`.execute(tx);
+    return rows[0].s;
+  });
+}
+
+/** After a key's creation is audited: revokes the user's keys in the org if they are banned. */
+export async function revokeIfCreatorBanned(
+  db: Kysely<unknown>,
+  orgId: string,
+  userId: string,
+): Promise<boolean> {
+  if (!(await userBannedLocked(db, userId))) return false;
+  return (await revokeKeysCreatedBy(db, orgId, userId, {}, 'user banned')).length > 0;
+}
+
 /** Org suspension (#348), by org id. */
 export const orgSuspensions = (db: Kysely<unknown>) => suspensions(db, ORG);
 
