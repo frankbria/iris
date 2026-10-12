@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import {
+  DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   ListObjectsV2Command,
@@ -30,6 +31,8 @@ export interface ArtifactStore {
    * how many went. Nothing there is not an error.
    */
   deletePrefix(prefix: string): Promise<number>;
+  /** Deletes one artifact (#475). Nothing there is not an error. */
+  delete(key: string): Promise<void>;
 }
 
 /** Safe segments ending in `/`: what may be bulk-deleted. Never empty, never the root. */
@@ -133,6 +136,10 @@ export class FilesystemArtifactStore implements ArtifactStore {
     return pathToFileURL(this.file(key)).href;
   }
 
+  async delete(key: string): Promise<void> {
+    await fs.promises.rm(this.file(key), { force: true });
+  }
+
   async deletePrefix(prefix: string): Promise<number> {
     const dir = path.join(this.root, assertPrefix(prefix));
     let count = 0;
@@ -217,6 +224,10 @@ export class S3ArtifactStore implements ArtifactStore {
     );
   }
 
+  async delete(key: string): Promise<void> {
+    await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: assertKey(key) }));
+  }
+
   async deletePrefix(prefix: string): Promise<number> {
     const Prefix = assertPrefix(prefix);
     let count = 0;
@@ -264,6 +275,7 @@ export function orgArtifacts(store: ArtifactStore, orgId: string): ArtifactStore
     get: async (key) => store.get(own(key)),
     signedUrl: async (key, ttlSeconds) => store.signedUrl(own(key), ttlSeconds),
     deletePrefix: async (prefix) => store.deletePrefix(own(prefix)),
+    delete: async (key) => store.delete(own(key)),
   };
 }
 

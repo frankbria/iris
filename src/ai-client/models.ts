@@ -95,6 +95,19 @@ const VISION_MODEL_PREFIXES: Record<'openai' | 'ollama', string[]> = {
 /** Variants inside a vision family that take no images (`o1-mini`, `gpt-4o-audio-preview`). */
 const NOT_VISION = /^o[13]-mini|-(?:audio|realtime|transcribe|tts|search)/;
 
+/**
+ * OpenAI's reasoning models (`o1`, `o3`, `o4`, their `-mini` and dated snapshots) refuse any
+ * `temperature` but the default with a 400 (#520): requests to them omit it.
+ */
+export function isReasoningModel(model: string): boolean {
+  return /^o\d(?:$|-)/i.test(model);
+}
+
+/** The sampling options an OpenAI request may carry for `model` (#520). */
+export function openAISampling(model: string): { temperature?: number } {
+  return isReasoningModel(model) ? {} : { temperature: 0.1 };
+}
+
 /** Whether a model accepts images, by the table above (#298). */
 export function isVisionModel(provider: ModelProvider, model: string): boolean {
   if (provider === 'anthropic') return true;

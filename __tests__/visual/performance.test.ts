@@ -157,12 +157,33 @@ describe('Performance Optimizations', () => {
       expect([diff.width, diff.height]).toEqual([2000, 1200]);
     });
 
+    // Determinism needs no large image (#569): three full 2000x1200 diffs at once timed out
+    // on loaded CI runners. A small pair that differs in a known block, compared in turn.
     it('gives the same answer every time', async () => {
-      const [white, black] = await Promise.all([solid(255), solid(0)]);
-      const runs = await Promise.all(
-        [1, 2, 3].map(() => new VisualDiffEngine().compare(white, black, options)),
-      );
-      expect(new Set(runs.map((r) => r.pixelDifference)).size).toBe(1);
+      const blank = () =>
+        sharp({
+          create: {
+            width: 200,
+            height: 120,
+            channels: 4,
+            background: { r: 255, g: 255, b: 255, alpha: 1 },
+          },
+        });
+      const block = await sharp({
+        create: { width: 50, height: 50, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } },
+      })
+        .png()
+        .toBuffer();
+      const plain = await blank().png().toBuffer();
+      const marked = await blank()
+        .composite([{ input: block, left: 20, top: 30 }])
+        .png()
+        .toBuffer();
+      const diffs: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        diffs.push((await new VisualDiffEngine().compare(plain, marked, options)).pixelDifference);
+      }
+      expect(diffs).toEqual([2500, 2500, 2500]);
     });
   });
 

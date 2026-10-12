@@ -240,14 +240,18 @@ describe('KeyboardTester', () => {
       };
       keyboardTester = new KeyboardTester(configWithEscapeTest);
 
-      // Sequence: discover dismissible components, then re-check visibility
-      // after Escape.
+      // Sequence (#491): pick the first untested dialog (marked, focused), judge it after
+      // Escape, then find no other; the real-Chromium fixtures are keyboard-real-behavior.
       mockPage.evaluate
-        .mockResolvedValueOnce([{ selector: 'DIV.modal', visible: true }] as never)
-        // State before and after Escape (#285): the marked modal was visible, then hidden.
-        .mockResolvedValueOnce({ marked: true, visibleCount: 1 } as never)
-        .mockResolvedValueOnce(undefined as never) // focus inside the dialog (#286)
-        .mockResolvedValueOnce({ marked: false, visibleCount: 0 } as never);
+        .mockResolvedValueOnce({
+          label: 'DIV.modal',
+          id: null,
+          rect: { x: 0, y: 0, width: 200 },
+          name: '',
+          text: 'Ok',
+        } as never)
+        .mockResolvedValueOnce(false as never) // not still open: closed
+        .mockResolvedValueOnce(null as never); // no untested dialog left
 
       const result = await keyboardTester.run(mockPage, 'escape-test');
 
