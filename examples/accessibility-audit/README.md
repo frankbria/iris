@@ -1,10 +1,10 @@
 # Accessibility Audit Example
 
-This example demonstrates IRIS accessibility testing with WCAG 2.1 AA compliance validation, keyboard navigation testing, and screen reader simulation.
+This example demonstrates IRIS accessibility testing with WCAG 2.2 AA compliance validation, keyboard navigation testing, and screen reader simulation.
 
 ## What This Example Tests
 
-- WCAG 2.1 Level A and AA compliance (axe-core integration)
+- WCAG 2.2 Level A and AA (2.0 and 2.1 rules included) compliance (axe-core integration)
 - Keyboard navigation and focus order
 - Focus trap detection
 - Arrow key navigation patterns

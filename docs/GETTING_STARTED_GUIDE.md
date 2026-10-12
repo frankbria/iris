@@ -718,7 +718,7 @@ cd tests
 
 **What Happens:**
 1. Starts local HTTP server
-2. Runs axe-core WCAG 2.1 AA/AAA scans
+2. Runs axe-core WCAG 2.2 AA/AAA scans (2.0 and 2.1 rules included)
 3. Tests keyboard navigation (Tab order, focus traps)
 4. Simulates screen reader (ARIA labels, landmarks, headings)
 5. Generates detailed HTML report
@@ -1112,7 +1112,7 @@ iris visual-diff \
 **What You Can Test Now:**
 - Visual regressions across pages
 - Responsive design (multi-device)
-- WCAG 2.1 AA/AAA compliance
+- WCAG 2.2 AA/AAA compliance
 - Keyboard navigation
 - Screen reader compatibility
 - AI-powered change analysis

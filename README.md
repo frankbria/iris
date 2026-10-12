@@ -89,7 +89,7 @@ The hosted service is the same package run as `iris connect` and `iris worker` w
 - ✅ Visual reporter with diff viewer and interactive HTML reports
 
 **Accessibility Testing:**
-- ✅ WCAG 2.1 Level AA/AAA compliance validation with axe-core
+- ✅ WCAG 2.2 Level AA/AAA (2.0 and 2.1 rules included) compliance validation with axe-core
 - ✅ Keyboard navigation testing (Tab order, focus traps, arrow keys)
 - ✅ Screen reader simulation (ARIA labels, landmarks, headings)
 

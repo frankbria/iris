@@ -60,7 +60,7 @@ cd multi-device-visual
 **Difficulty:** Intermediate
 **Time:** 15 minutes
 
-Comprehensive WCAG 2.1 AA compliance testing with keyboard and screen reader support.
+Comprehensive WCAG 2.2 AA compliance testing with keyboard and screen reader support.
 
 **What You'll Learn:**
 - WCAG compliance validation (axe-core)
