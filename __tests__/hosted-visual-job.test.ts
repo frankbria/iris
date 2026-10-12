@@ -210,7 +210,8 @@ const page = (color: string, extra = 0) =>
     });
     // Recorded: who approved it, on the baseline and in the audit log (#463).
     const audit = await sql<{ actor_api_key_id: string; action: string; target: string }>`
-      select actor_api_key_id, action, target from audit_log where org_id = 'org-a'`.execute(db);
+      select actor_api_key_id, action, target from audit_log
+      where org_id = 'org-a' and action = 'visual_baseline.approve'`.execute(db);
     expect(audit.rows).toEqual([
       {
         actor_api_key_id: 'key-org-a',

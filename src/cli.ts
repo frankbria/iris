@@ -722,6 +722,7 @@ program
     let authenticate: import('./protocol').Authenticator | undefined;
     let history: import('./history-store').PostgresHistory | undefined;
     let usage: ReturnType<typeof import('./billing/usage').usageLedger> | undefined;
+    let audit: ((entry: import('./audit-log').AuditEntry) => Promise<void>) | undefined;
     let jobs: import('./history-store').PostgresJobs | undefined;
     let artifacts: import('./artifact-store').ArtifactStore | null = null;
     let entitlements: ((orgId: string) => Promise<{ runsPerMonth: number }>) | undefined;
@@ -740,7 +741,7 @@ program
       }
       try {
         const { hostedServices } = await import('./api-key-auth');
-        ({ authenticate, history, aiCredentials, usage, jobs, entitlements } =
+        ({ authenticate, history, aiCredentials, usage, audit, jobs, entitlements } =
           await hostedServices());
         // Signs run-detail artifacts (#460); unset IRIS_S3_ENDPOINT means none.
         artifacts = (await import('./artifact-store')).resolveArtifactStore();
@@ -800,6 +801,7 @@ program
             entitlements,
             aiCredentials,
             usage,
+            audit,
             jobs,
             limits,
           }

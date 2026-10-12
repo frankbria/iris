@@ -349,7 +349,8 @@ describe('Dockerfile.portal (issue #273)', () => {
   const dockerfile = read('Dockerfile.portal');
 
   it('runs the standalone server as uid 1001 on the engines-floor Node line', () => {
-    expect(dockerfile).toMatch(/^FROM node:24-alpine AS runtime$/m);
+    // Digest-pinned since #360.
+    expect(dockerfile).toMatch(/^FROM node:24-alpine@sha256:[0-9a-f]{64} AS runtime$/m);
     expect(dockerfile).toMatch(/^USER portal$/m);
     expect(dockerfile).toMatch(/adduser -D -H -u 1001 portal/);
     expect(dockerfile).toMatch(/^CMD \["node", "apps\/portal\/server\.js"\]$/m);
@@ -377,7 +378,7 @@ describe('image base tag and dependency updates (issue #306)', () => {
     const tags = [
       ...read('Dockerfile').matchAll(
         // Up to the final `-<distro>` suffix, so a pre-release (`v1.64.0-beta-1-noble`) stays whole.
-        /^FROM mcr\.microsoft\.com\/playwright:v(.+?)-\w+(\s|$)/gm,
+        /^FROM mcr\.microsoft\.com\/playwright:v(.+?)-\w+(?:@sha256:[0-9a-f]{64})?(\s|$)/gm,
       ),
     ].map((m) => m[1]);
     // Three stages (deps, build, runtime), so a match can never be vacuous. The library and
@@ -390,6 +391,65 @@ describe('image base tag and dependency updates (issue #306)', () => {
   it('Dependabot watches the Docker base images', () => {
     const dependabot = read('.github/dependabot.yml');
     expect(dependabot).toMatch(/- package-ecosystem: docker\n/);
+  });
+});
+
+describe('image supply chain (issue #360)', () => {
+  const nonComment = (file: string) =>
+    read(file)
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+
+  it.each(['Dockerfile', 'Dockerfile.portal'])('pins every base image in %s by digest', (file) => {
+    const froms = [...read(file).matchAll(/^FROM (\S+)/gm)].map((m) => m[1]);
+    expect(froms.length).toBeGreaterThanOrEqual(2);
+    for (const from of froms) expect(from).toMatch(/@sha256:[0-9a-f]{64}$/);
+  });
+
+  it('ships third-party notices generated from what the deps stage installed', () => {
+    const dockerfile = nonComment('Dockerfile');
+    expect(dockerfile).toMatch(
+      /RUN node scripts\/third-party-notices\.js \. > THIRD_PARTY_NOTICES\.txt/,
+    );
+    expect(dockerfile).toMatch(/COPY --from=deps \/app\/THIRD_PARTY_NOTICES\.txt/);
+  });
+
+  it('removes npm from the runtime image', () => {
+    const runtime = nonComment('Dockerfile').split(/^FROM .* AS runtime$/m)[1];
+    expect(runtime).toMatch(/rm -rf \/usr\/lib\/node_modules\/npm \/usr\/bin\/npm \/usr\/bin\/npx/);
+  });
+
+  it('scans both images in CI with a digest-pinned Trivy, failing on fixable CRITICAL', () => {
+    const ci = nonComment('.github/workflows/ci.yml');
+    expect(ci).toMatch(/TRIVY: aquasec\/trivy:[\d.]+@sha256:[0-9a-f]{64}/);
+    expect(ci).toMatch(/for image in iris:ci iris-portal:ci; do/);
+    // Both images scanned before the gate fails (PR bot review: bash -e stopped at the first).
+    expect(ci).toMatch(
+      /--severity CRITICAL --ignore-unfixed --exit-code 1 "\$sbom" \|\| failed=1\n\s+done\n\s+exit "\$failed"/,
+    );
+    expect(ci).toMatch(/trivy image --timeout \S+ --format cyclonedx/);
+    expect(ci).toMatch(/uses: actions\/upload-artifact@[0-9a-f]{40}/);
+    // Uploaded even when the gate failed (codex review).
+    expect(ci).toMatch(/- if: \$\{\{ !cancelled\(\) \}\}\n\s+uses: actions\/upload-artifact@/);
+  });
+});
+
+describe('third-party notices script (issue #360)', () => {
+  const { notices, productionPackages } = require('../scripts/third-party-notices.js');
+
+  it('lists every installed production dependency with its license text', () => {
+    const text: string = notices(ROOT);
+    const packages: Array<{ dir: string; version: string }> = productionPackages(ROOT);
+    expect(packages.length).toBeGreaterThan(20);
+    expect(text).toMatch(/^ws@\d+\.\d+\.\d+\nLicense: MIT\n/m);
+    expect(text).toMatch(/Copyright/);
+  });
+
+  it('leaves out dev dependencies', () => {
+    const names = productionPackages(ROOT).map((p: { dir: string }) => p.dir);
+    expect(names).not.toContain('node_modules/jest');
+    expect(names).not.toContain('node_modules/typescript');
   });
 });
 

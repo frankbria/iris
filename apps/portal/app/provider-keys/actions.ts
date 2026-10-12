@@ -62,11 +62,15 @@ export async function saveProviderKey(
   if (!(await allowed(organizationId, "create")))
     return { error: "Only owners and admins can change provider keys." }
   if (await orgIsSuspended(organizationId)) return { error: SUSPENDED }
+  const session = await getAuth().api.getSession({ headers: await headers() })
+  if (!session) return { error: "Sign in again to change this." }
   try {
+    // Audited with the acting user (#361); the store records the provider, never the key.
     await getProviderKeys().set(
       organizationId,
       vendor,
-      String(form.get("apiKey") ?? "").trim()
+      String(form.get("apiKey") ?? "").trim(),
+      { userId: session.user.id }
     )
   } catch (error) {
     if (error instanceof ProviderKeyError) return { error: error.message }
@@ -86,7 +90,11 @@ export async function removeProviderKey(
   if (!(await allowed(organizationId, "delete")))
     return { error: "Only owners and admins can change provider keys." }
   if (await orgIsSuspended(organizationId)) return { error: SUSPENDED }
-  await getProviderKeys().remove(organizationId, vendor)
+  const session = await getAuth().api.getSession({ headers: await headers() })
+  if (!session) return { error: "Sign in again to change this." }
+  await getProviderKeys().remove(organizationId, vendor, {
+    userId: session.user.id,
+  })
   revalidatePath("/provider-keys")
   return { done: "Removed." }
 }
