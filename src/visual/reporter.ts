@@ -127,7 +127,7 @@ export class VisualReporter {
   </style>
 </head>
 <body>
-  <div class="container">
+  <main class="container">
     <!-- Header -->
     <header class="report-header">
       <h1>
@@ -180,15 +180,15 @@ export class VisualReporter {
 
     <!-- Filters -->
     <section class="filters">
-      <button class="filter-btn active" data-filter="all">All Tests</button>
-      <button class="filter-btn" data-filter="failed">Failed Only</button>
-      <button class="filter-btn" data-filter="passed">Passed Only</button>
+      <button class="filter-btn active" data-filter="all" aria-pressed="true">All Tests</button>
+      <button class="filter-btn" data-filter="failed" aria-pressed="false">Failed Only</button>
+      <button class="filter-btn" data-filter="passed" aria-pressed="false">Passed Only</button>
       ${
         Object.keys(summary.severityCounts).length > 0
           ? `
-      <button class="filter-btn" data-filter="breaking">Breaking</button>
-      <button class="filter-btn" data-filter="moderate">Moderate</button>
-      <button class="filter-btn" data-filter="minor">Minor</button>
+      <button class="filter-btn" data-filter="breaking" aria-pressed="false">Breaking</button>
+      <button class="filter-btn" data-filter="moderate" aria-pressed="false">Moderate</button>
+      <button class="filter-btn" data-filter="minor" aria-pressed="false">Minor</button>
       `
           : ''
       }
@@ -198,7 +198,7 @@ export class VisualReporter {
     <section class="test-results">
       ${this.generateTestResultCards(testResults)}
     </section>
-  </div>
+  </main>
 
   <script>
     ${this.getHTMLScript()}
@@ -379,9 +379,9 @@ export class VisualReporter {
               ? `
           <div class="diff-viewer">
             <div class="diff-controls">
-              <button class="diff-mode-btn active" data-mode="side-by-side">Side by Side</button>
-              <button class="diff-mode-btn" data-mode="overlay">Overlay</button>
-              <button class="diff-mode-btn" data-mode="diff-only">Diff Only</button>
+              <button class="diff-mode-btn active" data-mode="side-by-side" aria-pressed="true">Side by Side</button>
+              <button class="diff-mode-btn" data-mode="overlay" aria-pressed="false">Overlay</button>
+              <button class="diff-mode-btn" data-mode="diff-only" aria-pressed="false">Diff Only</button>
             </div>
 
             <div class="diff-images side-by-side">
@@ -390,21 +390,21 @@ export class VisualReporter {
                   ? `
               <div class="image-container">
                 <div class="image-label">Baseline</div>
-                <img src="${this.imageSrc(result.baselinePath!)}" alt="Baseline" class="comparison-image baseline">
+                <img src="${this.imageSrc(result.baselinePath!)}" alt="Baseline screenshot of ${escapeHtml(result.page)} (${escapeHtml(result.device)})" class="comparison-image baseline">
               </div>
               `
                   : ''
               }
               <div class="image-container">
                 <div class="image-label">Current</div>
-                <img src="${this.imageSrc(result.screenshotPath)}" alt="Current" class="comparison-image current">
+                <img src="${this.imageSrc(result.screenshotPath)}" alt="Current screenshot of ${escapeHtml(result.page)} (${escapeHtml(result.device)})" class="comparison-image current">
               </div>
               ${
                 result.diffPath
                   ? `
               <div class="image-container">
                 <div class="image-label">Difference</div>
-                <img src="${this.imageSrc(result.diffPath!)}" alt="Diff" class="comparison-image diff">
+                <img src="${this.imageSrc(result.diffPath!)}" alt="Differences between baseline and current of ${escapeHtml(result.page)} (${escapeHtml(result.device)})" class="comparison-image diff">
               </div>
               `
                   : ''
@@ -733,7 +733,7 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
       }
 
       .logo {
-        color: #6366f1;
+        color: #4f46e5;
       }
 
       .meta {
@@ -774,7 +774,7 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
       .status-failed { color: #ef4444; }
       .passed .stat-value { color: #10b981; }
       .failed .stat-value { color: #ef4444; }
-      .new .stat-value { color: #6366f1; }
+      .new .stat-value { color: #4f46e5; }
 
       .severity-breakdown {
         background: white;
@@ -833,13 +833,13 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
       }
 
       .filter-btn:hover {
-        border-color: #6366f1;
+        border-color: #4f46e5;
       }
 
       .filter-btn.active {
-        background: #6366f1;
+        background: #4f46e5;
         color: white;
-        border-color: #6366f1;
+        border-color: #4f46e5;
       }
 
       .test-results {
@@ -1054,13 +1054,13 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
       }
 
       .diff-mode-btn:hover {
-        border-color: #6366f1;
+        border-color: #4f46e5;
       }
 
       .diff-mode-btn.active {
-        background: #6366f1;
+        background: #4f46e5;
         color: white;
-        border-color: #6366f1;
+        border-color: #4f46e5;
       }
 
       .diff-images {
@@ -1122,8 +1122,12 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
       document.querySelectorAll('.filter-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           // Update active state
-          document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+          document.querySelectorAll('.filter-btn').forEach(b => {
+            b.classList.remove('active');
+            b.setAttribute('aria-pressed', 'false');
+          });
           btn.classList.add('active');
+          btn.setAttribute('aria-pressed', 'true');
 
           const filter = btn.dataset.filter;
           const cards = document.querySelectorAll('.test-card');
@@ -1150,8 +1154,12 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
           const diffImages = card.querySelector('.diff-images');
 
           // Update active state
-          card.querySelectorAll('.diff-mode-btn').forEach(b => b.classList.remove('active'));
+          card.querySelectorAll('.diff-mode-btn').forEach(b => {
+            b.classList.remove('active');
+            b.setAttribute('aria-pressed', 'false');
+          });
           btn.classList.add('active');
+          btn.setAttribute('aria-pressed', 'true');
 
           // Update display mode
           const mode = btn.dataset.mode;
