@@ -6,7 +6,13 @@ import { describeAction } from './actions';
 import { initializeDatabase, insertTestRun } from './db';
 import { ActionExecutor, ExecutionResult, ActionExecutorOptions } from './executor';
 import { guardedGoto } from './url-policy-guard';
-import { checkPlannedAction, originOf, planPolicy, type PolicyVerdict } from './agent-policy';
+import {
+  checkPlannedAction,
+  originOf,
+  pinPage,
+  planPolicy,
+  type PolicyVerdict,
+} from './agent-policy';
 import { Page } from 'playwright';
 import { VisualCaptureEngine } from './visual/capture';
 import { VisualDiffEngine } from './visual/diff';
@@ -618,6 +624,20 @@ export class FileWatcher {
       return;
     }
 
+    // pathToFileURL escapes URL-reserved characters (#, %, ?) that plain string
+    // concatenation would mis-parse when handed to page.goto().
+    const fileUrl = pathToFileURL(path.resolve(this.options.cwd, event.path)).href;
+    const target = this.executeTarget(event.path, fileUrl);
+    // A changed .ts or .css is no page (#319): navigating Chromium to its source and
+    // clicking there is what the README example used to do. Decided before translating,
+    // so nothing is paid for and no run is recorded (PR bot review).
+    if (this.options.execute && event.type !== 'unlink' && target === null) {
+      this.logger.log(
+        `⏭️  Not executed: ${event.path} is not a page. Pass --url (or set IRIS_BASE_URL) for the page to run against.`,
+      );
+      return;
+    }
+
     const startTime = new Date();
     let status: 'success' | 'error' = 'success';
     const executionResults: ExecutionResult[] = [];
@@ -626,11 +646,6 @@ export class FileWatcher {
       this.logger.log(`🔄 File ${event.type}: ${event.path}`);
       this.logger.log(`📝 Processing: "${this.options.instruction}"`);
 
-      // pathToFileURL escapes URL-reserved characters (#, %, ?) that plain string
-      // concatenation would mis-parse when handed to page.goto().
-      const fileUrl = pathToFileURL(path.resolve(this.options.cwd, event.path)).href;
-
-      const target = this.executeTarget(event.path, fileUrl);
       const result = await translate(this.options.instruction, {
         url: target ?? fileUrl,
       });
@@ -651,13 +666,7 @@ export class FileWatcher {
       // Execute actions if enabled. Skip execution entirely on unlink: the file is
       // gone, so there is nothing to navigate to, and running translated DOM actions
       // against the stale reused page would act on the previous file's content.
-      if (this.options.execute && event.type !== 'unlink' && target === null) {
-        // A changed .ts or .css is no page (#319): navigating Chromium to its source
-        // and clicking there is what the README example used to do.
-        this.logger.log(
-          `\n⏭️  Not executed: ${event.path} is not a page. Pass --url (or set IRIS_BASE_URL) for the page to run against.`,
-        );
-      } else if (this.options.execute && event.type !== 'unlink' && target) {
+      if (this.options.execute && event.type !== 'unlink' && target) {
         this.logger.log('\n🚀 Executing actions in browser...');
 
         try {
@@ -670,12 +679,6 @@ export class FileWatcher {
             throw new Error('Browser session not initialized');
           }
 
-          // Navigate to the target first so DOM-targeting actions run against its real
-          // DOM rather than the blank page. This is execution setup, not a translated
-          // action, so it is not counted in executionResults.
-          this.logger.log(`   🌐 Navigating to ${target}`);
-          await guardedGoto(this.page, target);
-
           // An AI plan runs under the agent policy, as on every path (#354). A page URL
           // pins the plan to its origin, as `iris run` does; a changed HTML file
           // (`file://`) has no origin to pin to, so the pin is off there and the
@@ -685,6 +688,16 @@ export class FileWatcher {
           const policy = planPolicy(result.method === 'ai', {
             allowCrossOrigin: startOrigin === null,
           });
+          // At the request layer too, before the first navigation (codex review): the
+          // per-action check sees an off-origin request only after a click made it. The
+          // pin stays on the reused page, which --url keeps on one origin anyway.
+          if (policy) await pinPage(this.page, policy, startOrigin);
+
+          // Navigate to the target first so DOM-targeting actions run against its real
+          // DOM rather than the blank page. This is execution setup, not a translated
+          // action, so it is not counted in executionResults.
+          this.logger.log(`   🌐 Navigating to ${target}`);
+          await guardedGoto(this.page, target);
 
           // Execute each action and report progress
           for (let i = 0; i < result.actions.length; i++) {

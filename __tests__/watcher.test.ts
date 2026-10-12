@@ -520,6 +520,9 @@ describe('FileWatcher execute-mode runtime', () => {
     expect(mockPage.goto).not.toHaveBeenCalled();
     expect(mockExecutorInstance.executeAction).not.toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith(expect.stringMatching(/Not executed: .*Pass --url/));
+    // Decided before translating: nothing is paid for a change that runs nothing.
+    const { translate } = await import('../src/translator');
+    expect(translate).not.toHaveBeenCalled();
     await watcher.stop();
   });
 
