@@ -1,4 +1,4 @@
-import { Browser, Page, errors } from 'playwright';
+import { Browser, ElementHandle, Page, errors } from 'playwright';
 import { Action } from './translator';
 import {
   launchBrowser,
@@ -189,6 +189,22 @@ export class ActionExecutor {
     action: Action,
     page: Page,
     secrets: SecretSource = isHostedMode() ? noSecrets : envSecrets(),
+    target?: ElementHandle,
+  ): Promise<ExecutionResult> {
+    // The element the agent policy read (#530): a click or fill goes to it, not to the
+    // selector, which the page could have pointed at another element since. Disposed after.
+    try {
+      return await this.runAction(action, page, secrets, target);
+    } finally {
+      await target?.dispose().catch(() => undefined);
+    }
+  }
+
+  private async runAction(
+    action: Action,
+    page: Page,
+    secrets: SecretSource,
+    target: ElementHandle | undefined,
   ): Promise<ExecutionResult> {
     if (!page) {
       throw new Error('Page is null or undefined');
@@ -200,7 +216,7 @@ export class ActionExecutor {
     // Try initial execution + retries
     for (let attempt = 0; attempt <= this.options.retryAttempts; attempt++) {
       try {
-        await this.performAction(action, page, secrets);
+        await this.performAction(action, page, secrets, target);
 
         const duration = Date.now() - startTime;
         const context = this.options.trackContext ? await this.getPageContext(page) : undefined;
@@ -339,10 +355,17 @@ export class ActionExecutor {
   /**
    * Perform the actual action on the page.
    */
-  private async performAction(action: Action, page: Page, secrets: SecretSource): Promise<void> {
+  private async performAction(
+    action: Action,
+    page: Page,
+    secrets: SecretSource,
+    target?: ElementHandle,
+  ): Promise<void> {
     switch (action.type) {
       case 'click':
-        await click(page, action.selector);
+        // A handle the page detached since the check fails here, rather than the click
+        // landing on what replaced it.
+        await (target ? target.click() : click(page, action.selector));
         break;
 
       case 'fill': {
@@ -350,7 +373,7 @@ export class ActionExecutor {
         // and the model's view of prior actions) keeps the reference (#352).
         const { value, fromReference } = resolveFillText(action.text, secrets);
         if (fromReference) this.resolvedSecrets.add(value);
-        await typeText(page, action.selector, value);
+        await (target ? target.fill(value) : typeText(page, action.selector, value));
         break;
       }
 

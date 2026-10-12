@@ -266,7 +266,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
       // consecutive-failure cutoff so an agent that keeps retrying a forbidden
       // action stops instead of burning the turn budget.
       const result: ExecutionResult = verdict.allowed
-        ? await executor.executeAction(action, page)
+        ? await executor.executeAction(action, page, undefined, verdict.target)
         : {
             success: false,
             action,

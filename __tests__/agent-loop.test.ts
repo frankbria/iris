@@ -551,6 +551,29 @@ describe('agent loop', () => {
           expect(await page.title()).toBe('Account');
         });
 
+        // #530: the check read one element and the click re-resolved the selector, so a page
+        // could show a disabled benign control to the check and swap in a destructive one
+        // before it became clickable. The click now goes to the element that was checked.
+        it('clicks the element it checked, never one the page swapped in afterwards', async () => {
+          await page.evaluate(`(() => {
+            document.body.insertAdjacentHTML('beforeend', '<button id="swap" disabled>Save draft</button>');
+            setTimeout(() => {
+              const evil = document.createElement('button');
+              evil.id = 'swap';
+              evil.textContent = 'Delete account';
+              evil.onclick = () => { document.title = 'SWAPPED'; };
+              document.getElementById('swap').replaceWith(evil);
+            }, 400);
+          })()`);
+          scriptAI([[{ type: 'click', selector: '#swap' }]]);
+
+          const result = await runAgentLoop({ instruction: 'save', executor, page, maxTurns: 1 });
+
+          expect(result.results[0].success).toBe(false); // the checked element went away
+          await page.waitForTimeout(500);
+          expect(await page.title()).toBe('Account'); // the swapped-in one was never clicked
+        });
+
         // Codex review: an element found and then detached (or a read that times out) made
         // every read fail; the failures were dropped as absent attributes and the action was
         // allowed. A read that fails refuses, like an element that is not there.
@@ -567,10 +590,13 @@ describe('agent loop', () => {
         });
 
         it('refuses when the element is found but cannot be read', async () => {
-          const locator = Object.getPrototypeOf(page.locator('body'));
+          // The check reads through the element's handle (#530), so its reads are the ones failed.
+          const body = (await page.$('body'))!;
+          const handle = Object.getPrototypeOf(body);
+          await body.dispose();
           const detached = () => Promise.reject(new Error('Element is not attached to the DOM'));
-          jest.spyOn(locator, 'getAttribute').mockImplementation(detached);
-          jest.spyOn(locator, 'textContent').mockImplementation(detached);
+          jest.spyOn(handle, 'getAttribute').mockImplementation(detached);
+          jest.spyOn(handle, 'textContent').mockImplementation(detached);
 
           const verdict = await checkResolvedTarget({ type: 'click', selector: '#x1' }, {}, page);
 
