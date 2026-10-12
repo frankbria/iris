@@ -37,12 +37,19 @@ describe('assert action execution', () => {
         setTimeout(() => res.end('{"ok":false}'), 1500);
         return;
       }
+      if (req.url === '/slower') {
+        setTimeout(() => res.end('{"ok":false}'), 3000);
+        return;
+      }
       res.setHeader('content-type', 'text/html');
       if (req.url === '/app') {
         res.end(`<!doctype html><html lang="en"><head><title>t</title></head><body>
           <button id="submit" onclick="fetch('/slow').then(() => {
             const e = document.createElement('p'); e.className = 'error';
             e.textContent = 'Invalid'; document.body.append(e); })">Submit</button>
+          <button id="slower" onclick="fetch('/slower').then(() => {
+            const e = document.createElement('p'); e.className = 'error-late';
+            e.textContent = 'Invalid'; document.body.append(e); })">Check</button>
           <button id="later" onclick="setTimeout(() => {
             const e = document.createElement('p'); e.className = 'late';
             e.textContent = 'Late'; document.body.append(e); }, 1500)">Later</button>
@@ -143,6 +150,16 @@ describe('assert action execution', () => {
       await page.goto(`${origin}/app`);
       expect((await run({ type: 'click', selector: '#submit' })).success).toBe(true);
       const r = await run({ type: 'assert', kind: 'element_absent', target: '.error' });
+      expect(r.success).toBe(false);
+    }, 30_000);
+
+    // Codex review: networkidle is a remembered lifecycle state. Reached before the click, it
+    // let the absence check run while the click's 3 s request was still pending.
+    it('waits for the request the click started even when the page was idle before', async () => {
+      await page.goto(`${origin}/app`);
+      await page.waitForLoadState('networkidle');
+      expect((await run({ type: 'click', selector: '#slower' })).success).toBe(true);
+      const r = await run({ type: 'assert', kind: 'element_absent', target: '.error-late' });
       expect(r.success).toBe(false);
     }, 30_000);
 

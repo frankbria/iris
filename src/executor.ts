@@ -84,6 +84,35 @@ export const EXECUTOR_DEFAULTS = { retryAttempts: 3, retryDelay: 1000, timeout: 
 const ABSENT_SETTLE_MS = 5000;
 /** How long the element must stay absent on the settled page (#504). */
 const ABSENT_WINDOW_MS = 2000;
+/** No request in flight for this long is a settled page (as Playwright's networkidle). */
+const QUIET_MS = 500;
+
+/** Requests in flight per page, from the first action IRIS ran there (#504). */
+const inFlight = new WeakMap<Page, { count: number; quietSince: number }>();
+
+function trackRequests(page: Page): void {
+  if (inFlight.has(page) || typeof page.on !== 'function') return; // mocked pages
+  const state = { count: 0, quietSince: performance.now() };
+  inFlight.set(page, state);
+  const done = () => {
+    state.count = Math.max(0, state.count - 1);
+    if (state.count === 0) state.quietSince = performance.now();
+  };
+  page.on('request', () => void state.count++);
+  page.on('requestfinished', done);
+  page.on('requestfailed', done);
+}
+
+/** Resolves once no request has been in flight for `QUIET_MS`, or after `capMs`. */
+async function waitForQuiet(page: Page, capMs: number): Promise<void> {
+  const state = inFlight.get(page);
+  if (!state) return;
+  const deadline = performance.now() + capMs;
+  while (performance.now() < deadline) {
+    if (state.count === 0 && performance.now() - state.quietSince >= QUIET_MS) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 
 /** `path` is `prefix` or below it, at segment boundaries; `/` is the root only. */
 function pathWithin(path: string, prefix: string): boolean {
@@ -260,6 +289,9 @@ export class ActionExecutor {
     secrets: SecretSource = isHostedMode() ? noSecrets : envSecrets(),
     target?: ElementHandle,
   ): Promise<ExecutionResult> {
+    // Requests an action starts are counted from the first action on the page, so a later
+    // element_absent can wait for them (#504).
+    trackRequests(page);
     // The element the agent policy read (#530): a click or fill goes to it, not to the
     // selector, which the page could have pointed at another element since. Disposed after.
     try {
@@ -541,9 +573,9 @@ export class ActionExecutor {
         // Absence is judged on a settled page (#504): network idle (bounded), then it
         // must stay absent for a window. A one-second glance passed `[click Submit,
         // element_absent .error]` when a slow validation request rendered the error later.
-        await page
-          .waitForLoadState('networkidle', { timeout: ABSENT_SETTLE_MS })
-          .catch(() => undefined); // a page that never idles is judged as it is
+        // Our own count, not `networkidle`: that is a lifecycle state Playwright keeps, so
+        // a page idle before the click read as settled with the click's request in flight.
+        await waitForQuiet(page, ABSENT_SETTLE_MS); // a page that never idles is judged as is
         holds = !(await this.isVisible(page.locator(action.target).first(), ABSENT_WINDOW_MS));
         break;
 

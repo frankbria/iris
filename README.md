@@ -223,7 +223,7 @@ Every `iris run` example above is checked by `__tests__/readme-run-examples.test
 |---|---|---|
 | `text_visible` | Literal text | The text becomes visible within the action timeout |
 | `element_visible` | Selector | The element becomes visible within the action timeout |
-| `element_absent` | Selector | After the page settles (network idle, at most 5 s), the element stays absent or hidden for 2 s, so an error rendered late by a slow request or timer still fails it |
+| `element_absent` | Selector | After the page settles (no request in flight for 500 ms, waiting at most 5 s), the element stays absent or hidden for 2 s, so an error rendered late by a slow request or timer still fails it |
 | `url_matches` | `https://host/path`, `/path`, `#route`, `example.com[/path]` or a segment such as `checkout-complete` | The parsed URL matches: same origin and a path prefix at segment boundaries (plus the query and hash when the target has them); for `/path` the path or below it (`/` is the root only); for a host the hostname or a subdomain; for a segment whole path or hash-route segments. Never a substring of the whole URL, so the query string cannot satisfy it |
 
 **Visual Regression Testing:**
