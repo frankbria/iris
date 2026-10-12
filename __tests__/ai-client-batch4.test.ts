@@ -866,6 +866,11 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
           const u = createCostTracker(':memory:', { dailyLimit: 7 });
           expect(u.getBudgetStatus().dailyLimit).toBe(7);
           u.close();
+          // Both limits explicit: a malformed environment value is never read (codex review).
+          process.env.IRIS_DAILY_BUDGET_USD = 'not-a-number';
+          const v = createCostTracker(':memory:', { dailyLimit: 7, monthlyLimit: 70 });
+          expect(v.getBudgetStatus().monthlyLimit).toBe(70);
+          v.close();
         } finally {
           if (before === undefined) delete process.env.IRIS_DAILY_BUDGET_USD;
           else process.env.IRIS_DAILY_BUDGET_USD = before;

@@ -953,5 +953,8 @@ export class CostTracker {
  * back to the built-in $10/$200 whatever the user had configured.
  */
 export function createCostTracker(dbPath?: string, budget?: BudgetConfig): CostTracker {
-  return new CostTracker(dbPath, { ...resolveBudget(), ...budget });
+  // Both limits given: nothing to resolve, so a malformed env or config value cannot break
+  // an explicit configuration (codex review; the smart client's needsBudget() rule).
+  const explicit = budget?.dailyLimit !== undefined && budget.monthlyLimit !== undefined;
+  return new CostTracker(dbPath, explicit ? budget : { ...resolveBudget(), ...budget });
 }
