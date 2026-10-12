@@ -91,6 +91,20 @@ class LRUNode {
  *
  * Cache keys are generated from image hashes, provider, and model.
  */
+/**
+ * Drop the index names the vision cache and the cost tracker used to share (#299), on
+ * `table` only. On a shared file the other table's copy may be its only index until that
+ * store opens and creates its own prefixed one, so it is not this store's to drop.
+ */
+export function dropLegacyIndexes(db: Database.Database, table: string): void {
+  const legacy = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND name IN ('idx_timestamp', 'idx_provider_model')",
+    )
+    .all(table) as Array<{ name: string }>;
+  for (const { name } of legacy) db.exec(`DROP INDEX ${name}`);
+}
+
 export class AIVisionCache {
   private config: Required<CacheConfig>;
   private db: Database.Database;
@@ -119,6 +133,8 @@ export class AIVisionCache {
    * Initialize database schema
    */
   private initializeDatabase(): void {
+    // Index names are prefixed: they are global to a SQLite file, and the cost tracker
+    // may share this one (#299). migrations/002_ai_cache_cost.sql uses the same names.
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS ai_vision_cache (
         key TEXT PRIMARY KEY,
@@ -129,9 +145,10 @@ export class AIVisionCache {
         hits INTEGER DEFAULT 0
       );
 
-      CREATE INDEX IF NOT EXISTS idx_timestamp ON ai_vision_cache(timestamp);
-      CREATE INDEX IF NOT EXISTS idx_provider_model ON ai_vision_cache(provider, model);
+      CREATE INDEX IF NOT EXISTS idx_ai_cache_timestamp ON ai_vision_cache(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_ai_cache_provider_model ON ai_vision_cache(provider, model);
     `);
+    dropLegacyIndexes(this.db, 'ai_vision_cache');
   }
 
   /**
@@ -188,6 +205,13 @@ export class AIVisionCache {
   get(key: string): AIVisionResponse | undefined {
     // Check memory cache first
     const node = this.memoryCache.get(key);
+    // The memory tier honours the TTL too (#299): a long-running server kept serving an
+    // expired verdict from memory. delete() drops the SQLite row as well.
+    if (node && Date.now() - node.value.timestamp > this.config.ttlMs) {
+      this.delete(key);
+      this.misses++;
+      return undefined;
+    }
     if (node) {
       // Defensive re-validation: a corrupt entry is treated as a miss and
       // evicted rather than returning a structurally invalid response.
