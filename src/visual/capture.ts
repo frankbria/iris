@@ -3,6 +3,21 @@ import { createHash } from 'crypto';
 import { CaptureConfig, CaptureResult, CaptureMetadata } from './types';
 import { addStyleTagBounded, withPageTimeout } from '../page-timeout';
 
+/**
+ * Freezes CSS animations and transitions for a stable capture (#323): durations and delays
+ * to zero. Static transforms stay: `transform: none` here used to un-rotate, un-scale and
+ * un-translate every element, so screenshots showed a layout the page never has. The one
+ * stylesheet for both capture paths (this engine and the visual runner).
+ */
+export const FREEZE_ANIMATIONS_CSS = `
+  *, *::before, *::after {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+  }
+`;
+
 type Viewport = CaptureMetadata['viewport'];
 
 /**
@@ -186,18 +201,7 @@ export class VisualCaptureEngine {
    * Disable CSS animations and transitions
    */
   private async disableAnimations(page: Page): Promise<void> {
-    await addStyleTagBounded(
-      page,
-      `
-        *, *::before, *::after {
-          animation-duration: 0s !important;
-          animation-delay: 0s !important;
-          transition-duration: 0s !important;
-          transition-delay: 0s !important;
-          transform: none !important;
-        }
-      `,
-    );
+    await addStyleTagBounded(page, FREEZE_ANIMATIONS_CSS);
   }
 
   /**
