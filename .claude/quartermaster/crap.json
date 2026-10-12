@@ -1,0 +1,6 @@
+{
+  "coverageCommand": "npx jest --coverage --coverageReporters=lcov --coverageDirectory \"$QUARTERMASTER_COVERAGE_DIR\"",
+  "sources": ["src"],
+  "exclude": ["**/*.test.*", "src/**/index.ts"],
+  "base": "main"
+}

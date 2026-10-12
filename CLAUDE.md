@@ -1153,7 +1153,8 @@ quoting the page. Both report writers route every interpolation through
   ready is 503 while draining. Production's compose healthcheck probes readiness (it used to
   infer health from `GET /` answering 404).
 - **SIGTERM drains** (`drainServer(wss, ms)`, src/protocol.ts): readiness turns 503, new
-  upgrades get 503 and new requests on open sockets `-32000 Server is shutting down`, and it
+  upgrades get 503 (re-checked after an async key check), new REST requests 503 (no job is
+  queued during shutdown), new requests on open sockets `-32000 Server is shutting down`, and it
   resolves once every message in flight has been answered (a counter around the message
   handler), or at the deadline (`DRAIN_DEADLINE_MS` = 12 s in cli.ts). Then the sockets
   close and the sessions' browsers with them; 5 s later a forced exit. `stop_grace_period`

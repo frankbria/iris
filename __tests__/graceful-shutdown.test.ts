@@ -102,6 +102,9 @@ describe('readiness and drain, in process (#309)', () => {
     expect(response.statusCode).toBe(503);
     late.on('error', () => undefined);
 
+    // Nor is new REST work (a plain request: no job API here, so 426 when not draining).
+    expect(await status(http, '/v1/jobs')).toBe(503);
+
     // The request in flight is answered, and the drain resolves after it.
     expect((await inFlight).result).toMatchObject({ success: true });
     expect(await drained).toBe(true);
@@ -114,6 +117,38 @@ describe('readiness and drain, in process (#309)', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(await drainServer(wss, 200)).toBe(false);
   }, 60_000);
+});
+
+describe('an upgrade whose key check ends after the drain began (#309)', () => {
+  it('is refused with 503, not admitted', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const wss = startServer(0, {
+      authenticate: {
+        verify: async () => {
+          await held;
+          return { orgId: 'org-a', keyId: 'key-a' };
+        },
+        recheck: async () => true,
+      },
+    });
+    await once(wss, 'listening');
+    const { port } = wss.address() as AddressInfo;
+    try {
+      const late = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { Authorization: 'Bearer iris_test' },
+      });
+      late.on('error', () => undefined);
+      const answered = once(late, 'unexpected-response');
+      await new Promise((resolve) => setTimeout(resolve, 200)); // the check is under way
+      expect(await drainServer(wss, 1_000)).toBe(true);
+      release();
+      const [, response] = await answered;
+      expect(response.statusCode).toBe(503);
+    } finally {
+      await new Promise((resolve) => wss.close(resolve));
+    }
+  });
 });
 
 /** Wait for a spawned process to exit, failing after `ms`. */

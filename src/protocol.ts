@@ -555,6 +555,12 @@ export function startServer(
       res.end(JSON.stringify({ status: ready ? 'ok' : 'draining' }));
       return;
     }
+    // Draining: no new REST work either (a job queued now would outlive the shutdown).
+    if (draining) {
+      res.writeHead(503, { 'content-type': 'application/json', 'retry-after': '1' });
+      res.end(JSON.stringify({ error: 'Server is shutting down' }));
+      return;
+    }
     // One line per REST request, with the id echoed back so a client can quote it (#275).
     const t0 = performance.now();
     // Ours is always generated (a client's could collide with another's); a safe
@@ -669,6 +675,8 @@ export function startServer(
           // and its 'connection' handler registers it in `tenants` before returning,
           // so the org count below cannot miss a client admitted a moment earlier.
           verifying--;
+          // The drain may have begun while the key was being checked.
+          if (draining) return refuse(503, 'Server is shutting down', 'draining');
           if (!principal) return refuse(401, 'Unauthorized', 'invalid_key');
           // A valid key of a suspended org (#348): 403, never the operator's reason.
           if (principal === 'suspended') return refuse(403, 'Organization suspended', 'suspended');
