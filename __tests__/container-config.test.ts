@@ -362,7 +362,10 @@ describe('image base tag and dependency updates (issue #306)', () => {
 
   it('every Playwright base image in the Dockerfile matches the installed playwright', () => {
     const tags = [
-      ...read('Dockerfile').matchAll(/^FROM mcr\.microsoft\.com\/playwright:v([^\s-]+)-/gm),
+      ...read('Dockerfile').matchAll(
+        // Up to the final `-<distro>` suffix, so a pre-release (`v1.64.0-beta-1-noble`) stays whole.
+        /^FROM mcr\.microsoft\.com\/playwright:v(.+?)-\w+(\s|$)/gm,
+      ),
     ].map((m) => m[1]);
     // Three stages (deps, build, runtime), so a match can never be vacuous. The library and
     // the bundled browsers are matched pairs (Dockerfile header): a bump of one without the
