@@ -213,6 +213,7 @@ export function createAuth(
       }),
       after: createAuthMiddleware(async (ctx) => {
         if (API_KEY_WRITES.has(ctx.path)) return auditKeyWrite(ctx, rest.database);
+        if (MEMBER_WRITES.has(ctx.path)) return afterMemberWrite(ctx, rest.database);
         if (ctx.path === '/organization/create')
           return undoOrgCreateOverFreeLimit(ctx, rest.database);
         if (ctx.path !== '/sign-up/email') return;
@@ -322,6 +323,83 @@ async function rememberDeletedKeyOrg(
   const { rows } = await sql<{ org: string | null }>`
     select "referenceId" as org from apikey where id = ${keyId}`.execute(termsDb(database));
   if (rows[0]?.org) deletedKeyOrgs.set(keyId, rows[0].org);
+}
+
+/** BetterAuth's member endpoints that change who is in an org, or their role (#408). */
+const MEMBER_WRITES = new Set([
+  '/organization/remove-member',
+  '/organization/leave',
+  '/organization/update-member-role',
+]);
+
+/**
+ * A member removed, gone or given another role (#408), audited with the user who did it.
+ * A member who leaves the org, or is removed, takes the API keys they created with them:
+ * keys belong to the org and outlive their creator (#340), and only #361's audit log says
+ * who that was. Keys made before #361 have no creator on record and stay. A role change
+ * revokes nothing. Logged on failure, not thrown: the membership change already happened.
+ */
+async function afterMemberWrite(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  const returned = ctx.context.returned as
+    { member?: MemberRow; userId?: string; organizationId?: string; role?: string } | undefined;
+  // Remove answers { member }, leave and role change the member row; a refusal, an error.
+  const member = ctx.path === '/organization/remove-member' ? returned?.member : returned;
+  if (!member?.userId || !member.organizationId) return;
+  const session = await getSessionFromCtx(ctx);
+  const actor = { userId: session?.user.id ?? null };
+  const orgId = member.organizationId;
+  const target = `user:${member.userId}`;
+  const db = termsDb(database);
+  try {
+    if (ctx.path === '/organization/update-member-role') {
+      await recordAudit(db, {
+        orgId,
+        actor,
+        action: 'member.role',
+        target,
+        metadata: { role: member.role },
+      });
+      return;
+    }
+    const action = ctx.path === '/organization/leave' ? 'member.leave' : 'member.remove';
+    await db.transaction().execute(async (tx) => {
+      const { rows } = await sql<{ id: string }>`
+        delete from apikey where "referenceId" = ${orgId} and id in (
+          select substr(target, 5) from audit_log
+          where org_id = ${orgId} and action = 'api_key.create' and actor_user_id = ${member.userId})
+        returning id`.execute(tx);
+      await recordAudit(tx, {
+        orgId,
+        actor,
+        action,
+        target,
+        metadata: { revokedKeys: rows.length },
+      });
+      for (const { id } of rows) {
+        await recordAudit(tx, {
+          orgId,
+          actor,
+          action: 'api_key.delete',
+          target: `key:${id}`,
+          metadata: { reason: action },
+        });
+      }
+    });
+  } catch (err) {
+    log('error', 'failed to record a membership change', {
+      action: ctx.path,
+      err: String((err as Error)?.message ?? err),
+    });
+  }
+}
+
+interface MemberRow {
+  userId?: string;
+  organizationId?: string;
+  role?: string;
 }
 
 /**

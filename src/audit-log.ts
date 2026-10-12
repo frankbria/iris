@@ -41,3 +41,19 @@ export function actorFrom(by: string | null | undefined): AuditActor {
   if (by?.startsWith('key:')) return { apiKeyId: by.slice(4) };
   return {};
 }
+
+/**
+ * How many of the org's live API keys each user created, by user id (#408): what removing
+ * them would revoke. From the audit log, so keys made before #361 are not counted.
+ */
+export async function liveKeysByCreator(
+  db: Kysely<unknown>,
+  orgId: string,
+): Promise<Map<string, number>> {
+  const { rows } = await sql<{ user_id: string; n: number }>`
+    select a.actor_user_id as user_id, count(*)::int as n from audit_log a
+    join apikey k on k.id = substr(a.target, 5) and k."referenceId" = a.org_id
+    where a.org_id = ${orgId} and a.action = 'api_key.create' and a.actor_user_id is not null
+    group by a.actor_user_id`.execute(db);
+  return new Map(rows.map((r) => [r.user_id, r.n]));
+}
