@@ -152,6 +152,9 @@ export class ActionExecutor {
    * hold a form of the value the scrub never saw (a `maxlength` prefix, a page rewrite).
    */
   private secretFieldHandles: ElementHandle[] = [];
+  /** The page each kept handle belongs to, so one close listener per page releases them. */
+  private readonly secretFieldPages = new WeakMap<ElementHandle, Page>();
+  private readonly watchedPages = new WeakSet<Page>();
   /** What those fields held at the last `refreshFieldValues`, cut by `redactSecrets` too. */
   private fieldValues = new Set<string>();
   /** Policy handles kept for those readers, not disposed after their action. */
@@ -384,10 +387,20 @@ export class ActionExecutor {
     if (this.secretFieldHandles.includes(handle)) return;
     this.retainedHandles.add(handle);
     this.secretFieldHandles.push(handle);
+    this.secretFieldPages.set(handle, page);
     // A page that closes takes its fields with it: release their handles then, not at the
     // next refresh. Handles kept into a closed page made browser.close() take tens of
-    // seconds, or hang (found by this PR's suite).
-    page.once('close', () => this.releaseSecretField(handle));
+    // seconds, or hang (found by this PR's suite). One listener per page (codex review).
+    if (!this.watchedPages.has(page)) {
+      this.watchedPages.add(page);
+      page.once('close', () => {
+        for (const h of this.secretFieldHandles.filter(
+          (x) => this.secretFieldPages.get(x) === page,
+        )) {
+          this.releaseSecretField(h);
+        }
+      });
+    }
     for (const old of this.secretFieldHandles.splice(
       0,
       Math.max(0, this.secretFieldHandles.length - MAX_SECRET_FIELDS),
