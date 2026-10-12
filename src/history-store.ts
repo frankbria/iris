@@ -135,6 +135,17 @@ const boundedError = (error: string): string => [...stripUserinfo(error)].slice(
  * `describeAction()`, which never includes what a `fill` typed (#81): history is
  * readable by everyone in the org, and a typed value is often a password.
  */
+/** At most this many needs-review rule ids are stored per page. */
+const MAX_REVIEW_RULES = 20;
+
+function needsReviewOf(page: { axeResult: { incomplete?: { id: string }[] } }) {
+  const rules = (page.axeResult.incomplete ?? []).map((r) => r.id);
+  return {
+    needsReview: rules.length,
+    ...(rules.length > 0 && { needsReviewRules: rules.slice(0, MAX_REVIEW_RULES) }),
+  };
+}
+
 function resultsOf(run: RunInput): StoredRunResult[] {
   switch (run.kind) {
     case 'visual':
@@ -174,6 +185,9 @@ function resultsOf(run: RunInput): StoredRunResult[] {
             screenReaderPassed: page.screenReaderResult?.passed ?? true,
             // An unscanned page has no score (#287), not a perfect one.
             ...(page.error === undefined && { score: calculateAccessibilityScore(counts, 1) }),
+            // axe's `incomplete` (#290, #498): rules it could not decide, which a person
+            // must check; never a failure. Rule ids are axe's own, bounded.
+            ...(page.error === undefined && needsReviewOf(page)),
           },
         };
       });

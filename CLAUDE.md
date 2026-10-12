@@ -262,7 +262,9 @@ plans/
   `wcag2a, wcag21a, wcag2aa, wcag21aa, wcag22aa`; axe tags a rule with the version that
   introduced it, so 2.0 tags alone skipped `autocomplete-valid` and `target-size`. axe's
   `incomplete` is "needs review": MCP `needsReview`, a CLI count, the HTML report and
-  JUnit `<system-out>`; never a failure. Hosted stored results do not carry it yet (#498)
+  JUnit `<system-out>`; never a failure. Hosted runs store it per page (#498:
+  `needsReview` count, up to 20 `needsReviewRules`, scanned pages only), shown by the
+  Results API and the portal run detail
 - **One a11y verdict per page (#288).** The runner sets `passed` and `failureReasons` on
   every result (`withVerdict`: axe violations at `--fail-on`, a failed keyboard or
   screen-reader check, or an error), and everything reads it: `summary.passed` (the exit
