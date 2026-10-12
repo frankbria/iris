@@ -13,6 +13,7 @@ import {
 import type { Authenticator, Principal } from './protocol';
 import { errMessage, log, redactStrings } from './log';
 import { signRunArtifacts, type ArtifactStore } from './artifact-store';
+import { StorageQuotaExceededError } from './storage-quota';
 
 /**
  * The hosted job REST API (#267, ADR 0001 §1): `POST /v1/a11y/jobs` queues a scan,
@@ -100,7 +101,9 @@ export interface JobsApiDeps {
   /** Lifetime of those URLs in seconds (default 5 minutes, at most 15). */
   artifactUrlTtlSeconds?: number;
   /** The org's plan limits (#346); without it no monthly run limit applies. */
-  entitlements?: (orgId: string) => Promise<{ runsPerMonth: number }>;
+  entitlements?: (
+    orgId: string,
+  ) => Promise<{ runsPerMonth: number; artifactStorageBytes?: number }>;
   /** Spends a request from the principal's key and org budgets; milliseconds to wait if refused, else 0. */
   charge(principal: Principal): number;
   /**
@@ -275,6 +278,12 @@ export async function handleJobsRequest(
       const outcome = await store.approveVisualResult(runId, Number(approve[2]), deps.artifacts);
       if (outcome.status === 'not-found') return send(res, 404, { error: 'Not found' });
       if (outcome.status === 'conflict') return send(res, 409, { error: outcome.reason });
+      if (outcome.status === 'over-quota')
+        return send(res, 402, {
+          error: 'Storage quota reached',
+          limit: outcome.limit,
+          used: outcome.used,
+        });
       const b = outcome.baseline;
       return send(res, 200, {
         project: b.project,
@@ -329,17 +338,17 @@ export async function handleJobsRequest(
         ? { kind: 'visual', params: parsed.data as VisualJobParams }
         : { kind: 'a11y', params: parsed.data as A11yJobParams }
     ) as JobSpec;
-    const monthlyRunLimit = deps.entitlements
-      ? (await deps.entitlements(scope.orgId)).runsPerMonth
-      : undefined;
+    const plan = deps.entitlements ? await deps.entitlements(scope.orgId) : undefined;
     let id: string | null;
     try {
       id = await store.enqueue(spec, {
         maxOutstanding: deps.maxQueuedJobsPerOrg,
-        monthlyRunLimit,
+        monthlyRunLimit: plan?.runsPerMonth,
+        storageLimitBytes: plan?.artifactStorageBytes,
       });
     } catch (err) {
-      if (!(err instanceof RunQuotaExceededError)) throw err;
+      if (!(err instanceof RunQuotaExceededError || err instanceof StorageQuotaExceededError))
+        throw err;
       // 402: a plan limit, not a rate (#346). The org upgrades or waits for the month.
       return send(res, 402, { error: err.message, limit: err.limit, used: err.used });
     }

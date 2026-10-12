@@ -2,6 +2,8 @@ import { recordAudit } from './audit-log';
 import { sql, type Kysely } from 'kysely';
 import { baselineObjectKey, orgArtifacts, type ArtifactStore } from './artifact-store';
 import { artifactName } from './visual/artifacts';
+import { orgEntitlements } from './billing/plans';
+import { quotaArtifacts, StorageQuotaExceededError } from './storage-quota';
 import { redactString } from './log';
 
 /**
@@ -37,7 +39,9 @@ export interface OrgBaselines {
 export type ApproveResult =
   | { status: 'approved'; baseline: VisualBaseline }
   | { status: 'not-found' }
-  | { status: 'conflict'; reason: string };
+  | { status: 'conflict'; reason: string }
+  /** The copy would pass the org's storage quota (#315). */
+  | { status: 'over-quota'; limit: number; used: number };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -137,7 +141,18 @@ export async function approveVisualResult(
   const objectKey = baselineObjectKey(orgId, project, name, runId);
   const image = await orgArtifacts(artifacts, orgId).get(current);
   if (!image) return { status: 'conflict', reason: 'The screenshot is no longer stored' };
-  await orgArtifacts(artifacts, orgId).put(objectKey, image, 'image/png');
+  // The copy is a new object: it counts against the plan's storage (#315).
+  const { artifactStorageBytes } = await orgEntitlements(db).get(orgId);
+  try {
+    await quotaArtifacts(orgArtifacts(artifacts, orgId), db, orgId, artifactStorageBytes).put(
+      objectKey,
+      image,
+      'image/png',
+    );
+  } catch (err) {
+    if (!(err instanceof StorageQuotaExceededError)) throw err;
+    return { status: 'over-quota', limit: err.limit, used: err.used };
+  }
   const approvedBy = actor.apiKeyId
     ? `key:${actor.apiKeyId}`
     : actor.userId

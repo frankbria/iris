@@ -928,6 +928,15 @@ program
         // Compose's liveness check reads its age (#273).
         heartbeatFile: process.env.IRIS_WORKER_HEARTBEAT_FILE || undefined,
         artifacts: artifacts ?? undefined,
+        // Visual jobs' writes count against each org's plan (#315).
+        storageQuota: async (orgId, store) => {
+          const [{ orgEntitlements }, { quotaArtifacts }] = await Promise.all([
+            import('./billing/plans'),
+            import('./storage-quota'),
+          ]);
+          const { artifactStorageBytes } = await orgEntitlements(db).get(orgId);
+          return quotaArtifacts(store, db, orgId, artifactStorageBytes);
+        },
       });
     } finally {
       await db.destroy();

@@ -84,3 +84,14 @@ export function runsHref(
 
 export const formatTime = (d: Date | string) =>
   new Date(d).toISOString().replace("T", " ").slice(0, 19) + " UTC"
+
+/** Bytes in the largest unit that keeps the number at least 1 (binary units). */
+export function formatBytes(bytes: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"]
+  let i = 0
+  while (bytes >= 1024 && i < units.length - 1) {
+    bytes /= 1024
+    i++
+  }
+  return `${i === 0 ? bytes : bytes.toFixed(1)} ${units[i]}`
+}

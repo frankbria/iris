@@ -25,6 +25,7 @@ import { hostedEgressProxy } from '../src/egress-proxy';
 import { postgresHistory, postgresJobs } from '../src/history-store';
 import { startServer, type Authenticator, type Principal } from '../src/protocol';
 import { processNextVisualJob } from '../src/worker';
+import { quotaArtifacts } from '../src/storage-quota';
 import { runVisualJob } from '../src/visual/hosted-job';
 import { orgArtifacts } from '../src/artifact-store';
 
@@ -398,6 +399,41 @@ const page = (color: string, extra = 0) =>
     color = '#c00';
     const other = await run('blog');
     expect(other.detail.results[0].result).toMatchObject({ project: 'blog', newBaseline: true });
+  }, 120_000);
+
+  // #315: the plan's artifact storage. A job whose writes would pass it fails with a clear
+  // error and seeds nothing; an approval that would pass it is refused with 402.
+  it('fails a visual job whose writes would pass the storage quota (#315)', async () => {
+    const res = await api('POST', '/v1/visual/jobs', 'key-a', { project: 'full', urls: [url()] });
+    const { id } = (await res.json()) as { id: string };
+    await processNextVisualJob(postgresJobs(db), {
+      artifacts: store,
+      storageQuota: async (orgId, own) => quotaArtifacts(own, db, orgId, 10),
+    });
+    const job = await (await api('GET', `/v1/jobs/${id}`)).json();
+    expect(job).toMatchObject({ status: 'failed', error: 'Storage quota reached' });
+    const rows = await sql`select 1 from visual_baselines where project = 'full'`.execute(db);
+    expect(rows.rows).toHaveLength(0);
+  }, 120_000);
+
+  it('refuses an approval that would pass the storage quota with 402 (#315)', async () => {
+    color = '#060';
+    await run('approvals');
+    color = '#600';
+    const changed = await run('approvals');
+    await sql`insert into org_plans (org_id, plan, overrides)
+      values ('org-a', 'free', '{"artifactStorageBytes": 1}'::jsonb)
+      on conflict (org_id) do update set overrides = excluded.overrides`.execute(db);
+    try {
+      const refused = await api('POST', `/v1/runs/${changed.id}/results/0/approve`);
+      expect(refused.status).toBe(402);
+      expect(await refused.json()).toMatchObject({ error: 'Storage quota reached', limit: 1 });
+      const rows = await sql<{ approved_by: string }>`select approved_by from visual_baselines
+        where org_id = 'org-a' and project = 'approvals'`.execute(db);
+      expect(rows.rows).toEqual([{ approved_by: 'first-run' }]); // unchanged
+    } finally {
+      await sql`delete from org_plans where org_id = 'org-a'`.execute(db);
+    }
   }, 120_000);
 
   // Codex review (#442): past the deadline the worker moves on, but a run blocked on a

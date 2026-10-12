@@ -162,16 +162,24 @@ export function processNextA11yJob(
  * Claims and runs one visual-diff job (#268). Its images go to `artifacts` (scoped to the
  * job's org here); its baselines are the job's org's.
  */
+/**
+ * Wraps an org's store so its writes count against the org's plan (#315): `quotaArtifacts`
+ * over the plan's `artifactStorageBytes`, built by `iris worker` from the database.
+ */
+export type StorageQuota = (orgId: string, store: ArtifactStore) => Promise<ArtifactStore>;
+
 export function processNextVisualJob(
   jobs: WorkerJobs,
   {
     artifacts,
     heartbeatMs,
     deadlineMs,
+    storageQuota,
   }: {
     artifacts: ArtifactStore;
     heartbeatMs?: number;
     deadlineMs?: (job: ClaimedJob) => number;
+    storageQuota?: StorageQuota;
   },
 ): Promise<ClaimedJob | null> {
   if (!jobs.baselines) throw new Error("Visual jobs need the job store's baselines");
@@ -185,8 +193,10 @@ export function processNextVisualJob(
         import('./visual/hosted-job'),
         import('./artifact-store'),
       ]);
+      const own = orgArtifacts(artifacts, job.orgId);
       return runVisualJob(job.params, {
-        artifacts: orgArtifacts(artifacts, job.orgId),
+        // A write past the plan's storage fails the job with "Storage quota reached" (#315).
+        artifacts: storageQuota ? await storageQuota(job.orgId, own) : own,
         baselines: baselines(job.orgId),
         orgId: job.orgId,
         runId: job.id,
@@ -335,6 +345,8 @@ export async function runWorker(options: {
   maxAttempts?: number;
   /** Where visual jobs' images go (#268); without it visual jobs are not claimed. */
   artifacts?: ArtifactStore;
+  /** Counts visual jobs' writes against each org's plan (#315). */
+  storageQuota?: StorageQuota;
 }): Promise<void> {
   const {
     jobs,
@@ -345,6 +357,7 @@ export async function runWorker(options: {
     staleMs = DEFAULT_STALE_MS,
     maxAttempts,
     artifacts,
+    storageQuota,
   } = options;
   if (artifacts && !jobs.baselines)
     throw new Error('Visual jobs (artifacts) need a job store with baselines');
@@ -396,7 +409,9 @@ export async function runWorker(options: {
       // without a store, #268).
       const kinds: Array<() => Promise<ClaimedJob | null>> = [
         () => processNextA11yJob(jobs, { heartbeatMs }),
-        ...(artifacts ? [() => processNextVisualJob(jobs, { artifacts, heartbeatMs })] : []),
+        ...(artifacts
+          ? [() => processNextVisualJob(jobs, { artifacts, heartbeatMs, storageQuota })]
+          : []),
       ];
       if (tick++ % 2) kinds.reverse();
       for (const next of kinds) if ((ran = (await next()) !== null)) break;

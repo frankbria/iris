@@ -1483,7 +1483,7 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - **`byokAllowed`**: `managedAiResolver()` (src/billing/managed-ai.ts, #479) returns no stored key
   for a plan without it.
 - Not enforced yet, no hosted surface: agent turns (the loop takes a scope, #428; nothing hosted runs it), vision calls (hosted
-  jobs run no AI), storage (#315).
+  jobs run no AI). Storage is enforced since #315 (below).
 
 ### Tenant Audit Log (issue #361)
 
@@ -1508,6 +1508,27 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - `rewrapAll()` writes one `provider_key.rewrap` per key, in that key's update transaction,
   with no actor (an operator ran it) and the sealing master key id.
 - There is no read surface yet (portal page or API): only the table.
+
+### Artifact Storage Quota (issue #315)
+
+`src/storage-quota.ts`, migration 0015 (`artifact_objects`: org, key, bytes). The plan's
+`artifactStorageBytes` (free 1 GB, pro 20 GB, team 100 GB) is enforced and shown.
+
+- **Usage is recorded beside each write**: `quotaArtifacts(orgStore, db, orgId, limit)` wraps an
+  org's store; `put` reserves the row first, in one statement with the check (a replaced key
+  counts its new size only; over the quota it refuses with `StorageQuotaExceededError` and
+  nothing is stored), then writes the object, and gives the reservation back if the write
+  fails: a crash in between overcounts, never undercounts (codex review). The org FK cascades,
+  so the 7-year tombstone deletion is not blocked by a purge still pending.
+  `deletePrefix` forgets the matching rows, and offboarding's purge queue calls
+  `forgetArtifacts` after each prefix it deletes. ponytail: concurrent writes can each
+  reserve against the same total, so they can overshoot by their sum.
+- **Where it bites**: a visual job submit is refused with **402** `{ error: 'Storage quota
+  reached', limit, used }` when the org is at the quota (inside `enqueue`, like
+  `runsPerMonth`; a11y jobs store nothing); a running visual job's write past it fails the job
+  with that message (`iris worker` passes `storageQuota`); an approval's baseline copy past it
+  is `over-quota` (API 402, portal message). The portal dashboard shows usage of quota.
+- **Objects stored before migration 0015 have no row** and are not counted.
 
 ### Managed AI Credits (issue #479)
 
