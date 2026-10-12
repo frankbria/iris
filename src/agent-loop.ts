@@ -14,6 +14,10 @@ import type { Action } from './actions';
 import type { ActionExecutor, ExecutionResult } from './executor';
 import { loadConfig } from './config';
 import { createResolvedAIClient } from './ai-client';
+import { configFromCredentials } from './ai-client/credentials';
+import type { SettledAICall } from './ai-client/factory';
+import type { SecretSource } from './credential-refs';
+import { resolveCredentials, type CredentialsSource } from './translator';
 import { checkPlannedAction, originOf, pinPage } from './agent-policy';
 import type { AgentPolicy } from './agent-policy';
 import { withPageTimeout } from './page-timeout';
@@ -74,6 +78,16 @@ export interface AgentLoopOptions {
    * read as destructive. See `./agent-policy` for why.
    */
   policy?: AgentPolicy;
+  /**
+   * A request's scope (#428), as for `translate()`: the org its turns are charged to (the
+   * ledger's budget and rows), its AI credentials (omitted: the process configuration
+   * locally, no AI under IRIS_HOSTED), each settled call (usage rows), and the values a
+   * fill's `{{secret:NAME}}` resolves from (omitted: the executor's default).
+   */
+  orgId?: string;
+  credentials?: CredentialsSource;
+  onUsage?: (call: SettledAICall) => void | Promise<void>;
+  secrets?: SecretSource;
 }
 
 /**
@@ -147,6 +161,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     log = () => {},
     policy = {},
     startUrl,
+    orgId,
+    onUsage,
+    secrets,
   } = options;
 
   // The origin the run is pinned to: what the caller ASKED for, falling back to
@@ -182,7 +199,15 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
 
   let client;
   try {
-    client = await createResolvedAIClient(loadConfig(), { operation: 'agent_turn' });
+    const credentials = await resolveCredentials(options.credentials);
+    if (credentials === null) {
+      log('no AI credentials for this organization');
+      return { goalMet: null, turns: 0, results: [], terminationReason: 'error' };
+    }
+    const config = credentials
+      ? configFromCredentials(credentials, { kind: 'text' })
+      : loadConfig();
+    client = await createResolvedAIClient(config, { operation: 'agent_turn', orgId, onUsage });
   } catch (error) {
     // An unsupported provider or unreadable config is a reportable outcome, not
     // a rejected promise — every other failure mode here returns a result.
@@ -266,7 +291,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
       // consecutive-failure cutoff so an agent that keeps retrying a forbidden
       // action stops instead of burning the turn budget.
       const result: ExecutionResult = verdict.allowed
-        ? await executor.executeAction(action, page)
+        ? await executor.executeAction(action, page, secrets)
         : {
             success: false,
             action,
