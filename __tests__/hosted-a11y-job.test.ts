@@ -22,7 +22,8 @@ import { migrateToLatest } from '../src/db/migrate';
 import { hostedEgressProxy } from '../src/egress-proxy';
 import { postgresJobs } from '../src/history-store';
 import { startServer, type Authenticator, type Principal } from '../src/protocol';
-import { processNextA11yJob } from '../src/worker';
+import { JOB_TIMED_OUT, processNextA11yJob } from '../src/worker';
+import { openBrowsers } from '../src/browser';
 import { orgSuspensions } from '../src/org-suspension';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
@@ -84,6 +85,7 @@ const PAGE =
 
     site = http.createServer((req, res) => {
       seen.push(`${req.headers.host} ${req.url}`);
+      if (req.url === '/hold') return; // never answers: a page that never finishes loading
       res.setHeader('content-type', 'text/html');
       res.end(PAGE);
     });
@@ -116,6 +118,7 @@ const PAGE =
 
   afterAll(async () => {
     await new Promise((r) => server?.close(() => r(null)));
+    site?.closeAllConnections();
     site?.close();
     await db?.destroy();
     await admin(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
@@ -235,6 +238,25 @@ const PAGE =
     const usage = await sql`select 1 from usage_events where run_id = ${id}`.execute(db);
     expect(usage.rows).toEqual([]);
   });
+
+  it('fails a job past its deadline, closes its browser and frees the worker (#442)', async () => {
+    const id = await submit([`http://site.test:${sitePort}/hold`]);
+    // The runner's own per-page budget is 120 s; the job's deadline ends it first.
+    const job = await processNextA11yJob(postgresJobs(db), { deadlineMs: () => 3_000 });
+    expect(job?.id).toBe(id);
+    expect(seen).toEqual([`site.test:${sitePort} /hold`]); // really reached, and held
+
+    const body = await (await api('GET', `/v1/jobs/${id}`)).json();
+    expect(body).toMatchObject({ status: 'failed', error: JOB_TIMED_OUT });
+    expect(body).not.toHaveProperty('results');
+    const usage = await sql`select 1 from usage_events where run_id = ${id}`.execute(db);
+    expect(usage.rows).toEqual([]);
+    expect(openBrowsers()).toEqual([]); // no Chromium outlives the job
+
+    // The worker is free: the next job runs.
+    const next = await submit([`http://site.test:${sitePort}/page`]);
+    expect((await processNextA11yJob(postgresJobs(db)))?.id).toBe(next);
+  }, 60_000);
 
   it('an empty queue is a no-op', async () => {
     expect(await processNextA11yJob(postgresJobs(db))).toBeNull();
