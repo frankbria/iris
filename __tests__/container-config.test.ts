@@ -379,3 +379,57 @@ describe('image base tag and dependency updates (issue #306)', () => {
     expect(dependabot).toMatch(/- package-ecosystem: docker\n/);
   });
 });
+
+describe('workflow pinning and deploy configuration (issue #359)', () => {
+  const workflows = fs
+    .readdirSync(path.join(ROOT, '.github/workflows'))
+    .filter((f) => /\.ya?ml$/.test(f))
+    .map((f) => [f, read(path.join('.github/workflows', f))] as const);
+  const uses = workflows.flatMap(([file, text]) =>
+    [...text.matchAll(/^\s*(?:-\s+)?uses:\s*(\S+)/gm)].map((m) => [file, m[1]] as const),
+  );
+
+  it('finds the workflow steps it checks', () => {
+    expect(uses.length).toBeGreaterThan(10);
+  });
+
+  // A tag (`@v7`) is moved by whoever controls the action's repository; a commit SHA
+  // is not. Dependabot's github-actions entry keeps the SHAs and their comments current.
+  it('pins every action and reusable workflow to a full commit SHA', () => {
+    const floating = uses.filter(
+      ([file, ref]) =>
+        !/@[0-9a-f]{40}$/.test(ref) &&
+        // The one documented exception: the reviewer floats so an upstream scope change
+        // cannot fail it silently (see check-workflow-calls.yml); the guard is pinned.
+        !(
+          file === 'glm-review.yml' &&
+          ref === 'frankbria/glm-review/.github/workflows/review.yml@main'
+        ),
+    );
+    expect(floating).toEqual([]);
+  });
+
+  it('trusts no host key on first use: staging and production require SSH_KNOWN_HOSTS', () => {
+    const ci = read('.github/workflows/ci.yml');
+    // Commands only: a comment may explain why ssh-keyscan is not used.
+    const commands = ci
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+    expect(commands).not.toMatch(/ssh-keyscan/);
+    expect(
+      ci.match(/::error::Set SSH_KNOWN_HOSTS in the (staging|production) environment/g),
+    ).toHaveLength(2);
+  });
+
+  it('bounds both deploy jobs with a timeout', () => {
+    const ci = read('.github/workflows/ci.yml');
+    for (const job of ['deploy-staging', 'deploy-production']) {
+      const body = ci.slice(
+        ci.indexOf(`\n  ${job}:`),
+        ci.indexOf('steps:', ci.indexOf(`\n  ${job}:`)),
+      );
+      expect(body).toMatch(/timeout-minutes: \d+/);
+    }
+  });
+});

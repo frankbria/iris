@@ -707,6 +707,12 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   current, which would not load the image). The worker uses the production compose
   file's own heartbeat check. Bash reads a script while running it: do not edit
   `deploy.sh` during a run.
+- **Every action is pinned to a commit SHA (#359)**, version in a trailing comment;
+  Dependabot's github-actions entry updates both. The one floating ref is
+  `frankbria/glm-review/.../review.yml@main`, deliberately (check-workflow-calls.yml says
+  why); `container-config.test.ts` fails on any other. Staging, like production, refuses to
+  deploy without `SSH_KNOWN_HOSTS` (no ssh-keyscan trust-on-first-use), and both deploy jobs
+  have `timeout-minutes`. A CI-only tailnet tag needs the Tailscale console: #535.
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
 

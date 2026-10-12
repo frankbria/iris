@@ -37,8 +37,8 @@ jobs:
           - 51025:1025
           - 58025:8025
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # Read from .nvmrc so CI and local environments cannot drift apart —
           # that drift is what hid the engines mismatch in issue #138.
@@ -66,8 +66,8 @@ jobs:
           DATABASE_URL: postgres://iris:iris@localhost:5432/iris
       # The portal image (#273), built on every run so a broken Dockerfile.portal fails
       # here, not at the first staging deploy. portal-image.test.ts runs it.
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/build-push-action@v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.portal
@@ -79,7 +79,7 @@ jobs:
       # post-merge staging deploy. iris-image.test.ts runs it under docker-compose.staging.yml
       # (healthy, sandboxed Chromium, the default-seccomp negative control, /data, no portal
       # packages). The sandbox needs the sysctl above.
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           load: true
@@ -157,6 +157,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: staging
+    # Bounded like deploy-production (#359): a hung ssh or registry call fails the job
+    # instead of holding a runner for the default six hours.
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write # push the image to GHCR
@@ -165,8 +168,7 @@ jobs:
       group: deploy-staging
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Everything below is pointless without a target. Checked once, up front,
       # so the job reports "skipped, no secrets" instead of failing five steps in
       # with an opaque ssh error.
@@ -290,20 +292,19 @@ jobs:
           echo "tailnet up: $state"
 
       - if: steps.preflight.outputs.configured == 'true'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - if: steps.preflight.outputs.configured == 'true'
-        uses: docker/setup-buildx-action@v4
-
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # Tagged with the commit SHA as well as `staging`, because that is what
       # makes rollback a one-liner: redeploy a previous SHA.
       - if: steps.preflight.outputs.configured == 'true'
         id: iris_image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
@@ -317,7 +318,7 @@ jobs:
       # the portal yet; the step after the deploy boots this exact digest instead.
       - if: steps.preflight.outputs.configured == 'true'
         id: portal_image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.portal
@@ -355,16 +356,14 @@ jobs:
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-          # Prefer a pinned host key when one is configured. ssh-keyscan is
+          # A pinned host key, as production requires (#359). ssh-keyscan is
           # trust-on-first-use: it accepts whatever key answers at that moment,
-          # so it authenticates nothing against an active MITM. Set
-          # SSH_KNOWN_HOSTS in the environment to close that.
-          if [ -n "${DEPLOY_SSH_KNOWN_HOSTS:-}" ]; then
-            printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
-          else
-            echo "::warning::SSH_KNOWN_HOSTS not set in this environment - falling back to ssh-keyscan (TOFU)."
-            ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          # so it authenticates nothing against an active MITM.
+          if [ -z "${DEPLOY_SSH_KNOWN_HOSTS:-}" ]; then
+            echo "::error::Set SSH_KNOWN_HOSTS in the staging environment"
+            exit 1
           fi
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
           # Reachability, checked directly rather than inferred from the shape of
           # the hostname. An earlier version pattern-matched HOST against
           # *.ts.net|100.* — which rejects a trailing-dot FQDN (what
@@ -615,8 +614,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: preflight
         env:
           DEPLOY_HOST: ${{ secrets.HOST }}
@@ -646,14 +644,13 @@ jobs:
           case "$PORTAL_URL$SMTP_FROM" in *"'"* | *$'\n'*) echo "::error::PORTAL_URL/SMTP_FROM may not hold ' or a newline"; exit 1 ;; esac
           if [ -n "$TS_AUTHKEY" ]; then echo "ts_auth=authkey" >> "$GITHUB_OUTPUT"; else echo "ts_auth=oauth" >> "$GITHUB_OUTPUT"; fi
 
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@v4
-
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # Refuse a commit staging never deployed: its `staged-<sha>` tags exist only
       # after deploy-staging succeeded on it. Pinned by digest from here on.
       - id: digests
