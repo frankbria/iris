@@ -239,10 +239,10 @@ production.
 
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
-| `P3.1` | [#325](https://github.com/frankbria/iris/issues/325) | Test trust: AI client fakes must return usage; cover the persistent cache | P0.16 (#244) | TODO |
-| `P3.2` | [#364](https://github.com/frankbria/iris/issues/364) | Test suite: protocol test configuration | P0.24 (#341) | TODO |
+| `P3.1` | [#325](https://github.com/frankbria/iris/issues/325) | Test trust: AI client fakes must return usage; cover the persistent cache | P0.16 (#244) | DONE (#578) |
+| `P3.2` | [#364](https://github.com/frankbria/iris/issues/364) | Test suite: protocol test configuration | P0.24 (#341) | DONE (#579, #584) |
 | `P3.3` | [#365](https://github.com/frankbria/iris/issues/365) | Hygiene: comments and dead code in RPC and AI layers | — | TODO |
-| `P3.4` | [#382](https://github.com/frankbria/iris/issues/382) | egress-proxy test assumes 127.0.0.1:1 refuses; it blackholes on WSL | — | TODO |
+| `P3.4` | [#382](https://github.com/frankbria/iris/issues/382) | egress-proxy test assumes 127.0.0.1:1 refuses; it blackholes on WSL | — | DONE (#582) |
 | `P3.5` | [#383](https://github.com/frankbria/iris/issues/383) | ActionExecutor.createPage is not reentrant: concurrent calls can orphan a browser | P0.12 (#240) | TODO |
 | `P3.6` | [#386](https://github.com/frankbria/iris/issues/386) | Deprecated createAIClient / AIClientFactory.create(…, 'text') return unmetered text clients | P0.14 (#242) | TODO |
 | `P3.7` | [#388](https://github.com/frankbria/iris/issues/388) | Cost tracker pricing edges left by #243: ceiling above the table, flat-only parents, getPricing | P0.15 (#243) | TODO |
