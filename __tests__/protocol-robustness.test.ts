@@ -24,15 +24,6 @@ import * as translatorModule from '../src/translator';
 const REPO_ROOT = path.resolve(__dirname, '..');
 const TOKEN = 'robustness-test-token';
 
-/** A port nothing is listening on right now. */
-async function freePort(): Promise<number> {
-  const srv = net.createServer().listen(0, '127.0.0.1');
-  await once(srv, 'listening');
-  const { port } = srv.address() as net.AddressInfo;
-  await new Promise((r) => srv.close(r));
-  return port;
-}
-
 interface Connect {
   proc: ChildProcess;
   stdout: string;
@@ -98,9 +89,15 @@ describe('iris connect survives malformed frames (#330)', () => {
   let server: Connect;
 
   beforeAll(async () => {
-    port = await freePort();
-    server = spawnConnect(port);
-    await waitFor(() => server.stdout.includes('listening'), 'the server to listen');
+    // Port 0: the OS picks, and the server prints what it bound (#364). Choosing a free
+    // port here and handing it over left a window for another process to take it.
+    server = spawnConnect(0);
+    await waitFor(
+      () => /listening on ws:\/\/[^\s]+:\d+/.test(server.stdout),
+      'the server to listen',
+    );
+    port = Number(/listening on ws:\/\/[^\s]+:(\d+)/.exec(server.stdout)![1]);
+    expect(port).toBeGreaterThan(0);
   }, 30000);
 
   afterAll(async () => {

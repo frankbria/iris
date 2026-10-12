@@ -343,6 +343,15 @@ plans/
   - `SmartAIVisionClient` rethrows `ModelUnavailableError` instead of stepping to the next vendor — that swallow is what made a retired model read as "all providers failed". Text clients resolve via `createResolvedAIClient()`; `loadConfig()` stays synchronous
   - `CostTracker` prices a model with no exact row by its family (#243), but only when the rest of the ID is one snapshot suffix (`-20260514`, `-2024-08-06`, `-latest`): a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) or dated snapshot gets its family's rate, while a variant (`gpt-4o-realtime-preview`, `gpt-4oz`) does not, because variants are priced differently. A snapshot that kept a different price needs its own row (`gpt-4o-2024-05-13`). Anything unmatched is charged the dearest registered rate per field (including `setPricing` rows), recorded with `estimated = 1` on its ledger row, and warned about once per pair. It used to record $0, which a budget breaker never trips on. A model dearer than every registered row still under-reports until it gets one. Free providers (Ollama) stay $0 for every model
 
+### Audit Log Page (issue #541)
+
+`/audit` in the portal shows the org's `audit_log` (#361) to owners and admins (`isManager(role)`
+in `lib/org.ts`, the one owner-or-admin check; members see "Only owners and admins…").
+`src/audit-reads.ts` (`auditPage`) is lean, like `run-reads`: one org's entries, newest first,
+paged by the identity id (`nextCursor`; a cursor it did not make is `InvalidAuditCursorError`,
+shown as a link back), the actor's name and email by a left join (gone users show their id),
+strings through `redactStrings`. Retention of the log is still the owner's decision (#541).
+
 ### Workspaces and the Portal (issue #247)
 
 The root `package.json` declares `"workspaces": ["apps/*"]`. The IRIS package stays
@@ -1127,6 +1136,25 @@ An error that reaches the executor is a timeout, a protocol or target error mid-
 unknown. `navigate` (a GET) and asserts keep the general rules (#75: timeouts and policy
 verdicts are not retried); retry tests that need a transient failure use `navigate`.
 
+### Assertions Judge a Settled Page and a Parsed URL (issue #504)
+
+`ActionExecutor.performAssert` (src/executor.ts). README has the table.
+
+- **`element_absent`** waits until no request has been in flight for 500 ms (at most
+  `ABSENT_SETTLE_MS`, 5 s; a page that never idles is judged as it is), counted by the executor
+  from the first action it ran on the page (`trackRequests`, by request identity: one that
+  began before tracking cannot cancel out a later one). Not `networkidle`: Playwright
+  keeps that lifecycle state, so a page idle before a click read as settled while the click's
+  request was in flight (codex review). Then it requires the element to stay absent for
+  `ABSENT_WINDOW_MS` (2 s), whatever the action timeout. It used to glance for 1 s, so
+  `[click Submit, element_absent .error]` passed before a slow validation request rendered
+  the error. Every absence check therefore costs about 2 s.
+- **`url_matches`** goes through `urlMatches(url, target)`, never a substring of the href:
+  an absolute URL needs the same origin and a path prefix at segment boundaries, `/path`
+  the path or below (`/` is the root only), `#route` a hash prefix, `example.com[/path]` the
+  hostname or a subdomain, and any other token whole path or hash-route segments. The query
+  string never satisfies it. The AI prompts say so.
+
 ### Pattern Translator Takes Selectors, Not Prose (issue #297)
 
 `translateWithPatterns` (src/translator.ts) keeps a match only when its target is
@@ -1234,8 +1262,9 @@ dials the address it vetted, so a rebinding resolver gets no second lookup.
   the forward path reports `socket.errored`, since `http.request` says only "socket hang
   up". Tests fake a black hole with `Object.assign(new net.Socket(), { connecting: true })`:
   a never-connected socket rejects writes at once, and a real TEST-NET address is dropped
-  on one network and unreachable at once on another. On WSL the "502 when the vetted
-  address refuses" test now gets this 504 (#382's blackhole) instead of hanging.
+  on one network and unreachable at once on another. The "502 when the vetted address
+  refuses" test dials a port it bound and closed, not 127.0.0.1:1, which blackholes on WSL
+  (#382).
 - Tests substitute DNS and dialing through `hostedEgressProxy({ lookup, connect })`,
   called before the first launch in the registry. `connect` sends the one "public"
   test address (`8.8.8.8`) to a local server, so every refusal has a positive control
@@ -1609,9 +1638,23 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - **IRIS's key** is operator config, read once at startup: `IRIS_MANAGED_AI_PROVIDER`
   (`openai` | `anthropic`) + `IRIS_MANAGED_AI_KEY(_FILE)`; one without the other exits 3. On
   the `jest.setup.ts` scrub list.
-- ponytail: a call is admitted while any credit is left, so the overshoot is the cost of
-  the org's calls in flight; the operator's CostTracker budget still reserves per call (#244).
-  Stripe reporting of managed usage is #264.
+- **Credit is reserved before the call (#482).** `managed_ai_reservations` (migration 0018):
+  under `pg_advisory_xact_lock(hashtext('managed-ai:' || org))` the resolver admits a managed
+  call only when this month's managed spend + live reservations + the call's worst case fit
+  the credit, and inserts a reservation at that worst case (`managedCallEstimateUsd`: the
+  cost tracker's `RESERVATION_CEILING` plus one input token per request character, which
+  the RPC server passes as `inputChars`, at the provider's **dearest** registered rates:
+  a retired default may be swapped for a pricier successor at call time, #184). The
+  credential carries
+  `release()`; the RPC server strips it before `translate()` and runs it in a `finally`, after
+  the settled usage row is written (`onUsage` is awaited). A row older than 10 minutes stops
+  counting and is deleted at the org's next admission (a crashed call). A billed call whose
+  usage row failed to write is released as `{ unrecorded: true }`: its row becomes `held`
+  and counts as spent until the month ends (codex review), since nothing else records it.
+  A live row ends only with its TTL, so a call started before midnight UTC still counts
+  after it. The estimate is a
+  resolver parameter, computed in `hostedServices()`: the portal imports `managed-ai.ts`,
+  and the cost tracker would bring SQLite into its bundle. Stripe reporting is #264.
 
 ### Hosted Job API (issue #267)
 
@@ -2190,8 +2233,7 @@ Global TDD/coverage/no-mock rules apply. IRIS-specific:
 - **Coverage**: >=85% for new code (repo-wide actual: ~93% statements / ~82% branch; new
   code should not lower it). Check with `npm run test -- --coverage`.
 - **Pass rate**: 100% of non-skipped tests (current: 2209/2210 passing, 1 skipped, 0
-  failing on CI, identical with and without a repo-root `.env`; on WSL the egress-proxy
-  "502 when the vetted address refuses" test times out, see #382).
+  failing on CI, identical with and without a repo-root `.env`).
 - **Commits**: conventional with scope (`feat(cli):`, `fix(a11y):`); branches
   `feature/…`, `fix/…`, `docs/…`; PR to main, CI green before done.
 - **Docs in the same PR**: this file (new patterns/gotchas), `docs/data-flows.md`

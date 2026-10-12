@@ -207,7 +207,14 @@ export interface BrowserSession {
  * The mode is required: a managed key recorded as `byok` would never count against the
  * org's credit.
  */
-export type TenantCredentials = AICredentials & { billingMode: 'byok' | 'managed' };
+/**
+ * A tenant's credential for one request. `release`, when present, is run once the AI call
+ * is over, settled or not: it frees managed credit reserved for the call (#482).
+ */
+export type TenantCredentials = AICredentials & {
+  billingMode: 'byok' | 'managed';
+  release?: (outcome?: { unrecorded?: boolean }) => Promise<void>;
+};
 
 export interface Principal {
   orgId: string;
@@ -506,7 +513,10 @@ export function startServer(
      * translation only, and the process-wide `*_API_KEY` is never used for it
      * (ADR 0001 §5). Local (token) connections keep the process configuration.
      */
-    aiCredentials?: (principal: Principal) => Promise<TenantCredentials | null>;
+    aiCredentials?: (
+      principal: Principal,
+      request?: { inputChars?: number },
+    ) => Promise<TenantCredentials | null>;
     /**
      * The usage ledger (#263): a tenant session's browser minutes when it ends, and
      * each AI call its translations make. Local connections record nothing.
@@ -1570,7 +1580,10 @@ async function executeBrowserActions(
   url: string | undefined,
   maxActions: number,
   tenant: {
-    aiCredentials?: (principal: Principal) => Promise<TenantCredentials | null>;
+    aiCredentials?: (
+      principal: Principal,
+      request?: { inputChars?: number },
+    ) => Promise<TenantCredentials | null>;
     usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
   } = {},
   secrets: Record<string, string> = {},
@@ -1597,6 +1610,10 @@ async function executeBrowserActions(
       const principal = session.principal;
       // Whose account a billed call is on, from the credential the resolver gave (#479).
       let billingMode = 'byok' as 'byok' | 'managed';
+      // Frees the credit a managed credential reserved, once translation is over (#482).
+      let release: TenantCredentials['release'];
+      // A billed call whose usage row failed to write keeps its reservation (#482).
+      let unrecorded = false;
       const translation = await translate(
         instruction,
         url ? { url } : undefined,
@@ -1613,23 +1630,33 @@ async function executeBrowserActions(
                   { provider: call.provider, kind, billing_mode: billingMode },
                   call.costUsd,
                 );
-                return tenant.usage?.record(principal.orgId, [
-                  {
-                    kind,
-                    quantity: 1,
-                    unitCostUsd: call.costUsd,
-                    estimated: call.estimated,
-                    billingMode,
-                    idempotencyKey: `${call.operation}:${call.callId}`,
-                  },
-                ]);
+                return tenant.usage
+                  ?.record(principal.orgId, [
+                    {
+                      kind,
+                      quantity: 1,
+                      unitCostUsd: call.costUsd,
+                      estimated: call.estimated,
+                      billingMode,
+                      idempotencyKey: `${call.operation}:${call.callId}`,
+                    },
+                  ])
+                  .catch((err: unknown) => {
+                    unrecorded = true;
+                    throw err; // still reported by the metered client
+                  });
               },
               credentials: async () => {
                 if (!tenant.aiCredentials) return null;
                 try {
-                  const resolved = await tenant.aiCredentials(principal);
-                  if (resolved) billingMode = resolved.billingMode;
-                  return resolved;
+                  // The request's size, so a managed reservation covers a long one (#482).
+                  const inputChars = JSON.stringify({ instruction, url }).length;
+                  const resolved = await tenant.aiCredentials(principal, { inputChars });
+                  if (!resolved) return null;
+                  billingMode = resolved.billingMode;
+                  const { release: free, ...credentials } = resolved;
+                  release = free;
+                  return credentials;
                 } catch (err) {
                   log('error', 'AI credentials lookup failed; translating without AI', {
                     ...who(principal),
@@ -1640,6 +1667,15 @@ async function executeBrowserActions(
               },
             }
           : {},
+      ).finally(() =>
+        // The settled usage (if any) is already in the ledger: the reservation can go. A
+        // failed release is logged; the row then stops counting after its TTL.
+        release?.({ unrecorded }).catch((err) =>
+          log('error', 'releasing managed AI credit failed', {
+            ...(principal && who(principal)),
+            err: errMessage(err),
+          }),
+        ),
       );
       // On IRIS's managed key, a translation with no actions is a failure whose reason
       // (provider error, invalid reply) describes IRIS's vendor account: a key's last

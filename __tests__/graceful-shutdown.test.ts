@@ -211,10 +211,11 @@ function exitOf(proc: ChildProcess, ms: number): Promise<number | null> {
 
 describe('iris connect on SIGTERM, as a real process (#309)', () => {
   it('answers the request in flight, then exits 0', async () => {
-    const port = 45300 + Math.floor(Math.random() * 500);
+    // Port 0: the OS picks and the server prints what it bound (#364). A random port could
+    // be taken, and the server then exited while this test went on to connect.
     const proc = spawn(
       process.execPath,
-      ['-r', 'ts-node/register', path.join(REPO_ROOT, 'src/cli.ts'), 'connect', String(port)],
+      ['-r', 'ts-node/register', path.join(REPO_ROOT, 'src/cli.ts'), 'connect', '0'],
       {
         cwd: REPO_ROOT,
         env: { ...process.env, TS_NODE_TRANSPILE_ONLY: '1', IRIS_CONNECT_TOKEN: TOKEN },
@@ -224,9 +225,12 @@ describe('iris connect on SIGTERM, as a real process (#309)', () => {
     proc.stdout!.on('data', (d) => (stdout += d));
     proc.stderr!.on('data', () => undefined);
     const deadline = Date.now() + 30_000;
-    while (!stdout.includes('listening') && Date.now() < deadline) {
+    const LISTENING = /listening on ws:\/\/\S+:(\d+)/;
+    while (!LISTENING.test(stdout) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    const port = Number(LISTENING.exec(stdout)?.[1]); // NaN, and a clear failure, if it never listened
+    expect(port).toBeGreaterThan(0);
     const { call } = await connectTo(`ws://127.0.0.1:${port}`);
     await call('launchBrowser');
     const inFlight = call('executeBrowserAction', {

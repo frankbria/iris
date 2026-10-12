@@ -138,7 +138,8 @@ is processed in Chromium's memory for the duration of the job.
 | Purpose | An org's audit trail (#361). |
 | Where | Postgres, `0001_initial.ts`. |
 | Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`); member removed, left or given a role (`member.remove|leave|role`, the member's user id, and the keys revoked with them); keys revoked by a user ban (`api_key.delete`, reason `user banned`, no actor); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463). No URL, page content or typed value is recorded. |
-| Retention | Deleted when the org is purged; a deleted user's id is removed from their entries (#349). Otherwise **undecided**. |
+| Access | The org's owners and admins on the portal's `/audit` page (#541), newest first, with the acting user's name and email while they exist; members are refused. Operators by query. |
+| Retention | Deleted when the org is purged; a deleted user's id is removed from their entries (#349). Otherwise **undecided** (#541). |
 
 ### Artifact storage usage
 
@@ -256,7 +257,9 @@ contacted unless the org opts into fallback, and with BYOK only the org's vendor
 `IRIS_MANAGED_AI_KEY`, operator configuration) until its plan's monthly credit is spent,
 then on its own key if it has one (`src/billing/managed-ai.ts`). For those requests the
 vendor is IRIS's subprocessor. The ledger row carries `billing_mode = managed`. Each
-vendor's own retention applies to what it receives.
+vendor's own retention applies to what it receives. While a managed call is in flight, a
+`managed_ai_reservations` row (org, worst-case amount, time; no content) holds its credit
+(#482); it is deleted when the call ends, or after 10 minutes, and with the org. A call that was billed but whose usage row could not be written keeps its row (`held`) until the month ends.
 
 ### Email (SMTP provider)
 
