@@ -10,7 +10,7 @@ import {
   AIVisionResponse,
 } from './base';
 import { withRetry, fetchWithTimeout, DEFAULT_TIMEOUT_MS, DEFAULT_RETRY_CONFIG } from './retry';
-import { DEFAULT_MODELS } from './models';
+import { DEFAULT_MODELS, isVisionModel, ollamaModelCapabilities } from './models';
 import { AIVisionResponseSchema } from './types';
 
 /**
@@ -157,22 +157,22 @@ Respond with valid JSON matching this schema:
   "suggestions": string[] (optional recommendations)
 }`;
 
-      const userPrompt = `Analyze these two screenshots and classify the visual differences.
-
-${
-  request.context
-    ? `Context:
+      // Built in parts, not nested templates: lizard (the CRAP gate) misreads nested ones.
+      const previous = request.context?.previousClassifications
+        ? `- Previous classifications: ${JSON.stringify(request.context.previousClassifications.slice(0, 3))}`
+        : '';
+      const contextBlock = request.context
+        ? `Context:
 - URL: ${request.context.url || 'unknown'}
 - Element: ${request.context.selector || 'full page'}
-${
-  request.context.previousClassifications
-    ? `- Previous classifications: ${JSON.stringify(request.context.previousClassifications.slice(0, 3))}`
-    : ''
-}`
-    : ''
-}
+${previous}`
+        : '';
+      const diffNote = diffBase64 ? `\n\n${DIFF_IMAGE_PROMPT}` : '';
+      const userPrompt = `Analyze these two screenshots and classify the visual differences.
 
-Compare the baseline (first image) with the current (second image) and identify any visual regressions.${diffBase64 ? `\n\n${DIFF_IMAGE_PROMPT}` : ''}`;
+${contextBlock}
+
+Compare the baseline (first image) with the current (second image) and identify any visual regressions.${diffNote}`;
 
       const response = await withRetry(
         () =>
@@ -213,7 +213,9 @@ Compare the baseline (first image) with the current (second image) and identify 
               },
             ],
             temperature: 0.1,
-            max_tokens: 1000,
+            // max_tokens is deprecated for OpenAI chat completions and refused by the
+            // o-series (#298).
+            max_completion_tokens: 1000,
           }),
         this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
       );
@@ -249,16 +251,9 @@ Compare the baseline (first image) with the current (second image) and identify 
   }
 
   supportsVision(): boolean {
-    // Kept as a name match, unlike the Anthropic client (see issue #183): OpenAI
-    // genuinely still serves non-vision models — gpt-3.5-turbo is live, and
-    // o1-mini has no vision — so discriminating here means something. It shares
-    // the same rot risk (a future vision model whose ID drops `gpt-4` would be
-    // skipped), which is what #184's provider-driven resolution is for.
-    //
-    // The `|| includes('gpt-4o')` arm this used to carry was dead: every string
-    // containing `gpt-4o` already contains `gpt-4`.
-    const model = this.config.model || '';
-    return model.includes('gpt-4');
+    // OpenAI still serves models that cannot see (gpt-3.5-turbo, o1-mini), and its
+    // model list says nothing about capability, so this is the table in models.ts (#298).
+    return isVisionModel('openai', this.config.model || DEFAULT_MODELS.vision.openai);
   }
 }
 
@@ -527,24 +522,17 @@ Respond with JSON only:
 
   async isAvailable(): Promise<boolean> {
     if (!this.config.endpoint) return false;
-
-    // Check if Ollama is running and has vision-capable model
-    try {
-      const response = await fetch(`${this.config.endpoint}/api/tags`);
-      if (!response.ok) return false;
-
-      const data = await response.json();
-      return data.models?.some(
-        (m: { name: string }) => m.name.includes('llava') || m.name.includes('bakllava'),
-      );
-    } catch {
-      return false;
-    }
+    // The configured model, pulled, and able to see (#298). It used to ask whether any
+    // llava model was pulled, with no timeout, before every analysis.
+    const model = this.config.model || DEFAULT_MODELS.vision.ollama;
+    const capabilities = await ollamaModelCapabilities(this.config.endpoint, model);
+    if (capabilities === null) return false;
+    return capabilities.length > 0
+      ? capabilities.includes('vision')
+      : isVisionModel('ollama', model);
   }
 
   supportsVision(): boolean {
-    // llava and bakllava are vision models
-    const model = this.config.model || '';
-    return model.includes('llava') || model.includes('bakllava');
+    return isVisionModel('ollama', this.config.model || DEFAULT_MODELS.vision.ollama);
   }
 }

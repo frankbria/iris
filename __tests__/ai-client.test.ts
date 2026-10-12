@@ -1,5 +1,6 @@
 import { createAIClient } from '../src/ai-client';
 import { IrisConfig } from '../src/config';
+import { resetModelProbeCache } from '../src/ai-client/models';
 
 // Mock OpenAI
 const mockCreate = jest.fn();
@@ -28,6 +29,8 @@ global.fetch = jest.fn();
 
 describe('AI Client', () => {
   beforeEach(() => {
+    // The Ollama availability probe is cached per process (#298).
+    resetModelProbeCache();
     jest.clearAllMocks();
   });
 
@@ -87,6 +90,9 @@ describe('AI Client', () => {
       expect(result.actions[0]).toEqual({ type: 'click', selector: '#submit' });
       expect(result.confidence).toBe(0.9);
       expect(result.reasoning).toBe('Clear click instruction');
+      // Not the deprecated max_tokens (#298).
+      expect(mockCreate.mock.calls[0][0].max_completion_tokens).toBe(1000);
+      expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('max_tokens');
     });
 
     it('should handle API errors gracefully', async () => {
@@ -214,13 +220,15 @@ describe('AI Client', () => {
     it('should check availability via API', async () => {
       (global.fetch as jest.Mock).mockResolvedValue({
         ok: true,
+        json: async () => ({ models: [] }),
       });
 
       const client = createAIClient(config);
       const isAvailable = await client.isAvailable();
 
       expect(isAvailable).toBe(true);
-      expect(fetch).toHaveBeenCalledWith('http://localhost:11434/api/tags');
+      // Bounded since #298: the call carries an abort signal.
+      expect((fetch as jest.Mock).mock.calls[0][0]).toBe('http://localhost:11434/api/tags');
     });
 
     it('should not be available when endpoint is unreachable', async () => {

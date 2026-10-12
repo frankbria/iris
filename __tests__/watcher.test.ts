@@ -1066,6 +1066,18 @@ describe('FileWatcher AI feedback mode', () => {
       );
     });
 
+    it('builds the classifier with the --ai-model vision model (#298)', async () => {
+      const construct = jest.spyOn(classifierModule, 'AIVisualClassifier');
+      await startFeedbackWatcher({ ai: { provider: 'ollama', model: 'llama3.2-vision' } });
+
+      changeCallback!('src/app.css');
+      await jest.advanceTimersByTimeAsync(60);
+
+      expect(construct).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'ollama', model: 'llama3.2-vision' }),
+      );
+    });
+
     it('closes the classifier on stop', async () => {
       const close = jest
         .spyOn(classifierModule.AIVisualClassifier.prototype, 'close')

@@ -808,6 +808,17 @@ describe('visual-diff CLI command', () => {
       });
     });
 
+    // Issue #298: there was no way to pick the vision model for --semantic.
+    it('passes --ai-model to the runner as the vision model', async () => {
+      process.env.OPENAI_API_KEY = 'sk-env-openai';
+      mockIrisConfig({ provider: 'openai' });
+
+      expect(
+        diffConfigOf(await runVisualDiff(['--semantic', '--ai-model', 'gpt-4.1'])).aiModel,
+      ).toBe('gpt-4.1');
+      expect(diffConfigOf(await runVisualDiff(['--semantic'])).aiModel).toBeUndefined();
+    });
+
     // Issue #74: the credentials map has to survive the whole path
     // CLI -> VisualTestRunner -> AIVisualClassifier -> SmartAIVisionClient, or
     // the fallback chain still cannot authenticate as a second vendor.

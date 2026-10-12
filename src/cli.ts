@@ -541,64 +541,40 @@ program
     (v) => parseEnumOption(v, ['openai', 'anthropic', 'ollama'], 'provider'),
   )
   .option(
+    '--ai-model <id>',
+    "Vision model for --feedback (e.g. gpt-4.1, claude-opus-5, llama3.2-vision). Default: the provider's vision default",
+  )
+  .option(
     '--max-ai-calls <n>',
     'Session cap on AI calls in --feedback mode',
     (v) => parseIntOption(v, { min: 1, max: 10000, name: 'max-ai-calls' }),
     50,
   )
-  .action(
-    async (
-      target: string | undefined,
-      options: {
-        instruction: string;
-        execute?: boolean;
-        quiet?: boolean;
-        blockPrivateHosts?: boolean;
-        headless?: boolean;
-        browserTimeout?: number;
-        retryAttempts?: number;
-        retryDelay?: number;
-        feedback?: boolean;
-        feedbackUrl?: string;
-        provider?: string;
-        maxAiCalls?: number;
-      },
-    ) => {
-      // Resolved before the watcher starts: a missing key is a usage error the
-      // user can act on, not something to discover on the first file save.
-      let ai;
-      if (options.feedback) {
-        ai = resolveSemanticAI(options.provider);
-        if (ai.provider !== 'ollama' && !ai.apiKey) {
-          console.error(
-            `\n❌ --feedback requires an API key: set ${semanticKeyEnvVar(ai.provider)}, ` +
-              'or use --provider ollama to analyze locally.',
-          );
-          process.exit(2); // Invalid usage
-        }
-      }
+  .action(async (target: string | undefined, options: WatchCommandOptions) => {
+    // Resolved before the watcher starts: a missing key is a usage error the
+    // user can act on, not something to discover on the first file save.
+    const ai = options.feedback ? resolveFeedbackAI(options) : undefined;
 
-      try {
-        const { watchFiles } = await import('./watcher');
-        await watchFiles(target, options.instruction, {
-          execute: options.execute,
-          quiet: options.quiet,
-          blockPrivateHosts: options.blockPrivateHosts,
-          headless: options.headless,
-          browserTimeout: options.browserTimeout,
-          retryAttempts: options.retryAttempts,
-          retryDelay: options.retryDelay,
-          feedback: options.feedback,
-          feedbackUrl: options.feedbackUrl,
-          maxAiCalls: options.maxAiCalls,
-          ai,
-        });
-      } catch (error) {
-        console.error('Watch error:', error);
-        process.exit(1);
-      }
-    },
-  );
+    try {
+      const { watchFiles } = await import('./watcher');
+      await watchFiles(target, options.instruction, {
+        execute: options.execute,
+        quiet: options.quiet,
+        blockPrivateHosts: options.blockPrivateHosts,
+        headless: options.headless,
+        browserTimeout: options.browserTimeout,
+        retryAttempts: options.retryAttempts,
+        retryDelay: options.retryDelay,
+        feedback: options.feedback,
+        feedbackUrl: options.feedbackUrl,
+        maxAiCalls: options.maxAiCalls,
+        ai,
+      });
+    } catch (error) {
+      console.error('Watch error:', error);
+      process.exit(1);
+    }
+  });
 
 /** `iris connect` options; the `max*` ones are server limits (#338). */
 interface ConnectOptions {
@@ -1098,8 +1074,13 @@ const DEFAULT_OLLAMA_ENDPOINT = 'http://localhost:11434';
  *
  * Note the vocabulary shift: config uses `anthropic`, the classifier uses `claude`.
  */
-function resolveSemanticAI(providerFlag?: string): {
+function resolveSemanticAI(
+  providerFlag?: string,
+  /** `--ai-model`: the vision model to ask for; unset keeps the provider's vision default (#298). */
+  model?: string,
+): {
   provider: AIProvider;
+  model?: string;
   apiKey?: string;
   endpoint?: string;
   credentials?: ProviderCredentials;
@@ -1124,6 +1105,7 @@ function resolveSemanticAI(providerFlag?: string): {
     const configuredEndpoint = config.ai.provider === 'ollama' ? config.ai.endpoint : undefined;
     return {
       provider,
+      model,
       endpoint: configuredEndpoint || process.env.OLLAMA_ENDPOINT || DEFAULT_OLLAMA_ENDPOINT,
       credentials,
       fallback,
@@ -1136,7 +1118,37 @@ function resolveSemanticAI(providerFlag?: string): {
       ? config.ai.apiKey
       : process.env[semanticKeyEnvVar(provider)];
 
-  return { provider, apiKey, credentials, fallback };
+  return { provider, model, apiKey, credentials, fallback };
+}
+
+/** `iris watch` options, as commander parses them. */
+interface WatchCommandOptions {
+  instruction: string;
+  execute?: boolean;
+  quiet?: boolean;
+  blockPrivateHosts?: boolean;
+  headless?: boolean;
+  browserTimeout?: number;
+  retryAttempts?: number;
+  retryDelay?: number;
+  feedback?: boolean;
+  feedbackUrl?: string;
+  provider?: string;
+  aiModel?: string;
+  maxAiCalls?: number;
+}
+
+/** The `watch --feedback` classifier's provider, key and model; exits 2 with no key. */
+function resolveFeedbackAI(options: WatchCommandOptions): ReturnType<typeof resolveSemanticAI> {
+  const ai = resolveSemanticAI(options.provider, options.aiModel);
+  if (ai.provider !== 'ollama' && !ai.apiKey) {
+    console.error(
+      `\n❌ --feedback requires an API key: set ${semanticKeyEnvVar(ai.provider)}, ` +
+        'or use --provider ollama to analyze locally.',
+    );
+    process.exit(2); // Invalid usage
+  }
+  return ai;
 }
 
 /** Environment variable that supplies the key for a paid vision provider. */
@@ -1191,6 +1203,10 @@ program
     (v) => parseEnumOption(v, ['openai', 'anthropic', 'ollama'], 'provider'),
   )
   .option(
+    '--ai-model <id>',
+    "Vision model for --semantic (e.g. gpt-4.1, claude-opus-5, llama3.2-vision). Default: the provider's vision default",
+  )
+  .option(
     '--threshold <value>',
     'Max fraction of pixels allowed to differ, 0-1 (default 0.1 = 10%)',
     (v) => parseFloatOption(v, { min: 0, max: 1, name: 'threshold' }),
@@ -1224,7 +1240,7 @@ program
     // Resolve AI credentials up front, before any browser work: a missing key is
     // a usage error the user can act on, not a constructor throw surfacing as an
     // opaque runtime failure mid-run (issue #111).
-    const ai = options.semantic ? resolveSemanticAI(options.provider) : undefined;
+    const ai = options.semantic ? resolveSemanticAI(options.provider, options.aiModel) : undefined;
     if (ai && ai.provider !== 'ollama' && !ai.apiKey) {
       console.error(
         `\n❌ --semantic requires an API key: set ${semanticKeyEnvVar(ai.provider)}, or use --provider ollama to analyze locally.`,
@@ -1261,6 +1277,7 @@ program
           threshold: options.threshold,
           semanticAnalysis: options.semantic,
           aiProvider: ai?.provider ?? 'openai',
+          aiModel: ai?.model,
           apiKey: ai?.apiKey,
           aiEndpoint: ai?.endpoint,
           aiCredentials: ai?.credentials,

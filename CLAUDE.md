@@ -281,6 +281,25 @@ plans/
   grades such a comparison by its pixels (`estimateSeverity`), counts it in
   `summary.aiUnavailable`, and `iris visual-diff` prints `AI: unavailable for N comparison(s)`.
   Mapped as `moderate`, a full-page change passed the default `--fail-on breaking`
+- **Vision capability is a table, Ollama's is its own answer (#298).** `isVisionModel(provider,
+  model)` (src/ai-client/models.ts) is the one capability check: id prefixes per family
+  (`gpt-4o`, `gpt-4.1`, `gpt-5`, `o1`/`o3`/`o4`; `llava`, `llama3.2-vision`, `gemma3`, `qwen2.5vl`
+  …) minus `o1-mini`/`o3-mini` and audio/realtime/tts variants. It replaced name guesses
+  (`includes('gpt-4')`, `llava|bakllava`) that skipped every newer vision model and kept the
+  text-only `gpt-4`. OpenAI's model list has no capability field, so the table is the source
+  there; add a family when OpenAI ships one. Ollama's vision `isAvailable()` asks `/api/show` for
+  the **configured** model (it used to accept any pulled llava): `capabilities` decides, the table
+  only when an old Ollama reports none, and a 404 (not pulled) is unavailable
+- **Ollama probes are bounded and cached (#298).** `probeOllama` (models.ts): 2 s timeout, answer
+  (promise) cached 60 s per URL and model, `performance.now()` (#190). Text `isAvailable()` is
+  `ollamaReachable()` (`/api/tags`, daemon up only: a 503 from the model must still reach the
+  caller, `cli-run-exit.test.ts`). `resetModelProbeCache()` clears it too; a test that mocks
+  `fetch` for the same endpoint twice must call it between cases
+- **OpenAI requests send `max_completion_tokens`**, not the deprecated `max_tokens` (#298);
+  Anthropic keeps `max_tokens` (its own API). The o-series still refuses `temperature: 0.1`
+  (#520)
+- **`--ai-model <id>`** on `visual-diff` and `watch` is the vision model (`diff.aiModel`,
+  `ai.model` -> `AIVisualClassifier`). `<PROVIDER>_MODEL` stays the text model
 - **Diff-aware vision requests**: when the caller supplies a computed pixel diff, it travels as an optional third image (`AIVisionRequest.diff`) to OpenAI, Anthropic, and Ollama alongside a prompt sentence pointing at it. Absent a diff, provider payloads and cache keys are byte-identical to the two-image form. Expect ~30-50% more input tokens per call when it is present (issue #124)
   - The diff mask is preprocessed as **lossless PNG**, not the JPEG used for screenshots: pixelmatch marks unchanged pixels transparent, and JPEG has no alpha channel and blurs the region edges that make the mask worth sending. An empty diff buffer is treated as no diff
 
