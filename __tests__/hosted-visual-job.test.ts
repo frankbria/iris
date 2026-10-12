@@ -25,6 +25,7 @@ import { hostedEgressProxy } from '../src/egress-proxy';
 import { postgresHistory, postgresJobs } from '../src/history-store';
 import { startServer, type Authenticator, type Principal } from '../src/protocol';
 import { processNextVisualJob } from '../src/worker';
+import { offboarding } from '../src/offboarding';
 import { quotaArtifacts } from '../src/storage-quota';
 import { runVisualJob } from '../src/visual/hosted-job';
 import { orgArtifacts } from '../src/artifact-store';
@@ -435,6 +436,87 @@ const page = (color: string, extra = 0) =>
       await sql`delete from org_plans where org_id = 'org-a'`.execute(db);
     }
   }, 120_000);
+
+  // #475: an approval leaves the old baseline image behind; the retention pass deletes it
+  // once no remaining run links it and it is older than run retention. The current
+  // baseline, and an image a remaining run still links, stay.
+  it('collects a superseded baseline image after its last linking run expires (#475)', async () => {
+    const recorded = {
+      artifacts: store,
+      storageQuota: async (orgId: string, own: never) => quotaArtifacts(own, db, orgId, 1e9),
+    };
+    const runGc = async () => {
+      const res = await api('POST', '/v1/visual/jobs', 'key-b', { project: 'gc', urls: [url()] });
+      const { id } = (await res.json()) as { id: string };
+      await processNextVisualJob(postgresJobs(db), recorded as never);
+      return id;
+    };
+    color = '#036';
+    const first = await runGc(); // seeds K1
+    color = '#630';
+    const second = await runGc(); // diffs against K1
+    expect((await api('POST', `/v1/runs/${second}/results/0/approve`, 'key-b')).status).toBe(200);
+    const keys = async () =>
+      (
+        await sql<{ key: string }>`select key from artifact_objects
+          where org_id = 'org-b' and key like '%/project/gc/baselines/%' order by created_at`.execute(
+          db,
+        )
+      ).rows.map((r) => r.key);
+    const [k1, k2] = await keys();
+    expect(k2).toBeDefined();
+    const current = await sql<{ object_key: string }>`select object_key from visual_baselines
+      where org_id = 'org-b' and project = 'gc'`.execute(db);
+    expect(current.rows[0].object_key).toBe(k2);
+
+    // Old enough, but both runs still link K1 (run 1 seeded it, run 2 was compared with it).
+    await sql`update artifact_objects set created_at = now() - interval '100 days'
+      where org_id = 'org-b' and key like '%/project/gc/baselines/%'`.execute(db);
+    const kept = await offboarding(db).runRetention({ artifacts: store });
+    expect(kept.baselinesCollected).toBe(0);
+    expect(await store.get(k1)).not.toBeNull();
+
+    // Both runs expire: K1 goes, with its usage row; K2 is current and stays.
+    await sql`update runs set finished_at = now() - interval '91 days'
+      where id in (${first}, ${second})`.execute(db);
+    // A visual job in flight may still record a link: nothing of the org is collected.
+    const [{ id: inFlight }] = (
+      await sql<{ id: string }>`insert into runs (org_id, kind, status)
+        values ('org-b', 'visual', 'running') returning id`.execute(db)
+    ).rows;
+    expect((await offboarding(db).runRetention({ artifacts: store })).baselinesCollected).toBe(0);
+    await sql`update runs set status = 'failed', finished_at = now() where id = ${inFlight}`.execute(
+      db,
+    );
+    // A re-approval of K1's run, uncommitted while a pass runs: approval rewrites the key
+    // through its accounting row (the quota reservation) and makes it current. The pass
+    // waits for that row, re-checks, and keeps K1 (codex review).
+    const reapproved = db.transaction().execute(async (tx) => {
+      await sql`update artifact_objects set created_at = now()
+        where org_id = 'org-b' and key = ${k1}`.execute(tx);
+      const pass = offboarding(db).runRetention({ artifacts: store });
+      await new Promise((r) => setTimeout(r, 1500));
+      await sql`update visual_baselines set object_key = ${k1}
+        where org_id = 'org-b' and project = 'gc'`.execute(tx);
+      // Wrapped: returning the promise itself would make the commit wait for the pass,
+      // which waits for this transaction's row lock.
+      return { pass };
+    });
+    const raced = await (await reapproved).pass;
+    expect(raced.baselinesCollected).toBe(0);
+    expect(await store.get(k1)).not.toBeNull();
+    await sql`update visual_baselines set object_key = ${k2}
+      where org_id = 'org-b' and project = 'gc'`.execute(db);
+    await sql`update artifact_objects set created_at = now() - interval '100 days'
+      where org_id = 'org-b' and key = ${k1}`.execute(db);
+
+    const swept = await offboarding(db).runRetention({ artifacts: store });
+    expect(swept.failures).toEqual([]);
+    expect(swept.baselinesCollected).toBe(1);
+    expect(await store.get(k1)).toBeNull();
+    expect(await store.get(k2)).not.toBeNull();
+    expect(await keys()).toEqual([k2]);
+  }, 180_000);
 
   // Codex review (#442): past the deadline the worker moves on, but a run blocked on a
   // storage write used to wake up later and seed a baseline for a job already failed.

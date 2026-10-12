@@ -188,7 +188,7 @@ private S3-compatible bucket (`src/artifact-store.ts`, #257):
 | Purpose | Visual regression testing: comparing a page with its approved look. |
 | Where | Bucket keys `org/<org>/project/<project>/run/<run uuid>/{current,diff}/<name>.png` and `org/<org>/project/<project>/baselines/<name>.png`. |
 | Access | The org's API keys, through run detail's signed URLs (5 minutes, at most 15; only that org's keys for that run, #460). The bucket is never public. |
-| Retention | Run images: with the run, **90 days** after it finishes; baselines: until the org is purged (a replaced baseline stays, since older runs' detail links the image they were compared with). The daily retention pass queues each prefix (`artifact_purges`, migration 0012) in the transaction that deletes its rows and deletes the objects when the container has `IRIS_S3_*`; a store failure is retried by the next pass (#472). A purged org's prefix is swept once more a day after the purge, for images a job already running at the purge wrote afterwards (#476). |
+| Retention | Run images: with the run, **90 days** after it finishes; current baselines: until the org is purged; a replaced baseline image, once no remaining run links it and it is older than 90 days (#475; images stored before #315's accounting stay until the org is purged). The daily retention pass queues each prefix (`artifact_purges`, migration 0012) in the transaction that deletes its rows and deletes the objects when the container has `IRIS_S3_*`; a store failure is retried by the next pass (#472). A purged org's prefix is swept once more a day after the purge, for images a job already running at the purge wrote afterwards (#476). |
 | Third parties | The hosting / object-storage provider (#273). Not sent to an AI vendor: hosted visual jobs run no AI analysis yet. |
 
 ### Browser sessions
@@ -256,7 +256,9 @@ contacted unless the org opts into fallback, and with BYOK only the org's vendor
 `IRIS_MANAGED_AI_KEY`, operator configuration) until its plan's monthly credit is spent,
 then on its own key if it has one (`src/billing/managed-ai.ts`). For those requests the
 vendor is IRIS's subprocessor. The ledger row carries `billing_mode = managed`. Each
-vendor's own retention applies to what it receives.
+vendor's own retention applies to what it receives. While a managed call is in flight, a
+`managed_ai_reservations` row (org, worst-case amount, time; no content) holds its credit
+(#482); it is deleted when the call ends, or after 10 minutes, and with the org. A call that was billed but whose usage row could not be written keeps its row (`held`) until the month ends.
 
 ### Email (SMTP provider)
 

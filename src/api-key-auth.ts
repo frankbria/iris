@@ -204,6 +204,12 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
       entitlements,
       providerKeys,
       managedKey,
+      // Reserved per managed call before it is made (#482).
+      estimateUsd: await (async () => {
+        if (!managedKey) return () => 0;
+        const { managedCallEstimateUsd } = await import('./ai-client/cost-tracker');
+        return (inputChars: number) => managedCallEstimateUsd(managedKey.provider, inputChars);
+      })(),
     }),
     // Billable usage of tenant sessions and AI calls (#263).
     usage: usageLedger(db),

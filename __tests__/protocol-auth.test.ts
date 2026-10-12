@@ -622,14 +622,17 @@ describe('hosted RPC history (#254)', () => {
   test('records the billing mode of the credential the call was made with', async () => {
     const recorded: UsageEvent[] = [];
     const usage = {
-      record: async (_o: string, events: UsageEvent[]) => void recorded.push(...events),
+      record: async (_o: string, events: UsageEvent[]) =>
+        void (recorded.push(...events), order.push('usage')),
     };
+    const order: string[] = [];
+    const received: unknown[] = [];
     const translate = jest
       .spyOn(translatorModule, 'translate')
       .mockImplementation(async (_i, _c, scope) => {
         // As the real translator does: credentials first, then the settled call.
         const credentials = scope?.credentials;
-        if (typeof credentials === 'function') await credentials();
+        if (typeof credentials === 'function') received.push(await credentials());
         await scope?.onUsage?.({
           callId: 'call-m',
           operation: 'text',
@@ -647,6 +650,7 @@ describe('hosted RPC history (#254)', () => {
           provider: 'openai',
           apiKey: 'iris-managed',
           billingMode: 'managed',
+          release: async () => void order.push('release'),
         }),
       });
       const b = await open(url, as('key-b'));
@@ -655,8 +659,57 @@ describe('hosted RPC history (#254)', () => {
       expect(recorded.filter((e) => e.kind === 'text_call')).toEqual([
         expect.objectContaining({ billingMode: 'managed', unitCostUsd: 0.003 }),
       ]);
+      // #482: the reserved credit is released once, after the settled call is recorded,
+      // and the release handle never reaches the AI client.
+      expect(order).toEqual(['usage', 'release']);
+      expect(received).toEqual([
+        { provider: 'openai', apiKey: 'iris-managed', billingMode: 'managed' },
+      ]);
     } finally {
       translate.mockRestore();
+    }
+  });
+
+  // #482, codex review: a billed managed call whose usage row fails to write keeps its
+  // reservation (release says so), or the spent credit would come back.
+  test('a managed call whose usage could not be recorded is released as unrecorded', async () => {
+    const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const outcomes: unknown[] = [];
+    const translate = jest
+      .spyOn(translatorModule, 'translate')
+      .mockImplementation(async (_i, _c, scope) => {
+        const credentials = scope?.credentials;
+        if (typeof credentials === 'function') await credentials();
+        // As MeteredTextClient.report does: a failed report is logged, never thrown.
+        await Promise.resolve(
+          scope?.onUsage?.({
+            callId: 'call-u',
+            operation: 'text',
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            costUsd: 0.003,
+            estimated: false,
+          }),
+        ).catch(() => undefined);
+        return { actions: [], method: 'ai', confidence: 0, reasoning: 'stub' };
+      });
+    try {
+      const url = await serve({
+        usage: { record: async () => Promise.reject(new Error('ledger down')) } as never,
+        aiCredentials: async () => ({
+          provider: 'openai',
+          apiKey: 'iris-managed',
+          billingMode: 'managed',
+          release: async (outcome) => void outcomes.push(outcome),
+        }),
+      });
+      const b = await open(url, as('key-b'));
+      await call(b, 'launchBrowser');
+      await call(b, 'executeBrowserAction', { instruction: 'check the order total' });
+      expect(outcomes).toEqual([{ unrecorded: true }]);
+    } finally {
+      translate.mockRestore();
+      errors.mockRestore();
     }
   });
 
@@ -668,6 +721,7 @@ describe('hosted RPC history (#254)', () => {
     ['byok', /Incorrect API key provided: sk-\.\.\.wxyz/],
   ] as const)('a %s provider error reaches the client as %p', async (billingMode, expected) => {
     const errors = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    let releases = 0;
     const vendor = http.createServer((_req, res) => {
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end(
@@ -681,7 +735,12 @@ describe('hosted RPC history (#254)', () => {
     process.env.OPENAI_BASE_URL = `http://127.0.0.1:${(vendor.address() as AddressInfo).port}/v1`;
     try {
       const url = await serve({
-        aiCredentials: async () => ({ provider: 'openai', apiKey: 'sk-x', billingMode }),
+        aiCredentials: async () => ({
+          provider: 'openai',
+          apiKey: 'sk-x',
+          billingMode,
+          release: async () => void releases++,
+        }),
       });
       const b = await open(url, as('key-b'));
       await call(b, 'launchBrowser');
@@ -689,6 +748,8 @@ describe('hosted RPC history (#254)', () => {
         instruction: 'make sure the cart looks right',
       });
       expect(reply.result.translationResult.reasoning).toMatch(expected);
+      // A failed call releases what it reserved too (#482).
+      expect(releases).toBe(1);
       // The provider failure is carried as `error` too (#294), under the same rewrite.
       expect(reply.result.translationResult.error).toMatch(expected);
       if (billingMode === 'managed') {

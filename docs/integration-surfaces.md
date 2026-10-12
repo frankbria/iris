@@ -76,6 +76,17 @@ the canonical local assistant surface, and the MCP stdio server stays local (hos
 MCP over HTTP is post-launch, #314). The ADR's §7 lists every surface and whether it
 is hosted.
 
+## Update — 2026-10-12: no JSON-RPC batches (#528)
+
+JSON-RPC 2.0 §6 lets a client send an array of requests. `iris connect` does not support
+them: an array is answered with one `-32600 Invalid Request` whose `data` is "Batch
+requests are not supported", and none of its elements runs. Supporting batches would mean
+deciding how an array interacts with the per-connection ordering gate (#128), the per-key
+and per-org rate buckets (#342: a token per element or per batch), the request log (a line
+per element) and `maxActionsPerRequest` (#338). No IRIS client sends batches, and a client
+loses nothing by sending the requests one by one: pipelined requests on one connection
+are already answered in order. Revisit if a client needs them.
+
 ## What this decision does not do
 
 It does not shrink the product vision. The audit's conclusion was to *close* the

@@ -11,7 +11,7 @@ import { Kysely, sql } from 'kysely';
 import { Client } from 'pg';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
-import { offboarding, OffboardingError } from '../../src/offboarding';
+import { listCollectableBaselines, offboarding, OffboardingError } from '../../src/offboarding';
 import { orgSuspensions } from '../../src/org-suspension';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -431,6 +431,58 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
       expect(await store.get(newImage)).toBeNull();
       expect(await store.get(baseline)).toBeNull();
       expect(fs.existsSync(path.join(root, 'org/org-img'))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('lists only baselines old enough, each judged by its own row (#475, codex review)', async () => {
+    await user('iona');
+    await org('org-agecheck', 'iona', new Date());
+    const [old, fresh] = ['old', 'fresh'].map((name) =>
+      baselineKey({ orgId: 'org-agecheck', projectId: 'p', name: name + '--abc' }),
+    );
+    await sql`insert into artifact_objects (org_id, key, bytes, created_at) values
+      ('org-agecheck', ${old}, 1, now() - interval '100 days'), ('org-agecheck', ${fresh}, 1, now())`.execute(
+      db,
+    );
+    const listed = (await listCollectableBaselines(db, new Date()))
+      .filter((r) => r.org_id === 'org-agecheck')
+      .map((r) => r.key);
+    expect(listed).toEqual([old]);
+    await sql`delete from artifact_objects where org_id = 'org-agecheck'`.execute(db);
+  });
+
+  it('one superseded baseline that cannot be deleted does not stop the others (#475)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-gc-'));
+    const store = new FilesystemArtifactStore(root);
+    try {
+      await user('gina');
+      await org('org-gc', 'gina', new Date());
+      const keys = ['stuck', 'free'].map((project) =>
+        baselineKey({ orgId: 'org-gc', projectId: project, name: 'home--abc' }),
+      );
+      for (const key of keys) {
+        await store.put(key, Buffer.from('png'), 'image/png');
+        await sql`insert into artifact_objects (org_id, key, bytes, created_at)
+          values ('org-gc', ${key}, 3, now() - interval '100 days')`.execute(db);
+      }
+      const stuckDir = path.join(root, 'org/org-gc/project/stuck/baselines');
+      fs.chmodSync(stuckDir, 0o500);
+      try {
+        const report = await offboarding(db).runRetention({ artifacts: store });
+        expect(report.failures).toContain('baselines');
+        // What did go is still reported (codex review).
+        expect(report.baselinesCollected).toBe(1);
+        expect(await store.get(keys[1])).toBeNull();
+        expect(await store.get(keys[0])).not.toBeNull();
+        expect(await count('artifact_objects', `key = '${keys[1]}'`)).toBe(0);
+        expect(await count('artifact_objects', `key = '${keys[0]}'`)).toBe(1);
+      } finally {
+        fs.chmodSync(stuckDir, 0o700);
+      }
+      // Next pass: it goes too.
+      expect((await offboarding(db).runRetention({ artifacts: store })).baselinesCollected).toBe(1);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
