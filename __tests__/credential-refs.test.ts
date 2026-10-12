@@ -352,6 +352,25 @@ describe('credential references', () => {
       }
     }, 30_000);
 
+    // Codex review: a sandboxed iframe (no allow-same-origin) has an opaque origin whatever
+    // its URL says; a credential bound to that URL's site must not be typed into it.
+    it('refuses a sandboxed iframe whose origin is opaque, whatever its URL', async () => {
+      await page.setContent(`<iframe sandbox="allow-scripts" src="${origin}/"></iframe>`);
+      await page.frameLocator('iframe').locator('#user').waitFor();
+      const r = await executor().executeAction(
+        {
+          type: 'fill',
+          selector: 'iframe >> internal:control=enter-frame >> #user',
+          text: '{{secret:LOGIN_PW}}',
+        },
+        page,
+        mapSecrets({ LOGIN_PW: { value: SECRET, origin } }),
+      );
+      expect(r.success).toBe(false);
+      expect(r.error).toMatch(/is bound to .*this field is on null/);
+      expect(await page.frameLocator('iframe').locator('#user').inputValue()).toBe('');
+    }, 30_000);
+
     // Codex review: the reader keeps the filled element itself; replaying the selector
     // misses a field whose id an input handler changed.
     it('redacts what a field holds even after its selector stops matching', async () => {

@@ -1174,7 +1174,9 @@ reference.
     URL). A reference fill resolves its element first (`fillFromReference`: the policy's handle,
     else the selector's own `elementHandle`, frame-entry selectors included) and
     `resolveFillText(text, source, pageOrigin)` refuses a bound reference unless that element's
-    frame has exactly that http(s) origin; an unknown or opaque origin is refused. The value is
+    document has exactly that http(s) origin, read as `self.origin` (`effectiveOrigin`), not
+    from the frame URL: a sandboxed iframe without `allow-same-origin` is opaque (`null`)
+    whatever its URL. An unknown or opaque origin is refused. The value is
     typed into that same element. A malformed env binding fails the fill, never unbinds it.
   - **Redaction by element**: the executor keeps the handle of each field it filled from a
     reference (a policy handle is retained, not disposed after the action) and

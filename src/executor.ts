@@ -92,6 +92,24 @@ async function readField(field: ElementHandle): Promise<string> {
 }
 
 /**
+ * The security origin of the document an element is in (#513): `self.origin`, not the
+ * frame's URL, since a sandboxed iframe without `allow-same-origin` has an opaque origin
+ * (`null`) whatever its URL (codex review). `undefined` when it cannot be read in time, which
+ * a bound reference refuses. A string expression, so coverage instrumentation never reaches
+ * the page.
+ */
+async function effectiveOrigin(handle: ElementHandle): Promise<string | undefined> {
+  const frame = await handle.ownerFrame();
+  if (!frame) return undefined;
+  const origin = await withPageTimeout(
+    frame.evaluate('self.origin').catch(() => undefined),
+    undefined,
+    1_000,
+  );
+  return typeof origin === 'string' ? origin : undefined;
+}
+
+/**
  * ActionExecutor handles the execution of translated actions with retry logic,
  * error handling, and browser lifecycle management.
  */
@@ -323,9 +341,7 @@ export class ActionExecutor {
         .locator(action.selector)
         .first()
         .elementHandle({ timeout: this.options.timeout ?? EXECUTOR_DEFAULTS.timeout }));
-    const url = (await handle.ownerFrame())?.url() ?? '';
-    const origin = URL.canParse(url) ? new URL(url).origin : undefined;
-    const { value } = resolveFillText(action.text, secrets, origin);
+    const { value } = resolveFillText(action.text, secrets, await effectiveOrigin(handle));
     this.resolvedSecrets.add(value);
     this.retainedHandles.add(handle);
     this.secretFieldReaders.push(() => readField(handle));
