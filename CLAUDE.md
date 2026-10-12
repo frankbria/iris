@@ -1010,6 +1010,13 @@ Constraints that are easy to break:
 - A pinned origin now refuses **every** cross-origin request, images and fonts
   included: an image URL is a write channel for a filled-in secret. The explicit
   allowance is `--allow-cross-origin`.
+- **`--allow-asset-origin <origin>` (#378, repeatable; `UrlPolicyOptions.assetOrigins`)**
+  admits images, fonts, stylesheets, media and scripts from named origins under the pin,
+  never a document (top-level or frame), XHR/fetch, beacon or socket. The exemption lives
+  in `assertNavigationAllowed(url, policy, resourceType)` (CDP's `Image` or Playwright's
+  `image`, lower-cased); every guard layer passes the request's type, and a navigation or
+  `guardedGoto` passes none, so an asset origin is never a navigation target. Values are
+  parsed to exact origins at the CLI.
 - `runAgentLoop` with pinning on refuses to start from an opaque origin
   (`about:blank`, `data:`), returning `terminationReason: 'error'`, and
   `checkAction` refuses too. Agent-loop tests therefore serve their fixture from a

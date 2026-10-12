@@ -123,6 +123,19 @@ describe('URL policy guard', () => {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(page('Script', `<script src="${OFFSITE}/evil.js"></script>`));
       }
+      if (url === '/assets-page') {
+        // #378: OFFSITE is an allowed asset origin; the same server as localhost is not.
+        const other = OFFSITE.replace('127.0.0.1', 'localhost');
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(
+          page(
+            'Assets',
+            `<img alt="a" src="${OFFSITE}/allowed.gif"><img alt="b" src="${other}/other.gif">` +
+              `<iframe title="f" src="${OFFSITE}/frame"></iframe>` +
+              `<script>fetch("${OFFSITE}/fetch").catch(() => {})</script>`,
+          ),
+        );
+      }
       if (url === '/exfil') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(
@@ -437,6 +450,24 @@ describe('URL policy guard', () => {
       await guardedGoto(p, `${origin}/offsite-script`, { waitUntil: 'networkidle' });
 
       expect(offsiteLog).not.toContain('/evil.js');
+    }, 60_000);
+
+    it('loads assets from an allowed asset origin, and nothing else from it (#378)', async () => {
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin, assetOrigins: [OFFSITE] });
+      await guardedGoto(p, `${origin}/assets-page`);
+      await p.waitForTimeout(1500);
+
+      expect(offsiteLog).toContain('/allowed.gif');
+      // Any other origin stays refused, the frame is a document, the fetch a channel.
+      expect(offsiteLog).not.toContain('/other.gif');
+      expect(offsiteLog).not.toContain('/frame');
+      expect(offsiteLog).not.toContain('/fetch');
+    }, 60_000);
+
+    it('never navigates to an allowed asset origin (#378)', async () => {
+      await installUrlPolicyGuard(p, { pinnedOrigin: origin, assetOrigins: [OFFSITE] });
+      await expect(guardedGoto(p, `${OFFSITE}/escaped`)).rejects.toThrow(/pinned origin/);
+      expect(offsiteLog).not.toContain('/escaped');
     }, 60_000);
 
     it('closes a cross-origin WebSocket before it connects', async () => {

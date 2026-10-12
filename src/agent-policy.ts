@@ -100,6 +100,8 @@ export interface AgentPolicy {
   pinOrigin?: boolean;
   /** Permit actions whose target reads as destructive. Defaults to false. */
   allowDestructive?: boolean;
+  /** Origins the pinned page may load assets from (#378); see `UrlPolicyOptions.assetOrigins`. */
+  assetOrigins?: readonly string[];
 }
 
 /** A refusal carries the reason so it can be logged and shown to the model. */
@@ -316,6 +318,7 @@ export interface PolicyFlags {
   allow?: readonly ActionType[];
   allowCrossOrigin?: boolean;
   allowDestructive?: boolean;
+  allowAssetOrigins?: readonly string[];
 }
 
 /**
@@ -331,6 +334,7 @@ export function planPolicy(modelProposed: boolean, flags: PolicyFlags = {}): Age
       allow: flags.allow,
       pinOrigin: !flags.allowCrossOrigin,
       allowDestructive: flags.allowDestructive,
+      assetOrigins: flags.allowAssetOrigins,
     };
   }
   return flags.allow ? { allow: flags.allow, pinOrigin: false, allowDestructive: true } : null;
@@ -365,7 +369,10 @@ export async function pinPage(
 ): Promise<boolean> {
   if (policy.pinOrigin === false) return true;
   if (!startOrigin) return false;
-  await installUrlPolicyGuard(page, { pinnedOrigin: startOrigin });
+  await installUrlPolicyGuard(page, {
+    pinnedOrigin: startOrigin,
+    ...(policy.assetOrigins?.length && { assetOrigins: policy.assetOrigins }),
+  });
   return true;
 }
 

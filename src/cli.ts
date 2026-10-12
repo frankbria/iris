@@ -53,6 +53,22 @@ function parseFailOn(value: string): Record<string, boolean> | string {
   return Object.fromEntries(impacts.map((i) => [i, true]));
 }
 
+/**
+ * `--allow-asset-origin` (#378), repeatable: each value becomes its exact origin, so a path
+ * or trailing slash cannot make an entry that never matches. http(s) only.
+ */
+function collectOrigin(value: string, previous: string[]): string[] {
+  let origin: string;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error();
+    origin = url.origin;
+  } catch {
+    throw new InvalidArgumentError(`--allow-asset-origin: not an http(s) origin: ${value}`);
+  }
+  return [...previous, origin];
+}
+
 const program = new Command();
 program.name('iris').description('Interface Recognition & Interaction Suite').version('0.0.1');
 
@@ -92,6 +108,12 @@ program
     false,
   )
   .option(
+    '--allow-asset-origin <origin>',
+    'Under the origin pin, also load images, fonts, stylesheets, media and scripts from this origin (repeatable). Never a page, frame, fetch or beacon there',
+    collectOrigin,
+    [] as string[],
+  )
+  .option(
     '--allow-destructive',
     'Let an AI-planned run act on targets that read as destructive (delete, remove, reset, …)',
     false,
@@ -121,6 +143,7 @@ program
         allow?: Array<'click' | 'fill' | 'navigate' | 'assert'>;
         allowCrossOrigin?: boolean;
         allowDestructive?: boolean;
+        allowAssetOrigin?: string[];
         blockPrivateHosts?: boolean;
       },
     ) => {
@@ -200,7 +223,11 @@ program
             : (originOf(startUrl) ?? undefined);
           const executor = new ActionExecutor({
             ...executorOptions,
-            urlPolicy: { ...executorOptions.urlPolicy, pinnedOrigin },
+            urlPolicy: {
+              ...executorOptions.urlPolicy,
+              pinnedOrigin,
+              assetOrigins: options.allowAssetOrigin,
+            },
           });
 
           try {
@@ -242,6 +269,7 @@ program
                   allow: options.allow,
                   pinOrigin: !options.allowCrossOrigin,
                   allowDestructive: options.allowDestructive,
+                  assetOrigins: options.allowAssetOrigin,
                 },
               });
 
@@ -350,6 +378,7 @@ program
               allow: options.allow,
               allowCrossOrigin: options.allowCrossOrigin,
               allowDestructive: options.allowDestructive,
+              allowAssetOrigins: options.allowAssetOrigin,
             });
             const startOrigin = policy ? startOriginOf(startUrl, page.url(), result.actions) : null;
             if (policy && !(await pinPage(page, policy, startOrigin))) {
