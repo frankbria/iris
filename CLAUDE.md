@@ -1331,7 +1331,9 @@ P1.25; criteria derived from the spec and #357's comments.
   message goes to the log (`rpc handler failed`).
 - **`serializeResponse`**: a result `JSON.stringify` cannot handle becomes a `-32603` frame
   for the same id instead of silence.
-- **Batches** are still answered `-32600`: #528.
+- **Batches are not supported (#528, decided)**: an array is one `-32600` with `data`
+  "Batch requests are not supported", and none of its elements runs; the reasons are in
+  docs/integration-surfaces.md.
 
 ### RPC Server Limits (issue #338)
 
