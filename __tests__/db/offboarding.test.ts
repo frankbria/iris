@@ -436,6 +436,39 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     }
   });
 
+  it('one superseded baseline that cannot be deleted does not stop the others (#475)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-gc-'));
+    const store = new FilesystemArtifactStore(root);
+    try {
+      await user('gina');
+      await org('org-gc', 'gina', new Date());
+      const keys = ['stuck', 'free'].map((project) =>
+        baselineKey({ orgId: 'org-gc', projectId: project, name: 'home--abc' }),
+      );
+      for (const key of keys) {
+        await store.put(key, Buffer.from('png'), 'image/png');
+        await sql`insert into artifact_objects (org_id, key, bytes, created_at)
+          values ('org-gc', ${key}, 3, now() - interval '100 days')`.execute(db);
+      }
+      const stuckDir = path.join(root, 'org/org-gc/project/stuck/baselines');
+      fs.chmodSync(stuckDir, 0o500);
+      try {
+        const report = await offboarding(db).runRetention({ artifacts: store });
+        expect(report.failures).toContain('baselines');
+        expect(await store.get(keys[1])).toBeNull();
+        expect(await store.get(keys[0])).not.toBeNull();
+        expect(await count('artifact_objects', `key = '${keys[1]}'`)).toBe(0);
+        expect(await count('artifact_objects', `key = '${keys[0]}'`)).toBe(1);
+      } finally {
+        fs.chmodSync(stuckDir, 0o700);
+      }
+      // Next pass: it goes too.
+      expect((await offboarding(db).runRetention({ artifacts: store })).baselinesCollected).toBe(1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('a visual run with no string project, or an invalid queued prefix, stalls nothing', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-purge-'));
     try {

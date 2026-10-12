@@ -108,6 +108,21 @@ export interface Approver {
  * org's run, an unknown run or position; `conflict` for a result that is not a hosted
  * visual comparison with a screenshot.
  */
+/**
+ * Serializes writes and deletes of one baseline image (#475): approval holds it while it
+ * writes the image and makes it current; the retention pass holds it while it re-checks and
+ * deletes a superseded one.
+ */
+export async function lockBaselineObject(
+  tx: Kysely<unknown>,
+  orgId: string,
+  objectKey: string,
+): Promise<void> {
+  await sql`select pg_advisory_xact_lock(hashtext(${'baseline-object:' + orgId + ':' + objectKey}))`.execute(
+    tx,
+  );
+}
+
 export async function approveVisualResult(
   db: Kysely<unknown>,
   artifacts: ArtifactStore,
@@ -143,22 +158,26 @@ export async function approveVisualResult(
   if (!image) return { status: 'conflict', reason: 'The screenshot is no longer stored' };
   // The copy is a new object: it counts against the plan's storage (#315).
   const { artifactStorageBytes } = await orgEntitlements(db).get(orgId);
-  try {
-    await quotaArtifacts(orgArtifacts(artifacts, orgId), db, orgId, artifactStorageBytes).put(
-      objectKey,
-      image,
-      'image/png',
-    );
-  } catch (err) {
-    if (!(err instanceof StorageQuotaExceededError)) throw err;
-    return { status: 'over-quota', limit: err.limit, used: err.used };
-  }
   const approvedBy = actor.apiKeyId
     ? `key:${actor.apiKeyId}`
     : actor.userId
       ? `user:${actor.userId}`
       : 'unknown';
-  await db.transaction().execute(async (tx) => {
+  // Re-approving a run reuses its key, which the retention pass may be collecting as a
+  // superseded image (#475): the write and the row that makes it current happen under the
+  // object's lock, which the collector takes before it re-checks and deletes.
+  const quota = await db.transaction().execute(async (tx) => {
+    await lockBaselineObject(tx, orgId, objectKey);
+    try {
+      await quotaArtifacts(orgArtifacts(artifacts, orgId), db, orgId, artifactStorageBytes).put(
+        objectKey,
+        image,
+        'image/png',
+      );
+    } catch (err) {
+      if (!(err instanceof StorageQuotaExceededError)) throw err;
+      return err;
+    }
     await orgBaselines(tx, orgId).set({
       project,
       name,
@@ -175,6 +194,8 @@ export async function approveVisualResult(
       target: `run:${runId}#${position}`,
       metadata: { project, page: redactString(row.url!), device },
     });
+    return null;
   });
+  if (quota) return { status: 'over-quota', limit: quota.limit, used: quota.used };
   return { status: 'approved', baseline: (await orgBaselines(db, orgId).get(project, name))! };
 }
