@@ -411,7 +411,10 @@ describe('image supply chain (issue #360)', () => {
     const ci = nonComment('.github/workflows/ci.yml');
     expect(ci).toMatch(/TRIVY: aquasec\/trivy:[\d.]+@sha256:[0-9a-f]{64}/);
     expect(ci).toMatch(/for image in iris:ci iris-portal:ci; do/);
-    expect(ci).toMatch(/--severity CRITICAL --ignore-unfixed --exit-code 1/);
+    // Both images scanned before the gate fails (PR bot review: bash -e stopped at the first).
+    expect(ci).toMatch(
+      /--severity CRITICAL --ignore-unfixed --exit-code 1 "\$sbom" \|\| failed=1\n\s+done\n\s+exit "\$failed"/,
+    );
     expect(ci).toMatch(/trivy image --timeout \S+ --format cyclonedx/);
     expect(ci).toMatch(/uses: actions\/upload-artifact@[0-9a-f]{40}/);
     // Uploaded even when the gate failed (codex review).

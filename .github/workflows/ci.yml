@@ -101,12 +101,15 @@ jobs:
             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -e TRIVY_SKIP_VERSION_CHECK=true \
               -v trivy-cache:/root/.cache -v "$PWD/sbom:/out" "$TRIVY" "$@"
           }
+          # Every image is scanned (and its SBOM written) before the gate fails the step.
+          failed=0
           for image in iris:ci iris-portal:ci; do
             sbom="/out/${image%%:*}.cdx.json"
             trivy image --timeout 15m --format cyclonedx --output "$sbom" "$image"
             trivy sbom --severity HIGH --ignore-unfixed --exit-code 0 "$sbom"
-            trivy sbom --severity CRITICAL --ignore-unfixed --exit-code 1 "$sbom"
+            trivy sbom --severity CRITICAL --ignore-unfixed --exit-code 1 "$sbom" || failed=1
           done
+          exit "$failed"
       # Also when the gate above failed: that is when the SBOM is wanted (codex review).
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
