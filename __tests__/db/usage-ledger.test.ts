@@ -160,6 +160,19 @@ const JUNE = { from: new Date('2026-06-01T00:00:00Z'), to: new Date('2026-07-01T
     ).rejects.toThrow();
   });
 
+  it('takes an RPC observation as platform usage (#312): no billing mode, no cost', async () => {
+    const ledger = usageLedger(db);
+    await ledger.record('org-b', [{ kind: 'observation', quantity: 1, idempotencyKey: 'obs:1' }]);
+    const rows = await sql`select kind, billing_mode, unit_cost_usd from usage_events
+      where org_id = 'org-b' and idempotency_key = 'obs:1'`.execute(db);
+    expect(rows.rows).toEqual([{ kind: 'observation', billing_mode: null, unit_cost_usd: null }]);
+    await expect(
+      ledger.record('org-b', [
+        { kind: 'observation', quantity: 1, billingMode: 'byok', idempotencyKey: 'obs:2' },
+      ]),
+    ).rejects.toThrow();
+  });
+
   it('refuses an AI call recorded without its cost', async () => {
     await expect(
       usageLedger(db).record('org-a', [

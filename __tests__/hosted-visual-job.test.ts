@@ -436,6 +436,39 @@ const page = (color: string, extra = 0) =>
     }
   }, 120_000);
 
+  // Codex review (#442): past the deadline the worker moves on, but a run blocked on a
+  // storage write used to wake up later and seed a baseline for a job already failed.
+  it('a job past its deadline seeds nothing once its blocked write returns (#442)', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const puts: string[] = [];
+    // The real store, with its writes held until the deadline has passed.
+    const slow = Object.create(store, {
+      put: {
+        value: async (key: string, body: Buffer, type: string) => {
+          puts.push(key);
+          await held;
+          return store.put(key, body, type);
+        },
+      },
+    }) as typeof store;
+    const res = await api('POST', '/v1/visual/jobs', 'key-a', { project: 'late', urls: [url()] });
+    const { id } = (await res.json()) as { id: string };
+    await processNextVisualJob(postgresJobs(db), { artifacts: slow, deadlineMs: () => 2_000 });
+    const job = await (await api('GET', `/v1/jobs/${id}`)).json();
+    expect(job).toMatchObject({ status: 'failed', error: 'The job timed out' });
+    // The deadline may land before the first write or while it is held; either way no
+    // write may start after it.
+    const atDeadline = puts.length;
+    expect(atDeadline).toBeLessThanOrEqual(1);
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 5_000)); // room for the run to go on
+    expect(puts).toHaveLength(atDeadline);
+    const rows = await sql`select 1 from visual_baselines where project = 'late'`.execute(db);
+    expect(rows.rows).toHaveLength(0);
+  }, 120_000);
+
   it('an error page fails the job instead of becoming a baseline', async () => {
     status = 403;
     try {

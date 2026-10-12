@@ -28,6 +28,7 @@ import {
   type AgentPolicy,
   type PolicyFlags,
 } from './agent-policy';
+import { observePage } from './agent-loop';
 import { metrics, REQUEST_BUCKETS } from './metrics';
 
 export interface JsonRpcRequest {
@@ -72,6 +73,12 @@ const LaunchBrowserOptions = z.object({
     })
     .optional(),
 });
+
+/** `observe` (#312): whether to include a screenshot (default yes). Nothing else is accepted. */
+const ObserveParams = z.object({ screenshot: z.boolean().optional() }).strict().optional();
+
+/** A screenshot larger than this is left out of an `observe` answer, with the reason. */
+export const MAX_OBSERVE_SCREENSHOT_BYTES = 1024 * 1024;
 
 const ExecuteBrowserActionParams = z.object({
   instruction: z.string().optional(),
@@ -315,6 +322,7 @@ const RPC_METHODS = new Set([
   'getBrowserStatus',
   'executeBrowserAction',
   'getStatus',
+  'observe',
 ]);
 const requestsTotal = metrics.counter(
   'iris_requests_total',
@@ -1183,6 +1191,41 @@ export function startServer(
             break;
           }
 
+          case 'observe': {
+            const parsed = ObserveParams.safeParse(req.params);
+            if (!parsed.success) {
+              res.error = { code: -32602, message: 'Invalid params' };
+              break;
+            }
+            // Exclusive (codex review): an action running alongside could fill a credential
+            // after the mask was chosen and before the capture.
+            res.result = await gate.write(async () => {
+              const session = sessions.get(ws);
+              if (!session?.page || session.page.isClosed()) {
+                throw {
+                  code: -32000,
+                  message: 'Nothing to observe yet: run an action first.',
+                  refused: true,
+                };
+              }
+              return observeSession(session, parsed.data?.screenshot ?? true);
+            });
+            // Metered per call (#312), best effort: the tenant has its answer either way.
+            if (principal && options?.usage) {
+              options.usage
+                .record(principal.orgId, [
+                  { kind: 'observation', quantity: 1, idempotencyKey: `observe:${randomUUID()}` },
+                ])
+                .catch((err: unknown) =>
+                  log('error', 'failed to record an observation', {
+                    ...requestFields,
+                    err: errMessage(err),
+                  }),
+                );
+            }
+            break;
+          }
+
           case 'getStatus': {
             // Real state, not a constant. `status` stays 'ready' because
             // answering at all means the server is serving — the fields beside
@@ -1478,6 +1521,42 @@ async function executeUnderPolicy(
     );
   }
   return results;
+}
+
+/**
+ * What the session's page shows (#312): the digest the agent loop plans against (URL,
+ * title, ARIA snapshot; credential values typed from references cut, before the cap), and
+ * a viewport JPEG with those fields masked. A screenshot over the cap is left out, saying so.
+ */
+async function observeSession(
+  session: BrowserSession,
+  withScreenshot: boolean,
+): Promise<{ snapshot: string; screenshot?: string; screenshotOmitted?: string }> {
+  const page = session.page!;
+  // In use, like an action: the idle sweep must not reap a session a client observes (#240).
+  session.busy++;
+  session.lastActivity = Date.now();
+  try {
+    const snapshot = await observePage(page, (text) => session.executor.redactSecrets(text));
+    if (!withScreenshot) return { snapshot };
+    const mask = await session.executor.secretFields(page);
+    // Fields that could not be listed may hold a credential: no screenshot rather than an
+    // unmasked one.
+    if (mask === null) return { snapshot, screenshotOmitted: 'the page did not answer' };
+    let shot: Buffer;
+    try {
+      shot = await page.screenshot({ type: 'jpeg', quality: 70, mask, timeout: 10_000 });
+    } catch {
+      // Mid-navigation or a slow frame: the snapshot is still worth having.
+      return { snapshot, screenshotOmitted: 'the screenshot failed' };
+    }
+    return shot.length > MAX_OBSERVE_SCREENSHOT_BYTES
+      ? { snapshot, screenshotOmitted: `larger than ${MAX_OBSERVE_SCREENSHOT_BYTES} bytes` }
+      : { snapshot, screenshot: shot.toString('base64') };
+  } finally {
+    session.busy--;
+    session.lastActivity = Date.now();
+  }
 }
 
 async function executeBrowserActions(

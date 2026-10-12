@@ -1,4 +1,4 @@
-import { Browser, ElementHandle, Page, errors } from 'playwright';
+import { Browser, ElementHandle, Locator, Page, errors } from 'playwright';
 import { Action } from './translator';
 import {
   launchBrowser,
@@ -280,6 +280,51 @@ export class ActionExecutor {
    */
   redactSecrets(text: string): string {
     return scrubValues(text, this.resolvedSecrets);
+  }
+
+  /**
+   * The fields on `page` that hold a value this executor typed from a credential reference
+   * (#352), for a screenshot to mask (#312): a field that is not `type=password` shows it.
+   * A fill can target an `input`, a `textarea` or a contenteditable element (codex review),
+   * and a field holding the value among other text still shows it. Bounded: the first 100
+   * fields, each read for at most a second; one that cannot be read is masked, since it
+   * might hold one, and so is every field past the first 100 (PR bot: they were left
+   * unmasked). `null` when the fields cannot even be listed (a hung page): the caller
+   * must not take a screenshot it cannot mask.
+   */
+  async secretFields(page: Page): Promise<Locator[] | null> {
+    if (this.resolvedSecrets.size === 0) return [];
+    // Every frame (PR bot): a fill can target a field inside an iframe, and the screenshot
+    // renders it.
+    const lists = await withPageTimeout(
+      Promise.all(
+        page
+          .frames()
+          .map((frame) =>
+            frame
+              .locator('input, textarea, [contenteditable]:not([contenteditable="false"])')
+              .all(),
+          ),
+      ),
+      null,
+      // A frame detaching or navigating mid-listing rejects: unlisted, so no screenshot.
+    ).catch(() => null);
+    if (lists === null) return null;
+    const all = lists.flat();
+    const fields = all.slice(0, 100);
+    const read = (field: Locator) =>
+      field
+        .inputValue({ timeout: 1_000 })
+        .catch(() => field.textContent({ timeout: 1_000 }).then((text) => text ?? ''));
+    const held = await Promise.all(
+      fields.map((field) =>
+        read(field).then(
+          (value) => [...this.resolvedSecrets].some((secret) => value.includes(secret)),
+          () => true,
+        ),
+      ),
+    );
+    return [...fields.filter((_, i) => held[i]), ...all.slice(100)];
   }
 
   /**

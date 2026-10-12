@@ -70,7 +70,7 @@ src/
 ├── db/                    # Hosted Postgres (ADR 0001 §2, #248)
 │   ├── postgres.ts        # resolveDatabaseUrl() (DATABASE_URL / _FILE), createPostgresDb(): Kysely over pg
 │   ├── migrate.ts         # migrateToLatest(); `node dist/db/migrate.js` is the deploy step; no-op on a newer schema (#273)
-│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268; 0012: artifact purges, #472)
+│   └── migrations/        # NNNN_<what>.ts, registered in migrate.ts's MIGRATIONS map (0002: run history, #254; 0003: usage, #263; 0006: terms acceptances, #276; 0007: org suspensions, #348; 0009: org plans, #260; 0010: offboarding, #349; 0011: visual baselines, #268; 0012: artifact purges, #472; 0013: org AI settings, #479; 0014: observation usage, #312)
 ├── agent-policy.ts        # What may the agent DO? (allowlist, origin pin, destructive)
 ├── credential-refs.ts     # {{secret:NAME}} fill values: sources, resolve at fill time, scrub (#352)
 ├── url-policy.ts          # Is this single URL allowed? (SSRF / scheme gate)
@@ -200,6 +200,13 @@ plans/
 - **CostTracker**: Real-time cost calculation, budget enforcement with circuit breaker (blocks paid operations only — cache hits and free providers like Ollama always proceed, issue #68), alert thresholds (80%/95%/100%)
 - **Text and agent turns are metered too (issue #242).** `createResolvedAIClient(config, { operation })` returns a `MeteredTextClient` (src/ai-client/factory.ts), the one place every text call is built (translator → `iris run`/RPC/watcher; agent loop with `agent_turn`). It reserves budget *before* the provider call and settles the reservation with the reply's `usage`, on the same ledger as vision, so one budget covers all AI spend. It opens a tracker per call and closes it afterwards, because the RPC server is long-lived; for that reason the unpriced-model "warn once" set is module-level, not per instance. Text clients return `usage` on every reply the provider sent, including ones IRIS then rejects. A reply with no usage (the request failed before the provider billed) writes no row. The deprecated sync `createAIClient()` is still unmetered
 - **Budget is reserved before a call and settled after it (issue #244).** `CostTracker.reserve()` checks the breaker and inserts a `pending = 1` row at the call's worst-case cost (8k in / 1k out tokens at the model's rate; text calls add one token per request character, since the instruction is uncapped short of the RPC payload limit) in one `BEGIN IMMEDIATE` transaction, so calls in flight count against the budget, across connections and processes. `settle(id, usage)` rewrites the row with the real cost; `release(id)` deletes it when no reply came back. Admission is "spend + reservations < limit", so N parallel calls end within the limit plus one call. `trackOperation()` never throws: a call that was answered is paid for, and dropping its row is how spend went missing. A pending row left by a crashed process keeps counting at its estimate (fails safe)
+  - **Money is summed in integer micro-dollars (#318)**: every row also carries `cost_micros`
+    (`toMicros()`: through nano-dollars, then rounded up, so a paid call is never $0 and
+    float noise adds nothing), and every sum adds `COALESCE(cost_micros, <cost in micros, rounded up>)`,
+    so rows an older release writes (`cost` only) still count; the fallback rounds up the same
+    way. The REAL `cost` stays for that release. The upgrade backfills settled rows only, in
+    the existing `immediate()` transaction: an older process settles its own pending rows by
+    updating `cost`, which a fixed `cost_micros` would ignore (codex review).
   - A reply the provider billed but IRIS rejected (empty, not JSON, outside the schema) throws `AIResponseRejectedError` carrying `usage`, and the smart client settles it before moving on. After a call is settled nothing may send it to the next vendor: a cache-write failure is logged, not treated as a provider failure
 - **SmartAIVisionClient**: Cache-first; calls the configured provider only. Other vendors are tried (configured provider still first) only when `enableFallback` is passed or `ai.fallback === true` in the config (#245). The old default walked a fixed `ollama → openai → anthropic` chain, so an OpenAI user with a local Ollama got Ollama's answer and an outage billed a vendor, or a BYOK key, the user never chose. Strict `=== true`, because `config.json` is untyped and `"false"` is truthy
 - **A page that grew or shrank is diffed, not refused (#282).** `VisualDiffEngine.compare`
@@ -714,6 +721,12 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   min on a blackhole).
 - **uid 1001 everywhere.** The portal image runs as `portal` (1001) like pwuser, so the
   deploy writes every app secret file once, owned by 1001. `pg_password` is 70.
+- **Optional settings reach the containers through the deploy job (#549)**: object storage
+  (`IRIS_S3_*` to iris, worker and portal) and managed AI (`IRIS_MANAGED_AI_*` to iris) come
+  from the `production` environment. Compose passes each as `${NAME:-}` (empty is unset to
+  the services' own readers), the two secret files are always written (empty when unused,
+  so the mounts exist), and `settings.env` names a `_FILE` path only when its secret was
+  given: a `_FILE` var set without the rest would be a partial config (exit 3).
 - **`_FILE` secrets go through `readSecretEnv()`** (src/secret-env.ts): `resolveDatabaseUrl`,
   `resolveKeyring`, `hostedServices`' `BETTER_AUTH_SECRET`, and the portal's
   `BETTER_AUTH_SECRET` / `SMTP_URL`. Do not add another reader.
@@ -1359,10 +1372,33 @@ They apply only to connections with a principal; local mode is untouched.
 - Tests: `protocol-auth.test.ts` (seam, in-test key table) and `api-key-auth.test.ts`
   (real Postgres, spawned hosted `iris connect`, keys made through BetterAuth).
 
+### RPC `observe` (issue #312)
+
+The network client's eyes: `observe` (params `{ screenshot?: boolean }`, `.strict()`) answers
+`{ snapshot, screenshot? | screenshotOmitted? }` for the session's page (`observeSession` in
+src/protocol.ts).
+
+- **`snapshot` is `observePage()`'s digest**, the one the agent loop plans against (URL, title,
+  ARIA snapshot, capped at `MAX_DIGEST_CHARS`), with `executor.redactSecrets()` applied before
+  the cap.
+- **The screenshot is a viewport JPEG (quality 70), base64**, with every field holding a value
+  typed from a `{{secret:NAME}}` reference masked (`executor.secretFields(page)`: the first 100
+  `input`/`textarea`/contenteditable elements, in every frame, whose value contains one; a field that cannot
+  be read is masked too, and so is every field past the 100th, unread). Fields that cannot
+  be listed (a hung page) mean no screenshot (`screenshotOmitted`), never an unmasked one; a
+  screenshot that throws keeps the snapshot. The session is `busy` while observed (#240). `observe` runs under the gate's exclusive side (`gate.write`), so
+  no fill can land between choosing the mask and the capture (codex review). Over
+  `MAX_OBSERVE_SCREENSHOT_BYTES` (1 MiB) it is left out with `screenshotOmitted`.
+- **No page yet is a refusal** (`-32000`): observing never launches a browser.
+- **Metered**: one `observation` usage row per call for a tenant connection (platform usage:
+  no billing mode, no unit cost), best effort like browser minutes. Nothing is stored: the
+  screenshot goes to the client only.
+
 ### Billable Usage Ledger (issue #263)
 
 - **`usage_events`** (migration 0003): kinds `browser_minutes`, `text_call`,
-  `vision_call`, `agent_turn`, `a11y_job`, `visual_job`; `unit_cost_usd` (the provider
+  `vision_call`, `agent_turn`, `a11y_job`, `visual_job`, and `observation` (0014, #312);
+  `unit_cost_usd` (the provider
   cost of one unit, AI only) and `estimated` (#243). `billing_mode` (`byok`/`managed`)
   is **required on AI kinds and must be null on platform kinds**, a check constraint,
   because the plan prices platform usage (#260). `(org_id, idempotency_key)` is unique,
@@ -1576,9 +1612,20 @@ index; 0005: `attempts`, `claim_token`, `heartbeat_at`, #435), no broker (ADR 00
   finish's row lock). `runWorker` refuses `heartbeatMs * 2 >= staleMs`. Migration 0005
   sets `lock_timeout = 5s`: its exclusive lock on `runs` must not queue behind a long
   transaction while the old release serves. A browser that hangs while the worker's event
-  loop still beats is never reaped (#442). During a rollout, a pre-0005 worker finishes
+  loop still beats is never reaped; the job deadline ends it instead (#442, below). During a rollout, a pre-0005 worker finishes
   without a token check until it is recreated (seconds; usage stays idempotent).
   Polling, not LISTEN/NOTIFY.
+- **Every job has a deadline (#442)**: `jobDeadlineMs(job)` (src/worker.ts) is pages x
+  `A11Y_PAGE_BUDGET_MS` (120 s) + 60 s for a11y, `JOB_DEADLINE_MS` + 5 min for visual,
+  capped at `MAX_JOB_MS` (30 min). Past it, `processNextJob` closes every browser the
+  process holds (`openBrowsers()` in src/browser.ts, a registry `launchBrowser()` fills;
+  the worker runs one job at a time), each close bounded at 10 s, and fails the job with
+  `The job timed out` and no usage. The run's promise may settle later; it is ignored, and
+  the run's `AbortSignal` is aborted first: `runVisualJob` checks it before every artifact
+  write and before seeding a baseline (codex review), so a write blocked past the deadline
+  cannot be followed by a baseline for a job already failed.
+  The worker copies the runners' budgets rather than importing them (as `DEFAULT_STALE_MS`):
+  `job-deadline.test.ts` pins the copies.
 - **Tests**: set `process.env.IRIS_HOSTED = '1'` at the top of the file and start
   `hostedEgressProxy({ lookup, connect })` before the first launch; no isolateModules is
   needed, because the worker loads the runner lazily.

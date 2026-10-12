@@ -195,6 +195,7 @@ describe('migrate process against a server that never answers', () => {
       ['0011_visual_baselines', 'Success'],
       ['0012_artifact_purges', 'Success'],
       ['0013_org_ai_settings', 'Success'],
+      ['0014_observation_usage', 'Success'],
       ['0015_artifact_objects', 'Success'],
     ]);
 
@@ -224,7 +225,7 @@ describe('migrate process against a server that never answers', () => {
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('14');
+    expect(applied.rows[0].n).toBe('15');
   });
 
   // A rollback deploys an older image (#273): its catalog lacks what a newer release applied.
@@ -254,7 +255,7 @@ describe('migrate process against a server that never answers', () => {
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('14');
+    expect(applied.rows[0].n).toBe('15');
   });
 
   it('gives every IRIS table org_id NOT NULL and an index that leads with it', async () => {

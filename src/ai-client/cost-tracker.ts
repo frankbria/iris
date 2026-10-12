@@ -265,6 +265,27 @@ const DEFAULT_BUDGET: Required<BudgetConfig> = {
 };
 
 /**
+ * USD as integer micro-dollars (#318): money is summed exactly in the ledger, not as REAL.
+ * Rounded up, through nano-dollars so float noise (`2.5e-5 * 1e6 = 25.000000000000004`)
+ * does not add a micro: a paid call never records $0, and the budget errs high (#243).
+ */
+export function toMicros(usd: number): number {
+  if (!(usd > 0)) return 0;
+  return Math.ceil(Math.round(usd * 1e9) / 1000);
+}
+
+const fromMicros = (micros: number | null): number => (micros ?? 0) / 1e6;
+
+/**
+ * A row's micros when only `cost` is set: rows an older release wrote, and the backfill.
+ * The same rule as `toMicros()` (codex review): nano-dollars, then rounded up by integer
+ * division, so a legacy row is never counted lower than this release would count it.
+ */
+const LEGACY_MICROS = '((CAST(ROUND(cost * 1000000000) AS INTEGER) + 999) / 1000)';
+/** What every sum adds: the exact column, else the row's `cost` converted. */
+const MICROS = `COALESCE(cost_micros, ${LEGACY_MICROS})`;
+
+/**
  * Cost tracker for AI vision API usage
  *
  * Tracks costs across providers and models with budget management.
@@ -330,7 +351,8 @@ export class CostTracker {
         input_tokens INTEGER,
         output_tokens INTEGER,
         estimated INTEGER NOT NULL DEFAULT 0,
-        pending INTEGER NOT NULL DEFAULT 0
+        pending INTEGER NOT NULL DEFAULT 0,
+        cost_micros INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_cost_timestamp ON cost_tracking(timestamp);
@@ -369,6 +391,15 @@ export class CostTracker {
         }
         if (!names.has('run_id')) {
           this.db.exec('ALTER TABLE cost_tracking ADD COLUMN run_id TEXT');
+        }
+        // #318: money in integer micro-dollars, so sums are exact. `cost` stays, written
+        // as before, for a release that reads this file and does not know the column.
+        if (!names.has('cost_micros')) {
+          this.db.exec('ALTER TABLE cost_tracking ADD COLUMN cost_micros INTEGER');
+          // Settled rows only (codex review): an older process settles its own pending
+          // reservations by updating `cost`, which a fixed `cost_micros` would ignore. Left
+          // null, a pending row is summed from `cost`, before and after it settles.
+          this.db.exec(`UPDATE cost_tracking SET cost_micros = ${LEGACY_MICROS} WHERE pending = 0`);
         }
       })
       .immediate();
@@ -514,8 +545,8 @@ export class CostTracker {
     this.warnIfEstimated(provider, model, estimated);
     this.db
       .prepare(
-        `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cached, input_tokens, output_tokens, estimated, org_id, run_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cost_micros, cached, input_tokens, output_tokens, estimated, org_id, run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         Date.now(),
@@ -523,6 +554,7 @@ export class CostTracker {
         model,
         operation,
         cost,
+        toMicros(cost),
         cached ? 1 : 0,
         usage?.inputTokens ?? null,
         usage?.outputTokens ?? null,
@@ -565,10 +597,19 @@ export class CostTracker {
         const { cost } = this.computeCost(provider, model, false, ceiling);
         const { lastInsertRowid } = this.db
           .prepare(
-            `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, pending, org_id, run_id)
-             VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+            `INSERT INTO cost_tracking (timestamp, provider, model, operation, cost, cost_micros, pending, org_id, run_id)
+             VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
           )
-          .run(Date.now(), provider, model, operation, cost, this.orgId, this.runId);
+          .run(
+            Date.now(),
+            provider,
+            model,
+            operation,
+            cost,
+            toMicros(cost),
+            this.orgId,
+            this.runId,
+          );
         return Number(lastInsertRowid);
       })
       .immediate();
@@ -596,11 +637,12 @@ export class CostTracker {
     this.db
       .prepare(
         `UPDATE cost_tracking
-         SET cost = ?, input_tokens = ?, output_tokens = ?, estimated = ?, pending = 0
+         SET cost = ?, cost_micros = ?, input_tokens = ?, output_tokens = ?, estimated = ?, pending = 0
          WHERE id = ? AND pending = 1 AND org_id IS ?`,
       )
       .run(
         cost,
+        toMicros(cost),
         usage?.inputTokens ?? null,
         usage?.outputTokens ?? null,
         estimated ? 1 : 0,
@@ -720,10 +762,10 @@ export class CostTracker {
     // the entire point.
     // `IS`, not `=`: local mode's scope is the rows with no org.
     const stmt = this.db.prepare(
-      'SELECT SUM(cost) as total FROM cost_tracking WHERE org_id IS ? AND timestamp >= ? AND timestamp <= ?',
+      `SELECT SUM(${MICROS}) as total FROM cost_tracking WHERE org_id IS ? AND timestamp >= ? AND timestamp <= ?`,
     );
     const result = stmt.get(this.orgId, startTime, endTime) as { total: number | null };
-    return result.total || 0;
+    return fromMicros(result.total);
   }
 
   /**
@@ -768,7 +810,7 @@ export class CostTracker {
     const where = this.runId === null ? 'org_id IS ?' : 'org_id IS ? AND run_id = ?';
     const params = this.runId === null ? [this.orgId] : [this.orgId, this.runId];
     const totalStmt = this.db.prepare(
-      `SELECT SUM(cost) as total, COUNT(*) as count FROM cost_tracking WHERE ${where}`,
+      `SELECT SUM(${MICROS}) as total, COUNT(*) as count FROM cost_tracking WHERE ${where}`,
     );
     const totalResult = totalStmt.get(...params) as { total: number | null; count: number };
 
@@ -778,7 +820,7 @@ export class CostTracker {
     const cacheResult = cacheStmt.get(...params) as { count: number };
 
     const providerStmt = this.db.prepare(
-      `SELECT provider, SUM(cost) as total FROM cost_tracking WHERE ${where} GROUP BY provider`,
+      `SELECT provider, SUM(${MICROS}) as total FROM cost_tracking WHERE ${where} GROUP BY provider`,
     );
     const providerResults = providerStmt.all(...params) as Array<{
       provider: string;
@@ -786,7 +828,7 @@ export class CostTracker {
     }>;
 
     const modelStmt = this.db.prepare(
-      `SELECT model, SUM(cost) as total FROM cost_tracking WHERE ${where} GROUP BY model`,
+      `SELECT model, SUM(${MICROS}) as total FROM cost_tracking WHERE ${where} GROUP BY model`,
     );
     const modelResults = modelStmt.all(...params) as Array<{
       model: string;
@@ -795,12 +837,12 @@ export class CostTracker {
 
     const costByProvider: Record<string, number> = {};
     for (const row of providerResults) {
-      costByProvider[row.provider] = row.total;
+      costByProvider[row.provider] = fromMicros(row.total);
     }
 
     const costByModel: Record<string, number> = {};
     for (const row of modelResults) {
-      costByModel[row.model] = row.total;
+      costByModel[row.model] = fromMicros(row.total);
     }
 
     const operationCount = totalResult.count;
@@ -808,7 +850,7 @@ export class CostTracker {
     const cacheHitRate = operationCount > 0 ? cacheHitCount / operationCount : 0;
 
     return {
-      totalCost: totalResult.total || 0,
+      totalCost: fromMicros(totalResult.total),
       dailyCost: this.getDailyCost(),
       monthlyCost: this.getMonthlyCost(),
       operationCount,

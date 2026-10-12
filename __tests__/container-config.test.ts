@@ -297,6 +297,56 @@ describe('docker-compose.production.yml (issue #273)', () => {
     expect(s).toMatch(/^\s+pids_limit: [1-9]\d*$/m);
   });
 
+  // #549: these were documented as operator settings, but no container received them.
+  const S3 = [
+    'IRIS_S3_ENDPOINT',
+    'IRIS_S3_BUCKET',
+    'IRIS_S3_REGION',
+    'IRIS_S3_ACCESS_KEY_ID',
+    'IRIS_S3_SECRET_ACCESS_KEY_FILE',
+  ];
+  it.each(['iris', 'worker', 'portal'])(
+    'passes object storage to %s, empty when unset (#549)',
+    (name) => {
+      const s = service(name);
+      for (const v of S3) expect(s).toMatch(new RegExp(`^\\s+${v}: \\$\\{${v}:-\\}$`, 'm'));
+      expect(s).toMatch(/^\s+- s3_secret_access_key$/m);
+    },
+  );
+
+  it('passes managed AI credentials to iris only (#549)', () => {
+    const s = service('iris');
+    expect(s).toMatch(/^\s+IRIS_MANAGED_AI_PROVIDER: \$\{IRIS_MANAGED_AI_PROVIDER:-\}$/m);
+    expect(s).toMatch(/^\s+IRIS_MANAGED_AI_KEY_FILE: \$\{IRIS_MANAGED_AI_KEY_FILE:-\}$/m);
+    expect(s).toMatch(/^\s+- managed_ai_key$/m);
+    expect(service('worker')).not.toMatch(/MANAGED_AI/);
+    expect(file).toMatch(/^  s3_secret_access_key:\n    file: \.\/secrets\/s3_secret_access_key$/m);
+    expect(file).toMatch(/^  managed_ai_key:\n    file: \.\/secrets\/managed_ai_key$/m);
+  });
+
+  it('reads the empty defaults as unset, not as a partial configuration (#549)', () => {
+    const { resolveArtifactStore } = require('../src/artifact-store');
+    const { resolveManagedKey } = require('../src/billing/managed-ai');
+    const empty = Object.fromEntries(
+      [...S3, 'IRIS_MANAGED_AI_PROVIDER', 'IRIS_MANAGED_AI_KEY_FILE'].map((v) => [v, '']),
+    );
+    expect(resolveArtifactStore(empty)).toBeNull();
+    expect(resolveManagedKey(empty)).toBeNull();
+  });
+
+  it('has the deploy job write both secret files, and point at them only when set (#549)', () => {
+    const ci = read('.github/workflows/ci.yml');
+    const job = ci.slice(ci.indexOf('\n  deploy-production:'));
+    expect(job).toMatch(/put_secret s3_secret_access_key "\$IRIS_S3_SECRET_ACCESS_KEY"/);
+    expect(job).toMatch(/put_secret managed_ai_key "\$IRIS_MANAGED_AI_KEY"/);
+    expect(job).toMatch(
+      /\[ -z "\$IRIS_S3_SECRET_ACCESS_KEY" \] \|\| printf "IRIS_S3_SECRET_ACCESS_KEY_FILE='\/run\/secrets\/s3_secret_access_key'\\n"/,
+    );
+    expect(job).toMatch(
+      /\[ -z "\$IRIS_MANAGED_AI_KEY" \] \|\| printf "IRIS_MANAGED_AI_KEY_FILE='\/run\/secrets\/managed_ai_key'\\n"/,
+    );
+  });
+
   it('publishes iris-api and the portal on loopback only, at the ingress ports (#347)', () => {
     const ports = [...file.matchAll(/^\s+- '([^']*:\d+)'$/gm)].map((m) => m[1]);
     expect(ports).toEqual([

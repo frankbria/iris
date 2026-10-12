@@ -180,20 +180,16 @@ export IRIS_DB_PATH=~/.iris/iris.db
     "provider": "openai",
     "model": "gpt-4o-mini"
   },
-  "visual": {
-    "baseline": {
-      "strategy": "branch",
-      "reference": "main"
-    },
-    "threshold": 0.1,
-    "semanticAnalysis": false
-  },
-  "a11y": {
-    "tags": ["wcag2a", "wcag2aa"],
-    "failOn": ["critical", "serious"]
+  "budget": {
+    "dailyLimit": 10,
+    "monthlyLimit": 200
   }
 }
 ```
+
+Only `ai`, `watch` and `budget` are read. Baselines, thresholds and a11y tags are flags:
+`--baseline`, `--threshold`, `--semantic` (`iris visual-diff`), `--tags`, `--fail-on`
+(`iris a11y`).
 
 ## Examples
 
@@ -211,7 +207,7 @@ git checkout feature/redesign
 npm start visual-diff --pages "/" --semantic
 
 # 4. Review report
-open ./reports/visual-regression-report.html
+open .iris/reports/visual-report-*.html
 
 # 5. Update baseline if changes are intentional
 npm start visual-diff --pages "/" --update-baseline

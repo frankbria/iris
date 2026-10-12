@@ -71,6 +71,17 @@ const HARDENED_CONTEXT_OPTIONS = {
  * binary is missing (issue #79), or naming the opt-out when the host cannot
  * sandbox Chromium (issue #331).
  */
+/** Browsers this process launched that are still connected (#442). */
+const launched = new Set<Browser>();
+
+/**
+ * The browsers this process launched and still holds. The worker runs one job at a time,
+ * so these are the current job's: what it closes when the job's deadline passes (#442).
+ */
+export function openBrowsers(): Browser[] {
+  return [...launched];
+}
+
 export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise<Browser> {
   const args: string[] = [];
   // Playwright >=1.61 removed the deprecated `devtools` launch option; this
@@ -89,7 +100,7 @@ export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise
   }
 
   try {
-    return await chromium.launch({
+    const browser = await chromium.launch({
       headless: options.headless ?? true,
       slowMo: options.slowMo ?? 0,
       args,
@@ -99,6 +110,9 @@ export async function launchBrowser(options: BrowserLaunchOptions = {}): Promise
       handleSIGTERM: false,
       handleSIGHUP: false,
     });
+    launched.add(browser);
+    browser.once('disconnected', () => launched.delete(browser));
+    return browser;
   } catch (error) {
     // Playwright's banner, then Chromium's own. Seen under Docker's default
     // seccomp profile and Ubuntu's AppArmor user-namespace restriction.

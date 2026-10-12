@@ -94,7 +94,7 @@ is processed in Chromium's memory for the duration of the job.
 
 | | |
 |---|---|
-| Data | `usage_events`: org, run, kind (`browser_minutes`, `text_call`, `vision_call`, `agent_turn`, `a11y_job`, `visual_job`), quantity, unit cost, billing mode, estimated flag, idempotency key. No content. |
+| Data | `usage_events`: org, run, kind (`browser_minutes`, `text_call`, `vision_call`, `agent_turn`, `a11y_job`, `visual_job`, `observation`), quantity, unit cost, billing mode, estimated flag, idempotency key. No content. |
 | Purpose | Metering and billing (#263). |
 | Where | Postgres, `0001`, `0003`; `src/billing/usage.ts`. |
 | Access | Operators; the org's own usage view (#271, pending). |
@@ -144,7 +144,7 @@ is processed in Chromium's memory for the duration of the job.
 
 | | |
 |---|---|
-| Data | `cost_tracking` (SQLite): time, provider, model, operation, cost, token counts, pending/estimated flags, org id, run id. No prompt or response content. |
+| Data | `cost_tracking` (SQLite): time, provider, model, operation, cost (USD, and exact integer micro-dollars since #318), token counts, pending/estimated flags, org id, run id. No prompt or response content. |
 | Purpose | Budget circuit breaker and reservations before each AI call (#242, #244, #255). |
 | Where | `<IRIS_DATA_DIR>/cache/cost-tracking.db` (`src/ai-client/factory.ts`, `src/ai-client/smart-client.ts`, `src/ai-client/cost-tracker.ts`); in production the `iris-data` / `worker-data` volumes. |
 | Access | Operators. |
@@ -164,6 +164,10 @@ is processed in Chromium's memory for the duration of the job.
 
 The local CLI writes screenshots, diffs and baselines under `<artifactsDir>/runs/<runId>/`
 and `.iris/baselines` on the user's own machine (`src/visual/artifacts.ts`, #343).
+
+The RPC `observe` method (#312) sends a viewport screenshot and an ARIA snapshot of the
+session's page to the connected client and stores neither; fields filled from a credential
+reference are masked in the screenshot and cut from the snapshot.
 
 The hosted service stores them for visual jobs (#268, `src/visual/hosted-job.ts`) in a
 private S3-compatible bucket (`src/artifact-store.ts`, #257):

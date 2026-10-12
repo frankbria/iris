@@ -9,7 +9,13 @@ import { hostedLog } from '../log';
  */
 
 export type UsageKind =
-  'browser_minutes' | 'text_call' | 'vision_call' | 'agent_turn' | 'a11y_job' | 'visual_job';
+  | 'browser_minutes'
+  | 'text_call'
+  | 'vision_call'
+  | 'agent_turn'
+  | 'a11y_job'
+  | 'visual_job'
+  | 'observation';
 
 export interface UsageEvent {
   kind: UsageKind;

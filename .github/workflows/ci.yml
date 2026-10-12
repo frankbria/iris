@@ -740,6 +740,14 @@ jobs:
           IRIS_ABUSE_CONTACT: ${{ vars.IRIS_ABUSE_CONTACT }}
           IRIS_SUPPORT_CONTACT: ${{ vars.IRIS_SUPPORT_CONTACT }}
           IRIS_SECURITY_TXT_EXPIRES_DAYS: ${{ vars.IRIS_SECURITY_TXT_EXPIRES_DAYS }}
+          # Optional (#549): object storage and managed AI credits.
+          IRIS_S3_ENDPOINT: ${{ vars.IRIS_S3_ENDPOINT }}
+          IRIS_S3_BUCKET: ${{ vars.IRIS_S3_BUCKET }}
+          IRIS_S3_REGION: ${{ vars.IRIS_S3_REGION }}
+          IRIS_S3_ACCESS_KEY_ID: ${{ vars.IRIS_S3_ACCESS_KEY_ID }}
+          IRIS_S3_SECRET_ACCESS_KEY: ${{ secrets.IRIS_S3_SECRET_ACCESS_KEY }}
+          IRIS_MANAGED_AI_PROVIDER: ${{ vars.IRIS_MANAGED_AI_PROVIDER }}
+          IRIS_MANAGED_AI_KEY: ${{ secrets.IRIS_MANAGED_AI_KEY }}
           IRIS_IMAGE: ${{ steps.digests.outputs.iris }}
           PORTAL_IMAGE: ${{ steps.digests.outputs.portal }}
           GHCR_USER: ${{ github.actor }}
@@ -790,12 +798,17 @@ jobs:
             [ -z "$PORTAL_PORT" ] || printf 'PORTAL_PORT=%d\n' "$PORTAL_PORT"
             # Published contacts (#348), optional: unset shows a placeholder on /contact,
             # and no security.txt is served without a security contact.
-            for name in IRIS_SECURITY_CONTACT IRIS_ABUSE_CONTACT IRIS_SUPPORT_CONTACT IRIS_SECURITY_TXT_EXPIRES_DAYS; do
+            for name in IRIS_SECURITY_CONTACT IRIS_ABUSE_CONTACT IRIS_SUPPORT_CONTACT IRIS_SECURITY_TXT_EXPIRES_DAYS \
+              IRIS_S3_ENDPOINT IRIS_S3_BUCKET IRIS_S3_REGION IRIS_S3_ACCESS_KEY_ID IRIS_MANAGED_AI_PROVIDER; do
               value=${!name}
               [ -n "$value" ] || continue
               case "$value" in *"'"* | *$'\n'*) echo "::error::$name may not hold ' or a newline" >&2; exit 1 ;; esac
               printf "%s='%s'\n" "$name" "$value"
             done
+            # The secret files are always written (below); the services read them only
+            # when pointed at them, so an empty one stays unset (#549).
+            [ -z "$IRIS_S3_SECRET_ACCESS_KEY" ] || printf "IRIS_S3_SECRET_ACCESS_KEY_FILE='/run/secrets/s3_secret_access_key'\n"
+            [ -z "$IRIS_MANAGED_AI_KEY" ] || printf "IRIS_MANAGED_AI_KEY_FILE='/run/secrets/managed_ai_key'\n"
           } | box "cat > $release/settings.env"
 
           # This release's secrets, over ssh's STDIN, never a remote command line (the
@@ -807,6 +820,8 @@ jobs:
           }
           put_secret better_auth_secret "$BETTER_AUTH_SECRET"
           put_secret smtp_url "$SMTP_URL"
+          put_secret s3_secret_access_key "$IRIS_S3_SECRET_ACCESS_KEY"
+          put_secret managed_ai_key "$IRIS_MANAGED_AI_KEY"
 
           # Shared, generated ON the box once and never overwritten: the Postgres
           # password (the volume keeps the one it was initialised with) and the BYOK

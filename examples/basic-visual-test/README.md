@@ -14,7 +14,6 @@ This example demonstrates IRIS visual regression testing capabilities with a sim
 
 - `sample-page.html` - Simple web page to test
 - `test-visual.sh` - Script to run visual tests
-- `.irisrc` - IRIS configuration file
 - `package.json` - Optional npm scripts
 
 ## Quick Start
@@ -61,33 +60,22 @@ chmod +x test-visual.sh
 
 ## Configuration Options
 
-The `.irisrc` file configures visual testing behavior:
+Visual testing is configured with `iris visual-diff` flags (IRIS reads no project
+config file):
 
-```json
-{
-  "visual": {
-    "threshold": 0.1,
-    "baseline": {
-      "strategy": "branch",
-      "reference": "main"
-    },
-    "capture": {
-      "fullPage": true,
-      "format": "png",
-      "quality": 90
-    }
-  }
-}
+```bash
+iris visual-diff --pages /sample-page.html --base-url http://localhost:8080 \
+  --threshold 0.1 --baseline main --baseline-strategy branch
 ```
 
 ### Key Options
 
-- `threshold` (0-1): Pixel difference tolerance (0.1 = 10% difference allowed)
-- `baseline.strategy`: How to manage baselines (`branch`, `commit`, or `tag`)
-- `baseline.reference`: Git reference for baseline comparison
-- `capture.fullPage`: Capture entire page or just viewport
-- `capture.format`: Screenshot format (`png` or `jpeg`)
-- `capture.quality`: Image quality (0-100)
+- `--threshold` (0-1): Pixel difference tolerance (0.1 = 10% difference allowed)
+- `--baseline-strategy`: How to read `--baseline` (`branch`, `commit`, or `tag`)
+- `--baseline`: Git reference for baseline comparison
+- `--mask`: CSS selectors to mask before comparing (comma-separated)
+
+Screenshots are always full-page PNGs.
 
 ## Understanding Results
 

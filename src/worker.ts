@@ -22,6 +22,72 @@ export const DEFAULT_STALE_MS = 180_000;
 /** The error a suspended org's claimed job is failed with (#348). */
 export const ORG_SUSPENDED = 'Organization suspended';
 
+/** The error a job past its deadline is failed with (#442). */
+export const JOB_TIMED_OUT = 'The job timed out';
+
+/**
+ * Budgets the deadline is made of (#442). Kept here, as `DEFAULT_STALE_MS` is, so the
+ * worker does not load the runners to read them; a test pins them to the runners' values.
+ * A11y: `A11Y_PAGE_TIMEOUT_MS` per page. Visual: `JOB_DEADLINE_MS`, after which no new
+ * page starts, plus room for the pages already under way.
+ */
+export const A11Y_PAGE_BUDGET_MS = 120_000;
+export const VISUAL_JOB_BUDGET_MS = 10 * 60_000;
+const DEADLINE_MARGIN_MS = 60_000;
+const VISUAL_IN_FLIGHT_MS = 5 * 60_000;
+/** No job runs longer than this, whatever its params ask for. */
+export const MAX_JOB_MS = 30 * 60_000;
+
+/**
+ * How long a claimed job may run before the worker gives up on it (#442): pages times the
+ * per-page budget plus a margin, capped. The heartbeat keeps a slow job from being reaped
+ * (#435), so without this a wedged browser held the worker for good.
+ */
+export function jobDeadlineMs(job: Pick<ClaimedJob, 'kind' | 'params'>): number {
+  const ms =
+    job.kind === 'visual'
+      ? VISUAL_JOB_BUDGET_MS + VISUAL_IN_FLIGHT_MS
+      : (job.params as A11yJobParams).urls.length * A11Y_PAGE_BUDGET_MS + DEADLINE_MARGIN_MS;
+  return Math.min(ms, MAX_JOB_MS);
+}
+
+class JobTimedOut extends Error {
+  constructor() {
+    super(JOB_TIMED_OUT);
+  }
+}
+
+/** `work`, or a `JobTimedOut` rejection once `ms` has passed. */
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new JobTimedOut()), ms);
+  });
+  // It may still settle after the deadline, once its browser is closed: not unhandled.
+  work.catch(() => undefined);
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Closes every browser the worker holds: the timed-out job's (one job at a time). Each
+ * close is bounded, so a browser that does not answer cannot hold the worker either.
+ * ponytail: a browser whose close never completes is logged and left to exit with its
+ * pipe; killing it needs the process handle Playwright's launch() does not expose.
+ */
+async function closeJobBrowsers(fields: Record<string, unknown>): Promise<void> {
+  const { openBrowsers } = await import('./browser');
+  await Promise.all(
+    openBrowsers().map((browser) =>
+      withDeadline(browser.close(), 10_000).catch((err: unknown) =>
+        log('error', 'could not close a timed-out job browser', {
+          ...fields,
+          err: errMessage(err),
+        }),
+      ),
+    ),
+  );
+}
+
 export type WorkerJobs = Pick<
   PostgresJobs,
   'claim' | 'finish' | 'fail' | 'heartbeat' | 'reapStuck'
@@ -87,7 +153,7 @@ async function runA11y(params: A11yJobParams) {
  */
 export function processNextA11yJob(
   jobs: WorkerJobs,
-  options: { heartbeatMs?: number } = {},
+  options: { heartbeatMs?: number; deadlineMs?: (job: ClaimedJob) => number } = {},
 ): Promise<ClaimedJob | null> {
   return processNextJob(jobs, 'a11y', (job) => runA11y(job.params as A11yJobParams), options);
 }
@@ -107,15 +173,21 @@ export function processNextVisualJob(
   {
     artifacts,
     heartbeatMs,
+    deadlineMs,
     storageQuota,
-  }: { artifacts: ArtifactStore; heartbeatMs?: number; storageQuota?: StorageQuota },
+  }: {
+    artifacts: ArtifactStore;
+    heartbeatMs?: number;
+    deadlineMs?: (job: ClaimedJob) => number;
+    storageQuota?: StorageQuota;
+  },
 ): Promise<ClaimedJob | null> {
   if (!jobs.baselines) throw new Error("Visual jobs need the job store's baselines");
   const baselines = jobs.baselines;
   return processNextJob(
     jobs,
     'visual',
-    async (job) => {
+    async (job, signal) => {
       if (job.kind !== 'visual') throw new Error(`Not a visual job: ${job.kind}`);
       const [{ runVisualJob }, { orgArtifacts }] = await Promise.all([
         import('./visual/hosted-job'),
@@ -129,9 +201,10 @@ export function processNextVisualJob(
         orgId: job.orgId,
         runId: job.id,
         attempt: job.claimToken,
+        signal,
       });
     },
-    { heartbeatMs },
+    { heartbeatMs, deadlineMs },
   );
 }
 
@@ -145,8 +218,11 @@ export function processNextVisualJob(
 async function processNextJob(
   jobs: WorkerJobs,
   kind: JobKind,
-  run: (job: ClaimedJob) => Promise<Parameters<WorkerJobs['finish']>[1]>,
-  { heartbeatMs = 30_000 }: { heartbeatMs?: number } = {},
+  run: (job: ClaimedJob, signal: AbortSignal) => Promise<Parameters<WorkerJobs['finish']>[1]>,
+  {
+    heartbeatMs = 30_000,
+    deadlineMs = jobDeadlineMs,
+  }: { heartbeatMs?: number; deadlineMs?: (job: ClaimedJob) => number } = {},
 ): Promise<ClaimedJob | null> {
   const job = await jobs.claim(kind);
   if (!job) return null;
@@ -197,12 +273,19 @@ async function processNextJob(
       (err) => log('error', `job heartbeat failed ${job.id}`, { ...fields, err: errMessage(err) }),
     );
   }, heartbeatMs);
+  const cancel = new AbortController();
   try {
     let result;
     try {
-      result = await run(job);
+      result = await withDeadline(run(job, cancel.signal), deadlineMs(job));
     } catch (err) {
       writing = true;
+      // Past its deadline (#442): the run is told to stop writing, its browser is closed so
+      // no Chromium outlives the job, then it fails like any job that could not run.
+      if (err instanceof JobTimedOut) {
+        cancel.abort();
+        await closeJobBrowsers(fields);
+      }
       const message = (err as Error).message || 'Job failed';
       done('error', await jobs.fail(job, message), message);
       return job;
