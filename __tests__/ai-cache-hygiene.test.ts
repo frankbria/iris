@@ -47,6 +47,7 @@ describe('memory tier TTL (#299)', () => {
       jest.spyOn(Date, 'now').mockReturnValue(now + 1001);
       expect(cache.get(key)).toBeUndefined();
       expect(cache.getStats().memorySize).toBe(0);
+      expect(cache.getStats().misses).toBe(1);
       // Gone from SQLite too: the next process does not get it back either.
       expect(cache.get(key)).toBeUndefined();
     } finally {
@@ -70,6 +71,48 @@ describe('distinct index names on a shared database (#299)', () => {
       db.close();
     }
   }
+
+  // Kimi review: a database made before #299 keeps the old names. Each store drops the
+  // legacy index on its own table only: on a shared file, the other table's copy may be
+  // that table's only index until its own store opens.
+  it("drops the pre-#299 index names on each store's own table only", () => {
+    const file = path.join(dir, 'legacy.db');
+    const legacy = new Database(file);
+    legacy.exec(`
+      CREATE TABLE ai_vision_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL,
+        timestamp INTEGER NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, hits INTEGER DEFAULT 0);
+      CREATE TABLE cost_tracking (id INTEGER PRIMARY KEY, timestamp INTEGER NOT NULL,
+        provider TEXT NOT NULL, model TEXT NOT NULL, operation TEXT NOT NULL, cost REAL NOT NULL);
+      CREATE INDEX idx_timestamp ON cost_tracking(timestamp);
+      CREATE INDEX idx_provider_model ON ai_vision_cache(provider, model);
+    `);
+    legacy.close();
+    const names = (table: string) => {
+      const db = new Database(file, { readonly: true });
+      try {
+        return (db.prepare(`PRAGMA index_list(${table})`).all() as Array<{ name: string }>)
+          .map((i) => i.name)
+          .filter((n) => !n.startsWith('sqlite_'))
+          .sort();
+      } finally {
+        db.close();
+      }
+    };
+
+    new AIVisionCache({ dbPath: file }).close();
+    expect(names('ai_vision_cache')).toEqual([
+      'idx_ai_cache_provider_model',
+      'idx_ai_cache_timestamp',
+    ]);
+    expect(names('cost_tracking')).toEqual(['idx_timestamp']); // not the cache's to drop
+
+    new CostTracker(file).close();
+    expect(names('cost_tracking')).toEqual([
+      'idx_cost_provider_model',
+      'idx_cost_timestamp',
+      'idx_org_timestamp',
+    ]);
+  });
 
   it.each(['cache first', 'tracker first'])('both tables get their indexes (%s)', (order) => {
     const file = path.join(dir, 'shared.db');

@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { ensureDatabaseDir } from '../db';
 import { DEFAULT_BUDGET_LIMITS } from '../config';
 import { hostedLog } from '../log';
+import { dropLegacyIndexes } from './cache';
 
 /**
  * AI provider pricing configuration
@@ -335,6 +336,7 @@ export class CostTracker {
       CREATE INDEX IF NOT EXISTS idx_cost_timestamp ON cost_tracking(timestamp);
       CREATE INDEX IF NOT EXISTS idx_cost_provider_model ON cost_tracking(provider, model);
     `);
+    dropLegacyIndexes(this.db, 'cost_tracking');
 
     // Idempotent upgrade: databases created before token columns existed get
     // them added here. CREATE TABLE IF NOT EXISTS won't alter an existing table,

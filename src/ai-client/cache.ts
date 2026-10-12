@@ -91,6 +91,20 @@ class LRUNode {
  *
  * Cache keys are generated from image hashes, provider, and model.
  */
+/**
+ * Drop the index names the vision cache and the cost tracker used to share (#299), on
+ * `table` only. On a shared file the other table's copy may be its only index until that
+ * store opens and creates its own prefixed one, so it is not this store's to drop.
+ */
+export function dropLegacyIndexes(db: Database.Database, table: string): void {
+  const legacy = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND name IN ('idx_timestamp', 'idx_provider_model')",
+    )
+    .all(table) as Array<{ name: string }>;
+  for (const { name } of legacy) db.exec(`DROP INDEX ${name}`);
+}
+
 export class AIVisionCache {
   private config: Required<CacheConfig>;
   private db: Database.Database;
@@ -134,6 +148,7 @@ export class AIVisionCache {
       CREATE INDEX IF NOT EXISTS idx_ai_cache_timestamp ON ai_vision_cache(timestamp);
       CREATE INDEX IF NOT EXISTS idx_ai_cache_provider_model ON ai_vision_cache(provider, model);
     `);
+    dropLegacyIndexes(this.db, 'ai_vision_cache');
   }
 
   /**
