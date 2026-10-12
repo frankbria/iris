@@ -1509,7 +1509,7 @@ async function executeUnderPolicy(
     const verdict = await checkPlannedAction(action, policy, page, startOrigin);
     results.push(
       verdict.allowed
-        ? await session.executor.executeAction(action, page, secrets)
+        ? await session.executor.executeAction(action, page, secrets, verdict.target)
         : {
             success: false,
             action,

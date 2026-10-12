@@ -203,7 +203,7 @@ production.
 | `P1.34` | [#376](https://github.com/frankbria/iris/issues/376) | Container egress firewall for the hosted deployment | P0.9 (#336), P1.33 (#375), P0.59 (#440) | TODO |
 | `P1.35` | [#379](https://github.com/frankbria/iris/issues/379) | Egress proxy timeouts, configurable popup cap, per-session page cap | P0.11 (#338) | DONE (#542) |
 | `P1.36` | [#408](https://github.com/frankbria/iris/issues/408) | Portal: remove members, change roles, leave an org | P0.22 (#250) | DONE (#543) |
-| `P1.39` | [#442](https://github.com/frankbria/iris/issues/442) | Job-level deadline: a hung browser holds the worker forever | P0.52 (#435) | TODO |
+| `P1.39` | [#442](https://github.com/frankbria/iris/issues/442) | Job-level deadline: a hung browser holds the worker forever | P0.52 (#435) | DONE (#545) |
 
 ### P2 — Post-launch fast-follow
 

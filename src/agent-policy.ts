@@ -12,10 +12,11 @@
  * see and adapt to.
  */
 
-import type { Locator, Page } from 'playwright';
+import type { ElementHandle, Locator, Page } from 'playwright';
 import type { Action } from './actions';
 import { isWithinPinnedOrigin } from './url-policy';
 import { installUrlPolicyGuard } from './url-policy-guard';
+import { withPageTimeout } from './page-timeout';
 
 export type ActionType = Action['type'];
 
@@ -105,6 +106,12 @@ export interface AgentPolicy {
 export interface PolicyVerdict {
   allowed: boolean;
   reason?: string;
+  /**
+   * The element the check read, when it read one (#530). Dispatch to it, not to the
+   * selector: re-resolving the selector would act on whatever the page put there since,
+   * unchecked. Hand it to `executeAction`, which disposes of it.
+   */
+  target?: ElementHandle;
 }
 
 const ALLOWED: PolicyVerdict = { allowed: true };
@@ -246,20 +253,20 @@ export async function checkResolvedTarget(
  * executor anyway.
  */
 async function resolvedVerdict(page: Page, selector: string): Promise<PolicyVerdict> {
-  const words = await elementWords(page.locator(selector).first());
-  if (words === null) {
+  const read = await elementWords(page.locator(selector).first());
+  if (read === null) {
     return {
       allowed: false,
       reason: `target ${selector} was not found on the page, or could not be read`,
     };
   }
-  const term = destructiveTerm(words);
-  return term
-    ? {
-        allowed: false,
-        reason: `target resolves to an element that looks destructive ("${term}") — pass --allow-destructive to permit it`,
-      }
-    : ALLOWED;
+  const term = destructiveTerm(read.words);
+  if (!term) return { allowed: true, target: read.handle };
+  await read.handle.dispose().catch(() => undefined);
+  return {
+    allowed: false,
+    reason: `target resolves to an element that looks destructive ("${term}") — pass --allow-destructive to permit it`,
+  };
 }
 
 /** A read that failed, told apart from an attribute that is simply absent (null). */
@@ -274,21 +281,34 @@ const unread = () => UNREAD;
  * `jest --coverage` a function sent to the page carries instrumentation the page does not
  * have.
  */
-async function elementWords(target: Locator): Promise<string | null> {
+async function elementWords(
+  target: Locator,
+): Promise<{ words: string; handle: ElementHandle } | null> {
+  let handle: ElementHandle | null;
   try {
     await target.waitFor({ state: 'attached' });
+    // Read through one handle, the one the action is then dispatched to (#530): a
+    // locator re-resolves on every call, so its reads could each see another element.
+    handle = await target.elementHandle({ timeout: READ_TIMEOUT_MS });
   } catch {
     return null;
   }
-  const timeout = { timeout: READ_TIMEOUT_MS };
+  if (!handle) return null;
+  // Bounded (codex review, #530): a handle's reads take no timeout, unlike a locator's,
+  // so a hung renderer would stall the check. A read that times out is unread: refused.
+  const bounded = (read: Promise<string | null>) =>
+    withPageTimeout(read.catch(unread), UNREAD, READ_TIMEOUT_MS);
   const reads = await Promise.all([
-    ...NAMING_ATTRIBUTES.map((name) => target.getAttribute(name, timeout).catch(unread)),
-    target.textContent(timeout).catch(unread),
+    ...NAMING_ATTRIBUTES.map((name) => bounded(handle.getAttribute(name))),
+    bounded(handle.textContent()),
   ]);
-  if (reads.includes(UNREAD)) return null;
+  if (reads.includes(UNREAD)) {
+    await handle.dispose().catch(() => undefined);
+    return null;
+  }
   // Matched whole, not capped: a cap let a long benign title push "Delete account" out of
   // reach (codex review). The pattern is linear, run once per action.
-  return reads.filter(Boolean).join(' ');
+  return { words: reads.filter(Boolean).join(' '), handle };
 }
 
 /** The flags a caller sets on a run: `--allow`, `--allow-cross-origin`, `--allow-destructive`. */
