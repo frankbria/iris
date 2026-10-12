@@ -241,7 +241,10 @@ export async function checkResolvedTarget(
 async function resolvedVerdict(page: Page, selector: string): Promise<PolicyVerdict> {
   const words = await elementWords(page.locator(selector).first());
   if (words === null) {
-    return { allowed: false, reason: `target ${selector} was not found on the page` };
+    return {
+      allowed: false,
+      reason: `target ${selector} was not found on the page, or could not be read`,
+    };
   }
   const term = destructiveTerm(words);
   return term
@@ -252,13 +255,17 @@ async function resolvedVerdict(page: Page, selector: string): Promise<PolicyVerd
     : ALLOWED;
 }
 
-const unread = () => null;
+/** A read that failed, told apart from an attribute that is simply absent (null). */
+const UNREAD = Symbol('unread');
+const unread = () => UNREAD;
 
 /**
- * What a user reads on `target`: its naming attributes and text content, or null when it
- * is not on the page within the page's action timeout. Playwright's own reads, not a page
- * function: under `jest --coverage` a function sent to the page carries instrumentation
- * the page does not have.
+ * What a user reads on `target`: its naming attributes and text content. Null when it is
+ * not on the page within the page's action timeout, or when any read fails (it detached, a
+ * read timed out): an element the check could not read is treated as one it did not find
+ * (codex review, #353). Playwright's own reads, not a page function: under
+ * `jest --coverage` a function sent to the page carries instrumentation the page does not
+ * have.
  */
 async function elementWords(target: Locator): Promise<string | null> {
   try {
@@ -267,9 +274,10 @@ async function elementWords(target: Locator): Promise<string | null> {
     return null;
   }
   const timeout = { timeout: READ_TIMEOUT_MS };
-  const attributes = NAMING_ATTRIBUTES.map((name) =>
-    target.getAttribute(name, timeout).catch(unread),
-  );
-  const text = await target.textContent(timeout).catch(unread);
-  return [...(await Promise.all(attributes)), text?.slice(0, 500)].filter(Boolean).join(' ');
+  const reads = await Promise.all([
+    ...NAMING_ATTRIBUTES.map((name) => target.getAttribute(name, timeout).catch(unread)),
+    target.textContent(timeout).catch(unread),
+  ]);
+  if (reads.includes(UNREAD)) return null;
+  return reads.filter(Boolean).join(' ').slice(0, 2000);
 }

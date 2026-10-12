@@ -931,15 +931,16 @@ listed in the body of the PR that closed #353, for checking against it.
   selects `#delete-account`.
 - **`checkResolvedTarget(action, policy, page)`** runs in the agent loop right after
   `checkAction` allows a click or fill. It reads the element the selector resolves to
-  (`aria-label`, `title`, `id`, `name`, `value`, `placeholder`, `alt`, text content up to
-  500 chars) and applies the same destructive-term match. It uses Playwright's
+  (`aria-label`, `title`, `id`, `name`, `value`, `placeholder`, `alt`, text content;
+  2000 chars in all) and applies the same destructive-term match. It uses Playwright's
   `getAttribute`/`textContent`, not `locator.evaluate`: a page function would need to be
   a string under `--coverage`, and a string arrow passed to `locator.evaluate` is
   evaluated as an expression that returns the function, never calling it (`undefined`).
 - **It fails closed** (codex review): the check waits for the element with the page's own
   action timeout (what the click would wait), so a control rendered late is read, not
   skipped; one that never appears is refused as "not found" (it would have timed out in the
-  executor). A refusal never ran, so it does not clear the goal verdict (#351); a test that
+  executor). A read that fails after the element was found (it detached, a read timed out)
+  refuses too: a failed read is not an absent attribute. A refusal never ran, so it does not clear the goal verdict (#351); a test that
   needs a failing click uses a real but disabled element. The page controls what is read,
   so a hostile page can still label a destructive control blandly; this narrows the
   selector-only gap, it does not close it.

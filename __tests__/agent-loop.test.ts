@@ -12,6 +12,7 @@ import { createServer, Server } from 'http';
 import type { AddressInfo } from 'net';
 import { observePage, runAgentLoop, MAX_DIGEST_CHARS, MAX_URL_CHARS } from '../src/agent-loop';
 import { ActionExecutor } from '../src/executor';
+import { checkResolvedTarget } from '../src/agent-policy';
 import * as aiClient from '../src/ai-client';
 import type { Action } from '../src/actions';
 
@@ -548,6 +549,21 @@ describe('agent loop', () => {
 
           expect(result.results[0].error).toMatch(/Refused by agent policy.*looks destructive/);
           expect(await page.title()).toBe('Account');
+        });
+
+        // Codex review: an element found and then detached (or a read that times out) made
+        // every read fail; the failures were dropped as absent attributes and the action was
+        // allowed. A read that fails refuses, like an element that is not there.
+        it('refuses when the element is found but cannot be read', async () => {
+          const locator = Object.getPrototypeOf(page.locator('body'));
+          const detached = () => Promise.reject(new Error('Element is not attached to the DOM'));
+          jest.spyOn(locator, 'getAttribute').mockImplementation(detached);
+          jest.spyOn(locator, 'textContent').mockImplementation(detached);
+
+          const verdict = await checkResolvedTarget({ type: 'click', selector: '#x1' }, {}, page);
+
+          expect(verdict.allowed).toBe(false);
+          expect(verdict.reason).toMatch(/could not be read/);
         });
 
         it('refuses, as not found, a selector that never matches', async () => {
