@@ -164,14 +164,22 @@ export function processNextA11yJob(
  */
 export function processNextVisualJob(
   jobs: WorkerJobs,
-  { artifacts, heartbeatMs }: { artifacts: ArtifactStore; heartbeatMs?: number },
+  {
+    artifacts,
+    heartbeatMs,
+    deadlineMs,
+  }: {
+    artifacts: ArtifactStore;
+    heartbeatMs?: number;
+    deadlineMs?: (job: ClaimedJob) => number;
+  },
 ): Promise<ClaimedJob | null> {
   if (!jobs.baselines) throw new Error("Visual jobs need the job store's baselines");
   const baselines = jobs.baselines;
   return processNextJob(
     jobs,
     'visual',
-    async (job) => {
+    async (job, signal) => {
       if (job.kind !== 'visual') throw new Error(`Not a visual job: ${job.kind}`);
       const [{ runVisualJob }, { orgArtifacts }] = await Promise.all([
         import('./visual/hosted-job'),
@@ -183,9 +191,10 @@ export function processNextVisualJob(
         orgId: job.orgId,
         runId: job.id,
         attempt: job.claimToken,
+        signal,
       });
     },
-    { heartbeatMs },
+    { heartbeatMs, deadlineMs },
   );
 }
 
@@ -199,7 +208,7 @@ export function processNextVisualJob(
 async function processNextJob(
   jobs: WorkerJobs,
   kind: JobKind,
-  run: (job: ClaimedJob) => Promise<Parameters<WorkerJobs['finish']>[1]>,
+  run: (job: ClaimedJob, signal: AbortSignal) => Promise<Parameters<WorkerJobs['finish']>[1]>,
   {
     heartbeatMs = 30_000,
     deadlineMs = jobDeadlineMs,
@@ -254,15 +263,19 @@ async function processNextJob(
       (err) => log('error', `job heartbeat failed ${job.id}`, { ...fields, err: errMessage(err) }),
     );
   }, heartbeatMs);
+  const cancel = new AbortController();
   try {
     let result;
     try {
-      result = await withDeadline(run(job), deadlineMs(job));
+      result = await withDeadline(run(job, cancel.signal), deadlineMs(job));
     } catch (err) {
       writing = true;
-      // Past its deadline (#442): its browser is closed first, so no Chromium outlives the
-      // job, then it fails like any job that could not run (no usage).
-      if (err instanceof JobTimedOut) await closeJobBrowsers(fields);
+      // Past its deadline (#442): the run is told to stop writing, its browser is closed so
+      // no Chromium outlives the job, then it fails like any job that could not run.
+      if (err instanceof JobTimedOut) {
+        cancel.abort();
+        await closeJobBrowsers(fields);
+      }
       const message = (err as Error).message || 'Job failed';
       done('error', await jobs.fail(job, message), message);
       return job;

@@ -58,8 +58,17 @@ export async function runVisualJob(
     deadlineMs?: number;
     /** Taller screenshots are refused (default `MAX_PAGE_HEIGHT`). */
     maxPageHeight?: number;
+    /**
+     * Aborted when the worker gives up on the job (#442). A write still pending then may
+     * complete, but nothing after it runs: no further object, no baseline seeded for a job
+     * already recorded as failed.
+     */
+    signal?: AbortSignal;
   },
 ): Promise<VisualTestResult> {
+  const live = () => {
+    if (ctx.signal?.aborted) throw new Error('The job was cancelled');
+  };
   const t0 = Date.now();
   const deadlineMs = ctx.deadlineMs ?? JOB_DEADLINE_MS;
   const deadline = t0 + deadlineMs;
@@ -122,8 +131,10 @@ export async function runVisualJob(
               name: `${name}--${tag}`,
             });
           const current = keyOf('current');
+          live();
           await ctx.artifacts.put(current, shot.buffer, 'image/png');
 
+          live();
           let baseline = await ctx.baselines.get(params.project, name);
           if (!baseline) {
             // Seeded insert-only: a concurrent job of the project, or a reaped one still
@@ -132,6 +143,7 @@ export async function runVisualJob(
             // missing or replaced object.
             const objectKey = baselineObjectKey(ctx.orgId, params.project, name, ctx.attempt);
             await ctx.artifacts.put(objectKey, shot.buffer, 'image/png');
+            live();
             const seeded = await ctx.baselines.insertIfAbsent({
               project: params.project,
               name,
@@ -175,6 +187,7 @@ export async function runVisualJob(
           // No difference, no diff image to publish (a zero-byte "png" would not render).
           if (compared.diffBuffer?.length && compared.pixelDifference > 0) {
             diffKey = keyOf('diff');
+            live();
             await ctx.artifacts.put(diffKey, compared.diffBuffer, 'image/png');
           }
           results.push({

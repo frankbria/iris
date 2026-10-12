@@ -1521,7 +1521,10 @@ index; 0005: `attempts`, `claim_token`, `heartbeat_at`, #435), no broker (ADR 00
   capped at `MAX_JOB_MS` (30 min). Past it, `processNextJob` closes every browser the
   process holds (`openBrowsers()` in src/browser.ts, a registry `launchBrowser()` fills;
   the worker runs one job at a time), each close bounded at 10 s, and fails the job with
-  `The job timed out` and no usage. The run's promise may settle later; it is ignored.
+  `The job timed out` and no usage. The run's promise may settle later; it is ignored, and
+  the run's `AbortSignal` is aborted first: `runVisualJob` checks it before every artifact
+  write and before seeding a baseline (codex review), so a write blocked past the deadline
+  cannot be followed by a baseline for a job already failed.
   The worker copies the runners' budgets rather than importing them (as `DEFAULT_STALE_MS`):
   `job-deadline.test.ts` pins the copies.
 - **Tests**: set `process.env.IRIS_HOSTED = '1'` at the top of the file and start
