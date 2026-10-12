@@ -301,3 +301,100 @@ test("a user left in no org is sent to log in again, which gives them one", asyn
   await expect(page).toHaveURL(/\/dashboard$/)
   await expect(page.getByText("Your role: owner")).toBeVisible()
 })
+
+test("owners and admins remove members and change roles; members only leave (#408)", async ({
+  page,
+  context,
+  browser,
+}) => {
+  const owner = unique()
+  await signUpVerified(context.request, owner, "Rosa")
+  await logIn(page, owner, PASSWORD)
+  await expect(page).toHaveURL(/\/dashboard$/)
+
+  /** Someone invited by the owner who joins in a browser of their own. */
+  async function joined(role: "admin" | "member", name: string) {
+    const email = unique()
+    const res = await page.request.post(
+      "/api/auth/organization/invite-member",
+      {
+        headers: sameOrigin,
+        data: { email, role },
+      }
+    )
+    expect(res.status()).toBe(200)
+    const ctx = await browser.newContext()
+    await ownRateLimitBucket(ctx)
+    const p = await ctx.newPage()
+    await signUpVerified(ctx.request, email, name)
+    const link = await linkFromMail(email, "Join Rosa's organization")
+    await logIn(p, email, PASSWORD)
+    await expect(p).toHaveURL(/\/dashboard$/)
+    await p.goto(link)
+    await p.getByRole("button", { name: "Accept invitation" }).click()
+    await expect(p).toHaveURL(/\/org$/)
+    return { email, ctx, page: p }
+  }
+  const admin = await joined("admin", "Ada")
+  const member = await joined("member", "Max")
+
+  // A member gets no controls, and the server refuses a forged removal.
+  await member.page.reload()
+  await expect(
+    member.page.getByRole("button", { name: /^Remove / })
+  ).toHaveCount(0)
+  const forged = await member.ctx.request.post(
+    "/api/auth/organization/remove-member",
+    {
+      headers: sameOrigin,
+      data: { memberIdOrEmail: admin.email },
+    }
+  )
+  expect((await forged.json()).code).toBe(
+    "YOU_ARE_NOT_ALLOWED_TO_DELETE_THIS_MEMBER"
+  )
+
+  // The sole owner is told why they cannot leave, and the admin sees no controls on them.
+  await page.goto("/org")
+  await expect(
+    page.getByText("You are the only owner, so you cannot leave.")
+  ).toBeVisible()
+  await admin.page.reload()
+  await expect(
+    admin.page.getByRole("button", { name: `Remove ${owner}` })
+  ).toHaveCount(0)
+
+  // The admin removes the member, who can no longer read the org.
+  await admin.page
+    .getByRole("button", { name: `Remove ${member.email}` })
+    .click()
+  await admin.page
+    .getByRole("button", { name: `Confirm removing ${member.email}` })
+    .click()
+  await expect(
+    admin.page.getByRole("list", { name: "Members" })
+  ).not.toContainText(member.email)
+  await member.page.goto("/org")
+  await expect(member.page.getByRole("heading", { level: 1 })).not.toHaveText(
+    "Rosa's organization"
+  )
+
+  // The owner makes the admin a member; then that member leaves.
+  await page.reload()
+  await page.getByLabel(`Role of ${admin.email}`).selectOption("member")
+  await expect(page.getByRole("list", { name: "Members" })).toContainText(
+    `${admin.email} member`
+  )
+  await admin.page.reload()
+  await admin.page
+    .getByRole("button", { name: "Leave this organization" })
+    .click()
+  await expect(admin.page).toHaveURL(/\/dashboard$/)
+  await page.reload()
+  await expect(page.getByRole("list", { name: "Members" })).not.toContainText(
+    admin.email
+  )
+
+  await admin.ctx.close()
+  await member.ctx.close()
+})

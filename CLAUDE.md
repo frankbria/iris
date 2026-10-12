@@ -89,6 +89,7 @@ src/
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
 ├── artifact-store.ts      # ArtifactStore: filesystem (local) + S3 (hosted, SeaweedFS in dev/CI/staging); tenant-first keys, signed URLs (#257)
 ├── audit-log.ts           # recordAudit(): tenant audit entries, on the change's own transaction (#361)
+├── member-keys.ts         # A departing member's API keys revoked; create-time re-check (#408)
 ├── visual-baselines.ts    # Project baselines (orgBaselines) and audited approval, no runner imports: API + portal (#268, #463)
 ├── run-reads.ts           # Read-only run queries (types, keyset cursor, listPage, get): no runner imports, so the portal can use it (#270)
 ├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
@@ -572,6 +573,14 @@ The org is the tenant (ADR 0001 §4). The organization plugin's options live in
   The login form passes `?next=` (checked by `safeNext()`) as that URL. `new URL()`
   collapses dot-segments, so `/.//host` parses to the path `//host`, and `safeNext()`
   checks the parsed path as well as the origin.
+- **Members are managed on `/org` (#408)**: owners and admins change a role (select) and
+  remove a member (two-step button, the count of keys it revokes shown); everyone else can
+  leave. Each call sends the rendered org's id. BetterAuth refuses the last owner's removal,
+  demotion or leave and an admin acting on an owner; the page does not offer those and says
+  why. No `window.confirm`: Playwright dismisses dialogs, so E2E would cancel it.
+  `afterMemberWrite` (createAuth after hook) audits `member.remove|leave|role` and revokes
+  keys; it reads the member from the response (`{ member }` for remove, the row for leave
+  and role).
 - Tenants cannot delete orgs (`disableOrganizationDeletion`): `runs`, `usage_events` and the
   other tenant tables reference the org with no cascade. Operators do it with
   `iris admin delete-org` (#349, below).
@@ -597,8 +606,15 @@ The portal page is `/api-keys`.
   Per-key limits are #342's. Rows created now carry `rateLimitEnabled = false`.
 - **Revoke deletes the row.** The key stops verifying at once; the audit log keeps
   `api_key.delete` with the user who did it (#361).
-- **A key outlives its creator's membership.** It belongs to the org and records no
-  creator, so after removing an admin, rotate the keys they could have copied.
+- **A key goes with its creator's membership (#408).** The row records no creator, but
+  #361's audit log does (`api_key.create`, actor user): when a member is removed or leaves,
+  a BetterAuth after hook deletes the org's live keys they created and audits each
+  (`api_key.delete`, `reason`). Keys made before #361 have no creator on record and stay;
+  a role change revokes nothing. Other members may have copied a key, so rotate anyway
+  after an admin leaves on bad terms. `src/member-keys.ts` holds both halves: the
+  removal's `revokeKeysCreatedBy`, and `revokeIfCreatorLeft`, run after each create's
+  audit row is committed (codex review): a removal racing a create either sees that row
+  or leaves no membership for the re-check to find.
 - `enableSessionForAPIKeys` stays off: a key must never become a portal session.
 - **Do not let `npm install -w @iris/portal` pick the package's latest version.** It
   nested a second `better-auth` under `apps/portal`. Pin the range the root uses and
@@ -969,6 +985,15 @@ Constraints that are easy to break:
   it right after refusing its first request. Never `Target.closeTarget` at
   `targetCreated`: closing a target Playwright is still attaching to stalled the
   opening click in 2 of 3 runs. Its guard install also closes it (`page.close()`).
+- **The cap is the policy's `maxPopups`** (#379), default `MAX_POPUPS_PER_CONTEXT`; the
+  RPC sets it from `ServerLimits.maxPopupsPerSession` (`clampLaunchOptions` puts it on the
+  executor's `urlPolicy`). The browser net reads it from the opener's live policy. An
+  opener-less page the net marked over the cap is closed at the context's `'page'` event
+  (`isOverCap`: a CDP target lookup, skipped while nothing is over the cap): with no URL it
+  makes no request to refuse, and with no opener no guard closes it. Not a page count:
+  `'page'` events arrive out of creation order, and a count closed a legitimate popup.
+  Today Playwright reports the opener even after it closed, or with `noopener`, so that
+  branch is the fallback for the race; the test pins the bound.
 - A pinned origin now refuses **every** cross-origin request, images and fonts
   included: an image URL is a write channel for a filled-in secret. The explicit
   allowance is `--allow-cross-origin`.
@@ -1128,6 +1153,14 @@ dials the address it vetted, so a rebinding resolver gets no second lookup.
   `PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK` is set.
 - `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`: UDP cannot be proxied,
   and STUN to an internal host:port otherwise goes straight out.
+- **Bounded (#379)**: a lookup (`lookupTimeoutMs`, 10 s), the upstream connect
+  (`connectTimeoutMs`, 10 s) and an upstream connection with no traffic either way
+  (`idleTimeoutMs`, 5 min) end with a 504. `dial()` destroys the socket with a `Refusal`;
+  the forward path reports `socket.errored`, since `http.request` says only "socket hang
+  up". Tests fake a black hole with `Object.assign(new net.Socket(), { connecting: true })`:
+  a never-connected socket rejects writes at once, and a real TEST-NET address is dropped
+  on one network and unreachable at once on another. On WSL the "502 when the vetted
+  address refuses" test now gets this 504 (#382's blackhole) instead of hanging.
 - Tests substitute DNS and dialing through `hostedEgressProxy({ lookup, connect })`,
   called before the first launch in the registry. `connect` sends the one "public"
   test address (`8.8.8.8`) to a local server, so every refusal has a positive control
@@ -1351,7 +1384,9 @@ They apply only to connections with a principal; local mode is untouched.
   `unit_cost_usd` (`usage_events_ai_cost_check`). A key already recorded is skipped and
   logged (`returning`), so a reused key cannot hide an event silently.
 - **Writers not yet wired**: vision calls (hosted visual jobs run no AI) and agent
-  turns (#428, the agent loop is CLI-only).
+  turns: `runAgentLoop` takes the request's `{ orgId, credentials, onUsage, secrets }`
+  since #428 (credentials resolved by `resolveCredentials()`, shared with `translate()`:
+  omitted is no AI under IRIS_HOSTED), but no hosted surface runs it yet.
 
 ### Plans and Entitlements (issue #260)
 
@@ -1404,7 +1439,7 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   (`api-key-auth.test.ts`).
 - **`byokAllowed`**: `managedAiResolver()` (src/billing/managed-ai.ts, #479) returns no stored key
   for a plan without it.
-- Not enforced yet, no hosted surface: agent turns (CLI-only, #428), vision calls (hosted
+- Not enforced yet, no hosted surface: agent turns (the loop takes a scope, #428; nothing hosted runs it), vision calls (hosted
   jobs run no AI), storage (#315).
 
 ### Tenant Audit Log (issue #361)

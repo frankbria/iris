@@ -44,6 +44,8 @@ import type { UrlPolicyOptions } from './url-policy';
  */
 export const MAX_POPUPS_PER_CONTEXT = 5;
 
+const popupCap = (policy: UrlPolicyOptions): number => policy.maxPopups ?? MAX_POPUPS_PER_CONTEXT;
+
 /** Why the guard turned a navigation away. */
 interface NavigationRefusal {
   /** The URL that was actually refused — the redirect target, when redirected. */
@@ -272,7 +274,7 @@ async function startBrowserNet(browser: Browser): Promise<BrowserNet> {
     const contextId = targetInfo.browserContextId ?? '';
     const live = net.popups.get(contextId) ?? new Set<string>();
     net.popups.set(contextId, live);
-    if (live.size >= MAX_POPUPS_PER_CONTEXT) {
+    if (live.size >= popupCap(opener.state.policy)) {
       // Refused here, closed once its own guard install sees it (joinBrowserNet).
       // Not Target.closeTarget now: closing a target Playwright is still
       // attaching to stalls the click that opened it — measured, 2 runs in 3.
@@ -294,8 +296,8 @@ async function startBrowserNet(browser: Browser): Promise<BrowserNet> {
     // document of a guarded page or popup. Subframes are the page guard's job.
     const target = net.targets.get(event.frameId);
     let reason: string | null = null;
-    if (net.overCap.has(event.frameId)) {
-      reason = `popup limit reached (${MAX_POPUPS_PER_CONTEXT} per context)`;
+    if (target && net.overCap.has(event.frameId)) {
+      reason = `popup limit reached (${popupCap(target.state.policy)} per context)`;
     } else if (target) {
       reason = blockReason(url, target.state.policy);
       if (target.inherited) {
@@ -360,6 +362,20 @@ async function joinBrowserNet(page: Page, state: GuardState, cdp: CDPSession): P
   if (joined.overCap.has(targetInfo.targetId)) return false;
   joined.targets.set(targetInfo.targetId, { state, inherited: false });
   return true;
+}
+
+/** Whether the browser net marked this page a popup over the cap (#379). */
+async function isOverCap(page: Page): Promise<boolean> {
+  const browser = page.context().browser();
+  const net = browser ? await browserNets.get(browser) : undefined;
+  if (!net || net.overCap.size === 0) return false; // the usual case: no CDP round trip
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const { targetInfo } = await cdp.send('Target.getTargetInfo');
+    return net.overCap.has(targetInfo.targetId);
+  } finally {
+    await cdp.detach().catch(() => undefined);
+  }
 }
 
 /**
@@ -458,6 +474,15 @@ async function installContextNet(context: BrowserContext, entry: ContextEntry): 
   context.on('page', (candidate) => {
     void (async () => {
       const opener = await candidate.opener();
+      // An over-cap popup whose opener has gone (#379): with no URL it makes no request
+      // for the browser net to refuse, and with no opener it gets no guard to close it.
+      // Every other over-cap page is closed by one of those, so a context holds at most
+      // its own page plus the cap. Not by counting pages: 'page' events arrive out of
+      // creation order, so a count closes whichever page is in hand, not the over-cap one.
+      if (!opener && (await isOverCap(candidate))) {
+        await candidate.close();
+        return;
+      }
       const inherited = opener ? guards.get(opener)?.policy : undefined;
       if (inherited) {
         await installUrlPolicyGuard(candidate, inherited);

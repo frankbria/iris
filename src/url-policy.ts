@@ -33,6 +33,12 @@ export interface UrlPolicyOptions {
   allowData?: boolean;
   /** Also block loopback, private and reserved hosts (see PRIVATE_RANGES). Default: false (localhost dev-server testing stays allowed); always on under IRIS_HOSTED. */
   blockPrivateHosts?: boolean;
+  /**
+   * Live popups the guarded page's context may hold (#337); default `MAX_POPUPS_PER_CONTEXT`.
+   * Not a URL rule: it rides on the guard's live policy, which the browser net reads for a
+   * popup's opener. An over-cap popup is closed whatever its opener did (#379).
+   */
+  maxPopups?: number;
 }
 
 /** Strip IPv6 brackets, DNS-equivalent trailing dots, and lowercase for comparison. */

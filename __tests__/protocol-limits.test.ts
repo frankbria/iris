@@ -10,9 +10,9 @@ import { ActionExecutor } from '../src/executor';
 /**
  * Server-side resource limits (#338), each exercised over a real socket.
  *
- * Every server here binds port 0 and runs with a token, the deployed shape. No
- * test navigates, so launchBrowser never starts a Chromium: sessions are created
- * lazily and these tests only count them.
+ * Every server here binds port 0 and runs with a token, the deployed shape. Only the
+ * popup cap test navigates; elsewhere launchBrowser never starts a Chromium: sessions
+ * are created lazily and these tests only count them.
  */
 
 const TOKEN = 'limits-token';
@@ -96,6 +96,7 @@ describe('defaults', () => {
       maxRetryAttempts: 5,
       maxRetryDelayMs: 10_000,
       maxSlowMoMs: 1_000,
+      maxPopupsPerSession: 5,
       heartbeatIntervalMs: 30_000,
       keyRequestsPerMinute: 120,
       orgRequestsPerMinute: 300,
@@ -446,4 +447,37 @@ describe('heartbeat', () => {
     // The ponging peer lived through the same intervals.
     expect(live.readyState).toBe(WebSocket.OPEN);
   });
+});
+
+describe('popup cap (#379)', () => {
+  test("maxPopupsPerSession reaches the session's page guard", async () => {
+    const opened: string[] = [];
+    const site = http.createServer((req, res) => {
+      if (req.url?.startsWith('/popup')) opened.push(req.url);
+      res.setHeader('content-type', 'text/html');
+      res.end(
+        '<!doctype html><title>p</title>' +
+          '<button id="many" onclick="for (let i = 0; i < 4; i++) window.open(\'/popup?\' + i)">many</button>',
+      );
+    });
+    site.listen(0, '127.0.0.1');
+    await new Promise((resolve) => site.once('listening', resolve));
+    try {
+      const ws = await open(await serve({ maxPopupsPerSession: 1 }));
+      await call(ws, 'launchBrowser');
+      const url = `http://127.0.0.1:${(site.address() as AddressInfo).port}/`;
+      const res = await call(ws, 'executeBrowserAction', {
+        actions: [
+          { type: 'navigate', url },
+          { type: 'click', selector: '#many' },
+        ],
+      });
+      expect(res.result).toMatchObject({ success: true });
+      await eventually(() => opened.length > 0);
+      await new Promise((resolve) => setTimeout(resolve, 2000)); // room for the other three
+      expect(opened).toHaveLength(1);
+    } finally {
+      site.close();
+    }
+  }, 60_000);
 });
