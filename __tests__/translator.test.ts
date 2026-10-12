@@ -267,6 +267,9 @@ describe('prose is not a selector or a URL (issue #297)', () => {
     ['click #menu >> text=Logout', '#menu >> text=Logout'],
     ['click *', '*'],
     ['click #save, button, a', '#save, button, a'],
+    ['click div>a', 'div>a'],
+    ['click li+li', 'li+li'],
+    ['click h2~p', 'h2~p'],
   ])('%s keeps the selector %s', (instruction, selector) => {
     expect(translateSync(instruction)).toEqual([{ type: 'click', selector }]);
   });

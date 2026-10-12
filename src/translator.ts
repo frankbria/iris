@@ -87,10 +87,11 @@ export function translateSync(instruction: string): Action[] {
 const ENGINE_OR_XPATH = /^(?:[a-z][\w-]*=\S|\(?\/\/)/i;
 
 /**
- * One whitespace-separated CSS token with selector syntax: a combinator (`>>` chains to an
+ * One whitespace-separated CSS token with selector syntax: a combinator, spaced or not
+ * (`div>a`; `>>` chains to an
  * engine selector such as `text=Logout`), `#id`, `.class`, `[attr]`, `:pseudo` or `*`.
  */
-const SELECTOR_TOKEN = /^(?:>>?|\+|~)$|[#.][a-z_-]|\[|:[a-z-]|\*|^[a-z][\w-]*=\S/i;
+const SELECTOR_TOKEN = /^(?:>>?|\+|~)$|[\w\])"'][>+~]|[#.][a-z_-]|\[|:[a-z-]|\*|^[a-z][\w-]*=\S/i;
 
 /**
  * Whether a pattern's target may go to Playwright as a selector (#297). Prose does not:
