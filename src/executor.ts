@@ -80,6 +80,71 @@ export interface PageContext {
 /** Timing defaults for an option the caller leaves unset. The RPC server clamps these too (#338). */
 export const EXECUTOR_DEFAULTS = { retryAttempts: 3, retryDelay: 1000, timeout: 30000 } as const;
 
+/** How long `element_absent` waits for the network to go idle before judging (#504). */
+const ABSENT_SETTLE_MS = 5000;
+/** How long the element must stay absent on the settled page (#504). */
+const ABSENT_WINDOW_MS = 2000;
+
+/** `path` is `prefix` or below it, at segment boundaries; `/` is the root only. */
+function pathWithin(path: string, prefix: string): boolean {
+  const p = prefix.replace(/\/+$/, '');
+  if (p === '') return path === '/' || path === '';
+  return path === p || path === p + '/' || path.startsWith(p + '/');
+}
+
+/**
+ * Whether `url` matches an `url_matches` target (#504). Never a substring of the whole href,
+ * which let `example.com` match `https://evil.test/?r=example.com` and `/` match every URL:
+ * - an absolute http(s) URL: same origin, a path prefix at segment boundaries, and its
+ *   query and hash when it has them;
+ * - `/path`: the path or below it (`/` is the root only);
+ * - `#route`: the hash starts with it;
+ * - a host (`example.com`, `example.com/cart`): the hostname or a subdomain, and the path;
+ * - any other token (`checkout-complete`): whole segments of the path or of a hash route.
+ */
+export function urlMatches(url: URL, target: string): boolean {
+  const t = target.trim();
+  if (/^https?:\/\//i.test(t)) return matchesAbsolute(url, t);
+  if (t.startsWith('/')) return pathWithin(url.pathname, t);
+  if (t.startsWith('#')) return url.hash.startsWith(t);
+  return looksLikeHost(t) ? matchesHost(url, t) : matchesSegments(url, t);
+}
+
+/** `example.com` or `example.com/cart`: a dotted first segment with no spaces. */
+const looksLikeHost = (target: string): boolean => /^[^/\s]*\.[^/\s]*(\/|$)/.test(target);
+
+/** A part the target leaves empty matches anything; a given one must be equal. */
+const emptyOrEqual = (want: string, got: string): boolean => want === '' || want === got;
+
+/** An absolute target: same origin, a path prefix, and its query and hash when it has them. */
+function matchesAbsolute(url: URL, target: string): boolean {
+  if (!URL.canParse(target)) return false;
+  const want = new URL(target);
+  return (
+    url.origin === want.origin &&
+    pathWithin(url.pathname, want.pathname) &&
+    emptyOrEqual(want.search, url.search) &&
+    emptyOrEqual(want.hash, url.hash)
+  );
+}
+
+/** `example.com[/path]`: the hostname or a subdomain, and the path when one is given. */
+function matchesHost(url: URL, target: string): boolean {
+  const [host, ...rest] = target.split('/');
+  const h = host.toLowerCase();
+  if (url.hostname !== h && !url.hostname.endsWith('.' + h)) return false;
+  return rest.length === 0 || pathWithin(url.pathname, '/' + rest.join('/'));
+}
+
+/** Any other token: whole segments of the path, or of a hash route (`#/checkout`). */
+function matchesSegments(url: URL, target: string): boolean {
+  const segments = (s: string) => '/' + s.split('/').filter(Boolean).join('/') + '/';
+  const token = segments(target);
+  return (
+    segments(url.pathname).includes(token) || segments(url.hash.replace(/^#!?/, '')).includes(token)
+  );
+}
+
 /**
  * ActionExecutor handles the execution of translated actions with retry logic,
  * error handling, and browser lifecycle management.
@@ -469,18 +534,20 @@ export class ActionExecutor {
         break;
 
       case 'element_absent':
-        // Not simply !element_visible: absence should not wait out the full
-        // timeout hoping something appears, so give it a short grace period.
-        holds = !(await this.isVisible(
-          page.locator(action.target).first(),
-          Math.min(timeout, 1000),
-        ));
+        // Absence is judged on a settled page (#504): network idle (bounded), then it
+        // must stay absent for a window. A one-second glance passed `[click Submit,
+        // element_absent .error]` when a slow validation request rendered the error later.
+        await page
+          .waitForLoadState('networkidle', { timeout: ABSENT_SETTLE_MS })
+          .catch(() => undefined); // a page that never idles is judged as it is
+        holds = !(await this.isVisible(page.locator(action.target).first(), ABSENT_WINDOW_MS));
         break;
 
       case 'url_matches':
         // Auto-waits like the other kinds. A single synchronous read races an
         // async URL change — an SPA route transition or redirect kicked off by a
         // preceding click lands after this line, producing a false negative.
+        // Matched against the parsed URL, not as a substring of the href (#504).
         holds = await this.urlBecomes(page, action.target, timeout);
         break;
 
@@ -496,23 +563,23 @@ export class ActionExecutor {
   }
 
   /**
-   * Whether the page URL comes to contain `substring` within `timeout`.
+   * Whether the page URL comes to match `target` (`urlMatches`) within `timeout`.
    *
    * Uses Playwright's own URL wait so a redirect or SPA route change that is
    * still in flight is given the same grace the visibility checks get. A timeout
    * means "it never matched", which is an answer, not an error.
    */
-  private async urlBecomes(page: Page, substring: string, timeout: number): Promise<boolean> {
+  private async urlBecomes(page: Page, target: string, timeout: number): Promise<boolean> {
     // A closed page still reports its last URL, which would pass (#240).
     if (page.isClosed()) {
       throw new Error('url_matches: page has been closed');
     }
-    if (page.url().includes(substring)) {
+    if (urlMatches(new URL(page.url()), target)) {
       return true; // already there — skip the wait entirely
     }
 
     try {
-      await page.waitForURL((url) => url.href.includes(substring), { timeout });
+      await page.waitForURL((url) => urlMatches(url, target), { timeout });
       return true;
     } catch (error) {
       if (error instanceof errors.TimeoutError) return false;

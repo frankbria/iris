@@ -8,6 +8,8 @@
  */
 
 import { chromium, Browser, Page } from 'playwright';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import { ActionExecutor } from '../src/executor';
 import type { Action } from '../src/actions';
 
@@ -20,17 +22,43 @@ const PAGE = `<!doctype html><html lang="en"><head><title>t</title></head><body>
 describe('assert action execution', () => {
   let browser: Browser;
   let page: Page;
+  // A real origin for URL and network cases (#504): any path serves PAGE, /slow answers
+  // after 1.5 s, /app has a form whose error renders late.
+  let site: http.Server;
+  let origin: string;
   // Short timeout: several cases deliberately assert something absent, and the
   // default 30s would make the suite crawl.
   const executor = new ActionExecutor({ timeout: 1000, retryAttempts: 0, trackContext: false });
 
   beforeAll(async () => {
     browser = await chromium.launch();
+    site = http.createServer((req, res) => {
+      if (req.url === '/slow') {
+        setTimeout(() => res.end('{"ok":false}'), 1500);
+        return;
+      }
+      res.setHeader('content-type', 'text/html');
+      if (req.url === '/app') {
+        res.end(`<!doctype html><html lang="en"><head><title>t</title></head><body>
+          <button id="submit" onclick="fetch('/slow').then(() => {
+            const e = document.createElement('p'); e.className = 'error';
+            e.textContent = 'Invalid'; document.body.append(e); })">Submit</button>
+          <button id="later" onclick="setTimeout(() => {
+            const e = document.createElement('p'); e.className = 'late';
+            e.textContent = 'Late'; document.body.append(e); }, 1500)">Later</button>
+        </body></html>`);
+        return;
+      }
+      res.end(PAGE);
+    });
+    await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve));
+    origin = `http://127.0.0.1:${(site.address() as AddressInfo).port}`;
   }, 60000);
 
   // close() takes seconds on a loaded host (#240); beforeAll has the same budget.
   afterAll(async () => {
     await browser?.close();
+    site?.close();
   }, 60000);
 
   beforeEach(async () => {
@@ -109,6 +137,22 @@ describe('assert action execution', () => {
       );
     });
 
+    // #504: straight after an action, absence is judged once the page settled, not in a
+    // one-second glance: an error rendered by a slow request, or a timer, still fails it.
+    it('fails when the element appears after a slow request the click started', async () => {
+      await page.goto(`${origin}/app`);
+      expect((await run({ type: 'click', selector: '#submit' })).success).toBe(true);
+      const r = await run({ type: 'assert', kind: 'element_absent', target: '.error' });
+      expect(r.success).toBe(false);
+    }, 30_000);
+
+    it('fails when the element appears 1.5 s after the action', async () => {
+      await page.goto(`${origin}/app`);
+      expect((await run({ type: 'click', selector: '#later' })).success).toBe(true);
+      const r = await run({ type: 'assert', kind: 'element_absent', target: '.late' });
+      expect(r.success).toBe(false);
+    }, 30_000);
+
     // A dead page has no elements, which used to read as "absent" (#240).
     it('errors, rather than passes, on a closed page', async () => {
       await page.close();
@@ -128,13 +172,40 @@ describe('assert action execution', () => {
       expect(r.error).toMatch(/closed/);
     });
 
-    it('passes on a substring of the current url', async () => {
-      expect(
-        (await run({ type: 'assert', kind: 'url_matches', target: 'text/html' })).success,
-      ).toBe(true);
-    });
+    // #504: matched against the parsed URL, never as a substring of the whole href.
+    const urlMatches = async (at: string, target: string) => {
+      await page.goto(origin + at);
+      return (await run({ type: 'assert', kind: 'url_matches', target })).success;
+    };
 
-    it('fails when the substring is absent', async () => {
+    it('a full URL matches its origin and a path prefix at segment boundaries', async () => {
+      expect(await urlMatches('/shop/cart?x=1', `${origin}/shop`)).toBe(true);
+      expect(await urlMatches('/shop/cart', `${origin}/shop/cart`)).toBe(true);
+      expect(await urlMatches('/shop/cart', `${origin}/sh`)).toBe(false);
+      expect(await urlMatches('/shop/cart', 'http://localhost:1/shop')).toBe(false);
+    }, 30_000);
+
+    it('a path matches that path or below it, and "/" only the root', async () => {
+      expect(await urlMatches('/shop/cart', '/shop')).toBe(true);
+      expect(await urlMatches('/shopping', '/shop')).toBe(false);
+      expect(await urlMatches('/shop/cart', '/')).toBe(false);
+      expect(await urlMatches('/', '/')).toBe(true);
+    }, 30_000);
+
+    it('a host matches the hostname, never the query string', async () => {
+      expect(await urlMatches('/?r=example.com', 'example.com')).toBe(false);
+      expect(await urlMatches('/cart', '127.0.0.1')).toBe(true);
+      expect(await urlMatches('/cart', '127.0.0.1/cart')).toBe(true);
+      expect(await urlMatches('/other', '127.0.0.1/cart')).toBe(false);
+    }, 30_000);
+
+    it('a bare word matches whole path segments, not part of one or the query', async () => {
+      expect(await urlMatches('/shop/cart', 'cart')).toBe(true);
+      expect(await urlMatches('/shop/cart', 'car')).toBe(false);
+      expect(await urlMatches('/?next=cart', 'cart')).toBe(false);
+    }, 30_000);
+
+    it('fails when the path is absent', async () => {
       expect(
         (await run({ type: 'assert', kind: 'url_matches', target: '/checkout' })).success,
       ).toBe(false);

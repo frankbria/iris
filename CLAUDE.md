@@ -1117,6 +1117,21 @@ An error that reaches the executor is a timeout, a protocol or target error mid-
 unknown. `navigate` (a GET) and asserts keep the general rules (#75: timeouts and policy
 verdicts are not retried); retry tests that need a transient failure use `navigate`.
 
+### Assertions Judge a Settled Page and a Parsed URL (issue #504)
+
+`ActionExecutor.performAssert` (src/executor.ts). README has the table.
+
+- **`element_absent`** waits for `networkidle` (at most `ABSENT_SETTLE_MS`, 5 s; a page that
+  never idles is judged as it is), then requires the element to stay absent for
+  `ABSENT_WINDOW_MS` (2 s), whatever the action timeout. It used to glance for 1 s, so
+  `[click Submit, element_absent .error]` passed before a slow validation request rendered
+  the error. Every absence check therefore costs about 2 s.
+- **`url_matches`** goes through `urlMatches(url, target)`, never a substring of the href:
+  an absolute URL needs the same origin and a path prefix at segment boundaries, `/path`
+  the path or below (`/` is the root only), `#route` a hash prefix, `example.com[/path]` the
+  hostname or a subdomain, and any other token whole path or hash-route segments. The query
+  string never satisfies it. The AI prompts say so.
+
 ### Pattern Translator Takes Selectors, Not Prose (issue #297)
 
 `translateWithPatterns` (src/translator.ts) keeps a match only when its target is
