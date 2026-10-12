@@ -26,9 +26,9 @@ export interface UrlPolicyOptions {
   pinnedOrigin?: string;
   /**
    * Origins a pinned page may load sub-resources from (#378): images, fonts, stylesheets,
-   * media and scripts. Never a document (top-level or frame), XHR/fetch, beacon or socket:
-   * an allowed asset origin is never a navigation target or a channel the page can write
-   * to. Full origins (`https://cdn.example.com`), compared exactly.
+   * media and scripts. Never a document (top-level or frame), XHR/fetch, beacon or socket,
+   * so an allowed asset origin is never a navigation target. An asset URL's query still
+   * reaches that origin: list only origins you trust. Full origins, compared exactly.
    */
   assetOrigins?: readonly string[];
   /** Allow `file://` navigation (e.g. the watcher rendering local files). Default: false. Ignored under IRIS_HOSTED. */
