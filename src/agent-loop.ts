@@ -14,7 +14,7 @@ import type { Action } from './actions';
 import type { ActionExecutor, ExecutionResult } from './executor';
 import { loadConfig } from './config';
 import { createResolvedAIClient } from './ai-client';
-import { checkAction, originOf } from './agent-policy';
+import { checkAction, checkResolvedTarget, originOf } from './agent-policy';
 import type { AgentPolicy } from './agent-policy';
 import { installUrlPolicyGuard } from './url-policy-guard';
 import { withPageTimeout } from './page-timeout';
@@ -261,7 +261,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     for (const action of plan.actions) {
       // Policy is checked per action, immediately before it runs, because an
       // earlier action in the same turn may have moved the page.
-      const verdict = checkAction(action, policy, page.url(), startOrigin);
+      let verdict = checkAction(action, policy, page.url(), startOrigin);
+      // Then what the selector actually hits on the page, which its text can hide (#353).
+      if (verdict.allowed) verdict = await checkResolvedTarget(action, policy, page);
 
       // A refusal is recorded as a failed result rather than skipped silently:
       // it goes into `previousActions`, so the next turn's prompt shows the

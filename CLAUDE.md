@@ -920,6 +920,27 @@ Constraints that are easy to break:
   `checkAction` refuses too. Agent-loop tests therefore serve their fixture from a
   local http origin, not a `data:` URL.
 
+### Agent Policy Reads the Resolved Element (issue #353)
+
+The destructive-target check (src/agent-policy.ts) read only the selector string, which can
+hide its target. Private backlog item P1.21; the criteria were derived from the code and
+listed in the body of the PR that closed #353, for checking against it.
+
+- **CSS escapes are decoded before matching** (`decodeCssEscapes`: hex escapes with their
+  optional trailing space, and `\x` for any other character): `#\64 elete-account`
+  selects `#delete-account`.
+- **`checkResolvedTarget(action, policy, page)`** runs in the agent loop right after
+  `checkAction` allows a click or fill. It reads the element the selector resolves to
+  (`aria-label`, `title`, `id`, `name`, `value`, `placeholder`, `alt`, text content up to
+  500 chars) and applies the same destructive-term match. It uses Playwright's
+  `getAttribute`/`textContent`, not `locator.evaluate`: a page function would need to be
+  a string under `--coverage`, and a string arrow passed to `locator.evaluate` is
+  evaluated as an expression that returns the function, never calling it (`undefined`).
+- An element not attached within 1 s is left to the executor (it fails as before). The
+  page controls what is read, so a hostile page can still label a destructive control
+  blandly; this narrows the selector-only gap, it does not close it.
+- One-shot `iris run` and the RPC do not apply agent policy at all yet: #354.
+
 ### Retries Never Repeat a Side Effect (issue #296)
 
 `ActionExecutor.executeAction` never retries `click` or `fill` (`mayRepeat` in

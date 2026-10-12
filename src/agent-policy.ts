@@ -12,6 +12,7 @@
  * see and adapt to.
  */
 
+import type { Locator, Page } from 'playwright';
 import type { Action } from './actions';
 import { isWithinPinnedOrigin } from './url-policy';
 
@@ -64,6 +65,22 @@ function separateWords(text: string): string {
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
     .replace(/_+/g, ' ');
+}
+
+/**
+ * Undo CSS escapes (#353). `#\64 elete-account` and `#de\lete` select `#delete...` but
+ * hide the word from the pattern. Hex escapes take up to six digits and one optional
+ * trailing space; any other escaped character stands for itself.
+ */
+function decodeCssEscapes(text: string): string {
+  return text.replace(/\\(?:([0-9a-fA-F]{1,6}) ?|(.))/g, (_m, hex: string, char: string) =>
+    hex ? String.fromCodePoint(Math.min(parseInt(hex, 16), 0x10ffff)) : char,
+  );
+}
+
+/** The destructive term `text` contains, if any. */
+function destructiveTerm(text: string): string | null {
+  return DESTRUCTIVE_PATTERN.exec(separateWords(decodeCssEscapes(text)))?.[1] ?? null;
 }
 
 export interface AgentPolicy {
@@ -178,14 +195,72 @@ export function checkAction(
     // Asserts are read-only by construction, so they are exempt — checking them
     // would refuse to *verify* that a delete button exists, which is a
     // legitimate and harmless thing to ask.
-    const match = DESTRUCTIVE_PATTERN.exec(separateWords(targetText(action)));
-    if (match) {
+    const term = destructiveTerm(targetText(action));
+    if (term) {
       return {
         allowed: false,
-        reason: `target looks destructive ("${match[1]}") — pass --allow-destructive to permit it`,
+        reason: `target looks destructive ("${term}") — pass --allow-destructive to permit it`,
       };
     }
   }
 
   return ALLOWED;
+}
+
+/** How long the resolved-target check waits for the element before leaving it to the executor. */
+const RESOLVE_TIMEOUT_MS = 1000;
+
+/** Attributes that name an element to its user, read with its text content. */
+const NAMING_ATTRIBUTES = ['aria-label', 'title', 'id', 'name', 'value', 'placeholder', 'alt'];
+
+/**
+ * Check the element a click or fill would hit, on the live page (#353). The selector text
+ * can hide its target: `form button:nth-of-type(2)` or `[id^="del"]` aim at "Delete
+ * account" without naming it, and {@link checkAction} only reads the selector.
+ *
+ * A heuristic like the selector check, and the page controls what it reads: a hostile page
+ * can still label a destructive control blandly. An element that is not there within
+ * {@link RESOLVE_TIMEOUT_MS} is left to the executor, which fails it as usual.
+ */
+export async function checkResolvedTarget(
+  action: Action,
+  policy: AgentPolicy,
+  page: Page,
+): Promise<PolicyVerdict> {
+  // Only click and fill aim at an element; asserts are read-only (see checkAction).
+  if (policy.allowDestructive || !('selector' in action)) return ALLOWED;
+  const term = await resolvedDestructiveTerm(page, action.selector);
+  return term
+    ? {
+        allowed: false,
+        reason: `target resolves to an element that looks destructive ("${term}") — pass --allow-destructive to permit it`,
+      }
+    : ALLOWED;
+}
+
+/** The destructive term on the element `selector` resolves to, if any. */
+async function resolvedDestructiveTerm(page: Page, selector: string): Promise<string | null> {
+  return destructiveTerm((await elementWords(page.locator(selector).first())) ?? '');
+}
+
+const unread = () => null;
+
+/**
+ * What a user reads on `target`: its naming attributes and text content, or null when it is
+ * not on the page within {@link RESOLVE_TIMEOUT_MS}. Playwright's own reads, not a page
+ * function: under `jest --coverage` a function sent to the page carries instrumentation the
+ * page does not have.
+ */
+async function elementWords(target: Locator): Promise<string | null> {
+  const timeout = { timeout: RESOLVE_TIMEOUT_MS };
+  try {
+    await target.waitFor({ state: 'attached', ...timeout });
+  } catch {
+    return null;
+  }
+  const attributes = NAMING_ATTRIBUTES.map((name) =>
+    target.getAttribute(name, timeout).catch(unread),
+  );
+  const text = await target.textContent(timeout).catch(unread);
+  return [...(await Promise.all(attributes)), text?.slice(0, 500)].filter(Boolean).join(' ');
 }

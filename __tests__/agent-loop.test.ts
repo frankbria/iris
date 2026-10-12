@@ -463,6 +463,80 @@ describe('agent loop', () => {
         expect(result.results[0].error).toMatch(/Refused by agent policy.*looks destructive/);
       });
 
+      // #353: the selector string can hide its target (position, partial attribute
+      // match), so the check also reads the element the action would hit.
+      describe('the element a click or fill resolves to', () => {
+        const ACCOUNT = `<!doctype html><html lang="en"><head><title>Account</title></head><body>
+  <form onsubmit="return false">
+    <button type="button" onclick="document.title='saved'">Save</button>
+    <button type="button" onclick="document.title='DELETED'">Delete account</button>
+    <button type="button" id="x1" aria-label="Remove member" onclick="document.title='REMOVED'">×</button>
+    <input id="confirm" aria-label="Type ERASE to confirm">
+  </form>
+</body></html>`;
+
+        beforeEach(async () => {
+          await load(page, ACCOUNT);
+        });
+
+        it.each([
+          ['a positional selector', 'form button:nth-of-type(2)', /delete/i],
+          ['an icon button named by aria-label', '#x1', /remove/i],
+        ])('refuses %s whose element reads as destructive', async (_what, selector, term) => {
+          scriptAI([[{ type: 'click', selector }]]);
+          const execute = jest.spyOn(executor, 'executeAction');
+
+          const result = await runAgentLoop({
+            instruction: 'tidy up',
+            executor,
+            page,
+            maxTurns: 1,
+          });
+
+          expect(execute).not.toHaveBeenCalled();
+          expect(result.results[0].error).toMatch(/Refused by agent policy.*looks destructive/);
+          expect(result.results[0].error).toMatch(term);
+          expect(await page.title()).toBe('Account'); // never clicked
+        });
+
+        it('refuses a fill into a field labelled as destructive', async () => {
+          scriptAI([[{ type: 'fill', selector: '#confirm', text: 'yes' }]]);
+
+          const result = await runAgentLoop({
+            instruction: 'confirm',
+            executor,
+            page,
+            maxTurns: 1,
+          });
+
+          expect(result.results[0].error).toMatch(/Refused by agent policy.*erase/i);
+        });
+
+        it('lets a benign element through, and a destructive one with --allow-destructive', async () => {
+          scriptAI([[{ type: 'click', selector: 'form button:nth-of-type(1)' }]]);
+          await runAgentLoop({ instruction: 'save', executor, page, maxTurns: 1 });
+          expect(await page.title()).toBe('saved');
+
+          scriptAI([[{ type: 'click', selector: 'form button:nth-of-type(2)' }]]);
+          await runAgentLoop({
+            instruction: 'delete it',
+            executor,
+            page,
+            maxTurns: 1,
+            policy: { allowDestructive: true },
+          });
+          expect(await page.title()).toBe('DELETED');
+        });
+
+        it('leaves a selector that matches nothing to the executor', async () => {
+          scriptAI([[{ type: 'click', selector: '#not-here' }]]);
+
+          const result = await runAgentLoop({ instruction: 'click', executor, page, maxTurns: 1 });
+
+          expect(result.results[0].error).not.toMatch(/Refused by agent policy/);
+        });
+      });
+
       it('shows the refusal AND its reason to the model on the next turn', async () => {
         // previousActions alone says what was tried, never how it went — so a
         // model would re-propose the same blocked action every turn until the

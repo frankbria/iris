@@ -216,6 +216,20 @@ describe('destructive-target policy', () => {
     expect(check({ type: 'click', selector }).allowed).toBe(false);
   });
 
+  // #353: CSS escapes name the same element while hiding the word from the regex.
+  it.each([
+    ['#\\64 elete-account'],
+    ['#de\\lete-account'],
+    ['[data-action="\\72 emove"]'],
+    ['#\\000064 rop-table'],
+  ])('decodes CSS escapes before matching: %s', (selector) => {
+    expect(check({ type: 'click', selector }).allowed).toBe(false);
+  });
+
+  it('does not refuse an escaped selector that is not destructive', () => {
+    expect(check({ type: 'click', selector: '#\\64 ashboard' }).allowed).toBe(true);
+  });
+
   it('matches whole words only', () => {
     // "undelete" and "removal-policy" are not destructive; refusing them would
     // make the check feel arbitrary.
