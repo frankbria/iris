@@ -272,13 +272,18 @@ export class ActionExecutor {
    * A fill can target an `input`, a `textarea` or a contenteditable element (codex review),
    * and a field holding the value among other text still shows it. Bounded: the first 100
    * fields, each read for at most a second; one that cannot be read is masked, since it
-   * might hold one.
+   * might hold one, and so is every field past the first 100 (PR bot: they were left
+   * unmasked). `null` when the fields cannot even be listed (a hung page): the caller
+   * must not take a screenshot it cannot mask.
    */
-  async secretFields(page: Page): Promise<Locator[]> {
+  async secretFields(page: Page): Promise<Locator[] | null> {
     if (this.resolvedSecrets.size === 0) return [];
-    const fields = (
-      await page.locator('input, textarea, [contenteditable]:not([contenteditable="false"])').all()
-    ).slice(0, 100);
+    const all = await withPageTimeout(
+      page.locator('input, textarea, [contenteditable]:not([contenteditable="false"])').all(),
+      null,
+    );
+    if (all === null) return null;
+    const fields = all.slice(0, 100);
     const read = (field: Locator) =>
       field
         .inputValue({ timeout: 1_000 })
@@ -291,7 +296,7 @@ export class ActionExecutor {
         ),
       ),
     );
-    return fields.filter((_, i) => held[i]);
+    return [...fields.filter((_, i) => held[i]), ...all.slice(100)];
   }
 
   /**

@@ -1531,17 +1531,30 @@ async function observeSession(
   withScreenshot: boolean,
 ): Promise<{ snapshot: string; screenshot?: string; screenshotOmitted?: string }> {
   const page = session.page!;
-  const snapshot = await observePage(page, (text) => session.executor.redactSecrets(text));
-  if (!withScreenshot) return { snapshot };
-  const shot = await page.screenshot({
-    type: 'jpeg',
-    quality: 70,
-    mask: await session.executor.secretFields(page),
-    timeout: 10_000,
-  });
-  return shot.length > MAX_OBSERVE_SCREENSHOT_BYTES
-    ? { snapshot, screenshotOmitted: `larger than ${MAX_OBSERVE_SCREENSHOT_BYTES} bytes` }
-    : { snapshot, screenshot: shot.toString('base64') };
+  // In use, like an action: the idle sweep must not reap a session a client observes (#240).
+  session.busy++;
+  session.lastActivity = Date.now();
+  try {
+    const snapshot = await observePage(page, (text) => session.executor.redactSecrets(text));
+    if (!withScreenshot) return { snapshot };
+    const mask = await session.executor.secretFields(page);
+    // Fields that could not be listed may hold a credential: no screenshot rather than an
+    // unmasked one.
+    if (mask === null) return { snapshot, screenshotOmitted: 'the page did not answer' };
+    let shot: Buffer;
+    try {
+      shot = await page.screenshot({ type: 'jpeg', quality: 70, mask, timeout: 10_000 });
+    } catch {
+      // Mid-navigation or a slow frame: the snapshot is still worth having.
+      return { snapshot, screenshotOmitted: 'the screenshot failed' };
+    }
+    return shot.length > MAX_OBSERVE_SCREENSHOT_BYTES
+      ? { snapshot, screenshotOmitted: `larger than ${MAX_OBSERVE_SCREENSHOT_BYTES} bytes` }
+      : { snapshot, screenshot: shot.toString('base64') };
+  } finally {
+    session.busy--;
+    session.lastActivity = Date.now();
+  }
 }
 
 async function executeBrowserActions(

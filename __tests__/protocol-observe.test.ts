@@ -160,3 +160,47 @@ it('masks a credential typed into a contenteditable element too', async () => {
     ws.close();
   }
 }, 60_000);
+
+describe('executor.secretFields', () => {
+  const { ActionExecutor } = require('../src/executor') as typeof import('../src/executor');
+  const { mapSecrets } =
+    require('../src/credential-refs') as typeof import('../src/credential-refs');
+  const executor = new ActionExecutor({ retryAttempts: 0, timeout: 5_000, trackContext: false });
+  afterAll(() => executor.cleanup());
+
+  it('masks every field past the first 100, unread (PR bot review)', async () => {
+    const page = await executor.createPage();
+    try {
+      const inputs = Array.from({ length: 105 }, (_, i) => `<input id="i${i}" aria-label="f${i}">`);
+      await page.setContent(`<!doctype html><title>Many</title>${inputs.join('')}`);
+      const filled = await executor.executeAction(
+        { type: 'fill', selector: '#i103', text: '{{secret:PW}}' },
+        page,
+        mapSecrets({ PW: SECRET }),
+      );
+      expect(filled.success).toBe(true);
+      const ids = await Promise.all(
+        (await executor.secretFields(page))!.map((f) => f.getAttribute('id')),
+      );
+      expect(ids).toEqual(['i100', 'i101', 'i102', 'i103', 'i104']);
+    } finally {
+      await page.close();
+    }
+  }, 60_000);
+
+  it('answers null for a page that does not answer, so no unmasked screenshot is taken', async () => {
+    const page = await executor.createPage();
+    try {
+      await page.setContent('<!doctype html><title>Hung</title><input id="a" aria-label="a">');
+      await executor.executeAction(
+        { type: 'fill', selector: '#a', text: '{{secret:PW}}' },
+        page,
+        mapSecrets({ PW: SECRET }),
+      );
+      await page.evaluate('setTimeout(() => { for (;;) {} }, 0)');
+      expect(await executor.secretFields(page)).toBeNull();
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+  }, 60_000);
+});
