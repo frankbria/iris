@@ -175,6 +175,8 @@ describe('credential references', () => {
       jest.restoreAllMocks();
     });
 
+    // Never cleaned up on purpose: closing the page must release the field handles a
+    // reference fill keeps (#513), or browser.close() in afterAll takes tens of seconds.
     const executor = () => new ActionExecutor({ timeout: 1000, retryAttempts: 2, retryDelay: 0 });
 
     it('types the resolved value; the result keeps the reference', async () => {
@@ -370,6 +372,24 @@ describe('credential references', () => {
       expect(r.error).toMatch(/is bound to .*this field is on null/);
       expect(await page.frameLocator('iframe').locator('#user').inputValue()).toBe('');
     }, 30_000);
+
+    // Codex review: page script can overwrite self.origin; the browser's URL origin must
+    // agree too, so a page that lies about its origin is refused, never let through.
+    it('refuses a page that rewrites self.origin to the bound one', async () => {
+      await page.evaluate(() => {
+        Object.defineProperty(self, 'origin', {
+          value: 'https://shop.example',
+          configurable: true,
+        });
+      });
+      const r = await executor().executeAction(
+        { type: 'fill', selector: '#pw', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: { value: SECRET, origin: 'https://shop.example' } }),
+      );
+      expect(r.success).toBe(false);
+      expect(await page.inputValue('#pw')).toBe('');
+    });
 
     // Codex review: the reader keeps the filled element itself; replaying the selector
     // misses a field whose id an input handler changed.

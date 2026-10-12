@@ -1174,12 +1174,16 @@ reference.
     URL). A reference fill resolves its element first (`fillFromReference`: the policy's handle,
     else the selector's own `elementHandle`, frame-entry selectors included) and
     `resolveFillText(text, source, pageOrigin)` refuses a bound reference unless that element's
-    document has exactly that http(s) origin, read as `self.origin` (`effectiveOrigin`), not
-    from the frame URL: a sandboxed iframe without `allow-same-origin` is opaque (`null`)
-    whatever its URL. An unknown or opaque origin is refused. The value is
+    document has exactly that http(s) origin (`effectiveOrigin`): the frame URL's origin (the
+    browser's) and `self.origin` (catches a sandboxed iframe, opaque `null` whatever its URL;
+    writable by page script) must both equal it, so a page lying about either is refused. An
+    unknown or opaque origin is refused. The value is
     typed into that same element. A malformed env binding fails the fill, never unbinds it.
   - **Redaction by element**: the executor keeps the handle of each field it filled from a
-    reference (a policy handle is retained, not disposed after the action) and
+    reference (a policy handle is retained, not disposed after the action; at most 50, the
+    oldest released first; released when the page closes, when a read finds the field gone,
+    and at `cleanup()`: handles kept into closed pages made `browser.close()` take tens of
+    seconds or hang) and
     `refreshFieldValues()` re-reads what they hold, so `redactSecrets` also cuts a
     `maxlength` prefix or a page rewrite of the value. The agent loop and RPC `observe` call it
     before reading the page. Values under 4 characters read back are not cut.
