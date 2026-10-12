@@ -1,3 +1,4 @@
+import { recordAudit, type AuditActor } from '../audit-log';
 import { sql, type Kysely } from 'kysely';
 
 /**
@@ -97,14 +98,24 @@ export function orgEntitlements(db: Kysely<unknown>) {
       return resolveEntitlements(rows[0]?.plan ?? DEFAULT_PLAN, rows[0]?.overrides ?? {});
     },
 
-    /** Sets the plan and replaces the overrides (none unless given). */
-    async setPlan(orgId: string, plan: PlanId, overrides: Partial<PlanLimits> = {}): Promise<void> {
+    /** Sets the plan and replaces the overrides (none unless given), audited (#361). */
+    async setPlan(
+      orgId: string,
+      plan: PlanId,
+      overrides: Partial<PlanLimits> = {},
+      actor: AuditActor = {},
+    ): Promise<void> {
       if (!isPlan(plan)) throw new Error(`Unknown plan: ${JSON.stringify(plan)}`);
-      await sql`
-        insert into org_plans (org_id, plan, overrides)
-        values (${orgId}, ${plan}, ${JSON.stringify(overrides)}::jsonb)
-        on conflict (org_id) do update
-          set plan = excluded.plan, overrides = excluded.overrides, updated_at = now()`.execute(db);
+      await db.transaction().execute(async (tx) => {
+        await sql`
+          insert into org_plans (org_id, plan, overrides)
+          values (${orgId}, ${plan}, ${JSON.stringify(overrides)}::jsonb)
+          on conflict (org_id) do update
+            set plan = excluded.plan, overrides = excluded.overrides, updated_at = now()`.execute(
+          tx,
+        );
+        await recordAudit(tx, { orgId, actor, action: 'plan.set', metadata: { plan, overrides } });
+      });
     },
   };
 }

@@ -1,3 +1,4 @@
+import { recordAudit } from '../audit-log';
 import { apiKey } from '@better-auth/api-key';
 import { betterAuth, type BetterAuthOptions } from 'better-auth';
 import { APIError, createAuthMiddleware, getIP, getSessionFromCtx } from 'better-auth/api';
@@ -195,7 +196,10 @@ export function createAuth(
       // Sign-up must carry the current versions of the terms (#276). A client that skips
       // the checkbox, or names an old version, is refused here, not in the form.
       before: createAuthMiddleware(async (ctx) => {
-        if (API_KEY_WRITES.has(ctx.path)) return refuseSuspendedKeyWrite(ctx, rest.database);
+        if (API_KEY_WRITES.has(ctx.path)) {
+          await refuseSuspendedKeyWrite(ctx, rest.database);
+          return rememberDeletedKeyOrg(ctx, rest.database);
+        }
         if (ctx.path === '/organization/create') {
           await refuseOrgCreateForSuspendedMember(ctx, rest.database);
           return refuseOrgCreateOverFreeLimit(ctx, rest.database);
@@ -208,6 +212,7 @@ export function createAuth(
           });
       }),
       after: createAuthMiddleware(async (ctx) => {
+        if (API_KEY_WRITES.has(ctx.path)) return auditKeyWrite(ctx, rest.database);
         if (ctx.path === '/organization/create')
           return undoOrgCreateOverFreeLimit(ctx, rest.database);
         if (ctx.path !== '/sign-up/email') return;
@@ -298,6 +303,64 @@ export function createAuth(
 
 /** The api-key plugin's endpoints that change an org's keys. */
 const API_KEY_WRITES = new Set(['/api-key/create', '/api-key/update', '/api-key/delete']);
+
+/**
+ * The org of a key being deleted, by key id, looked up before the plugin deletes the row:
+ * after it, nothing names the org the audit entry belongs to (#361). Removed when read.
+ * ponytail: per process, and an entry whose delete throws before the after hook stays (one
+ * small string per failed delete of a real key); a BetterAuth request context would replace it.
+ */
+const deletedKeyOrgs = new Map<string, string>();
+
+async function rememberDeletedKeyOrg(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  const keyId = (ctx.body as { keyId?: unknown } | undefined)?.keyId;
+  if (ctx.path !== '/api-key/delete' || typeof keyId !== 'string') return;
+  const { rows } = await sql<{ org: string | null }>`
+    select "referenceId" as org from apikey where id = ${keyId}`.execute(termsDb(database));
+  if (rows[0]?.org) deletedKeyOrgs.set(keyId, rows[0].org);
+}
+
+/**
+ * An org key created, changed or revoked, with the user who did it (#361, from #340: the
+ * key row records no creator). Never the key: create's response carries the plaintext, and
+ * only its id is recorded. A failed write is logged; the key change already happened.
+ */
+async function auditKeyWrite(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  const session = await getSessionFromCtx(ctx);
+  const returned = ctx.context.returned as
+    { id?: string; referenceId?: string; success?: boolean } | undefined;
+  const body = (ctx.body ?? {}) as { keyId?: unknown };
+  const deleting = ctx.path === '/api-key/delete';
+  const keyId = deleting ? (typeof body.keyId === 'string' ? body.keyId : undefined) : returned?.id;
+  const orgId = deleting ? keyId && deletedKeyOrgs.get(keyId) : returned?.referenceId;
+  if (deleting && keyId) deletedKeyOrgs.delete(keyId);
+  if (!session || !keyId || !orgId || (deleting && returned?.success !== true)) return;
+  const verb = ctx.path.slice('/api-key/'.length);
+  const fields =
+    verb === 'update'
+      ? Object.keys(body)
+          .filter((k) => k !== 'keyId')
+          .sort()
+      : undefined;
+  await recordAudit(termsDb(database), {
+    orgId,
+    actor: { userId: session.user.id },
+    action: `api_key.${verb}`,
+    target: `key:${keyId}`,
+    ...(fields && { metadata: { fields } }),
+  }).catch((err) =>
+    log('error', 'failed to record audit entry', {
+      action: `api_key.${verb}`,
+      err: String(err?.message ?? err),
+    }),
+  );
+}
 
 /**
  * A suspended org's keys cannot be created, changed or revoked (#348). Refused only

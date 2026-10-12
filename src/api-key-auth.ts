@@ -143,6 +143,7 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   history: PostgresHistory;
   aiCredentials: (principal: Principal) => Promise<TenantCredentials | null>;
   usage: ReturnType<typeof import('./billing/usage').usageLedger>;
+  audit: (entry: import('./audit-log').AuditEntry) => Promise<void>;
   jobs: PostgresJobs;
   entitlements: (orgId: string) => Promise<import('./billing/plans').Entitlements>;
 }> {
@@ -186,6 +187,7 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   const { providerKeyStore } = await import('./byok/store');
   const providerKeys = providerKeyStore(db, keyring);
   const { usageLedger } = await import('./billing/usage');
+  const { recordAudit } = await import('./audit-log');
   const { orgEntitlements } = await import('./billing/plans');
   const entitlements = (orgId: string) => orgEntitlements(db as Kysely<unknown>).get(orgId);
   return {
@@ -205,6 +207,8 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
     }),
     // Billable usage of tenant sessions and AI calls (#263).
     usage: usageLedger(db),
+    // Tenant audit log (#361): session start and end.
+    audit: (entry) => recordAudit(db as Kysely<unknown>, entry),
     // The job API (#267): `iris worker` runs what it queues.
     jobs: postgresJobs(db),
     // Plan limits at the API boundary (#346).

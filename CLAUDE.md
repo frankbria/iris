@@ -88,6 +88,7 @@ src/
 ├── offboarding.ts         # Org soft delete/restore/purge to tombstone, user deletion, daily retention, AI-state purge (#349)
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
 ├── artifact-store.ts      # ArtifactStore: filesystem (local) + S3 (hosted, SeaweedFS in dev/CI/staging); tenant-first keys, signed URLs (#257)
+├── audit-log.ts           # recordAudit(): tenant audit entries, on the change's own transaction (#361)
 ├── visual-baselines.ts    # Project baselines (orgBaselines) and audited approval, no runner imports: API + portal (#268, #463)
 ├── run-reads.ts           # Read-only run queries (types, keyset cursor, listPage, get): no runner imports, so the portal can use it (#270)
 ├── history-store.ts       # HistoryStore seam: sqliteHistoryStore (local), postgresHistory(db).forOrg() (hosted, #254)
@@ -594,8 +595,8 @@ The portal page is `/api-keys`.
 - **The plugin's own limiter is off.** Its default is 10 verifications per day, and
   `create` copies the setting onto each key row (`rateLimitEnabled`, `rateLimitMax`).
   Per-key limits are #342's. Rows created now carry `rateLimitEnabled = false`.
-- **Revoke deletes the row.** The key stops verifying at once. A deleted key leaves no
-  record; the audit log is #361.
+- **Revoke deletes the row.** The key stops verifying at once; the audit log keeps
+  `api_key.delete` with the user who did it (#361).
 - **A key outlives its creator's membership.** It belongs to the org and records no
   creator, so after removing an admin, rotate the keys they could have copied.
 - `enableSessionForAPIKeys` stays off: a key must never become a portal session.
@@ -1367,6 +1368,29 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   for a plan without it.
 - Not enforced yet, no hosted surface: agent turns (CLI-only, #428), vision calls (hosted
   jobs run no AI), storage (#315).
+
+### Tenant Audit Log (issue #361)
+
+`src/audit-log.ts`: `recordAudit(db, { orgId, actor, action, target?, metadata? })` into
+`audit_log` (migration 0001). What is recorded is listed in `docs/data-flows.md`.
+
+- **Written on the change's own transaction** (`tx`), so neither commits without the other.
+  A store that changes something audited takes the actor (`AuditActor`: `userId` /
+  `apiKeyId`, plain ids with no foreign keys); `actorFrom()` reads the `user:<id>` /
+  `key:<id>` form `updated_by` already uses.
+- **Never a secret**: a provider key's entry names the provider, an API key's its id; an
+  update records the field names it changed, not their values. Tests assert the plaintext
+  is absent from every row.
+- **API keys are audited by BetterAuth hooks**: the after hook on `/api-key/*` takes the
+  org from the plugin's response, except for delete (the response is `{ success }` and the
+  row is gone), whose org the before hook looks up by key id and passes in a module-level
+  map. A refused write leaves no entry. A failed write is logged, not thrown: the key change
+  already happened.
+- **RPC sessions** are audited through `startServer({ audit })` (hosted `iris connect` wires
+  it), best effort: a failed write is logged and the session goes on.
+- `rewrapAll()` writes one `provider_key.rewrap` per key, in that key's update transaction,
+  with no actor (an operator ran it) and the sealing master key id.
+- There is no read surface yet (portal page or API): only the table.
 
 ### Managed AI Credits (issue #479)
 

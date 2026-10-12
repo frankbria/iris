@@ -94,6 +94,34 @@ test("an owner saves, replaces and removes a key that is never shown again", asy
       await orgOf(email),
     ])
   ).toEqual([])
+
+  // Audited with the acting user, never the key (#361); the refused save is absent.
+  const [{ id: userId }] = await sql<{ id: string }>(
+    `select id from "user" where email = $1`,
+    [email]
+  )
+  const audit = await sql<{
+    actor_user_id: string
+    action: string
+    metadata: unknown
+  }>(
+    "select actor_user_id, action, metadata from audit_log where org_id = $1 order by id",
+    [await orgOf(email)]
+  )
+  expect(audit).toEqual([
+    {
+      actor_user_id: userId,
+      action: "provider_key.save",
+      metadata: { replaced: false },
+    },
+    {
+      actor_user_id: userId,
+      action: "provider_key.save",
+      metadata: { replaced: true },
+    },
+    { actor_user_id: userId, action: "provider_key.remove", metadata: null },
+  ])
+  expect(JSON.stringify(audit)).not.toContain(first.slice(8))
 })
 
 test("a member sees which keys are set, and the server refuses a member's save", async ({

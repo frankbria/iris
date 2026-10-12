@@ -1,3 +1,4 @@
+import { recordAudit } from './audit-log';
 import { sql, type Kysely } from 'kysely';
 import { baselineObjectKey, orgArtifacts, type ArtifactStore } from './artifact-store';
 import { artifactName } from './visual/artifacts';
@@ -152,11 +153,13 @@ export async function approveVisualResult(
       runId,
       approvedBy,
     });
-    await sql`insert into audit_log (org_id, actor_user_id, actor_api_key_id, action, target, metadata)
-      values (${orgId}, ${actor.userId ?? null}, ${actor.apiKeyId ?? null}, 'visual_baseline.approve',
-        ${`run:${runId}#${position}`}, ${JSON.stringify({ project, page: redactString(row.url!), device })}::jsonb)`.execute(
-      tx,
-    );
+    await recordAudit(tx, {
+      orgId,
+      actor,
+      action: 'visual_baseline.approve',
+      target: `run:${runId}#${position}`,
+      metadata: { project, page: redactString(row.url!), device },
+    });
   });
   return { status: 'approved', baseline: (await orgBaselines(db, orgId).get(project, name))! };
 }
