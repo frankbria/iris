@@ -679,7 +679,7 @@ guarantee. Every action the model proposes is checked before it reaches the brow
 | Default | Flag to relax it |
 |---|---|
 | Confined to the origin you started on — enforced on every request, so a link or redirect that leaves it is stopped before the request goes out, not noticed a turn later | `--allow-cross-origin` |
-| Targets that read as destructive (`delete`, `remove`, `reset`, `deactivate`, …) are refused | `--allow-destructive` |
+| Targets that read as destructive (`delete`, `remove`, `reset`, `deactivate`, …) are refused: the selector (CSS escapes decoded) and the element it resolves to on the page (its label, title, id, name, value and text), so `form button:nth-of-type(2)` on a "Delete account" button is refused too | `--allow-destructive` |
 | All four action types available | `--allow click,assert` to restrict |
 
 A refusal is fed back to the model with its reason, so it can see *why* and adapt

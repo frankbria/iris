@@ -12,6 +12,7 @@ import { createServer, Server } from 'http';
 import type { AddressInfo } from 'net';
 import { observePage, runAgentLoop, MAX_DIGEST_CHARS, MAX_URL_CHARS } from '../src/agent-loop';
 import { ActionExecutor } from '../src/executor';
+import { checkResolvedTarget } from '../src/agent-policy';
 import * as aiClient from '../src/ai-client';
 import type { Action } from '../src/actions';
 
@@ -282,6 +283,13 @@ describe('agent loop', () => {
     // #351: before, this reported goalMet true — the check that passed came
     // before three clicks it says nothing about.
     it('does not carry a passing check past the actions that followed it', async () => {
+      // Disabled, so each click reaches the executor and times out waiting for it: a failed
+      // click may still have been dispatched. (A selector that matches nothing is refused
+      // before it runs since #353, and a refused action clears nothing, by #351's rule.)
+      await load(
+        page,
+        `${PAGE}<button id="ghost-a" disabled>A</button><button id="ghost-b" disabled>B</button><button id="ghost-c" disabled>C</button>`,
+      );
       scriptAI([
         [
           { type: 'assert', kind: 'text_visible', target: 'Your cart' }, // passes
@@ -461,6 +469,124 @@ describe('agent loop', () => {
         expect(result.results).toHaveLength(1);
         expect(result.results[0].success).toBe(false);
         expect(result.results[0].error).toMatch(/Refused by agent policy.*looks destructive/);
+      });
+
+      // #353: the selector string can hide its target (position, partial attribute
+      // match), so the check also reads the element the action would hit.
+      describe('the element a click or fill resolves to', () => {
+        const ACCOUNT = `<!doctype html><html lang="en"><head><title>Account</title></head><body>
+  <form onsubmit="return false">
+    <button type="button" onclick="document.title='saved'">Save</button>
+    <button type="button" onclick="document.title='DELETED'">Delete account</button>
+    <button type="button" id="x1" aria-label="Remove member" onclick="document.title='REMOVED'">×</button>
+    <input id="confirm" aria-label="Type ERASE to confirm">
+  </form>
+</body></html>`;
+
+        beforeEach(async () => {
+          await load(page, ACCOUNT);
+        });
+
+        it.each([
+          ['a positional selector', 'form button:nth-of-type(2)', /delete/i],
+          ['an icon button named by aria-label', '#x1', /remove/i],
+        ])('refuses %s whose element reads as destructive', async (_what, selector, term) => {
+          scriptAI([[{ type: 'click', selector }]]);
+          const execute = jest.spyOn(executor, 'executeAction');
+
+          const result = await runAgentLoop({
+            instruction: 'tidy up',
+            executor,
+            page,
+            maxTurns: 1,
+          });
+
+          expect(execute).not.toHaveBeenCalled();
+          expect(result.results[0].error).toMatch(/Refused by agent policy.*looks destructive/);
+          expect(result.results[0].error).toMatch(term);
+          expect(await page.title()).toBe('Account'); // never clicked
+        });
+
+        it('refuses a fill into a field labelled as destructive', async () => {
+          scriptAI([[{ type: 'fill', selector: '#confirm', text: 'yes' }]]);
+
+          const result = await runAgentLoop({
+            instruction: 'confirm',
+            executor,
+            page,
+            maxTurns: 1,
+          });
+
+          expect(result.results[0].error).toMatch(/Refused by agent policy.*erase/i);
+        });
+
+        it('lets a benign element through, and a destructive one with --allow-destructive', async () => {
+          scriptAI([[{ type: 'click', selector: 'form button:nth-of-type(1)' }]]);
+          await runAgentLoop({ instruction: 'save', executor, page, maxTurns: 1 });
+          expect(await page.title()).toBe('saved');
+
+          scriptAI([[{ type: 'click', selector: 'form button:nth-of-type(2)' }]]);
+          await runAgentLoop({
+            instruction: 'delete it',
+            executor,
+            page,
+            maxTurns: 1,
+            policy: { allowDestructive: true },
+          });
+          expect(await page.title()).toBe('DELETED');
+        });
+
+        // Codex review: the check used to give up after 1 s and allow the action, and the
+        // click's longer auto-wait then found a destructive control rendered late.
+        it('checks an element that appears late, within the action timeout', async () => {
+          await page.evaluate(
+            `setTimeout(() => document.body.insertAdjacentHTML('beforeend', '<button id="late" onclick="document.title=\\'LATE\\'">Delete everything</button>'), 1600)`,
+          );
+          page.setDefaultTimeout(3000);
+          scriptAI([[{ type: 'click', selector: '#late' }]]);
+
+          const result = await runAgentLoop({ instruction: 'tidy', executor, page, maxTurns: 1 });
+
+          expect(result.results[0].error).toMatch(/Refused by agent policy.*looks destructive/);
+          expect(await page.title()).toBe('Account');
+        });
+
+        // Codex review: an element found and then detached (or a read that times out) made
+        // every read fail; the failures were dropped as absent attributes and the action was
+        // allowed. A read that fails refuses, like an element that is not there.
+        it('reads the whole element, so long metadata cannot push the word out of reach', async () => {
+          await page.evaluate(
+            `document.querySelector('form button:nth-of-type(2)').setAttribute('title', 'x'.repeat(5000))`,
+          );
+          const verdict = await checkResolvedTarget(
+            { type: 'click', selector: 'form button:nth-of-type(2)' },
+            {},
+            page,
+          );
+          expect(verdict.reason).toMatch(/looks destructive \("Delete"\)/);
+        });
+
+        it('refuses when the element is found but cannot be read', async () => {
+          const locator = Object.getPrototypeOf(page.locator('body'));
+          const detached = () => Promise.reject(new Error('Element is not attached to the DOM'));
+          jest.spyOn(locator, 'getAttribute').mockImplementation(detached);
+          jest.spyOn(locator, 'textContent').mockImplementation(detached);
+
+          const verdict = await checkResolvedTarget({ type: 'click', selector: '#x1' }, {}, page);
+
+          expect(verdict.allowed).toBe(false);
+          expect(verdict.reason).toMatch(/could not be read/);
+        });
+
+        it('refuses, as not found, a selector that never matches', async () => {
+          scriptAI([[{ type: 'click', selector: '#not-here' }]]);
+          const execute = jest.spyOn(executor, 'executeAction');
+
+          const result = await runAgentLoop({ instruction: 'click', executor, page, maxTurns: 1 });
+
+          expect(execute).not.toHaveBeenCalled();
+          expect(result.results[0].error).toMatch(/Refused by agent policy.*#not-here.*not found/);
+        });
       });
 
       it('shows the refusal AND its reason to the model on the next turn', async () => {

@@ -12,6 +12,7 @@
  * see and adapt to.
  */
 
+import type { Locator, Page } from 'playwright';
 import type { Action } from './actions';
 import { isWithinPinnedOrigin } from './url-policy';
 
@@ -66,6 +67,22 @@ function separateWords(text: string): string {
     .replace(/_+/g, ' ');
 }
 
+/**
+ * Undo CSS escapes (#353). `#\64 elete-account` and `#de\lete` select `#delete...` but
+ * hide the word from the pattern. Hex escapes take up to six digits and one optional
+ * trailing space; any other escaped character stands for itself.
+ */
+function decodeCssEscapes(text: string): string {
+  return text.replace(/\\(?:([0-9a-fA-F]{1,6}) ?|(.))/g, (_m, hex: string, char: string) =>
+    hex ? String.fromCodePoint(Math.min(parseInt(hex, 16), 0x10ffff)) : char,
+  );
+}
+
+/** The destructive term `text` contains, if any. */
+function destructiveTerm(text: string): string | null {
+  return DESTRUCTIVE_PATTERN.exec(separateWords(text))?.[1] ?? null;
+}
+
 export interface AgentPolicy {
   /** Action types the agent may execute. Defaults to all of them. */
   allow?: readonly ActionType[];
@@ -104,10 +121,12 @@ export function originOf(url: string): string | null {
 /** The text an action aims at, which is what a destructive-intent check reads. */
 function targetText(action: Action): string {
   switch (action.type) {
+    // CSS escapes are decoded in selectors only. A typed value, a URL or page text has no
+    // escape syntax, and decoding it lost words: `delete\q` became `deleteq` (codex).
     case 'click':
-      return action.selector;
+      return decodeCssEscapes(action.selector);
     case 'fill':
-      return `${action.selector} ${action.text}`;
+      return `${decodeCssEscapes(action.selector)} ${action.text}`;
     case 'navigate':
       return action.url;
     case 'assert':
@@ -178,14 +197,91 @@ export function checkAction(
     // Asserts are read-only by construction, so they are exempt — checking them
     // would refuse to *verify* that a delete button exists, which is a
     // legitimate and harmless thing to ask.
-    const match = DESTRUCTIVE_PATTERN.exec(separateWords(targetText(action)));
-    if (match) {
+    const term = destructiveTerm(targetText(action));
+    if (term) {
       return {
         allowed: false,
-        reason: `target looks destructive ("${match[1]}") — pass --allow-destructive to permit it`,
+        reason: `target looks destructive ("${term}") — pass --allow-destructive to permit it`,
       };
     }
   }
 
   return ALLOWED;
+}
+
+/** Reading an attached element's attributes and text is quick; this only bounds a hung page. */
+const READ_TIMEOUT_MS = 1000;
+
+/** Attributes that name an element to its user, read with its text content. */
+const NAMING_ATTRIBUTES = ['aria-label', 'title', 'id', 'name', 'value', 'placeholder', 'alt'];
+
+/**
+ * Check the element a click or fill would hit, on the live page (#353). The selector text
+ * can hide its target: `form button:nth-of-type(2)` or `[id^="del"]` aim at "Delete
+ * account" without naming it, and {@link checkAction} only reads the selector.
+ *
+ * A heuristic like the selector check, and the page controls what it reads: a hostile page
+ * can still label a destructive control blandly. An element that never appears is refused
+ * (see resolvedVerdict).
+ */
+export async function checkResolvedTarget(
+  action: Action,
+  policy: AgentPolicy,
+  page: Page,
+): Promise<PolicyVerdict> {
+  // Only click and fill aim at an element; asserts are read-only (see checkAction).
+  if (policy.allowDestructive || !('selector' in action)) return ALLOWED;
+  return resolvedVerdict(page, action.selector);
+}
+
+/**
+ * Fails closed (codex review, #353): an element the check cannot read is not acted on. The
+ * check waits as long as the click would (the page's action timeout), so a control that
+ * renders late is read, not skipped; one that never appears would have timed out in the
+ * executor anyway.
+ */
+async function resolvedVerdict(page: Page, selector: string): Promise<PolicyVerdict> {
+  const words = await elementWords(page.locator(selector).first());
+  if (words === null) {
+    return {
+      allowed: false,
+      reason: `target ${selector} was not found on the page, or could not be read`,
+    };
+  }
+  const term = destructiveTerm(words);
+  return term
+    ? {
+        allowed: false,
+        reason: `target resolves to an element that looks destructive ("${term}") — pass --allow-destructive to permit it`,
+      }
+    : ALLOWED;
+}
+
+/** A read that failed, told apart from an attribute that is simply absent (null). */
+const UNREAD = Symbol('unread');
+const unread = () => UNREAD;
+
+/**
+ * What a user reads on `target`: its naming attributes and text content. Null when it is
+ * not on the page within the page's action timeout, or when any read fails (it detached, a
+ * read timed out): an element the check could not read is treated as one it did not find
+ * (codex review, #353). Playwright's own reads, not a page function: under
+ * `jest --coverage` a function sent to the page carries instrumentation the page does not
+ * have.
+ */
+async function elementWords(target: Locator): Promise<string | null> {
+  try {
+    await target.waitFor({ state: 'attached' });
+  } catch {
+    return null;
+  }
+  const timeout = { timeout: READ_TIMEOUT_MS };
+  const reads = await Promise.all([
+    ...NAMING_ATTRIBUTES.map((name) => target.getAttribute(name, timeout).catch(unread)),
+    target.textContent(timeout).catch(unread),
+  ]);
+  if (reads.includes(UNREAD)) return null;
+  // Matched whole, not capped: a cap let a long benign title push "Delete account" out of
+  // reach (codex review). The pattern is linear, run once per action.
+  return reads.filter(Boolean).join(' ');
 }
