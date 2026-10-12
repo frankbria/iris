@@ -61,10 +61,13 @@ describe('vision cache persistent tier (#325)', () => {
 
   it('treats an expired row as a miss and deletes it', () => {
     const key = writeOnce();
+    // Opened first: its constructor prunes expired rows, which would delete the row before
+    // the read path under test ever saw it (codex review).
+    const second = new AIVisionCache({ dbPath, ttlMs: 1_000, pruneIntervalWrites: 0 });
     const db = new Database(dbPath);
     db.prepare('UPDATE ai_vision_cache SET timestamp = ?').run(Date.now() - 60_000);
     db.close();
-    const second = new AIVisionCache({ dbPath, ttlMs: 1_000, pruneIntervalWrites: 0 });
+    expect(rows()).toBe(1); // still there: only get() can remove it now
     try {
       expect(second.get(key)).toBeUndefined();
       expect(second.getStats().misses).toBe(1);
