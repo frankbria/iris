@@ -33,7 +33,7 @@ export class InvalidAuditCursorError extends Error {
 
 const CURSOR = /^[1-9][0-9]{0,18}$/;
 /** Postgres bigint's maximum: 19 digits can exceed it (codex review). */
-const MAX_ID = 9223372036854775807n;
+const MAX_ID = BigInt('9223372036854775807'); // no BigInt literal: the portal targets below ES2020
 const validCursor = (cursor: string) => CURSOR.test(cursor) && BigInt(cursor) <= MAX_ID;
 
 interface Row {
