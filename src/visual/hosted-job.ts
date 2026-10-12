@@ -142,6 +142,7 @@ export async function runVisualJob(
             // image goes to a key of its own first, so a winning row never points at a
             // missing or replaced object.
             const objectKey = baselineObjectKey(ctx.orgId, params.project, name, ctx.attempt);
+            live(); // the baseline lookup above may have outlasted the deadline
             await ctx.artifacts.put(objectKey, shot.buffer, 'image/png');
             live();
             const seeded = await ctx.baselines.insertIfAbsent({

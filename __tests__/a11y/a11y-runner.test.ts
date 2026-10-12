@@ -87,6 +87,8 @@ describe('AccessibilityRunner', () => {
     mockBrowser = {
       newContext: jest.fn().mockResolvedValue(mockContext),
       close: jest.fn().mockResolvedValue(undefined),
+      // launchBrowser() registers each browser until it disconnects (#442).
+      once: jest.fn(),
     } as any;
 
     // Mock chromium.launch
