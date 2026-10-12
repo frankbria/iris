@@ -682,6 +682,14 @@ guarantee. Every action the model proposes is checked before it reaches the brow
 | Targets that read as destructive (`delete`, `remove`, `reset`, `deactivate`, …) are refused: the selector (CSS escapes decoded) and the element it resolves to on the page (its label, title, id, name, value and text), so `form button:nth-of-type(2)` on a "Delete account" button is refused too | `--allow-destructive` |
 | All four action types available | `--allow click,assert` to restrict |
 
+The same policy covers **every plan a model proposed**, not only `--agent` (#354): a one-shot
+`iris run` whose instruction the AI translated, and an RPC `executeBrowserAction` whose
+`instruction` the AI translated (relaxed with a `policy` param:
+`{ "allow": [...], "allowCrossOrigin": true, "allowDestructive": true }`). A plan you wrote
+yourself (a pattern-translated `iris run "click #delete-row"`, or explicit RPC `actions`) is
+yours: only `--allow` / `policy.allow` restricts it. On the RPC the checks are per action;
+the request-level origin pin is not installed, because a session's page outlives the request.
+
 A refusal is fed back to the model with its reason, so it can see *why* and adapt
 rather than re-proposing the same blocked action; three failures in a row end the run
 rather than burning the turn budget. Ordinary action failures (a selector that missed,
