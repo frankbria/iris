@@ -15,6 +15,7 @@
 import type { Locator, Page } from 'playwright';
 import type { Action } from './actions';
 import { isWithinPinnedOrigin } from './url-policy';
+import { installUrlPolicyGuard } from './url-policy-guard';
 
 export type ActionType = Action['type'];
 
@@ -174,7 +175,11 @@ export function checkAction(
     // Same predicate the request-layer guard uses, so the two layers cannot
     // disagree — they did once, and an http→https upgrade would load fine and
     // then have every action on it refused.
-    if (!isWithinPinnedOrigin(currentUrl, startOrigin)) {
+    // A navigation into the pinned origin is let through from anywhere: it is how a fresh
+    // page (about:blank) reaches the start origin, and it cannot leak (codex, #354). Every
+    // other action on an off-origin page is refused.
+    const intoPinned = action.type === 'navigate' && isWithinPinnedOrigin(action.url, startOrigin);
+    if (!intoPinned && !isWithinPinnedOrigin(currentUrl, startOrigin)) {
       return {
         allowed: false,
         reason: `page is on ${originOf(currentUrl) ?? 'an opaque origin'}, not the starting origin ${startOrigin} — refusing to act off-origin`,
@@ -284,4 +289,73 @@ async function elementWords(target: Locator): Promise<string | null> {
   // Matched whole, not capped: a cap let a long benign title push "Delete account" out of
   // reach (codex review). The pattern is linear, run once per action.
   return reads.filter(Boolean).join(' ');
+}
+
+/** The flags a caller sets on a run: `--allow`, `--allow-cross-origin`, `--allow-destructive`. */
+export interface PolicyFlags {
+  allow?: readonly ActionType[];
+  allowCrossOrigin?: boolean;
+  allowDestructive?: boolean;
+}
+
+/**
+ * The policy a plan runs under (#354). A plan a model proposed (the agent loop, an AI
+ * translation in one-shot `iris run` or the RPC) gets the agent's defaults (origin pinned,
+ * destructive refused) and the flags relax them. A plan the caller wrote itself (a
+ * pattern-translated instruction, explicit RPC `actions`) is the caller's own intent: only
+ * a requested `--allow` restriction applies, and none at all without one (null).
+ */
+export function planPolicy(modelProposed: boolean, flags: PolicyFlags = {}): AgentPolicy | null {
+  if (modelProposed) {
+    return {
+      allow: flags.allow,
+      pinOrigin: !flags.allowCrossOrigin,
+      allowDestructive: flags.allowDestructive,
+    };
+  }
+  return flags.allow ? { allow: flags.allow, pinOrigin: false, allowDestructive: true } : null;
+}
+
+/**
+ * The origin a run is confined to: the URL the caller asked for, else where the page is,
+ * else the plan's first navigation (a one-shot plan that starts by navigating), else none.
+ */
+export function startOriginOf(
+  requestedUrl: string | undefined,
+  currentUrl: string,
+  actions: readonly Action[],
+): string | null {
+  const firstNavigate = actions.find((a) => a.type === 'navigate');
+  return (
+    originOf(requestedUrl ?? '') ??
+    originOf(currentUrl) ??
+    (firstNavigate?.type === 'navigate' ? originOf(firstNavigate.url) : null)
+  );
+}
+
+/**
+ * Confine `page` to `startOrigin` at the request layer when the policy pins (#337): the
+ * per-action check refuses only the next action, after a same-origin click that navigated
+ * away has already made its request. False when pinning is on and there is no origin.
+ */
+export async function pinPage(
+  page: Page,
+  policy: AgentPolicy,
+  startOrigin: string | null,
+): Promise<boolean> {
+  if (policy.pinOrigin === false) return true;
+  if (!startOrigin) return false;
+  await installUrlPolicyGuard(page, { pinnedOrigin: startOrigin });
+  return true;
+}
+
+/** Every check a planned action passes before it runs (#354): one path for every caller. */
+export async function checkPlannedAction(
+  action: Action,
+  policy: AgentPolicy,
+  page: Page,
+  startOrigin: string | null,
+): Promise<PolicyVerdict> {
+  const verdict = checkAction(action, policy, page.url(), startOrigin);
+  return verdict.allowed ? checkResolvedTarget(action, policy, page) : verdict;
 }

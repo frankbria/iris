@@ -14,9 +14,8 @@ import type { Action } from './actions';
 import type { ActionExecutor, ExecutionResult } from './executor';
 import { loadConfig } from './config';
 import { createResolvedAIClient } from './ai-client';
-import { checkAction, checkResolvedTarget, originOf } from './agent-policy';
+import { checkPlannedAction, originOf, pinPage } from './agent-policy';
 import type { AgentPolicy } from './agent-policy';
-import { installUrlPolicyGuard } from './url-policy-guard';
 import { withPageTimeout } from './page-timeout';
 
 /** Cap on the serialized page digest. Keeps the prompt affordable on big pages. */
@@ -163,16 +162,13 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
   // trusting the caller to have done it — the default is advertised as safe, and
   // a library caller gets the same guarantee the CLI does. Installing is
   // idempotent: it merges into whatever policy the executor already set.
-  if (policy.pinOrigin !== false) {
-    // No origin (about:blank, data:) means nothing to confine to. Running anyway
-    // would silently turn the advertised default into "any origin" (#337).
-    if (!startOrigin) {
-      log(
-        'refusing to start: the starting page has no origin to pin to — opt out of pinning to run anyway',
-      );
-      return { goalMet: null, turns: 0, results: [], terminationReason: 'error' };
-    }
-    await installUrlPolicyGuard(page, { pinnedOrigin: startOrigin });
+  // No origin (about:blank, data:) means nothing to confine to. Running anyway
+  // would silently turn the advertised default into "any origin" (#337).
+  if (!(await pinPage(page, policy, startOrigin))) {
+    log(
+      'refusing to start: the starting page has no origin to pin to — opt out of pinning to run anyway',
+    );
+    return { goalMet: null, turns: 0, results: [], terminationReason: 'error' };
   }
 
   const results: ExecutionResult[] = [];
@@ -261,9 +257,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     for (const action of plan.actions) {
       // Policy is checked per action, immediately before it runs, because an
       // earlier action in the same turn may have moved the page.
-      let verdict = checkAction(action, policy, page.url(), startOrigin);
-      // Then what the selector actually hits on the page, which its text can hide (#353).
-      if (verdict.allowed) verdict = await checkResolvedTarget(action, policy, page);
+      // The action, then what its selector hits on the page (#353), as on every path (#354).
+      const verdict = await checkPlannedAction(action, policy, page, startOrigin);
 
       // A refusal is recorded as a failed result rather than skipped silently:
       // it goes into `previousActions`, so the next turn's prompt shows the

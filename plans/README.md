@@ -188,13 +188,13 @@ production.
 | `P1.19` | [#298](https://github.com/frankbria/iris/issues/298) | Vision provider detection and Ollama timeouts | — | DONE (#521) |
 | `P1.20` | [#299](https://github.com/frankbria/iris/issues/299) | AI cache and ledger hygiene: memory-tier TTL, index name collision | — | DONE (#524) |
 | `P1.21` | [#353](https://github.com/frankbria/iris/issues/353) | Agent policy: action validation | — | DONE (#525) |
-| `P1.22` | [#354](https://github.com/frankbria/iris/issues/354) | Agent policy: apply flags on every execution path | P0.7 (#334), P1.21 (#353) | TODO |
+| `P1.22` | [#354](https://github.com/frankbria/iris/issues/354) | Agent policy: apply flags on every execution path | P0.7 (#334), P1.21 (#353) | DONE (#533) |
 | `P1.23` | [#355](https://github.com/frankbria/iris/issues/355) | Vision prompts: content framing | — | DONE (#526) |
 | `P1.24` | [#356](https://github.com/frankbria/iris/issues/356) | Local history store improvements | — | DONE (#527) |
 | `P1.25` | [#357](https://github.com/frankbria/iris/issues/357) | RPC server: JSON-RPC compliance and error responses | P0.2 (#330) | DONE (#529) |
 | `P1.26` | [#358](https://github.com/frankbria/iris/issues/358) | `iris connect`: startup configuration | P0.3 (#231) | DONE (#531) |
 | `P1.27` | [#306](https://github.com/frankbria/iris/issues/306) | Build and smoke-test the container on every PR; tie base image to Playwright | — | DONE (#532) |
-| `P1.28` | [#359](https://github.com/frankbria/iris/issues/359) | CI/CD: action pinning and deploy configuration | P0.1 (#329) | TODO |
+| `P1.28` | [#359](https://github.com/frankbria/iris/issues/359) | CI/CD: action pinning and deploy configuration | P0.1 (#329) | DONE (#536) |
 | `P1.29` | [#360](https://github.com/frankbria/iris/issues/360) | Container image: pinning, scanning, SBOM, notices | P1.27 (#306) | TODO |
 | `P1.30` | [#309](https://github.com/frankbria/iris/issues/309) | Graceful shutdown: drain in-flight work, readiness signal, MCP shutdown | P0.12 (#240) | TODO |
 | `P1.31` | [#361](https://github.com/frankbria/iris/issues/361) | Audit log of tenant actions | P0.26 (#254) | TODO |

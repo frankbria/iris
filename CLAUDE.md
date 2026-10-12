@@ -707,6 +707,12 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   current, which would not load the image). The worker uses the production compose
   file's own heartbeat check. Bash reads a script while running it: do not edit
   `deploy.sh` during a run.
+- **Every action is pinned to a commit SHA (#359)**, version in a trailing comment;
+  Dependabot's github-actions entry updates both. The one floating ref is
+  `frankbria/glm-review/.../review.yml@main`, deliberately (check-workflow-calls.yml says
+  why); `container-config.test.ts` fails on any other. Staging, like production, refuses to
+  deploy without `SSH_KNOWN_HOSTS` (no ssh-keyscan trust-on-first-use), and both deploy jobs
+  have `timeout-minutes`. A CI-only tailnet tag needs the Tailscale console: #535.
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
 
@@ -995,7 +1001,18 @@ listed in the body of the PR that closed #353, for checking against it.
   needs a failing click uses a real but disabled element. The page controls what is read,
   so a hostile page can still label a destructive control blandly; this narrows the
   selector-only gap, it does not close it.
-- One-shot `iris run` and the RPC do not apply agent policy at all yet: #354.
+- **Every model-proposed plan runs under it (#354)**: `planPolicy(modelProposed, flags)`
+  gives an AI plan (the agent loop, one-shot `iris run` with `translation.method === 'ai'`,
+  an RPC `instruction` the AI translated) the agent defaults relaxed by `--allow*` / the RPC
+  `policy` param (zod `.strict()`); a plan the caller wrote (pattern translation, explicit
+  RPC `actions`) gets only a requested `allow`, or no policy. `checkPlannedAction` (both
+  checks) and `pinPage` (request-level pin) are the shared path; `startOriginOf` takes the
+  requested URL, then the page, then the plan's first navigation. The RPC applies the
+  per-action checks only (`executeUnderPolicy` in protocol.ts): the request-level guard
+  would stay on the session's page for later requests. `iris watch --execute` applies it to
+  an AI plan with the pin off (`allowCrossOrigin`: the page is the watched `file://`, which has
+  no origin), so the destructive checks remain; `watch` has no `--allow*` flags. Private
+  backlog item P1.22.
 
 ### Retries Never Repeat a Side Effect (issue #296)
 
