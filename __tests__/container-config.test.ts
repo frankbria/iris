@@ -414,6 +414,8 @@ describe('image supply chain (issue #360)', () => {
     expect(ci).toMatch(/--severity CRITICAL --ignore-unfixed --exit-code 1/);
     expect(ci).toMatch(/trivy image --timeout \S+ --format cyclonedx/);
     expect(ci).toMatch(/uses: actions\/upload-artifact@[0-9a-f]{40}/);
+    // Uploaded even when the gate failed (codex review).
+    expect(ci).toMatch(/- if: \$\{\{ !cancelled\(\) \}\}\n\s+uses: actions\/upload-artifact@/);
   });
 });
 

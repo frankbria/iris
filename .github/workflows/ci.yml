@@ -107,10 +107,13 @@ jobs:
             trivy sbom --severity HIGH --ignore-unfixed --exit-code 0 "$sbom"
             trivy sbom --severity CRITICAL --ignore-unfixed --exit-code 1 "$sbom"
           done
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      # Also when the gate above failed: that is when the SBOM is wanted (codex review).
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-sboms
           path: sbom/*.cdx.json
+          if-no-files-found: warn
       # The S3-compatible artifact store (#257), as in docker-compose.dev.yml. A step,
       # not a service container: services cannot pass the server its command line.
       - name: Start SeaweedFS
