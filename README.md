@@ -191,6 +191,15 @@ iris run --agent --url http://localhost:3000 --max-turns 6 \
   "make sure a signed-out visitor can reach the pricing page"
 ```
 
+Without an AI provider, `iris run` understands instructions that name the element or
+page exactly: `click|press|tap <selector>`, `fill <selector> with <text>`,
+`enter|type|input <text> into|in|to <selector>`, `navigate to|go to|visit|open <absolute URL>`
+and `verify <text> is visible`. A selector is CSS with real selector syntax (`#id`,
+`.class`, `[attr]`, `form > button`), a Playwright engine selector (`text=Sign in`,
+`role=button[name="Save"]`) or an XPath. Prose such as `click submit` or
+`go to the pricing page` goes to the AI; with none configured, the run fails and says so.
+Every `iris run` example above is checked by `__tests__/readme-run-examples.test.ts`.
+
 **Visual Regression Testing:**
 ```bash
 # Compare current page against baseline

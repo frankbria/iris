@@ -912,6 +912,29 @@ An error that reaches the executor is a timeout, a protocol or target error mid-
 unknown. `navigate` (a GET) and asserts keep the general rules (#75: timeouts and policy
 verdicts are not retried); retry tests that need a transient failure use `navigate`.
 
+### Pattern Translator Takes Selectors, Not Prose (issue #297)
+
+`translateWithPatterns` (src/translator.ts) keeps a match only when its target is
+something Playwright can use as written; otherwise the instruction falls through to the AI.
+It used to pass prose through: `click submit` became `page.click("submit")` (a CSS type
+selector no page has), and the watcher's default instruction is `click submit`.
+
+- **Selector targets** (click, fill, `element_absent`): `looksLikeSelector()` accepts an
+  engine selector (`text=…`, `role=…`, `css=…`), an XPath, or CSS with at least one token
+  carrying selector syntax (`#`, `.x`, `[`, `:x`, `*`, a combinator) and only bare
+  identifiers beside it. So `form > button` is a selector, while a bare `button` or `submit`
+  is prose (write `css=button`). Quoted, bracket and paren contents are blanked first, so
+  `button:has-text("Sign in")` counts as one token.
+- **Navigation**: a whitespace-free absolute URL (`URL.canParse`) only, which is all
+  `assertNavigationAllowed` accepts anyway; `go to example.com` goes to the AI.
+- **No AI configured**: the reply's `reasoning` says no pattern matched and shows the
+  forms to use (`click #submit`, …). `error` stays unset: nothing was asked (#294).
+- RPC `executeCommand` (`translateSync`, pattern-only) returns `[]` for prose now.
+- `__tests__/readme-run-examples.test.ts` reads every `iris run "…"` line of the README
+  (not `--agent`). It runs the pattern ones in real Chromium against a local fixture
+  (`https://example.com` swapped for it) and checks that the prose ones reach the AI.
+  A new README example must work on that fixture or be prose.
+
 ### Agent Loop Verdict (issue #351)
 
 `runAgentLoop`'s `goalMet` is the AND of the checks made after the agent's last
