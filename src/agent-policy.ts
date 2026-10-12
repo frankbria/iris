@@ -80,7 +80,7 @@ function decodeCssEscapes(text: string): string {
 
 /** The destructive term `text` contains, if any. */
 function destructiveTerm(text: string): string | null {
-  return DESTRUCTIVE_PATTERN.exec(separateWords(decodeCssEscapes(text)))?.[1] ?? null;
+  return DESTRUCTIVE_PATTERN.exec(separateWords(text))?.[1] ?? null;
 }
 
 export interface AgentPolicy {
@@ -121,10 +121,12 @@ export function originOf(url: string): string | null {
 /** The text an action aims at, which is what a destructive-intent check reads. */
 function targetText(action: Action): string {
   switch (action.type) {
+    // CSS escapes are decoded in selectors only. A typed value, a URL or page text has no
+    // escape syntax, and decoding it lost words: `delete\q` became `deleteq` (codex).
     case 'click':
-      return action.selector;
+      return decodeCssEscapes(action.selector);
     case 'fill':
-      return `${action.selector} ${action.text}`;
+      return `${decodeCssEscapes(action.selector)} ${action.text}`;
     case 'navigate':
       return action.url;
     case 'assert':

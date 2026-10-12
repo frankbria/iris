@@ -226,6 +226,11 @@ describe('destructive-target policy', () => {
     expect(check({ type: 'click', selector }).allowed).toBe(false);
   });
 
+  // Codex review: decoding a typed value as CSS lost the word.
+  it('reads a typed value literally, not as CSS', () => {
+    expect(check({ type: 'fill', selector: '#confirm', text: 'delete\\q' }).allowed).toBe(false);
+  });
+
   it('does not refuse an escaped selector that is not destructive', () => {
     expect(check({ type: 'click', selector: '#\\64 ashboard' }).allowed).toBe(true);
   });
