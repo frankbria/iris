@@ -131,49 +131,8 @@ function acceptReply<T>(usage: AITokenUsage | undefined, validate: () => T): T {
   }
 }
 
-/**
- * OpenAI GPT-4V/GPT-4o vision client for visual diff analysis
- */
-export class OpenAIVisionClient extends BaseAIVisionClient {
-  constructor(config: IrisConfig['ai']) {
-    super(config);
-  }
-
-  async translateInstruction(_request: AITranslationRequest): Promise<AITranslationResponse> {
-    // For now, delegate to text-only implementation
-    // Vision-enhanced translation will be added in future iteration
-    throw new Error('Vision-enhanced translation not yet implemented');
-  }
-
-  async analyzeVisualDiff(request: AIVisionRequest): Promise<AIVisionResponse> {
-    if (!this.config.apiKey) {
-      throw new Error('OpenAI API key not configured');
-    }
-
-    try {
-      const { OpenAI } = await import('openai');
-      const openai = new OpenAI({
-        apiKey: this.config.apiKey,
-        // Explicit, so the SDK cannot add the process's OPENAI_ORG_ID / OPENAI_PROJECT_ID
-        // to a request made with someone else's key (#258).
-        organization: null,
-        project: null,
-        timeout: this.config.timeout ?? DEFAULT_TIMEOUT_MS,
-        maxRetries: 0, // retries are driven by our withRetry below
-      });
-
-      // Convert buffers to base64
-      const baselineBase64 = request.baseline.toString('base64');
-      const currentBase64 = request.current.toString('base64');
-      const diffBase64 = request.diff?.toString('base64');
-      // Per image: the shipped pipeline mixes JPEG screenshots with a PNG diff
-      // mask, so a single per-request type would have to be wrong for one.
-      const baselineType = detectImageMimeType(request.baseline);
-      const currentType = detectImageMimeType(request.current);
-      const diffType = request.diff ? detectImageMimeType(request.diff) : undefined;
-      const model = this.config.model || DEFAULT_MODELS.vision.openai;
-
-      const systemPrompt = `You are an expert at analyzing visual differences in web UIs for regression testing.
+/** The OpenAI vision system prompt (#573: out of the request builder). */
+const OPENAI_VISION_SYSTEM_PROMPT = `You are an expert at analyzing visual differences in web UIs for regression testing.
 
 Your task is to classify visual changes between a baseline screenshot and a current screenshot.
 
@@ -203,72 +162,70 @@ Respond with valid JSON matching this schema:
   "suggestions": string[] (optional recommendations)
 }`;
 
-      // Built in parts, not nested templates: lizard (the CRAP gate) misreads nested ones.
-      const contextBlock = visionContextBlock(request.context);
-      const diffNote = diffBase64 ? `\n\n${DIFF_IMAGE_PROMPT}` : '';
-      const userPrompt = `Analyze these two screenshots and classify the visual differences.
+/** The OpenAI vision user turn: context, the comparison ask, and a note when a diff is sent. */
+function openAIVisionUserPrompt(request: AIVisionRequest): string {
+  // Built in parts, not nested templates: lizard (the CRAP gate) misreads nested ones.
+  const contextBlock = visionContextBlock(request.context);
+  const diffNote = request.diff?.length ? `\n\n${DIFF_IMAGE_PROMPT}` : '';
+  return `Analyze these two screenshots and classify the visual differences.
 
 ${contextBlock}
 
 Compare the baseline (first image) with the current (second image) and identify any visual regressions.${diffNote}`;
+}
 
-      const response = await withRetry(
-        () =>
-          openai.chat.completions.create({
-            model,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: userPrompt },
-                  {
-                    type: 'image_url',
-                    image_url: {
-                      url: `data:${baselineType};base64,${baselineBase64}`,
-                      detail: 'high',
-                    },
-                  },
-                  {
-                    type: 'image_url',
-                    image_url: {
-                      url: `data:${currentType};base64,${currentBase64}`,
-                      detail: 'high',
-                    },
-                  },
-                  ...(diffBase64
-                    ? [
-                        {
-                          type: 'image_url' as const,
-                          image_url: {
-                            url: `data:${diffType};base64,${diffBase64}`,
-                            detail: 'high' as const,
-                          },
-                        },
-                      ]
-                    : []),
-                ],
-              },
-            ],
-            // The o-series refuses anything but the default temperature (#520).
-            ...openAISampling(model),
-            // max_tokens is deprecated for OpenAI chat completions and refused by the
-            // o-series (#298).
-            max_completion_tokens: 1000,
-          }),
-        this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
-      );
+/**
+ * One image as an OpenAI content part. Typed per image: the shipped pipeline mixes JPEG
+ * screenshots with a PNG diff mask, so a single per-request type would be wrong for one.
+ */
+const openAIImage = (image: Buffer) => ({
+  type: 'image_url' as const,
+  image_url: {
+    url: `data:${detectImageMimeType(image)};base64,${image.toString('base64')}`,
+    detail: 'high' as const,
+  },
+});
 
-      // Attach token usage (defensive: may be absent) so downstream cost
-      // tracking reflects real high-detail token consumption, not a flat rate.
-      const usage = response.usage
-        ? {
-            inputTokens: response.usage.prompt_tokens ?? 0,
-            outputTokens: response.usage.completion_tokens ?? 0,
-            totalTokens: response.usage.total_tokens,
-          }
-        : undefined;
+/** Baseline, current and, when one was sent, the diff. An empty diff buffer is no diff (#124). */
+const visionImages = (request: AIVisionRequest): Buffer[] =>
+  request.diff?.length
+    ? [request.baseline, request.current, request.diff]
+    : [request.baseline, request.current];
 
+/** Token usage, defensive (it may be absent), so cost tracking sees real high-detail use. */
+const openAIVisionUsage = (
+  u?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null,
+) =>
+  u
+    ? {
+        inputTokens: u.prompt_tokens ?? 0,
+        outputTokens: u.completion_tokens ?? 0,
+        totalTokens: u.total_tokens,
+      }
+    : undefined;
+
+/**
+ * OpenAI GPT-4V/GPT-4o vision client for visual diff analysis
+ */
+export class OpenAIVisionClient extends BaseAIVisionClient {
+  constructor(config: IrisConfig['ai']) {
+    super(config);
+  }
+
+  async translateInstruction(_request: AITranslationRequest): Promise<AITranslationResponse> {
+    // For now, delegate to text-only implementation
+    // Vision-enhanced translation will be added in future iteration
+    throw new Error('Vision-enhanced translation not yet implemented');
+  }
+
+  async analyzeVisualDiff(request: AIVisionRequest): Promise<AIVisionResponse> {
+    if (!this.config.apiKey) {
+      throw new Error('OpenAI API key not configured');
+    }
+
+    try {
+      const response = await this.ask(request);
+      const usage = openAIVisionUsage(response.usage);
       // Validate before use: invalid/empty severity throws (surfacing through
       // handleVisionError) rather than silently degrading to severity:'none'.
       const parsed = acceptReply(usage, () => {
@@ -283,6 +240,47 @@ Compare the baseline (first image) with the current (second image) and identify 
     } catch (error) {
       return this.handleVisionError(error, 'OpenAI vision analysis');
     }
+  }
+
+  private async client() {
+    const { OpenAI } = await import('openai');
+    return new OpenAI({
+      apiKey: this.config.apiKey,
+      // Explicit, so the SDK cannot add the process's OPENAI_ORG_ID / OPENAI_PROJECT_ID
+      // to a request made with someone else's key (#258).
+      organization: null,
+      project: null,
+      timeout: this.config.timeout ?? DEFAULT_TIMEOUT_MS,
+      maxRetries: 0, // retries are driven by our withRetry below
+    });
+  }
+
+  /** One chat completion over the baseline, current and (when sent) diff images. */
+  private async ask(request: AIVisionRequest) {
+    const openai = await this.client();
+    const model = this.config.model || DEFAULT_MODELS.vision.openai;
+    return withRetry(
+      () =>
+        openai.chat.completions.create({
+          model,
+          messages: [
+            { role: 'system', content: OPENAI_VISION_SYSTEM_PROMPT },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: openAIVisionUserPrompt(request) },
+                ...visionImages(request).map(openAIImage),
+              ],
+            },
+          ],
+          // The o-series refuses anything but the default temperature (#520).
+          ...openAISampling(model),
+          // max_tokens is deprecated for OpenAI chat completions and refused by the
+          // o-series (#298).
+          max_completion_tokens: 1000,
+        }),
+      this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
+    );
   }
 
   async isAvailable(): Promise<boolean> {
