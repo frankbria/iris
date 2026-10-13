@@ -7,6 +7,7 @@
  * the model.
  */
 
+import * as fs from 'fs';
 import { chromium, Browser, Page } from 'playwright';
 import { createServer, Server } from 'http';
 import type { AddressInfo } from 'net';
