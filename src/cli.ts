@@ -152,444 +152,22 @@ program
     (v) => parseIntOption(v, { min: 1000, max: 3600000, name: 'timeout' }),
     30000,
   )
-  .action(
-    async (
-      instruction: string,
-      options: {
-        dryRun?: boolean;
-        headless?: boolean;
-        timeout?: number;
-        url?: string;
-        json?: boolean;
-        agent?: boolean;
-        maxTurns?: number;
-        allow?: Array<'click' | 'fill' | 'navigate' | 'assert'>;
-        allowCrossOrigin?: boolean;
-        allowDestructive?: boolean;
-        allowAssetOrigin?: string[];
-        blockPrivateHosts?: boolean;
-      },
-    ) => {
-      const startTime = new Date();
-      let status: 'success' | 'error' = 'success';
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const executionResults: any[] = [];
-      const startUrl = options.url || process.env.IRIS_BASE_URL;
-
-      // In JSON mode stdout is a machine contract, so narration is suppressed
-      // entirely — an assistant pipes this straight into JSON.parse. Errors keep
-      // going to console.error (stderr), which never pollutes the payload.
-      const say = (message: string) => {
-        if (!options.json) console.log(message);
-      };
-
-      // Captured for the JSON envelope, which is emitted once from `finally` so
-      // that every exit path (success, no-actions return, throw, dry-run) reports.
-      let translation: TranslationResult | null = null;
-      let executed = false;
-      // null = the plan contained no assertions, i.e. no goal was stated.
-      let goalMet: boolean | null = null;
-      // Populated only in --agent mode; stays null so the one-shot envelope is unchanged.
-      let agent: { turns: number; terminationReason: string; errorKind: string | null } | null =
-        null;
-      // Exit 2 rather than 1: the flags were wrong, nothing was run (#294).
-      let usageError = false;
-      // Exit 3 rather than 1: the AI provider could not be asked or answer (#510), as
-      // visual-diff and a11y use 3 for "could not run here"; CI can retry an outage.
-      let providerOutage = false;
-
-      /**
-       * Executor options shared by the one-shot and agent paths, so the two
-       * cannot drift apart on timeout or retry behaviour.
-       */
-      const executorOptions = {
-        timeout: options.timeout ?? 30000,
-        trackContext: true,
-        retryAttempts: 2,
-        retryDelay: 1000,
-        browserOptions: {
-          headless: options.headless !== false,
-          devtools: options.headless === false, // Enable devtools in non-headless mode
-        },
-        urlPolicy: { blockPrivateHosts: options.blockPrivateHosts },
-      };
-
-      try {
-        if (options.agent) {
-          // Both guards run before any browser launch: a usage error should cost
-          // nothing and surface immediately. They go to stderr rather than say()
-          // so they are still visible when --json owns stdout.
-          if (!startUrl) {
-            console.error(
-              '❌ --agent needs a starting page: pass --url <url> or set IRIS_BASE_URL.\n' +
-                '   The loop plans against what is actually on the page, so it cannot start from about:blank.',
-            );
-            status = 'error';
-            usageError = true;
-            return;
-          }
-          if (options.dryRun) {
-            console.error(
-              '❌ --agent cannot be combined with --dry-run.\n' +
-                '   Each turn is planned from the result of the last one, so there is nothing to translate without executing.',
-            );
-            status = 'error';
-            usageError = true;
-            return;
-          }
-
-          executed = true;
-          const { ActionExecutor } = await import('./executor');
-          const { originOf } = await import('./agent-policy');
-
-          // Pin at the REQUEST layer, not just before each action. A pre-action
-          // check notices a same-origin click that navigates away only on the
-          // next turn, by which time the cross-origin request has gone out.
-          const pinnedOrigin = options.allowCrossOrigin
-            ? undefined
-            : (originOf(startUrl) ?? undefined);
-          const executor = new ActionExecutor({
-            ...executorOptions,
-            urlPolicy: {
-              ...executorOptions.urlPolicy,
-              pinnedOrigin,
-              assetOrigins: options.allowAssetOrigin,
-            },
-          });
-
-          try {
-            await executor.launchBrowser();
-            const page = await executor.createPage();
-
-            say(`🤖 Agent mode (experimental), up to ${options.maxTurns ?? 8} turns`);
-            say(
-              `   Policy: ${options.allow ? options.allow.join('/') : 'all actions'}, ` +
-                `${options.allowCrossOrigin ? 'any origin' : 'start origin only'}, ` +
-                `${options.allowDestructive ? 'destructive allowed' : 'destructive refused'}`,
-            );
-            say(`   Opening starting page: ${startUrl}`);
-
-            // Routed through executeAction so the URL policy applies, exactly as
-            // the one-shot path does.
-            const navResult = await executor.executeAction(
-              { type: 'navigate', url: startUrl },
-              page,
-            );
-            executionResults.push(navResult);
-
-            if (!navResult.success) {
-              say(`   ❌ Failed to open starting page: ${navResult.error}`);
-              status = 'error';
-            } else {
-              const { runAgentLoop } = await import('./agent-loop');
-              const outcome = await runAgentLoop({
-                instruction,
-                executor,
-                page,
-                maxTurns: options.maxTurns ?? 8,
-                // What the user asked for, not where the navigation landed: a
-                // start URL that redirects cross-origin must not silently move
-                // the origin the agent is pinned to.
-                startUrl,
-                log: (message) => say(`   ${message}`),
-                policy: {
-                  allow: options.allow,
-                  pinOrigin: !options.allowCrossOrigin,
-                  allowDestructive: options.allowDestructive,
-                  assetOrigins: options.allowAssetOrigin,
-                },
-              });
-
-              executionResults.push(...outcome.results);
-              goalMet = outcome.goalMet;
-              agent = {
-                turns: outcome.turns,
-                terminationReason: outcome.terminationReason,
-                errorKind: outcome.errorKind ?? null,
-              };
-              // 3 says a retry is safe: only when the loop dispatched nothing (#510 review).
-              // After a click, a retry would repeat it (#296).
-              providerOutage = outcome.errorKind === 'provider' && outcome.results.length === 0;
-
-              // A failed action is NOT a failed agent run — recovering from one is
-              // the entire point of re-planning, so the one-shot path's "every
-              // action succeeded" rule would be wrong here. The verdict is whether
-              // the goal held at the end.
-              //
-              // Not `terminationReason === 'goal_met'` either: a model that keeps
-              // acting alongside its assert never trips the completion signal, so a
-              // run can end at the turn cap with the goal demonstrably passing.
-              // Reporting that as a failure contradicts the "Goal check: passed"
-              // printed a line earlier — observed with a small local model.
-              //
-              // Abnormal exits stay errors regardless, since `goalMet` there can be
-              // a stale verdict from a turn before things went wrong.
-              const abnormalExit =
-                outcome.terminationReason === 'error' ||
-                outcome.terminationReason === 'consecutive_failures';
-              if (goalMet !== true || abnormalExit) {
-                status = 'error';
-              }
-
-              say(
-                `\n🎯 Agent finished after ${outcome.turns} turn(s): ${outcome.terminationReason}`,
-              );
-              if (goalMet === null) {
-                say('   Goal unverified — no check of the final page ran.');
-              } else {
-                say(`   Goal check: ${goalMet ? 'passed' : 'failed'}`);
-              }
-            }
-
-            await executor.cleanup();
-          } catch (agentError) {
-            status = 'error';
-            console.error(
-              '\n❌ Agent run failed:',
-              agentError instanceof Error ? agentError.message : agentError,
-            );
-            try {
-              await executor.cleanup();
-            } catch (cleanupError) {
-              console.error(
-                'Warning: Browser cleanup failed:',
-                cleanupError instanceof Error ? cleanupError.message : cleanupError,
-              );
-            }
-          }
-          return;
-        }
-
-        const { translate } = await import('./translator');
-        const result = await translate(instruction, startUrl ? { url: startUrl } : undefined);
-        translation = result;
-
-        say(`✨ Translation result (${result.method}):`);
-        say(`   Actions: ${JSON.stringify(result.actions)}`);
-        say(`   Confidence: ${result.confidence}`);
-        if (result.reasoning) {
-          say(`   Reasoning: ${result.reasoning}`);
-        }
-
-        // The provider could not be asked: say why, rather than "no actions" (#293).
-        if (result.error) {
-          status = 'error';
-          providerOutage = true;
-          console.error(`❌ AI translation failed: ${result.error}`);
-          return;
-        }
-
-        if (result.actions.length === 0) {
-          status = 'error';
-          say('⚠️  No actions generated from instruction');
-          return;
-        }
-
-        // Execute actions unless dry-run
-        if (!options.dryRun) {
-          executed = true;
-          say('\n🚀 Executing actions...');
-
-          const { ActionExecutor } = await import('./executor');
-          const executor = new ActionExecutor(executorOptions);
-
-          try {
-            // Launch browser and create page
-            await executor.launchBrowser();
-            const page = await executor.createPage();
-
-            // Provide feedback about browser mode
-            if (options.headless !== false) {
-              say('   Running in headless mode...');
-            } else {
-              say('   Launching visible browser with developer tools...');
-            }
-
-            // The agent's policy applies to any plan a model proposed, here as in --agent
-            // (#354); a pattern-translated plan is the user's own, with only --allow.
-            const { planPolicy, startOriginOf, pinPage, checkPlannedAction } =
-              await import('./agent-policy');
-            const policy = planPolicy(result.method === 'ai', {
-              allow: options.allow,
-              allowCrossOrigin: options.allowCrossOrigin,
-              allowDestructive: options.allowDestructive,
-              allowAssetOrigins: options.allowAssetOrigin,
-            });
-            const startOrigin = policy ? startOriginOf(startUrl, page.url(), result.actions) : null;
-            if (policy && !(await pinPage(page, policy, startOrigin))) {
-              console.error(
-                '❌ Refusing to run an AI-planned run with no starting origin to pin to: pass --url, or --allow-cross-origin',
-              );
-              status = 'error';
-              // The browser is already up: close it, or the CLI hangs on it (codex).
-              await executor.cleanup();
-              return;
-            }
-
-            // Open the starting page first, otherwise every non-navigate action
-            // runs against about:blank (issue #112). Routed through executeAction
-            // so the URL policy applies to the user-supplied URL. Skipped when the
-            // instruction already begins with a navigation, to avoid loading twice.
-            let startPageReady = true;
-            if (startUrl && result.actions[0].type !== 'navigate') {
-              say(`   Opening starting page: ${startUrl}`);
-              const navResult = await executor.executeAction(
-                { type: 'navigate', url: startUrl },
-                page,
-              );
-              executionResults.push(navResult);
-
-              if (!navResult.success) {
-                say(`   ❌ Failed to open starting page: ${navResult.error}`);
-                status = 'error';
-                startPageReady = false;
-              }
-            }
-
-            // Execute each action and report progress
-            for (let i = 0; startPageReady && i < result.actions.length; i++) {
-              const action = result.actions[i];
-              say(`   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`);
-
-              const verdict: PolicyVerdict = policy
-                ? await checkPlannedAction(action, policy, page, startOrigin)
-                : { allowed: true };
-              const execResult: ExecutionResult = verdict.allowed
-                ? await executor.executeAction(action, page, undefined, verdict.target)
-                : {
-                    success: false,
-                    action,
-                    error: `Refused by agent policy: ${verdict.reason}`,
-                    duration: 0,
-                  };
-              executionResults.push(execResult);
-
-              if (execResult.success) {
-                say(`   ✅ Success (${execResult.duration}ms)`);
-                if (execResult.context?.url) {
-                  say(`      Current page: ${execResult.context.url}`);
-                }
-              } else {
-                say(`   ❌ Failed: ${execResult.error}`);
-                status = 'error';
-                // Continue with remaining actions instead of stopping
-              }
-            }
-
-            // Goal verdict: did every assertion in the plan hold? Distinct from
-            // per-action success, which only says the Playwright call didn't
-            // throw. Stays null when the plan asserted nothing, so "no goal
-            // stated" is never conflated with "goal met".
-            const assertResults = executionResults.filter((r) => r.action?.type === 'assert');
-            if (assertResults.length > 0) {
-              goalMet = assertResults.every((r) => r.success);
-              say(`\n🎯 Goal check: ${goalMet ? 'passed' : 'failed'}`);
-              for (const failed of assertResults.filter((r) => !r.success)) {
-                say(`   ✗ ${failed.action.description ?? describeAction(failed.action)}`);
-              }
-            }
-
-            // Final status
-            const successCount = executionResults.filter((r) => r.success).length;
-            const totalCount = executionResults.length;
-
-            if (successCount === totalCount) {
-              say(`\n🎉 All ${totalCount} actions completed successfully!`);
-            } else {
-              say(`\n⚠️  ${successCount}/${totalCount} actions completed successfully`);
-              status = 'error';
-            }
-
-            // Clean up browser resources
-            await executor.cleanup();
-          } catch (executionError) {
-            status = 'error';
-            console.error(
-              '\n❌ Execution failed:',
-              executionError instanceof Error ? executionError.message : executionError,
-            );
-
-            // Ensure cleanup even on error
-            try {
-              await executor.cleanup();
-            } catch (cleanupError) {
-              // Ignore cleanup errors, but log them for debugging
-              console.error(
-                'Warning: Browser cleanup failed:',
-                cleanupError instanceof Error ? cleanupError.message : cleanupError,
-              );
-            }
-          }
-        } else {
-          say('\n🔍 Dry run mode - actions not executed');
-        }
-      } catch (error) {
-        status = 'error';
-        console.error('Error processing instruction:', error);
-      } finally {
-        const endTime = new Date();
-
-        // Persist to database (graceful degradation: never crash the run on a DB hiccup)
-        try {
-          const { initializeDatabase, insertTestRun } = await import('./db');
-          const dbPath = resolveDbPath();
-
-          // initializeDatabase creates the parent dir (mode 0o700) if needed.
-          const db = initializeDatabase(dbPath);
-          try {
-            insertTestRun(db, {
-              instruction,
-              status,
-              startTime,
-              endTime,
-            });
-          } finally {
-            // Always close, even if insertTestRun throws, so the handle never leaks.
-            db.close();
-          }
-        } catch (dbErr) {
-          console.error(
-            '⚠️  Failed to persist run to database:',
-            dbErr instanceof Error ? dbErr.message : dbErr,
-          );
-        }
-
-        // The machine-readable envelope. Emitted last and from `finally` so it
-        // covers every exit path, and built field-by-field rather than spreading
-        // internal objects — this shape is a public contract for assistants, and
-        // future changes to it must be additive.
-        if (options.json) {
-          console.log(
-            JSON.stringify({
-              instruction,
-              translation: translation && {
-                method: translation.method,
-                confidence: translation.confidence,
-                reasoning: translation.reasoning ?? null,
-                error: translation.error ?? null,
-                actions: translation.actions,
-              },
-              executed,
-              goalMet,
-              // null outside --agent mode, so the one-shot contract is unchanged.
-              agent,
-              results: executionResults.map((r) => ({
-                success: r.success,
-                action: r.action ?? null,
-                error: r.error ?? null,
-                duration: r.duration ?? null,
-                context: r.context ?? null,
-              })),
-              status,
-            }),
-          );
-        }
-
-        // exitCode, not exit(): a piped --json payload is flushed before the process ends.
-        if (status === 'error') process.exitCode = usageError ? 2 : providerOutage ? 3 : 1;
-      }
-    },
-  );
+  .action(async (instruction: string, options: RunCommandOptions) => {
+    const startTime = new Date();
+    const ctx = runContext(instruction, options);
+    const st = newRunState();
+    try {
+      await (options.agent ? runAgentMode(ctx, st) : runOneShot(ctx, st));
+    } catch (error) {
+      st.status = 'error';
+      console.error('Error processing instruction:', error);
+    } finally {
+      await persistRun(instruction, st.status, startTime, new Date());
+      if (options.json) printRunEnvelope(instruction, st);
+      // exitCode, not exit(): a piped --json payload is flushed before the process ends.
+      if (st.status === 'error') process.exitCode = runExitCode(st);
+    }
+  });
 
 program
   .command('watch [target]')
@@ -715,6 +293,774 @@ async function startMetrics(port: number | undefined): Promise<boolean> {
 /** How long `iris connect` waits for requests in flight on SIGTERM before closing (#309). */
 const DRAIN_DEADLINE_MS = 12_000;
 
+type RunExecutor = import('./executor').ActionExecutor;
+type RunPage = Awaited<ReturnType<RunExecutor['createPage']>>;
+type RunPolicy = NonNullable<ReturnType<typeof import('./agent-policy').planPolicy>>;
+type AgentOutcome = import('./agent-loop').AgentRunResult;
+
+/** What one `iris run` has to work with; fixed for the run. */
+interface RunContext {
+  instruction: string;
+  options: RunCommandOptions;
+  startUrl: string | undefined;
+  say: (message: string) => void;
+  executorOptions: import('./executor').ActionExecutorOptions;
+}
+
+/**
+ * What one `iris run` found out, captured for the JSON envelope, which is emitted once
+ * from `finally` so that every exit path (success, no-actions return, throw, dry-run)
+ * reports.
+ */
+interface RunState {
+  status: 'success' | 'error';
+  executionResults: ExecutionResult[];
+  translation: TranslationResult | null;
+  executed: boolean;
+  /** null = the plan contained no assertions, i.e. no goal was stated. */
+  goalMet: boolean | null;
+  /** Populated only in --agent mode; stays null so the one-shot envelope is unchanged. */
+  agent: { turns: number; terminationReason: string; errorKind: string | null } | null;
+  /** Exit 2 rather than 1: the flags were wrong, nothing was run (#294). */
+  usageError: boolean;
+  /**
+   * Exit 3 rather than 1: the AI provider could not be asked or answer (#510), as
+   * visual-diff and a11y use 3 for "could not run here"; CI can retry an outage.
+   */
+  providerOutage: boolean;
+}
+
+function newRunState(): RunState {
+  return {
+    status: 'success',
+    executionResults: [],
+    translation: null,
+    executed: false,
+    goalMet: null,
+    agent: null,
+    usageError: false,
+    providerOutage: false,
+  };
+}
+
+function runContext(instruction: string, options: RunCommandOptions): RunContext {
+  return {
+    instruction,
+    options,
+    startUrl: options.url || process.env.IRIS_BASE_URL,
+    // In JSON mode stdout is a machine contract, so narration is suppressed
+    // entirely — an assistant pipes this straight into JSON.parse. Errors keep
+    // going to console.error (stderr), which never pollutes the payload.
+    say: (message: string) => {
+      if (!options.json) console.log(message);
+    },
+    executorOptions: runExecutorOptions(options),
+  };
+}
+
+/**
+ * Executor options shared by the one-shot and agent paths, so the two
+ * cannot drift apart on timeout or retry behaviour.
+ */
+function runExecutorOptions(
+  options: RunCommandOptions,
+): import('./executor').ActionExecutorOptions {
+  return {
+    timeout: options.timeout ?? 30000,
+    trackContext: true,
+    retryAttempts: 2,
+    retryDelay: 1000,
+    browserOptions: {
+      headless: options.headless !== false,
+      devtools: options.headless === false, // Enable devtools in non-headless mode
+    },
+    urlPolicy: { blockPrivateHosts: options.blockPrivateHosts },
+  };
+}
+
+function messageOf(error: unknown): unknown {
+  return error instanceof Error ? error.message : error;
+}
+
+/** Ensure cleanup even on error; a cleanup failure is logged, never thrown. */
+async function cleanupQuietly(executor: RunExecutor): Promise<void> {
+  try {
+    await executor.cleanup();
+  } catch (cleanupError) {
+    console.error('Warning: Browser cleanup failed:', messageOf(cleanupError));
+  }
+}
+
+/**
+ * Both guards run before any browser launch: a usage error should cost
+ * nothing and surface immediately. They go to stderr rather than say()
+ * so they are still visible when --json owns stdout.
+ */
+function agentUsageError(ctx: RunContext): string | null {
+  if (!ctx.startUrl) {
+    return (
+      '❌ --agent needs a starting page: pass --url <url> or set IRIS_BASE_URL.\n' +
+      '   The loop plans against what is actually on the page, so it cannot start from about:blank.'
+    );
+  }
+  if (ctx.options.dryRun) {
+    return (
+      '❌ --agent cannot be combined with --dry-run.\n' +
+      '   Each turn is planned from the result of the last one, so there is nothing to translate without executing.'
+    );
+  }
+  return null;
+}
+
+async function runAgentMode(ctx: RunContext, st: RunState): Promise<void> {
+  const usage = agentUsageError(ctx);
+  if (usage) {
+    console.error(usage);
+    st.status = 'error';
+    st.usageError = true;
+    return;
+  }
+  st.executed = true;
+  const executor = await agentExecutor(ctx);
+  try {
+    await agentSession(ctx, st, executor);
+  } catch (agentError) {
+    st.status = 'error';
+    console.error('\n❌ Agent run failed:', messageOf(agentError));
+    await cleanupQuietly(executor);
+  }
+}
+
+/**
+ * Pin at the REQUEST layer, not just before each action. A pre-action
+ * check notices a same-origin click that navigates away only on the
+ * next turn, by which time the cross-origin request has gone out.
+ */
+async function agentExecutor(ctx: RunContext): Promise<RunExecutor> {
+  const { ActionExecutor } = await import('./executor');
+  const { originOf } = await import('./agent-policy');
+  const pinnedOrigin = ctx.options.allowCrossOrigin
+    ? undefined
+    : (originOf(ctx.startUrl!) ?? undefined);
+  return new ActionExecutor({
+    ...ctx.executorOptions,
+    urlPolicy: {
+      ...ctx.executorOptions.urlPolicy,
+      pinnedOrigin,
+      assetOrigins: ctx.options.allowAssetOrigin,
+    },
+  });
+}
+
+function sayAgentBanner(ctx: RunContext): void {
+  const o = ctx.options;
+  ctx.say(`🤖 Agent mode (experimental), up to ${o.maxTurns ?? 8} turns`);
+  ctx.say(
+    `   Policy: ${o.allow ? o.allow.join('/') : 'all actions'}, ` +
+      `${o.allowCrossOrigin ? 'any origin' : 'start origin only'}, ` +
+      `${o.allowDestructive ? 'destructive allowed' : 'destructive refused'}`,
+  );
+  ctx.say(`   Opening starting page: ${ctx.startUrl}`);
+}
+
+async function agentSession(ctx: RunContext, st: RunState, executor: RunExecutor): Promise<void> {
+  await executor.launchBrowser();
+  const page = await executor.createPage();
+  sayAgentBanner(ctx);
+
+  // Routed through executeAction so the URL policy applies, exactly as
+  // the one-shot path does.
+  const navResult = await executor.executeAction({ type: 'navigate', url: ctx.startUrl! }, page);
+  st.executionResults.push(navResult);
+
+  if (navResult.success) {
+    await runAgentTurns(ctx, st, executor, page);
+  } else {
+    ctx.say(`   ❌ Failed to open starting page: ${navResult.error}`);
+    st.status = 'error';
+  }
+  await executor.cleanup();
+}
+
+async function runAgentTurns(
+  ctx: RunContext,
+  st: RunState,
+  executor: RunExecutor,
+  page: RunPage,
+): Promise<void> {
+  const o = ctx.options;
+  const { runAgentLoop } = await import('./agent-loop');
+  const outcome = await runAgentLoop({
+    instruction: ctx.instruction,
+    executor,
+    page,
+    maxTurns: o.maxTurns ?? 8,
+    // What the user asked for, not where the navigation landed: a
+    // start URL that redirects cross-origin must not silently move
+    // the origin the agent is pinned to.
+    startUrl: ctx.startUrl,
+    log: (message) => ctx.say(`   ${message}`),
+    policy: {
+      allow: o.allow,
+      pinOrigin: !o.allowCrossOrigin,
+      allowDestructive: o.allowDestructive,
+      assetOrigins: o.allowAssetOrigin,
+    },
+  });
+  applyAgentOutcome(st, outcome);
+  sayAgentOutcome(ctx, outcome);
+}
+
+function applyAgentOutcome(st: RunState, outcome: AgentOutcome): void {
+  st.executionResults.push(...outcome.results);
+  st.goalMet = outcome.goalMet;
+  st.agent = {
+    turns: outcome.turns,
+    terminationReason: outcome.terminationReason,
+    errorKind: outcome.errorKind ?? null,
+  };
+  // 3 says a retry is safe: only when the loop dispatched nothing (#510 review).
+  // After a click, a retry would repeat it (#296).
+  st.providerOutage = outcome.errorKind === 'provider' && outcome.results.length === 0;
+  if (agentRunFailed(outcome)) st.status = 'error';
+}
+
+/**
+ * A failed action is NOT a failed agent run — recovering from one is
+ * the entire point of re-planning, so the one-shot path's "every
+ * action succeeded" rule would be wrong here. The verdict is whether
+ * the goal held at the end.
+ *
+ * Not `terminationReason === 'goal_met'` either: a model that keeps
+ * acting alongside its assert never trips the completion signal, so a
+ * run can end at the turn cap with the goal demonstrably passing.
+ * Reporting that as a failure contradicts the "Goal check: passed"
+ * printed a line earlier — observed with a small local model.
+ *
+ * Abnormal exits stay errors regardless, since `goalMet` there can be
+ * a stale verdict from a turn before things went wrong.
+ */
+function agentRunFailed(outcome: AgentOutcome): boolean {
+  const abnormalExit =
+    outcome.terminationReason === 'error' || outcome.terminationReason === 'consecutive_failures';
+  return outcome.goalMet !== true || abnormalExit;
+}
+
+function sayAgentOutcome(ctx: RunContext, outcome: AgentOutcome): void {
+  ctx.say(`\n🎯 Agent finished after ${outcome.turns} turn(s): ${outcome.terminationReason}`);
+  if (outcome.goalMet === null) {
+    ctx.say('   Goal unverified — no check of the final page ran.');
+  } else {
+    ctx.say(`   Goal check: ${outcome.goalMet ? 'passed' : 'failed'}`);
+  }
+}
+
+async function runOneShot(ctx: RunContext, st: RunState): Promise<void> {
+  const { translate } = await import('./translator');
+  const result = await translate(ctx.instruction, ctx.startUrl ? { url: ctx.startUrl } : undefined);
+  st.translation = result;
+  sayTranslation(ctx, result);
+  if (planRefused(ctx, st, result)) return;
+
+  // Execute actions unless dry-run
+  if (ctx.options.dryRun) {
+    ctx.say('\n🔍 Dry run mode - actions not executed');
+    return;
+  }
+  await executeOneShot(ctx, st, result);
+}
+
+function sayTranslation(ctx: RunContext, result: TranslationResult): void {
+  ctx.say(`✨ Translation result (${result.method}):`);
+  ctx.say(`   Actions: ${JSON.stringify(result.actions)}`);
+  ctx.say(`   Confidence: ${result.confidence}`);
+  if (result.reasoning) {
+    ctx.say(`   Reasoning: ${result.reasoning}`);
+  }
+}
+
+/** A translation with nothing to run: the run ends as an error. */
+function planRefused(ctx: RunContext, st: RunState, result: TranslationResult): boolean {
+  // The provider could not be asked: say why, rather than "no actions" (#293).
+  if (result.error) {
+    st.status = 'error';
+    st.providerOutage = true;
+    console.error(`❌ AI translation failed: ${result.error}`);
+    return true;
+  }
+  if (result.actions.length === 0) {
+    st.status = 'error';
+    ctx.say('⚠️  No actions generated from instruction');
+    return true;
+  }
+  return false;
+}
+
+async function executeOneShot(
+  ctx: RunContext,
+  st: RunState,
+  result: TranslationResult,
+): Promise<void> {
+  st.executed = true;
+  ctx.say('\n🚀 Executing actions...');
+
+  const { ActionExecutor } = await import('./executor');
+  const executor = new ActionExecutor(ctx.executorOptions);
+  try {
+    await oneShotSession(ctx, st, executor, result);
+  } catch (executionError) {
+    st.status = 'error';
+    console.error('\n❌ Execution failed:', messageOf(executionError));
+    await cleanupQuietly(executor);
+  }
+}
+
+async function oneShotSession(
+  ctx: RunContext,
+  st: RunState,
+  executor: RunExecutor,
+  result: TranslationResult,
+): Promise<void> {
+  // Launch browser and create page
+  await executor.launchBrowser();
+  const page = await executor.createPage();
+
+  // Provide feedback about browser mode
+  ctx.say(
+    ctx.options.headless !== false
+      ? '   Running in headless mode...'
+      : '   Launching visible browser with developer tools...',
+  );
+
+  const pin = await pinOneShot(ctx, page, result);
+  if (!pin) {
+    console.error(
+      '❌ Refusing to run an AI-planned run with no starting origin to pin to: pass --url, or --allow-cross-origin',
+    );
+    st.status = 'error';
+    // The browser is already up: close it, or the CLI hangs on it (codex).
+    await executor.cleanup();
+    return;
+  }
+
+  if (await openStartPage(ctx, st, executor, page, result)) {
+    await runPlannedActions(ctx, st, executor, page, result, pin);
+  }
+  sayPlanGoal(ctx, st);
+  sayActionCounts(ctx, st);
+
+  // Clean up browser resources
+  await executor.cleanup();
+}
+
+/**
+ * The agent's policy applies to any plan a model proposed, here as in --agent
+ * (#354); a pattern-translated plan is the user's own, with only --allow. Null when
+ * a policy needs a start origin to pin to and there is none.
+ */
+async function pinOneShot(
+  ctx: RunContext,
+  page: RunPage,
+  result: TranslationResult,
+): Promise<{ policy: RunPolicy | null; startOrigin: string | null } | null> {
+  const o = ctx.options;
+  const { planPolicy, startOriginOf, pinPage } = await import('./agent-policy');
+  const policy = planPolicy(result.method === 'ai', {
+    allow: o.allow,
+    allowCrossOrigin: o.allowCrossOrigin,
+    allowDestructive: o.allowDestructive,
+    allowAssetOrigins: o.allowAssetOrigin,
+  });
+  if (!policy) return { policy, startOrigin: null };
+  const startOrigin = startOriginOf(ctx.startUrl, page.url(), result.actions);
+  return (await pinPage(page, policy, startOrigin)) ? { policy, startOrigin } : null;
+}
+
+/**
+ * Open the starting page first, otherwise every non-navigate action
+ * runs against about:blank (issue #112). Routed through executeAction
+ * so the URL policy applies to the user-supplied URL. Skipped when the
+ * instruction already begins with a navigation, to avoid loading twice.
+ * False when it could not be opened.
+ */
+async function openStartPage(
+  ctx: RunContext,
+  st: RunState,
+  executor: RunExecutor,
+  page: RunPage,
+  result: TranslationResult,
+): Promise<boolean> {
+  if (!ctx.startUrl || result.actions[0].type === 'navigate') return true;
+  ctx.say(`   Opening starting page: ${ctx.startUrl}`);
+  const navResult = await executor.executeAction({ type: 'navigate', url: ctx.startUrl }, page);
+  st.executionResults.push(navResult);
+  if (navResult.success) return true;
+  ctx.say(`   ❌ Failed to open starting page: ${navResult.error}`);
+  st.status = 'error';
+  return false;
+}
+
+/** Execute each action and report progress */
+async function runPlannedActions(
+  ctx: RunContext,
+  st: RunState,
+  executor: RunExecutor,
+  page: RunPage,
+  result: TranslationResult,
+  pin: { policy: RunPolicy | null; startOrigin: string | null },
+): Promise<void> {
+  const { checkPlannedAction, refusedResult } = await import('./agent-policy');
+  for (const [i, action] of result.actions.entries()) {
+    ctx.say(`   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`);
+    const verdict: PolicyVerdict = pin.policy
+      ? await checkPlannedAction(action, pin.policy, page, pin.startOrigin)
+      : { allowed: true };
+    const execResult: ExecutionResult = verdict.allowed
+      ? await executor.executeAction(action, page, undefined, verdict.target)
+      : refusedResult(action, verdict);
+    st.executionResults.push(execResult);
+    sayActionResult(ctx, st, execResult);
+  }
+}
+
+function sayActionResult(ctx: RunContext, st: RunState, execResult: ExecutionResult): void {
+  if (!execResult.success) {
+    ctx.say(`   ❌ Failed: ${execResult.error}`);
+    st.status = 'error';
+    // Continue with remaining actions instead of stopping
+    return;
+  }
+  ctx.say(`   ✅ Success (${execResult.duration}ms)`);
+  if (execResult.context?.url) {
+    ctx.say(`      Current page: ${execResult.context.url}`);
+  }
+}
+
+/**
+ * Goal verdict: did every assertion in the plan hold? Distinct from
+ * per-action success, which only says the Playwright call didn't
+ * throw. Stays null when the plan asserted nothing, so "no goal
+ * stated" is never conflated with "goal met".
+ */
+function sayPlanGoal(ctx: RunContext, st: RunState): void {
+  const assertResults = st.executionResults.filter((r) => r.action.type === 'assert');
+  if (assertResults.length === 0) return;
+  st.goalMet = assertResults.every((r) => r.success);
+  ctx.say(`\n🎯 Goal check: ${st.goalMet ? 'passed' : 'failed'}`);
+  for (const failed of assertResults.filter((r) => !r.success)) {
+    ctx.say(
+      `   ✗ ${(failed.action as { description?: string }).description ?? describeAction(failed.action)}`,
+    );
+  }
+}
+
+/** Final status */
+function sayActionCounts(ctx: RunContext, st: RunState): void {
+  const successCount = st.executionResults.filter((r) => r.success).length;
+  const totalCount = st.executionResults.length;
+  if (successCount === totalCount) {
+    ctx.say(`\n🎉 All ${totalCount} actions completed successfully!`);
+  } else {
+    ctx.say(`\n⚠️  ${successCount}/${totalCount} actions completed successfully`);
+    st.status = 'error';
+  }
+}
+
+/** Persist to database (graceful degradation: never crash the run on a DB hiccup) */
+async function persistRun(
+  instruction: string,
+  status: RunState['status'],
+  startTime: Date,
+  endTime: Date,
+): Promise<void> {
+  try {
+    const { initializeDatabase, insertTestRun } = await import('./db');
+    // initializeDatabase creates the parent dir (mode 0o700) if needed.
+    const db = initializeDatabase(resolveDbPath());
+    try {
+      insertTestRun(db, { instruction, status, startTime, endTime });
+    } finally {
+      // Always close, even if insertTestRun throws, so the handle never leaks.
+      db.close();
+    }
+  } catch (dbErr) {
+    console.error('⚠️  Failed to persist run to database:', messageOf(dbErr));
+  }
+}
+
+/**
+ * The machine-readable envelope. Emitted last and from `finally` so it
+ * covers every exit path, and built field-by-field rather than spreading
+ * internal objects — this shape is a public contract for assistants, and
+ * future changes to it must be additive.
+ */
+function printRunEnvelope(instruction: string, st: RunState): void {
+  console.log(
+    JSON.stringify({
+      instruction,
+      translation: envelopeTranslation(st.translation),
+      executed: st.executed,
+      goalMet: st.goalMet,
+      // null outside --agent mode, so the one-shot contract is unchanged.
+      agent: st.agent,
+      results: st.executionResults.map(envelopeResult),
+      status: st.status,
+    }),
+  );
+}
+
+function envelopeTranslation(translation: TranslationResult | null) {
+  if (!translation) return null;
+  return {
+    method: translation.method,
+    confidence: translation.confidence,
+    reasoning: orNull(translation.reasoning),
+    error: orNull(translation.error),
+    actions: translation.actions,
+  };
+}
+
+function envelopeResult(r: ExecutionResult) {
+  return {
+    success: r.success,
+    action: orNull(r.action),
+    error: orNull(r.error),
+    duration: orNull(r.duration),
+    context: orNull(r.context),
+  };
+}
+
+/** JSON has no undefined: an absent field is reported as null. */
+function orNull<T>(value: T | undefined): T | null {
+  return value ?? null;
+}
+
+function runExitCode(st: RunState): number {
+  if (st.usageError) return 2;
+  return st.providerOutage ? 3 : 1;
+}
+
+/** `iris run` options as commander parses them. */
+interface RunCommandOptions {
+  dryRun?: boolean;
+  headless?: boolean;
+  timeout?: number;
+  url?: string;
+  json?: boolean;
+  agent?: boolean;
+  maxTurns?: number;
+  allow?: Array<'click' | 'fill' | 'navigate' | 'assert'>;
+  allowCrossOrigin?: boolean;
+  allowDestructive?: boolean;
+  allowAssetOrigin?: string[];
+  blockPrivateHosts?: boolean;
+}
+
+type ServerOptions = import('./protocol').StartServerOptions;
+type ConnectServer = ReturnType<typeof import('./protocol').startServer>;
+/** How `iris connect` authenticates: org API keys (hosted) or one bearer token. */
+type ConnectAuth =
+  | { hosted: ServerOptions; authToken?: undefined; invented?: undefined }
+  | { hosted?: undefined; authToken: string; invented: boolean };
+
+/**
+ * Bind address, most explicit first. The default stays loopback: this server
+ * drives a real browser, so a wider bind turns it into an SSRF engine that
+ * anything routable can reach (see src/url-policy.ts for why that matters).
+ *
+ * It is configurable at all because a container cannot use loopback: Docker
+ * forwards a published port to the container's network interface, so a
+ * 127.0.0.1 bind means the service starts, looks healthy, and refuses every
+ * connection (issue #192). Widen it only where something else — a published
+ * port scoped to 127.0.0.1, a private network — provides the boundary.
+ * `||`, not `??`: an empty value means "unset", and `??` would keep `''`,
+ * which WebSocketServer treats as "bind every interface" — silently widening
+ * the boundary for an operator whose wrapper script wrote
+ * `export IRIS_CONNECT_HOST=` meaning the opposite. Same trap as #185's
+ * IRIS_DOTENV_DIR.
+ */
+function connectHost(options: ConnectOptions): string {
+  return options.host || process.env.IRIS_CONNECT_HOST || '127.0.0.1';
+}
+
+/**
+ * A supplied token is used verbatim so a deployed instance keeps a stable
+ * credential across restarts; without one, a fresh per-session token is
+ * generated. Either way the server requires it in an `Authorization: Bearer`
+ * header — a browser page cannot set that header, so cross-site WebSocket
+ * hijacking and origin-less local processes are locked out.
+ *
+ * Hosted mode (#341, ADR 0001 §4): tenants authenticate with their org's API keys,
+ * and the shared token is off. Null after a refusal (the exit code is set).
+ */
+async function connectAuth(options: ConnectOptions): Promise<ConnectAuth | null> {
+  // IRIS_CONNECT_TOKEN_FILE is the deployed form (#332): an env var shows up in
+  // `docker inspect` and /proc/<pid>/environ, a mounted secret file does not.
+  const tokenFile = process.env.IRIS_CONNECT_TOKEN_FILE;
+  if (isHostedMode()) {
+    const hosted = await hostedConnectServices(tokenFile);
+    if (!hosted) return null;
+    warnStartupConfig(options, undefined);
+    return { hosted };
+  }
+  const supplied = await suppliedConnectToken(tokenFile);
+  if (supplied === null) return null;
+  warnStartupConfig(options, supplied);
+  const { randomBytes } = await import('crypto');
+  return { authToken: supplied || randomBytes(32).toString('hex'), invented: !supplied };
+}
+
+/** Hosted services for `iris connect`, or null after a refusal (exit 2 / 3). */
+async function hostedConnectServices(tokenFile: string | undefined): Promise<ServerOptions | null> {
+  // A token set anyway is refused rather than ignored: whoever set it expects it to
+  // be what guards the server.
+  if (tokenFile || process.env.IRIS_CONNECT_TOKEN) {
+    console.error(
+      'Hosted mode authenticates API keys; unset IRIS_CONNECT_TOKEN and IRIS_CONNECT_TOKEN_FILE',
+    );
+    process.exit(2); // Invalid usage
+    return null;
+  }
+  try {
+    const { hostedServices } = await import('./api-key-auth');
+    const services = await hostedServices();
+    // Signs run-detail artifacts (#460); unset IRIS_S3_ENDPOINT means none.
+    const artifacts = (await import('./artifact-store')).resolveArtifactStore() ?? undefined;
+    return { ...services, runs: services.history, artifacts };
+  } catch (err) {
+    console.error(`Cannot start in hosted mode: ${(err as Error).message}`);
+    process.exit(3); // Environment/runtime error
+    return null;
+  }
+}
+
+/** The operator's token (env or file), undefined for none, null after a refusal. */
+async function suppliedConnectToken(
+  tokenFile: string | undefined,
+): Promise<string | undefined | null> {
+  if (tokenFile && process.env.IRIS_CONNECT_TOKEN) {
+    console.error('Set IRIS_CONNECT_TOKEN and IRIS_CONNECT_TOKEN_FILE one at a time, not both');
+    process.exit(2); // Invalid usage
+    return null;
+  }
+  if (!tokenFile) return process.env.IRIS_CONNECT_TOKEN;
+  return readTokenFile(tokenFile);
+}
+
+/**
+ * An unreadable or empty file must not fall through to a random token: that
+ * server would look healthy and refuse every client holding the real one.
+ */
+async function readTokenFile(tokenFile: string): Promise<string | null> {
+  const { readFile } = await import('fs/promises');
+  let token: string;
+  try {
+    token = (await readFile(tokenFile, 'utf8')).trim();
+  } catch (err) {
+    console.error(`Cannot read IRIS_CONNECT_TOKEN_FILE: ${(err as Error).message}`);
+    process.exit(3); // Environment/runtime error
+    return null;
+  }
+  if (token) return token;
+  console.error(`IRIS_CONNECT_TOKEN_FILE (${tokenFile}) holds no token`);
+  process.exit(3); // Environment/runtime error
+  return null;
+}
+
+function connectLimits(options: ConnectOptions): ServerOptions['limits'] {
+  return Object.fromEntries(
+    Object.entries({
+      maxPayloadBytes: options.maxPayload,
+      maxConnections: options.maxConnections,
+      maxSessions: options.maxSessions,
+      maxActionsPerRequest: options.maxActions,
+      keyRequestsPerMinute: options.ratePerKey,
+      orgRequestsPerMinute: options.ratePerOrg,
+      maxSessionsPerOrg: options.maxSessionsPerOrg,
+      maxConnectionsPerOrg: options.maxConnectionsPerOrg,
+    }).filter(([, v]) => v !== undefined),
+  );
+}
+
+/**
+ * Wait for the bind before claiming it. `listen` fails asynchronously, so
+ * logging straight after startServer() announced a server that then died
+ * on an unhandled 'error' event when the port was taken (#330). `once`
+ * rejects on 'error', which is the bind failure.
+ */
+async function listenOrExit(wss: ConnectServer, host: string, port: number): Promise<boolean> {
+  try {
+    await once(wss, 'listening');
+    return true;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    const reason = e.code === 'EADDRINUSE' ? 'address already in use' : e.message;
+    console.error(`Cannot listen on ${host}:${port}: ${reason}`);
+    wss.close();
+    process.exit(3); // Environment/runtime error
+    return false;
+  }
+}
+
+/**
+ * Advertise the address actually bound. Hardcoding 127.0.0.1 here would
+ * describe a container as unreachable while it works fine, and advertising
+ * `localhost` would send dual-stack clients to ::1 and miss an IPv4 listener.
+ * The bound port, not the requested one: `connect 0` lets the OS pick (#364), and a
+ * caller reads it from this line instead of racing for a port it chose itself.
+ */
+function announceServer(wss: ConnectServer, host: string, port: number, auth: ConnectAuth): void {
+  const address = wss.address?.();
+  const bound = address && typeof address === 'object' ? address.port : port;
+  console.log(`JSON-RPC server listening on ws://${host}:${bound}`);
+  // Only echo a token this process invented. Reprinting a supplied one tells
+  // the operator what they already know and copies a secret into the logs.
+  if (auth.invented) {
+    console.log(`Auth token (send as "Authorization: Bearer <token>"):\n  ${auth.authToken}`);
+  }
+}
+
+/**
+ * Close the server on Ctrl+C / termination so wss.on('close') drains
+ * in-flight sessions (executor.cleanup) instead of being skipped. Existing
+ * client sockets must be closed first — wss.close() only stops accepting new
+ * connections and won't fire 'close' (or let the process exit) while a
+ * client stays connected. Installing this handler also suppresses Node's
+ * default SIGINT/SIGTERM termination, so without this the process would hang.
+ * Drain first (#309): readiness turns 503, new connections and requests are refused, and
+ * requests in flight are answered, up to DRAIN_DEADLINE_MS. Then the sockets close and
+ * the sessions' browsers with them. Compose's stop_grace_period (20s) covers the drain
+ * plus the 5s force-exit below. A second signal skips the wait.
+ */
+function installShutdown(
+  wss: ConnectServer,
+  drainServer: typeof import('./protocol').drainServer,
+): void {
+  let stopping = false;
+  const shutdown = async () => {
+    if (stopping) process.exit(0);
+    stopping = true;
+    console.log('\nShutting down JSON-RPC server: draining requests in flight...');
+    const drained = await drainServer(wss, DRAIN_DEADLINE_MS);
+    if (!drained) console.error(`Drain deadline (${DRAIN_DEADLINE_MS}ms) passed; closing anyway`);
+    for (const client of wss.clients) {
+      client.close(1001, 'Server shutting down');
+    }
+    wss.close();
+    // Force-terminate if a wedged/unresponsive client stalls the graceful
+    // close handshake; otherwise wss never emits 'close' and the process hangs.
+    // unref() so this timer never keeps the process alive on its own.
+    setTimeout(() => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      process.exit(0);
+    }, 5000).unref();
+  };
+  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown());
+}
+
 program
   .command('connect')
   .description('Start JSON-RPC/WebSocket server on the given port')
@@ -758,191 +1104,22 @@ program
   .option('--metrics-port <port>', METRICS_PORT_HELP, parseMetricsPort)
   .action(async (port: number, options: ConnectOptions) => {
     const { startServer, installProcessErrorPolicy, drainServer } = await import('./protocol');
-    const { randomBytes } = await import('crypto');
-    const { readFile } = await import('fs/promises');
-
-    // Bind address, most explicit first. The default stays loopback: this server
-    // drives a real browser, so a wider bind turns it into an SSRF engine that
-    // anything routable can reach (see src/url-policy.ts for why that matters).
-    //
-    // It is configurable at all because a container cannot use loopback: Docker
-    // forwards a published port to the container's network interface, so a
-    // 127.0.0.1 bind means the service starts, looks healthy, and refuses every
-    // connection (issue #192). Widen it only where something else — a published
-    // port scoped to 127.0.0.1, a private network — provides the boundary.
-    // `||`, not `??`: an empty value means "unset", and `??` would keep `''`,
-    // which WebSocketServer treats as "bind every interface" — silently widening
-    // the boundary for an operator whose wrapper script wrote
-    // `export IRIS_CONNECT_HOST=` meaning the opposite. Same trap as #185's
-    // IRIS_DOTENV_DIR.
-    const host = options.host || process.env.IRIS_CONNECT_HOST || '127.0.0.1';
-
-    // A supplied token is used verbatim so a deployed instance keeps a stable
-    // credential across restarts; without one, a fresh per-session token is
-    // generated exactly as before. Either way the server requires it in an
-    // `Authorization: Bearer` header — a browser page cannot set that header, so
-    // cross-site WebSocket hijacking and origin-less local processes are locked out.
-    //
-    // IRIS_CONNECT_TOKEN_FILE is the deployed form (#332): an env var shows up in
-    // `docker inspect` and /proc/<pid>/environ, a mounted secret file does not.
-    const tokenFile = process.env.IRIS_CONNECT_TOKEN_FILE;
-    // Hosted mode (#341, ADR 0001 §4): tenants authenticate with their org's API
-    // keys, and the shared token is off. A token set anyway is refused rather than
-    // ignored: whoever set it expects it to be what guards the server.
-    let authenticate: import('./protocol').Authenticator | undefined;
-    let history: import('./history-store').PostgresHistory | undefined;
-    let usage: ReturnType<typeof import('./billing/usage').usageLedger> | undefined;
-    let audit: ((entry: import('./audit-log').AuditEntry) => Promise<void>) | undefined;
-    let jobs: import('./history-store').PostgresJobs | undefined;
-    let artifacts: import('./artifact-store').ArtifactStore | null = null;
-    let entitlements: ((orgId: string) => Promise<{ runsPerMonth: number }>) | undefined;
-    let aiCredentials:
-      | ((
-          p: import('./protocol').Principal,
-        ) => Promise<import('./protocol').TenantCredentials | null>)
-      | undefined;
-    if (isHostedMode()) {
-      if (tokenFile || process.env.IRIS_CONNECT_TOKEN) {
-        console.error(
-          'Hosted mode authenticates API keys; unset IRIS_CONNECT_TOKEN and IRIS_CONNECT_TOKEN_FILE',
-        );
-        process.exit(2); // Invalid usage
-        return;
-      }
-      try {
-        const { hostedServices } = await import('./api-key-auth');
-        ({ authenticate, history, aiCredentials, usage, audit, jobs, entitlements } =
-          await hostedServices());
-        // Signs run-detail artifacts (#460); unset IRIS_S3_ENDPOINT means none.
-        artifacts = (await import('./artifact-store')).resolveArtifactStore();
-      } catch (err) {
-        console.error(`Cannot start in hosted mode: ${(err as Error).message}`);
-        process.exit(3); // Environment/runtime error
-        return;
-      }
-    }
-    if (tokenFile && process.env.IRIS_CONNECT_TOKEN) {
-      console.error('Set IRIS_CONNECT_TOKEN and IRIS_CONNECT_TOKEN_FILE one at a time, not both');
-      process.exit(2); // Invalid usage
-      return;
-    }
-    let suppliedToken = process.env.IRIS_CONNECT_TOKEN;
-    if (tokenFile) {
-      // An unreadable or empty file must not fall through to a random token: that
-      // server would look healthy and refuse every client holding the real one.
-      try {
-        suppliedToken = (await readFile(tokenFile, 'utf8')).trim();
-      } catch (err) {
-        console.error(`Cannot read IRIS_CONNECT_TOKEN_FILE: ${(err as Error).message}`);
-        process.exit(3); // Environment/runtime error
-        return;
-      }
-      if (!suppliedToken) {
-        console.error(`IRIS_CONNECT_TOKEN_FILE (${tokenFile}) holds no token`);
-        process.exit(3); // Environment/runtime error
-        return;
-      }
-    }
-    warnStartupConfig(options, authenticate ? undefined : suppliedToken);
-    const authToken = authenticate ? undefined : suppliedToken || randomBytes(32).toString('hex');
-
-    const limits = Object.fromEntries(
-      Object.entries({
-        maxPayloadBytes: options.maxPayload,
-        maxConnections: options.maxConnections,
-        maxSessions: options.maxSessions,
-        maxActionsPerRequest: options.maxActions,
-        keyRequestsPerMinute: options.ratePerKey,
-        orgRequestsPerMinute: options.ratePerOrg,
-        maxSessionsPerOrg: options.maxSessionsPerOrg,
-        maxConnectionsPerOrg: options.maxConnectionsPerOrg,
-      }).filter(([, v]) => v !== undefined),
-    );
-
+    const host = connectHost(options);
+    const auth = await connectAuth(options);
+    if (!auth) return;
+    const limits = connectLimits(options);
     const wss = startServer(
       port,
-      authenticate
-        ? {
-            host,
-            authenticate,
-            history,
-            runs: history,
-            artifacts: artifacts ?? undefined,
-            entitlements,
-            aiCredentials,
-            usage,
-            audit,
-            jobs,
-            limits,
-          }
-        : { host, authToken, limits },
+      auth.hosted ? { host, ...auth.hosted, limits } : { host, authToken: auth.authToken, limits },
     );
-    // Wait for the bind before claiming it. `listen` fails asynchronously, so
-    // logging straight after startServer() announced a server that then died
-    // on an unhandled 'error' event when the port was taken (#330). `once`
-    // rejects on 'error', which is the bind failure.
-    try {
-      await once(wss, 'listening');
-    } catch (err) {
-      const e = err as NodeJS.ErrnoException;
-      const reason = e.code === 'EADDRINUSE' ? 'address already in use' : e.message;
-      console.error(`Cannot listen on ${host}:${port}: ${reason}`);
-      wss.close();
-      process.exit(3); // Environment/runtime error
-      return;
-    }
+    if (!(await listenOrExit(wss, host, port))) return;
     if (!(await startMetrics(options.metricsPort))) {
       wss.close();
       return;
     }
     installProcessErrorPolicy();
-    // Advertise the address actually bound. Hardcoding 127.0.0.1 here would
-    // describe a container as unreachable while it works fine, and advertising
-    // `localhost` would send dual-stack clients to ::1 and miss an IPv4 listener.
-    // The bound port, not the requested one: `connect 0` lets the OS pick (#364), and a
-    // caller reads it from this line instead of racing for a port it chose itself.
-    const address = wss.address?.();
-    const bound = address && typeof address === 'object' ? address.port : port;
-    console.log(`JSON-RPC server listening on ws://${host}:${bound}`);
-    // Only echo a token this process invented. Reprinting a supplied one tells
-    // the operator what they already know and copies a secret into the logs.
-    if (authToken && !suppliedToken) {
-      console.log(`Auth token (send as "Authorization: Bearer <token>"):\n  ${authToken}`);
-    }
-
-    // Close the server on Ctrl+C / termination so wss.on('close') drains
-    // in-flight sessions (executor.cleanup) instead of being skipped. Existing
-    // client sockets must be closed first — wss.close() only stops accepting new
-    // connections and won't fire 'close' (or let the process exit) while a
-    // client stays connected. Installing this handler also suppresses Node's
-    // default SIGINT/SIGTERM termination, so without this the process would hang.
-    // Drain first (#309): readiness turns 503, new connections and requests are refused, and
-    // requests in flight are answered, up to DRAIN_DEADLINE_MS. Then the sockets close and
-    // the sessions' browsers with them. Compose's stop_grace_period (20s) covers the drain
-    // plus the 5s force-exit below. A second signal skips the wait.
-    let stopping = false;
-    const shutdown = async () => {
-      if (stopping) process.exit(0);
-      stopping = true;
-      console.log('\nShutting down JSON-RPC server: draining requests in flight...');
-      const drained = await drainServer(wss, DRAIN_DEADLINE_MS);
-      if (!drained) console.error(`Drain deadline (${DRAIN_DEADLINE_MS}ms) passed; closing anyway`);
-      for (const client of wss?.clients ?? []) {
-        client.close(1001, 'Server shutting down');
-      }
-      wss?.close();
-      // Force-terminate if a wedged/unresponsive client stalls the graceful
-      // close handshake; otherwise wss never emits 'close' and the process hangs.
-      // unref() so this timer never keeps the process alive on its own.
-      setTimeout(() => {
-        for (const client of wss?.clients ?? []) {
-          client.terminate();
-        }
-        process.exit(0);
-      }, 5000).unref();
-    };
-    process.on('SIGINT', () => void shutdown());
-    process.on('SIGTERM', () => void shutdown());
+    announceServer(wss, host, port, auth);
+    installShutdown(wss, drainServer);
   });
 
 program
@@ -1351,6 +1528,165 @@ interface WatchCommandOptions {
   maxAiCalls?: number;
 }
 
+/** `iris visual-diff` options as commander parses them. */
+interface VisualDiffOptions {
+  pages?: string[];
+  baseline: string;
+  baselineStrategy: 'branch' | 'commit' | 'tag';
+  semantic: boolean;
+  provider?: string;
+  aiModel?: string;
+  threshold: number;
+  devices: string;
+  format: 'html' | 'json' | 'junit';
+  output?: string;
+  failOn: 'breaking' | 'moderate' | 'minor';
+  updateBaseline: boolean;
+  mask?: string;
+  concurrency: number;
+  baseUrl?: string;
+  showCost: boolean;
+  keepRuns: number;
+}
+
+type VisualResult = import('./visual/visual-runner').VisualTestResult;
+type SemanticAI = ReturnType<typeof resolveSemanticAI>;
+
+/**
+ * Resolve AI credentials up front, before any browser work: a missing key is
+ * a usage error the user can act on, not a constructor throw surfacing as an
+ * opaque runtime failure mid-run (issue #111).
+ */
+function semanticAIOrExit(options: VisualDiffOptions): SemanticAI | undefined {
+  if (!options.semantic) return undefined;
+  const ai = resolveSemanticAI(options.provider, options.aiModel);
+  if (ai.provider !== 'ollama' && !ai.apiKey) {
+    console.error(
+      `\n❌ --semantic requires an API key: set ${semanticKeyEnvVar(ai.provider)}, or use --provider ollama to analyze locally.`,
+    );
+    process.exit(2); // Invalid usage
+  }
+  return ai;
+}
+
+function splitList(list: string | undefined): string[] {
+  return list ? list.split(',').map((s) => s.trim()) : [];
+}
+
+function visualRunnerConfig(
+  options: VisualDiffOptions,
+  ai: SemanticAI | undefined,
+): import('./visual/visual-runner').VisualTestRunnerConfig {
+  return {
+    pages: options.pages ?? ['/'],
+    baseline: {
+      strategy: options.baselineStrategy,
+      reference: options.baseline,
+    },
+    capture: {
+      viewport: { width: 1920, height: 1080 },
+      fullPage: true,
+      mask: splitList(options.mask),
+      format: 'png' as const,
+      quality: 90,
+      stabilization: {
+        waitForFonts: true,
+        disableAnimations: true,
+        delay: 500,
+        waitForNetworkIdle: true,
+        networkIdleTimeout: 2000,
+      },
+    },
+    diff: {
+      threshold: options.threshold,
+      semanticAnalysis: options.semantic,
+      ...aiDiffOptions(ai),
+      antiAliasing: true,
+      maxConcurrency: options.concurrency,
+    },
+    devices: splitList(options.devices),
+    updateBaseline: options.updateBaseline,
+    failOn: options.failOn,
+    baseURL: options.baseUrl || process.env.IRIS_BASE_URL,
+    output: {
+      format: options.format,
+      path: options.output,
+    },
+    keepRuns: options.keepRuns,
+  };
+}
+
+function aiDiffOptions(ai: SemanticAI | undefined) {
+  return {
+    aiProvider: ai?.provider ?? ('openai' as const),
+    aiModel: ai?.model,
+    apiKey: ai?.apiKey,
+    aiEndpoint: ai?.endpoint,
+    aiCredentials: ai?.credentials,
+    aiFallback: ai?.fallback,
+  };
+}
+
+function printVisualSummary(result: VisualResult, duration: number, showCost: boolean): void {
+  console.log(`\n📊 Visual testing completed in ${duration}ms`);
+  console.log(`   Total comparisons: ${result.summary.totalComparisons}`);
+  console.log(`   Passed: ${result.summary.passed}`);
+  console.log(`   Failed: ${result.summary.failed}`);
+  if (result.runId)
+    console.log(`   Run: ${result.runId} (artifacts in .iris/runs/${result.runId}/)`);
+
+  // Read-only AI cost summary (spike 008). Only printed when opted in and a
+  // classifier ran; cost is $0 on all-cache-hit or local/stub-provider runs.
+  const c = result.costSummary;
+  if (!showCost || !c) return;
+  console.log(
+    `   AI vision: ${c.operationCount} analyses, est. $${c.totalCost.toFixed(4)} (cache hit rate ${(c.cacheHitRate * 100).toFixed(1)}%)`,
+  );
+}
+
+const FAILURE_SEVERITIES = ['breaking', 'moderate', 'minor'] as const;
+
+async function reportVisualFailure(
+  result: VisualResult,
+  options: VisualDiffOptions,
+): Promise<void> {
+  const counts = result.summary.severityCounts;
+  console.log(`\n❌ Visual regression detected!`);
+  for (const severity of FAILURE_SEVERITIES) {
+    console.log(`   ${severity[0].toUpperCase()}${severity.slice(1)}: ${counts[severity] || 0}`);
+  }
+  // #281, #484: these severities are not an AI verdict; say why when it is known.
+  const { aiUnavailableNote } = await import('./visual/reporter');
+  const note = aiUnavailableNote(result.summary);
+  if (note) console.log(`   AI: ${note}`);
+
+  if (options.format === 'html' && result.reportPath) {
+    console.log(`\n📋 Report generated: ${result.reportPath}`);
+  }
+
+  exitOnSeverity(counts, options.failOn);
+}
+
+/** Exit with failure code based on severity threshold */
+function exitOnSeverity(counts: VisualResult['summary']['severityCounts'], failOn: string): void {
+  const failIndex = FAILURE_SEVERITIES.indexOf(failOn as (typeof FAILURE_SEVERITIES)[number]);
+  // Defense-in-depth: the parser normally rejects bad values, but if an
+  // unrecognized severity ever reaches here, fail loudly rather than let
+  // slice(0, 0) swallow the regression and exit 0.
+  if (failIndex === -1) {
+    console.error(
+      `\n❌ Invalid --fail-on value "${failOn}"; expected one of breaking|moderate|minor.`,
+    );
+    process.exit(2); // Invalid usage
+  }
+  const hasFailures = FAILURE_SEVERITIES.slice(0, failIndex + 1).some(
+    (severity) => (counts[severity] || 0) > 0,
+  );
+  if (hasFailures) {
+    process.exit(5); // Visual regression failure exit code
+  }
+}
+
 /** The `watch --feedback` classifier's provider, key and model; exits 2 with no key. */
 function resolveFeedbackAI(options: WatchCommandOptions): ReturnType<typeof resolveSemanticAI> {
   const ai = resolveSemanticAI(options.provider, options.aiModel);
@@ -1453,69 +1789,15 @@ program
     (v) => parseIntOption(v, { min: 0, max: 100_000, name: 'keep-runs' }),
     DEFAULT_KEEP_RUNS,
   )
-  .action(async (options) => {
+  .action(async (options: VisualDiffOptions) => {
     const startTime = Date.now();
-
-    // Resolve AI credentials up front, before any browser work: a missing key is
-    // a usage error the user can act on, not a constructor throw surfacing as an
-    // opaque runtime failure mid-run (issue #111).
-    const ai = options.semantic ? resolveSemanticAI(options.provider, options.aiModel) : undefined;
-    if (ai && ai.provider !== 'ollama' && !ai.apiKey) {
-      console.error(
-        `\n❌ --semantic requires an API key: set ${semanticKeyEnvVar(ai.provider)}, or use --provider ollama to analyze locally.`,
-      );
-      process.exit(2); // Invalid usage
-    }
+    const ai = semanticAIOrExit(options);
 
     try {
       console.log('🎯 Starting visual regression testing...');
 
       const { VisualTestRunner } = await import('./visual/visual-runner');
-      const { aiUnavailableNote } = await import('./visual/reporter');
-
-      const runner = new VisualTestRunner({
-        pages: options.pages ?? ['/'],
-        baseline: {
-          strategy: options.baselineStrategy,
-          reference: options.baseline,
-        },
-        capture: {
-          viewport: { width: 1920, height: 1080 },
-          fullPage: true,
-          mask: options.mask ? options.mask.split(',').map((s: string) => s.trim()) : [],
-          format: 'png' as const,
-          quality: 90,
-          stabilization: {
-            waitForFonts: true,
-            disableAnimations: true,
-            delay: 500,
-            waitForNetworkIdle: true,
-            networkIdleTimeout: 2000,
-          },
-        },
-        diff: {
-          threshold: options.threshold,
-          semanticAnalysis: options.semantic,
-          aiProvider: ai?.provider ?? 'openai',
-          aiModel: ai?.model,
-          apiKey: ai?.apiKey,
-          aiEndpoint: ai?.endpoint,
-          aiCredentials: ai?.credentials,
-          aiFallback: ai?.fallback,
-          antiAliasing: true,
-          maxConcurrency: options.concurrency,
-        },
-        devices: options.devices.split(',').map((d: string) => d.trim()),
-        updateBaseline: options.updateBaseline,
-        failOn: options.failOn,
-        baseURL: options.baseUrl || process.env.IRIS_BASE_URL,
-        output: {
-          format: options.format,
-          path: options.output,
-        },
-        keepRuns: options.keepRuns,
-      });
-
+      const runner = new VisualTestRunner(visualRunnerConfig(options, ai));
       const result = await runner.run();
 
       // Record the run before any exit path below — the failure branches call
@@ -1523,60 +1805,9 @@ program
       const { recordVisualRun } = await import('./history');
       recordVisualRun(result, new Date(startTime), new Date());
 
-      const duration = Date.now() - startTime;
-      console.log(`\n📊 Visual testing completed in ${duration}ms`);
-      console.log(`   Total comparisons: ${result.summary.totalComparisons}`);
-      console.log(`   Passed: ${result.summary.passed}`);
-      console.log(`   Failed: ${result.summary.failed}`);
-      if (result.runId)
-        console.log(`   Run: ${result.runId} (artifacts in .iris/runs/${result.runId}/)`);
-
-      // Read-only AI cost summary (spike 008). Only printed when opted in and a
-      // classifier ran; cost is $0 on all-cache-hit or local/stub-provider runs.
-      if (options.showCost && result.costSummary) {
-        const c = result.costSummary;
-        console.log(
-          `   AI vision: ${c.operationCount} analyses, est. $${c.totalCost.toFixed(4)} (cache hit rate ${(c.cacheHitRate * 100).toFixed(1)}%)`,
-        );
-      }
-
+      printVisualSummary(result, Date.now() - startTime, options.showCost);
       if (result.summary.overallStatus === 'failed') {
-        console.log(`\n❌ Visual regression detected!`);
-        console.log(`   Breaking: ${result.summary.severityCounts.breaking || 0}`);
-        console.log(`   Moderate: ${result.summary.severityCounts.moderate || 0}`);
-        console.log(`   Minor: ${result.summary.severityCounts.minor || 0}`);
-        // #281, #484: these severities are not an AI verdict; say why when it is known.
-        const note = aiUnavailableNote(result.summary);
-        if (note) console.log(`   AI: ${note}`);
-
-        if (options.format === 'html' && result.reportPath) {
-          console.log(`\n📋 Report generated: ${result.reportPath}`);
-        }
-
-        // Exit with failure code based on severity threshold
-        const failureSeverities = ['breaking', 'moderate', 'minor'];
-        const failIndex = failureSeverities.indexOf(options.failOn);
-        // Defense-in-depth: the parser normally rejects bad values, but if an
-        // unrecognized severity ever reaches here, fail loudly rather than let
-        // slice(0, 0) swallow the regression and exit 0.
-        if (failIndex === -1) {
-          console.error(
-            `\n❌ Invalid --fail-on value "${options.failOn}"; expected one of breaking|moderate|minor.`,
-          );
-          process.exit(2); // Invalid usage
-        }
-        const hasFailures = failureSeverities
-          .slice(0, failIndex + 1)
-          .some(
-            (severity) =>
-              (result.summary.severityCounts[
-                severity as keyof typeof result.summary.severityCounts
-              ] || 0) > 0,
-          );
-
-        if (hasFailures) {
-          process.exit(5); // Visual regression failure exit code
-        }
+        await reportVisualFailure(result, options);
       } else {
         console.log(`\n✅ All visual tests passed!`);
       }

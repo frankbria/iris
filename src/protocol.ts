@@ -1,7 +1,7 @@
 import type { AuditEntry } from './audit-log';
 import WebSocket, { WebSocketServer } from 'ws';
 import { MAX_POPUPS_PER_CONTEXT } from './url-policy-guard';
-import { createServer, IncomingMessage, STATUS_CODES } from 'http';
+import { createServer, IncomingMessage, ServerResponse, STATUS_CODES } from 'http';
 import { handleJobsRequest, type ApiJobs, type RunReader } from './jobs-api';
 import type { ArtifactStore } from './artifact-store';
 import { randomUUID, timingSafeEqual } from 'crypto';
@@ -24,6 +24,7 @@ import { mapSecrets, type SecretEntry, type SecretSource } from './credential-re
 import {
   checkPlannedAction,
   planPolicy,
+  refusedResult,
   startOriginOf,
   type AgentPolicy,
   type PolicyFlags,
@@ -361,6 +362,104 @@ type Outcome = 'ok' | 'client_error' | 'rate_limited' | 'aborted' | 'error';
  * translation threw) is `error`, so the error rate sees a browser outage (#275).
  */
 const resultOutcome = new WeakMap<object, Outcome>();
+
+/** A frame as JSON, or `unparseable` (#357: charged first, then answered -32700). */
+function parseFrame(data: WebSocket.RawData): { parsed: unknown; unparseable: boolean } {
+  try {
+    return { parsed: JSON.parse(data.toString()), unparseable: false };
+  } catch {
+    return { parsed: undefined, unparseable: true };
+  }
+}
+
+/** The id a reply to `parsed` may echo: a string or number, else null. */
+function replyId(parsed: unknown): string | number | null {
+  const id = (parsed as { id?: unknown } | null)?.id;
+  return typeof id === 'string' || typeof id === 'number' ? id : null;
+}
+
+interface FrameError {
+  id: string | number | null;
+  error: { code: number; message: string; data?: string };
+}
+
+/**
+ * What is wrong with a frame as a JSON-RPC 2.0 request, or null (#330, #357, #528):
+ * unparseable is -32700; anything but an object (`null`, `1`, `[]`, `"x"` all parse) or a
+ * batch is -32600 with a null id; a request object needs `jsonrpc: "2.0"`, a string `method`
+ * and, when present, a string, number or null id, which is echoed only if it is one.
+ */
+function frameError(parsed: unknown, unparseable: boolean): FrameError | null {
+  if (unparseable) return { id: null, error: { code: -32700, message: 'Parse error' } };
+  return shapeError(parsed) ?? requestError(parsed as Record<string, unknown>);
+}
+
+/**
+ * Not an object at all. Reading `.id` off `null` used to throw outside every try and take the
+ * whole process down (#330). Batches are not supported (#528, docs/integration-surfaces.md):
+ * an array is one -32600 that says so, and none of its elements runs.
+ */
+function shapeError(parsed: unknown): FrameError | null {
+  if (Array.isArray(parsed)) {
+    return {
+      id: null,
+      error: { code: -32600, message: 'Invalid Request', data: 'Batch requests are not supported' },
+    };
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return { id: null, error: { code: -32600, message: 'Invalid Request' } };
+  }
+  return null;
+}
+
+function requestError(candidate: Record<string, unknown>): FrameError | null {
+  if (!invalidRequest(candidate)) return null;
+  const id = isRpcId(candidate.id) ? candidate.id : null;
+  return { id, error: { code: -32600, message: 'Invalid Request' } };
+}
+
+/**
+ * A method that threw: its error into `res` (-32603 is logged with the detail the client does
+ * not get). True when the client caused it (`refused`). `throw null` or any primitive must not
+ * make this throw in turn: that escapes the listener exactly like the frame crash (#330).
+ */
+function failRequest(
+  thrown: unknown,
+  req: JsonRpcRequest,
+  res: JsonRpcResponse,
+  requestFields: Record<string, unknown>,
+): boolean {
+  res.error = toRpcError(thrown);
+  if (res.error.code === -32603) {
+    log('error', 'rpc handler failed', {
+      ...requestFields,
+      method: rpcMethod(req),
+      err: thrown instanceof Error ? thrown.message : String(thrown),
+    });
+  }
+  return (thrown as { refused?: unknown } | null)?.refused === true;
+}
+
+/** How an answered request is counted: refused by the client, tagged by its handler, or by code. */
+function requestOutcome(res: JsonRpcResponse, refused: boolean): Outcome {
+  if (refused) return 'client_error';
+  const tagged = res.result && resultOutcome.get(res.result);
+  return tagged ?? rpcOutcome(res.error?.code);
+}
+
+/** A request's log fields; for executeBrowserAction the action types, never selectors or values. */
+function requestLogFields(res: JsonRpcResponse, requestFields: Record<string, unknown>) {
+  const ran = (res.result as { results?: ExecutionResult[] } | undefined)?.results;
+  return {
+    ...requestFields,
+    ...(res.error && { code: res.error.code }),
+    ...(Array.isArray(ran) && {
+      actions: ran.map((r) => r.action?.type),
+      success: res.result.success,
+    }),
+  };
+}
+
 const tagged = <T extends object>(result: T, outcome: Outcome): T => {
   resultOutcome.set(result, outcome);
   return result;
@@ -417,6 +516,44 @@ const REFUSAL_LOG_MS = 10_000;
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 
 /** The REST route a request names, with ids folded so the label set stays bounded. */
+const HEALTH_PATHS = new Set(['/health/live', '/health/ready']);
+const isHealthProbe = (req: IncomingMessage) =>
+  req.method === 'GET' && HEALTH_PATHS.has(req.url ?? '');
+
+/** Liveness and readiness (#309); true when it answered. */
+function answerHealth(req: IncomingMessage, res: ServerResponse, draining: boolean): boolean {
+  if (!isHealthProbe(req)) return false;
+  const ready = req.url === '/health/live' || !draining;
+  res.writeHead(ready ? 200 : 503, {
+    'content-type': 'application/json',
+    'cache-control': 'no-store',
+  });
+  res.end(JSON.stringify({ status: ready ? 'ok' : 'draining' }));
+  return true;
+}
+
+function answerDraining(res: ServerResponse): void {
+  res.writeHead(503, { 'content-type': 'application/json', 'retry-after': '1' });
+  res.end(JSON.stringify({ error: 'Server is shutting down' }));
+}
+
+/** What ws answers a plain HTTP request with when it owns the listener. */
+function answerUpgradeRequired(res: ServerResponse): void {
+  res.writeHead(426, {
+    'content-type': 'text/plain',
+    'content-length': STATUS_CODES[426]!.length,
+  });
+  res.end(STATUS_CODES[426]);
+}
+
+/** A REST request's outcome; a client that went away before the answer is not our error. */
+function restOutcome(status: number | undefined, rateLimited: boolean): Outcome {
+  if (status === undefined) return 'aborted';
+  if (status >= 500) return 'error';
+  if (rateLimited) return 'rate_limited';
+  return status >= 400 ? 'client_error' : 'ok';
+}
+
 function restRoute(req: IncomingMessage): string {
   const path = (req.url ?? '').split('?')[0];
   const route =
@@ -493,77 +630,86 @@ function isProbe(req: IncomingMessage): boolean {
   return loopback && req.headers['x-iris-probe'] === '1';
 }
 
+/** Option combinations `startServer` refuses. */
+function assertServerOptions(options: StartServerOptions | undefined): void {
+  if (options?.authenticate && options.authToken) {
+    throw new Error('Pass authToken or authenticate, one at a time');
+  }
+  if (options?.jobs && !options.authenticate) throw new Error('The job API needs authenticate');
+}
+
+/** `startServer` options. */
+export interface StartServerOptions {
+  sessionTimeout?: number;
+  host?: string;
+  allowedOrigins?: string[];
+  /** Local mode: one shared bearer token. */
+  authToken?: string;
+  /** Hosted mode: per-tenant API keys (#341). Exclusive with `authToken`. */
+  authenticate?: Authenticator;
+  /** How often a connected key is verified again, so revoking it ends the connection. */
+  authRecheckMs?: number;
+  /**
+   * Hosted run history (#254): each `executeBrowserAction` of a tenant connection
+   * is recorded under its org and API key. Local connections record nothing.
+   */
+  history?: { forOrg(scope: TenantScope): Pick<HistoryStore, 'record'> };
+  /**
+   * A tenant's AI credentials (#258): BYOK (#344) or managed credits (#346). `null`,
+   * or no resolver at all, means the tenant has no AI: its instructions get pattern
+   * translation only, and the process-wide `*_API_KEY` is never used for it
+   * (ADR 0001 §5). Local (token) connections keep the process configuration.
+   */
+  aiCredentials?: (
+    principal: Principal,
+    request?: { inputChars?: number },
+  ) => Promise<TenantCredentials | null>;
+  /**
+   * The usage ledger (#263): a tenant session's browser minutes when it ends, and
+   * each AI call its translations make. Local connections record nothing.
+   */
+  usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
+  /** Hosted: writes a tenant audit entry (#361): session start and end. Failures are logged. */
+  audit?: (entry: AuditEntry) => Promise<void>;
+  /**
+   * How often an open tenant session's browser minutes are written (#263), so a
+   * crash or a forced restart loses at most one interval, and a session spanning a
+   * month boundary is billed to both months.
+   */
+  usageCheckpointMs?: number;
+  /**
+   * The hosted job API (#267), served over HTTP on the same port: `POST
+   * /v1/a11y/jobs`, `GET /v1/jobs/:id`. Needs `authenticate`; it shares the key and
+   * org request budgets with the RPC messages. Unset, plain HTTP gets 426 as before.
+   */
+  jobs?: { forOrg(scope: TenantScope): ApiJobs };
+  /** The results API (#269), `GET /v1/runs[/:id]`, served beside the job API. */
+  runs?: RunReader;
+  /** Signs run-detail artifacts (#460); unset, run detail carries none. */
+  artifacts?: ArtifactStore;
+  /** The org's plan limits for job submits (#346). */
+  entitlements?: (
+    orgId: string,
+  ) => Promise<{ runsPerMonth: number; artifactStorageBytes?: number }>;
+  /** Signed URL lifetime in seconds (default 300, at most 900). */
+  artifactUrlTtlSeconds?: number;
+  /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
+  limits?: Partial<ServerLimits>;
+}
+
 /**
  * Start a JSON-RPC 2.0 over WebSocket server on the given port.
  */
-export function startServer(
-  port: number,
-  options?: {
-    sessionTimeout?: number;
-    host?: string;
-    allowedOrigins?: string[];
-    /** Local mode: one shared bearer token. */
-    authToken?: string;
-    /** Hosted mode: per-tenant API keys (#341). Exclusive with `authToken`. */
-    authenticate?: Authenticator;
-    /** How often a connected key is verified again, so revoking it ends the connection. */
-    authRecheckMs?: number;
-    /**
-     * Hosted run history (#254): each `executeBrowserAction` of a tenant connection
-     * is recorded under its org and API key. Local connections record nothing.
-     */
-    history?: { forOrg(scope: TenantScope): Pick<HistoryStore, 'record'> };
-    /**
-     * A tenant's AI credentials (#258): BYOK (#344) or managed credits (#346). `null`,
-     * or no resolver at all, means the tenant has no AI: its instructions get pattern
-     * translation only, and the process-wide `*_API_KEY` is never used for it
-     * (ADR 0001 §5). Local (token) connections keep the process configuration.
-     */
-    aiCredentials?: (
-      principal: Principal,
-      request?: { inputChars?: number },
-    ) => Promise<TenantCredentials | null>;
-    /**
-     * The usage ledger (#263): a tenant session's browser minutes when it ends, and
-     * each AI call its translations make. Local connections record nothing.
-     */
-    usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
-    /** Hosted: writes a tenant audit entry (#361): session start and end. Failures are logged. */
-    audit?: (entry: AuditEntry) => Promise<void>;
-    /**
-     * How often an open tenant session's browser minutes are written (#263), so a
-     * crash or a forced restart loses at most one interval, and a session spanning a
-     * month boundary is billed to both months.
-     */
-    usageCheckpointMs?: number;
-    /**
-     * The hosted job API (#267), served over HTTP on the same port: `POST
-     * /v1/a11y/jobs`, `GET /v1/jobs/:id`. Needs `authenticate`; it shares the key and
-     * org request budgets with the RPC messages. Unset, plain HTTP gets 426 as before.
-     */
-    jobs?: { forOrg(scope: TenantScope): ApiJobs };
-    /** The results API (#269), `GET /v1/runs[/:id]`, served beside the job API. */
-    runs?: RunReader;
-    /** Signs run-detail artifacts (#460); unset, run detail carries none. */
-    artifacts?: ArtifactStore;
-    /** The org's plan limits for job submits (#346). */
-    entitlements?: (
-      orgId: string,
-    ) => Promise<{ runsPerMonth: number; artifactStorageBytes?: number }>;
-    /** Signed URL lifetime in seconds (default 300, at most 900). */
-    artifactUrlTtlSeconds?: number;
-    /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
-    limits?: Partial<ServerLimits>;
-  },
-): WebSocketServer {
+export function startServer(port: number, options?: StartServerOptions): WebSocketServer {
+  assertServerOptions(options);
   const authenticate = options?.authenticate;
-  if (authenticate && options?.authToken) {
-    throw new Error('Pass authToken or authenticate, one at a time');
-  }
-  if (options?.jobs && !authenticate) throw new Error('The job API needs authenticate');
-  const host = options?.host ?? '127.0.0.1';
+  const {
+    host = '127.0.0.1',
+    allowedOrigins = [],
+    usageCheckpointMs = 5 * 60_000,
+    authRecheckMs = 60_000,
+  } = options ?? {};
   const limits: ServerLimits = { ...DEFAULT_SERVER_LIMITS, ...options?.limits };
-  const allowedOrigins = options?.allowedOrigins ?? [];
   const ActionParams = ExecuteBrowserActionParams.extend({
     actions: z.array(ActionSchema).max(limits.maxActionsPerRequest).optional(),
   });
@@ -578,30 +724,14 @@ export function startServer(
   /** RPC messages and REST requests being handled; a drain waits for them to reach zero. */
   let inFlight = 0;
 
-  // One listener for both: the WebSocket upgrade, and the job REST API (#267).
-  const server = createServer((req, res) => {
-    // Liveness and readiness (#309), before auth and logging: probes run every few seconds,
-    // and a hosted deployment has no shared token to authenticate one with (#341).
-    if (req.method === 'GET' && (req.url === '/health/live' || req.url === '/health/ready')) {
-      const ready = req.url === '/health/live' || !draining;
-      res.writeHead(ready ? 200 : 503, {
-        'content-type': 'application/json',
-        'cache-control': 'no-store',
-      });
-      res.end(JSON.stringify({ status: ready ? 'ok' : 'draining' }));
-      return;
-    }
-    // Draining: no new REST work either (a job queued now would outlive the shutdown).
-    if (draining) {
-      res.writeHead(503, { 'content-type': 'application/json', 'retry-after': '1' });
-      res.end(JSON.stringify({ error: 'Server is shutting down' }));
-      return;
-    }
-    // In flight until answered: a drain waits for a REST request admitted before it began
-    // (its key check is async) as it does for an RPC message.
-    inFlight++;
-    res.on('close', () => inFlight--);
-    // One line per REST request, with the id echoed back so a client can quote it (#275).
+  /** One REST request's state, shared by its log line and its rate charge. */
+  interface RestRequest {
+    tenant: Principal | undefined;
+    rateLimited: boolean;
+  }
+
+  /** One line per REST request, with an id echoed back so a client can quote it (#275). */
+  function logRestRequest(req: IncomingMessage, res: ServerResponse, rest: RestRequest): void {
     const t0 = performance.now();
     // Ours is always generated (a client's could collide with another's); a safe
     // client id is logged beside it.
@@ -610,72 +740,130 @@ export function startServer(
       typeof sent === 'string' && SAFE_REQUEST_ID.test(sent) ? sent : undefined;
     const requestId = randomUUID();
     res.setHeader('x-request-id', requestId);
-    let tenant: Principal | undefined;
-    let rateLimited = false;
     res.on('close', () => {
       const status = res.writableFinished ? res.statusCode : undefined;
-      const outcome: Outcome =
-        status === undefined
-          ? 'aborted' // the client went away before the answer: not ours to count as an error
-          : status >= 500
-            ? 'error'
-            : rateLimited
-              ? 'rate_limited'
-              : status >= 400
-                ? 'client_error'
-                : 'ok';
       observeRequest(
         'rest',
         restRoute(req),
-        outcome,
+        restOutcome(status, rest.rateLimited),
         t0,
-        { requestId, clientRequestId, status: status ?? 'aborted', ...who(tenant) },
+        { requestId, clientRequestId, status: status ?? 'aborted', ...who(rest.tenant) },
         !closed,
       );
     });
+  }
+
+  /** The job API's options for one request: its verification slot and its rate charge. */
+  function jobsOptions(jobs: { forOrg(scope: TenantScope): ApiJobs }, rest: RestRequest) {
+    return {
+      authenticate: authenticate!,
+      jobs,
+      runs: options?.runs,
+      artifacts: options?.artifacts,
+      artifactUrlTtlSeconds: options?.artifactUrlTtlSeconds,
+      entitlements: options?.entitlements,
+      maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
+      // REST verifications share the upgrades' `verifying` count, so a bad-key flood
+      // cannot pile onto the auth pool. Only pending ones count here: idle sockets
+      // should not make the API unavailable.
+      admit: () => {
+        if (verifying >= limits.maxConnections) return null;
+        verifying++;
+        return () => {
+          verifying--;
+        };
+      },
+      charge: (principal: Principal) => {
+        rest.tenant = principal;
+        // Both buckets need a token before either is spent (see the RPC path).
+        const now = performance.now();
+        const wait = Math.max(
+          keyRate.wait(principal.keyId, now),
+          orgRate.wait(principal.orgId, now),
+        );
+        if (wait === 0) {
+          keyRate.take(principal.keyId);
+          orgRate.take(principal.orgId);
+        } else rest.rateLimited = true;
+        return wait;
+      },
+    };
+  }
+
+  // One listener for both: the WebSocket upgrade, and the job REST API (#267).
+  const server = createServer((req, res) => {
+    // Liveness and readiness (#309), before auth and logging: probes run every few seconds,
+    // and a hosted deployment has no shared token to authenticate one with (#341).
+    if (answerHealth(req, res, draining)) return;
+    // Draining: no new REST work either (a job queued now would outlive the shutdown).
+    if (draining) return answerDraining(res);
+    // In flight until answered: a drain waits for a REST request admitted before it began
+    // (its key check is async) as it does for an RPC message.
+    inFlight++;
+    res.on('close', () => inFlight--);
+    const rest: RestRequest = { tenant: undefined, rateLimited: false };
+    logRestRequest(req, res, rest);
     if (options?.jobs) {
-      void handleJobsRequest(req, res, {
-        authenticate: authenticate!,
-        jobs: options.jobs,
-        runs: options.runs,
-        artifacts: options.artifacts,
-        artifactUrlTtlSeconds: options.artifactUrlTtlSeconds,
-        entitlements: options.entitlements,
-        maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
-        // REST verifications share the upgrades' `verifying` count, so a bad-key flood
-        // cannot pile onto the auth pool. Only pending ones count here: idle sockets
-        // should not make the API unavailable.
-        admit: () => {
-          if (verifying >= limits.maxConnections) return null;
-          verifying++;
-          return () => {
-            verifying--;
-          };
-        },
-        charge: (principal) => {
-          tenant = principal;
-          // Both buckets need a token before either is spent (see the RPC path).
-          const now = performance.now();
-          const wait = Math.max(
-            keyRate.wait(principal.keyId, now),
-            orgRate.wait(principal.orgId, now),
-          );
-          if (wait === 0) {
-            keyRate.take(principal.keyId);
-            orgRate.take(principal.orgId);
-          } else rateLimited = true;
-          return wait;
-        },
-      });
+      void handleJobsRequest(req, res, jobsOptions(options.jobs, rest));
       return;
     }
-    // What ws answers a plain HTTP request with when it owns the listener.
-    res.writeHead(426, {
-      'content-type': 'text/plain',
-      'content-length': STATUS_CODES[426]!.length,
-    });
-    res.end(STATUS_CODES[426]);
+    answerUpgradeRequired(res);
   });
+  /**
+   * What refuses a WebSocket upgrade before any key is checked, as [status, message, reason]:
+   * a draining server, a cross-site Origin (a browser page connecting to localhost sends one;
+   * trusted local tooling sends none), a missing or wrong shared token (the Authorization
+   * header, which a browser page cannot set on a WebSocket; absent Origin is NOT trusted), or
+   * the connection cap (one more for a loopback health probe, #342).
+   */
+  const upgradeRefusal = (req: IncomingMessage): [number, string, string] | null => {
+    if (draining) return [503, 'Server is shutting down', 'draining'];
+    const credentials = credentialRefusal(req);
+    if (credentials) return credentials;
+    const cap = limits.maxConnections + (isProbe(req) ? 1 : 0);
+    if (wss.clients.size + verifying >= cap)
+      return [503, 'Connection limit reached', 'connection_limit'];
+    return null;
+  };
+
+  /** A cross-site Origin, or a shared token that is missing or wrong. */
+  const credentialRefusal = (req: IncomingMessage): [number, string, string] | null => {
+    const origin = req.headers.origin;
+    if (origin && !allowedOrigins.includes(origin)) return [403, 'Origin not allowed', 'origin'];
+    const token = options?.authToken;
+    if (token && !hasValidToken(req.headers.authorization, token)) {
+      return [401, 'Unauthorized', 'token'];
+    }
+    return null;
+  };
+
+  /**
+   * Admits a verified key's connection, or refuses it: the drain may have begun while the key
+   * was being checked; an invalid key is 401; a valid key of a suspended org is 403, never the
+   * operator's reason (#348); an org at its connection cap is 429.
+   */
+  const admitPrincipal = (
+    principal: Principal | 'suspended' | null,
+    req: IncomingMessage,
+    refuse: (status: number, message: string, reason: string) => void,
+    done: (ok: boolean, status?: number, message?: string) => void,
+  ) => {
+    if (draining) return refuse(503, 'Server is shutting down', 'draining');
+    if (!principal) return refuse(401, 'Unauthorized', 'invalid_key');
+    if (principal === 'suspended') return refuse(403, 'Organization suspended', 'suspended');
+    const orgConnections = [...tenants.values()].filter((t) => t.orgId === principal.orgId).length;
+    if (orgConnections >= limits.maxConnectionsPerOrg) {
+      log('info', 'connection refused', {
+        reason: 'org_connection_limit',
+        status: 429,
+        ...who(principal),
+      });
+      return done(false, 429, 'Organization connection limit reached');
+    }
+    verified.set(req, principal);
+    done(true);
+  };
+
   const wss: WebSocketServer = new WebSocketServer({
     server,
     maxPayload: limits.maxPayloadBytes,
@@ -685,28 +873,13 @@ export function startServer(
     // synchronous, so the connection count read here cannot change before ws adds
     // the client; a key check is async, so upgrades in it are counted as `verifying`.
     verifyClient: ({ req }, done) => {
-      // Reject cross-site WebSocket hijacking: a browser page connecting to
-      // localhost sends an Origin header; trusted local tooling sends none.
-      const origin = req.headers.origin;
       // Refusals are logged with their reason only; never the header that was refused.
       const refuse = (status: number, message: string, reason: string) => {
         log('info', 'connection refused', { reason, status });
         done(false, status, message);
       };
-      if (draining) return refuse(503, 'Server is shutting down', 'draining');
-      if (origin && !allowedOrigins.includes(origin)) {
-        return refuse(403, 'Origin not allowed', 'origin');
-      }
-      // The token travels in the Authorization header, which a browser page
-      // cannot set on a WebSocket. Absent Origin is NOT treated as trusted: no
-      // token means rejected.
-      if (options?.authToken && !hasValidToken(req.headers.authorization, options.authToken)) {
-        return refuse(401, 'Unauthorized', 'token');
-      }
-      const cap = limits.maxConnections + (isProbe(req) ? 1 : 0);
-      if (wss.clients.size + verifying >= cap) {
-        return refuse(503, 'Connection limit reached', 'connection_limit');
-      }
+      const refusal = upgradeRefusal(req);
+      if (refusal) return refuse(...refusal);
       if (!authenticate) return done(true);
       verifying++;
       authenticate.verify(req.headers.authorization).then(
@@ -715,24 +888,7 @@ export function startServer(
           // and its 'connection' handler registers it in `tenants` before returning,
           // so the org count below cannot miss a client admitted a moment earlier.
           verifying--;
-          // The drain may have begun while the key was being checked.
-          if (draining) return refuse(503, 'Server is shutting down', 'draining');
-          if (!principal) return refuse(401, 'Unauthorized', 'invalid_key');
-          // A valid key of a suspended org (#348): 403, never the operator's reason.
-          if (principal === 'suspended') return refuse(403, 'Organization suspended', 'suspended');
-          const orgConnections = [...tenants.values()].filter(
-            (t) => t.orgId === principal.orgId,
-          ).length;
-          if (orgConnections >= limits.maxConnectionsPerOrg) {
-            log('info', 'connection refused', {
-              reason: 'org_connection_limit',
-              status: 429,
-              ...who(principal),
-            });
-            return done(false, 429, 'Organization connection limit reached');
-          }
-          verified.set(req, principal);
-          done(true);
+          admitPrincipal(principal, req, refuse, done);
         },
         (err: unknown) => {
           verifying--;
@@ -801,15 +957,12 @@ export function startServer(
       target: `session:${session.id}`,
     });
   };
-  const checkpoint = setInterval(
-    () => {
-      const now = Date.now();
-      for (const session of sessions.values()) {
-        if (session.isActive) billMinutes(session, now);
-      }
-    },
-    options?.usageCheckpointMs ?? 5 * 60_000,
-  );
+  const checkpoint = setInterval(() => {
+    const now = Date.now();
+    for (const session of sessions.values()) {
+      if (session.isActive) billMinutes(session, now);
+    }
+  }, usageCheckpointMs);
   checkpoint.unref();
   if (!options?.usage) clearInterval(checkpoint);
   const sessions = new Map<WebSocket, BrowserSession>();
@@ -889,7 +1042,7 @@ export function startServer(
     } finally {
       rechecking = false;
     }
-  }, options?.authRecheckMs ?? 60_000);
+  }, authRecheckMs);
   recheck.unref();
   if (!authenticate) clearInterval(recheck);
 
@@ -932,387 +1085,386 @@ export function startServer(
       if (ws.readyState === WebSocket.OPEN) ws.send(serializeResponse(res));
     };
 
-    const handleMessage = async (data: WebSocket.RawData) => {
-      // Per request (#275): an id for its log line, and the start of its latency.
-      const t0 = performance.now();
-      const requestId = randomUUID();
-      const requestFields = { requestId, ...who(principal) };
-      let parsed: unknown;
-      let unparseable = false;
-      try {
-        parsed = JSON.parse(data.toString());
-      } catch {
-        unparseable = true;
+    /**
+     * Admission before dispatch, synchronous (#128: no await may reorder pipelined
+     * messages): the tenant's rate budget (#342), then the frame's shape (#330, #357). Returns
+     * the request, or null when it was answered (or, for a notification, dropped) here.
+     */
+    const admit = (
+      data: WebSocket.RawData,
+      t0: number,
+      requestFields: Record<string, unknown>,
+    ): JsonRpcRequest | null => {
+      const { parsed, unparseable } = parseFrame(data);
+      if (rateLimited(parsed, t0, requestFields)) return null;
+      const bad = frameError(parsed, unparseable);
+      if (bad) {
+        reply({ jsonrpc: '2.0', id: bad.id, error: bad.error });
+        refusal('unknown', 'client_error', t0, { ...requestFields, code: bad.error.code });
+        return null;
       }
+      return parsed as JsonRpcRequest;
+    };
 
-      // Tenant request budgets (#342), before anything else, so a malformed frame
-      // spends one too. Both must have a token before either is spent, so a refusal
-      // by the org costs the key nothing.
-      if (principal) {
-        const now = performance.now();
-        const wait = Math.max(
-          keyRate.wait(principal.keyId, now),
-          orgRate.wait(principal.orgId, now),
-        );
-        if (wait > 0) {
-          const id = (parsed as { id?: unknown } | null)?.id;
-          // A notification gets no reply, a rate refusal included (§4.1, #357); it is still
-          // charged and logged.
-          if (!isNotification(parsed)) {
-            reply({
-              jsonrpc: '2.0',
-              id: typeof id === 'string' || typeof id === 'number' ? id : null,
-              error: {
-                code: RATE_LIMITED,
-                message: 'Rate limit exceeded',
-                data: { retryAfterMs: wait },
-              },
-            });
-          }
-          refusal(rpcMethod(parsed), 'rate_limited', t0, { ...requestFields, code: RATE_LIMITED });
-          return;
-        }
+    /**
+     * Tenant request budgets (#342), before anything else, so a malformed frame spends one
+     * too. Both must have a token before either is spent, so a refusal by the org costs the
+     * key nothing. True when refused (answered and logged here).
+     */
+    const rateLimited = (
+      parsed: unknown,
+      t0: number,
+      requestFields: Record<string, unknown>,
+    ): boolean => {
+      if (!principal) return false;
+      const now = performance.now();
+      const wait = Math.max(keyRate.wait(principal.keyId, now), orgRate.wait(principal.orgId, now));
+      if (wait <= 0) {
         keyRate.take(principal.keyId);
         orgRate.take(principal.orgId);
+        return false;
       }
-      // Charged above. JSON-RPC 2.0 answers it with -32700 and a null id (#357).
-      if (unparseable) {
-        reply({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
-        refusal('unknown', 'client_error', t0, { ...requestFields, code: -32700 });
-        return;
+      // A notification gets no reply, a rate refusal included (§4.1, #357); it is still
+      // charged and logged.
+      if (!isNotification(parsed)) {
+        reply({
+          jsonrpc: '2.0',
+          id: replyId(parsed),
+          error: {
+            code: RATE_LIMITED,
+            message: 'Rate limit exceeded',
+            data: { retryAfterMs: wait },
+          },
+        });
       }
+      refusal(rpcMethod(parsed), 'rate_limited', t0, { ...requestFields, code: RATE_LIMITED });
+      return true;
+    };
 
-      // Valid JSON is not necessarily a request: `null`, `1`, `[]` and `"x"`
-      // all parse. Reading `.id` off `null` used to throw here, outside every
-      // try, and the rejected listener took the whole process — and every
-      // session in it — down (#330). Batches are not supported (#528, decision in
-      // docs/integration-surfaces.md): an array is one -32600 that says so, and none of
-      // its elements runs.
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        const error = Array.isArray(parsed)
-          ? { code: -32600, message: 'Invalid Request', data: 'Batch requests are not supported' }
-          : { code: -32600, message: 'Invalid Request' };
-        reply({ jsonrpc: '2.0', id: null, error });
-        refusal('unknown', 'client_error', t0, { ...requestFields, code: -32600 });
-        return;
+    /**
+     * Each RPC method's handler (#518: a table instead of one switch). It writes `res`; a
+     * refusal or failure is thrown, as before, and answered by dispatch. A handler with
+     * nothing to wait for stays synchronous: its reply then goes out before ws emits the
+     * next frame, as the switch's did, so a later frame's synchronous refusal cannot
+     * overtake it.
+     */
+    /**
+     * Throws when this connection may not start a session now (#342, #346): its org is at the
+     * plan's limit (never above the operator's ceiling), or the server is full. Synchronous,
+     * so the check and the caller's sessions.set have no await between them.
+     */
+    const assertSessionRoom = () => {
+      if (principal) assertOrgSessionRoom(principal);
+      if (sessions.size >= limits.maxSessions) {
+        throw {
+          code: -32000,
+          message: `Session limit reached (${limits.maxSessions}); try again later`,
+          refused: true,
+        };
       }
-      // A request object needs `jsonrpc: "2.0"`, a string `method`, and an id that is a
-      // string, number or null when present (#357). The id is echoed only if it is one.
-      const candidate = parsed as Record<string, unknown>;
-      if (invalidRequest(candidate)) {
-        const id = isRpcId(candidate.id) ? candidate.id : null;
-        reply({ jsonrpc: '2.0', id, error: { code: -32600, message: 'Invalid Request' } });
-        refusal('unknown', 'client_error', t0, { ...requestFields, code: -32600 });
-        return;
-      }
-      const req = parsed as JsonRpcRequest;
-      // No `id` member: a notification. It runs, and gets no reply, error or not (§4.1).
-      const notification = isNotification(req);
+    };
 
-      const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id ?? null };
-      let refused = false;
+    /** The plan's session limit for the org, never above the operator's ceiling (#346). */
+    const assertOrgSessionRoom = (tenant: Principal) => {
+      const orgCap = Math.min(
+        limits.maxSessionsPerOrg,
+        tenant.maxSessions ?? Number.POSITIVE_INFINITY,
+      );
+      const open = [...sessions.values()].filter((s) => s.principal?.orgId === tenant.orgId).length;
+      if (open < orgCap) return;
+      throw {
+        code: -32000,
+        message: orgCap
+          ? `Organization session limit reached (${orgCap}); try again later`
+          : "The organization's plan allows no browser sessions",
+        refused: true,
+      };
+    };
 
+    const methods: Record<
+      string,
+      (
+        req: JsonRpcRequest,
+        res: JsonRpcResponse,
+        requestFields: Record<string, unknown>,
+      ) => void | Promise<void>
+    > = {
+      executeCommand: (req, res) => {
+        const parsed = ExecuteCommandParams.safeParse(req.params);
+        if (!parsed.success) {
+          res.error = { code: -32602, message: 'Invalid params' };
+          return;
+        }
+        res.result = translateSync(parsed.data.instruction);
+      },
+      launchBrowser: async (req, res) => {
+        const parsedOptions = LaunchBrowserOptions.safeParse(req.params?.options ?? {});
+        if (!parsedOptions.success) {
+          res.error = { code: -32602, message: 'Invalid params' };
+          return;
+        }
+        const launchOptions = clampLaunchOptions(parsedOptions.data, limits);
+        // A missing browser is a setup fault, so report it HERE rather than
+        // letting it surface later as the failure of whatever action runs
+        // first (issue #194). Cheap on purpose — a path resolve and a stat,
+        // no process spawned — because this call must stay fast and the
+        // browser is still started lazily below.
+        //
+        // Before the gate, so a rejected launch has NO side effects: an
+        // existing session survives rather than being torn down to make room
+        // for a replacement that was never going to be created. Deleting the
+        // browser binary does not kill an already-running Chromium, so that
+        // session stays usable, and the inactivity sweeper still reclaims it.
+        if (!chromiumIsInstalled()) {
+          res.error = {
+            code: -32000,
+            message: 'Playwright browsers are not installed. Run: npx playwright install chromium',
+          };
+          return;
+        }
+
+        // Exclusive: cleanup + create + map-write must be indivisible, or a
+        // second pipelined launch interleaves at one of those awaits and
+        // orphans an executor (issue #128).
+        res.result = await gate.write(async () => {
+          // Tear down any existing session first so its Chromium process
+          // isn't orphaned when the map entry is overwritten (issue #69).
+          await cleanupSession(ws, sessions, 'replaced');
+          // This callback can resume after the socket closed: it waits on
+          // in-flight actions and on the old session's teardown. Its 'close'
+          // cleanup has then already run, so a session set now would hold a
+          // maxSessions slot until the idle sweep.
+          if (ws.readyState !== WebSocket.OPEN) {
+            throw { code: -32000, message: 'Connection closed during launch', refused: true };
+          }
+          // Check and insert with no await between them: the map is shared
+          // by every connection, and each connection has its own gate.
+          // This connection's own session was cleaned up above, so a relaunch
+          // is never counted against its org.
+          assertSessionRoom();
+          const session = createBrowserSession(
+            launchOptions,
+            principal,
+            principal && meterMinutes(principal),
+          );
+          sessions.set(ws, session);
+          log('info', 'session started', { sessionId: session.id, ...who(principal) });
+          if (principal) {
+            audit({
+              orgId: principal.orgId,
+              actor: { apiKeyId: principal.keyId },
+              action: 'session.start',
+              target: `session:${session.id}`,
+            });
+          }
+          return {
+            success: true,
+            // Says what happened. This used to claim "Browser launched
+            // successfully" while createBrowserSession returns page: null and
+            // starts nothing — a statement about the world that was untrue
+            // when sent, and the reason a container healthcheck built on this
+            // RPC reported a browser-less container as healthy (issue #194).
+            //
+            // The deferral itself is kept: a client that calls this and never
+            // acts should not be holding a Chromium.
+            message: 'Session created; browser starts on the first action',
+            sessionId: getSessionId(ws),
+            // What the session will actually use, after clamping.
+            options: {
+              timeout: launchOptions.timeout,
+              retryAttempts: launchOptions.retryAttempts,
+              retryDelay: launchOptions.retryDelay,
+              slowMo: launchOptions.browserOptions.slowMo,
+            },
+          };
+        });
+      },
+      closeBrowser: async (req, res) => {
+        res.result = await gate.write(async () => {
+          // Read the session inside the gate: a launch queued ahead of this
+          // one may have replaced it since the message arrived.
+          const session = sessions.get(ws);
+          if (!session) {
+            throw { code: -32000, message: 'No active browser session', refused: true };
+          }
+          await cleanupSession(ws, sessions, 'closed');
+          return { success: true, message: 'Browser closed successfully' };
+        });
+      },
+      getBrowserStatus: async (req, res) => {
+        res.result = await gate.read(async () => getBrowserSessionStatus(sessions.get(ws)));
+      },
+      executeBrowserAction: async (req, res, requestFields) => {
+        const parsed = ActionParams.safeParse(req.params);
+        if (!parsed.success) {
+          res.error = { code: -32602, message: 'Invalid params' };
+          return;
+        }
+        const { instruction, actions, url, secrets, policy } = parsed.data;
+        const startedAt = new Date();
+
+        // Shared: actions still run concurrently with each other, but never
+        // alongside a session mutation. Resolving the session inside the
+        // callback is the point — reading it before waiting would hand this
+        // action an executor a queued launch is about to destroy (#128).
+        res.result = await gate.read(async () => {
+          const session = sessions.get(ws);
+          if (!session) {
+            throw {
+              code: -32000,
+              message: 'No active browser session. Call launchBrowser first.',
+              refused: true,
+            };
+          }
+          return executeBrowserActions(
+            session,
+            instruction,
+            actions,
+            url,
+            limits.maxActionsPerRequest,
+            { aiCredentials: options?.aiCredentials, usage: options?.usage },
+            secrets ?? {},
+            policy,
+          );
+        });
+        if (principal && options?.history) {
+          // A side effect of the request, like local history (#77): a failed
+          // write is logged, and the caller still gets the actions' result.
+          await options.history
+            .forOrg({ orgId: principal.orgId, apiKeyId: principal.keyId })
+            .record({
+              kind: 'rpc',
+              success: res.result.success,
+              results: res.result.results,
+              startedAt,
+              finishedAt: new Date(),
+            })
+            .catch((err: unknown) =>
+              log('error', 'failed to record run history', {
+                ...requestFields,
+                err: errMessage(err),
+              }),
+            );
+        }
+      },
+      observe: async (req, res, requestFields) => {
+        const parsed = ObserveParams.safeParse(req.params);
+        if (!parsed.success) {
+          res.error = { code: -32602, message: 'Invalid params' };
+          return;
+        }
+        // Exclusive (codex review): an action running alongside could fill a credential
+        // after the mask was chosen and before the capture.
+        res.result = await gate.write(async () => {
+          const session = sessions.get(ws);
+          if (!session?.page || session.page.isClosed()) {
+            throw {
+              code: -32000,
+              message: 'Nothing to observe yet: run an action first.',
+              refused: true,
+            };
+          }
+          return observeSession(session, parsed.data?.screenshot ?? true);
+        });
+        // Metered per call (#312), best effort: the tenant has its answer either way.
+        if (principal && options?.usage) {
+          options.usage
+            .record(principal.orgId, [
+              { kind: 'observation', quantity: 1, idempotencyKey: `observe:${randomUUID()}` },
+            ])
+            .catch((err: unknown) =>
+              log('error', 'failed to record an observation', {
+                ...requestFields,
+                err: errMessage(err),
+              }),
+            );
+        }
+      },
+      getStatus: (req, res) => {
+        // Real state, not a constant. `status` stays 'ready' because
+        // answering at all means the server is serving — the fields beside
+        // it are what make that claim checkable (issue #80).
+        res.result = {
+          status: 'ready',
+          uptimeMs: Date.now() - startedAt,
+          // A tenant sees its own org's sessions only: another org's activity
+          // is not its business (#341).
+          activeSessions: principal
+            ? [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId).length
+            : sessions.size,
+          // Server-wide vs. this connection: a client asking "do I have a
+          // browser?" was previously indistinguishable from "is anything alive?"
+          hasSession: sessions.has(ws),
+        };
+      },
+    };
+
+    // `streamLogs` is deliberately absent and falls through to -32601.
+    // It used to answer a hardcoded ['log1','log2'] — fabricated data a
+    // client cannot tell from real logs. Real streaming would mean a log
+    // buffer and a subscription mechanism, and this server is frozen
+    // legacy-experimental (docs/integration-surfaces.md), so that is the
+    // wrong place to build one. An honest "method not found" is the fix
+    // that decision calls for (issue #80).
+
+    /** Own properties only: `toString` or `__proto__` is no method. */
+    function methodFor(name: string) {
+      return Object.hasOwn(methods, name) ? methods[name] : undefined;
+    }
+
+    /**
+     * Runs an admitted request's method into `res`. A thrown refusal or failure becomes
+     * `res.error`; true when the client caused it (no session, a session limit).
+     * Synchronous when the handler is (see `methods`).
+     */
+    const dispatch = (
+      req: JsonRpcRequest,
+      res: JsonRpcResponse,
+      requestFields: Record<string, unknown>,
+    ): boolean | Promise<boolean> => {
+      const fail = (thrown: unknown) => failRequest(thrown, req, res, requestFields);
       try {
         // Draining (#309): what is in flight finishes, nothing new starts.
         if (draining) {
           throw { code: -32000, message: 'Server is shutting down', refused: true };
         }
-        switch (req.method) {
-          case 'executeCommand': {
-            const parsed = ExecuteCommandParams.safeParse(req.params);
-            if (!parsed.success) {
-              res.error = { code: -32602, message: 'Invalid params' };
-              break;
-            }
-            res.result = translateSync(parsed.data.instruction);
-            break;
-          }
-
-          case 'launchBrowser': {
-            const parsedOptions = LaunchBrowserOptions.safeParse(req.params?.options ?? {});
-            if (!parsedOptions.success) {
-              res.error = { code: -32602, message: 'Invalid params' };
-              break;
-            }
-            const launchOptions = clampLaunchOptions(parsedOptions.data, limits);
-            // A missing browser is a setup fault, so report it HERE rather than
-            // letting it surface later as the failure of whatever action runs
-            // first (issue #194). Cheap on purpose — a path resolve and a stat,
-            // no process spawned — because this call must stay fast and the
-            // browser is still started lazily below.
-            //
-            // Before the gate, so a rejected launch has NO side effects: an
-            // existing session survives rather than being torn down to make room
-            // for a replacement that was never going to be created. Deleting the
-            // browser binary does not kill an already-running Chromium, so that
-            // session stays usable, and the inactivity sweeper still reclaims it.
-            if (!chromiumIsInstalled()) {
-              res.error = {
-                code: -32000,
-                message:
-                  'Playwright browsers are not installed. Run: npx playwright install chromium',
-              };
-              break;
-            }
-
-            // Exclusive: cleanup + create + map-write must be indivisible, or a
-            // second pipelined launch interleaves at one of those awaits and
-            // orphans an executor (issue #128).
-            res.result = await gate.write(async () => {
-              // Tear down any existing session first so its Chromium process
-              // isn't orphaned when the map entry is overwritten (issue #69).
-              await cleanupSession(ws, sessions, 'replaced');
-              // This callback can resume after the socket closed: it waits on
-              // in-flight actions and on the old session's teardown. Its 'close'
-              // cleanup has then already run, so a session set now would hold a
-              // maxSessions slot until the idle sweep.
-              if (ws.readyState !== WebSocket.OPEN) {
-                throw { code: -32000, message: 'Connection closed during launch', refused: true };
-              }
-              // Check and insert with no await between them: the map is shared
-              // by every connection, and each connection has its own gate.
-              // This connection's own session was cleaned up above, so a relaunch
-              // is never counted against its org.
-              // The plan's limit, never above the operator's ceiling (#346).
-              const orgCap = Math.min(
-                limits.maxSessionsPerOrg,
-                principal?.maxSessions ?? Number.POSITIVE_INFINITY,
-              );
-              if (
-                principal &&
-                [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId)
-                  .length >= orgCap
-              ) {
-                throw {
-                  code: -32000,
-                  message: orgCap
-                    ? `Organization session limit reached (${orgCap}); try again later`
-                    : "The organization's plan allows no browser sessions",
-                  refused: true,
-                };
-              }
-              if (sessions.size >= limits.maxSessions) {
-                throw {
-                  code: -32000,
-                  message: `Session limit reached (${limits.maxSessions}); try again later`,
-                  refused: true,
-                };
-              }
-              const session = createBrowserSession(
-                launchOptions,
-                principal,
-                principal && meterMinutes(principal),
-              );
-              sessions.set(ws, session);
-              log('info', 'session started', { sessionId: session.id, ...who(principal) });
-              if (principal) {
-                audit({
-                  orgId: principal.orgId,
-                  actor: { apiKeyId: principal.keyId },
-                  action: 'session.start',
-                  target: `session:${session.id}`,
-                });
-              }
-              return {
-                success: true,
-                // Says what happened. This used to claim "Browser launched
-                // successfully" while createBrowserSession returns page: null and
-                // starts nothing — a statement about the world that was untrue
-                // when sent, and the reason a container healthcheck built on this
-                // RPC reported a browser-less container as healthy (issue #194).
-                //
-                // The deferral itself is kept: a client that calls this and never
-                // acts should not be holding a Chromium.
-                message: 'Session created; browser starts on the first action',
-                sessionId: getSessionId(ws),
-                // What the session will actually use, after clamping.
-                options: {
-                  timeout: launchOptions.timeout,
-                  retryAttempts: launchOptions.retryAttempts,
-                  retryDelay: launchOptions.retryDelay,
-                  slowMo: launchOptions.browserOptions.slowMo,
-                },
-              };
-            });
-            break;
-          }
-
-          case 'closeBrowser': {
-            res.result = await gate.write(async () => {
-              // Read the session inside the gate: a launch queued ahead of this
-              // one may have replaced it since the message arrived.
-              const session = sessions.get(ws);
-              if (!session) {
-                throw { code: -32000, message: 'No active browser session', refused: true };
-              }
-              await cleanupSession(ws, sessions, 'closed');
-              return { success: true, message: 'Browser closed successfully' };
-            });
-            break;
-          }
-
-          case 'getBrowserStatus': {
-            res.result = await gate.read(async () => getBrowserSessionStatus(sessions.get(ws)));
-            break;
-          }
-
-          case 'executeBrowserAction': {
-            const parsed = ActionParams.safeParse(req.params);
-            if (!parsed.success) {
-              res.error = { code: -32602, message: 'Invalid params' };
-              break;
-            }
-            const { instruction, actions, url, secrets, policy } = parsed.data;
-            const startedAt = new Date();
-
-            // Shared: actions still run concurrently with each other, but never
-            // alongside a session mutation. Resolving the session inside the
-            // callback is the point — reading it before waiting would hand this
-            // action an executor a queued launch is about to destroy (#128).
-            res.result = await gate.read(async () => {
-              const session = sessions.get(ws);
-              if (!session) {
-                throw {
-                  code: -32000,
-                  message: 'No active browser session. Call launchBrowser first.',
-                  refused: true,
-                };
-              }
-              return executeBrowserActions(
-                session,
-                instruction,
-                actions,
-                url,
-                limits.maxActionsPerRequest,
-                { aiCredentials: options?.aiCredentials, usage: options?.usage },
-                secrets ?? {},
-                policy,
-              );
-            });
-            if (principal && options?.history) {
-              // A side effect of the request, like local history (#77): a failed
-              // write is logged, and the caller still gets the actions' result.
-              await options.history
-                .forOrg({ orgId: principal.orgId, apiKeyId: principal.keyId })
-                .record({
-                  kind: 'rpc',
-                  success: res.result.success,
-                  results: res.result.results,
-                  startedAt,
-                  finishedAt: new Date(),
-                })
-                .catch((err: unknown) =>
-                  log('error', 'failed to record run history', {
-                    ...requestFields,
-                    err: errMessage(err),
-                  }),
-                );
-            }
-            break;
-          }
-
-          case 'observe': {
-            const parsed = ObserveParams.safeParse(req.params);
-            if (!parsed.success) {
-              res.error = { code: -32602, message: 'Invalid params' };
-              break;
-            }
-            // Exclusive (codex review): an action running alongside could fill a credential
-            // after the mask was chosen and before the capture.
-            res.result = await gate.write(async () => {
-              const session = sessions.get(ws);
-              if (!session?.page || session.page.isClosed()) {
-                throw {
-                  code: -32000,
-                  message: 'Nothing to observe yet: run an action first.',
-                  refused: true,
-                };
-              }
-              return observeSession(session, parsed.data?.screenshot ?? true);
-            });
-            // Metered per call (#312), best effort: the tenant has its answer either way.
-            if (principal && options?.usage) {
-              options.usage
-                .record(principal.orgId, [
-                  { kind: 'observation', quantity: 1, idempotencyKey: `observe:${randomUUID()}` },
-                ])
-                .catch((err: unknown) =>
-                  log('error', 'failed to record an observation', {
-                    ...requestFields,
-                    err: errMessage(err),
-                  }),
-                );
-            }
-            break;
-          }
-
-          case 'getStatus': {
-            // Real state, not a constant. `status` stays 'ready' because
-            // answering at all means the server is serving — the fields beside
-            // it are what make that claim checkable (issue #80).
-            res.result = {
-              status: 'ready',
-              uptimeMs: Date.now() - startedAt,
-              // A tenant sees its own org's sessions only: another org's activity
-              // is not its business (#341).
-              activeSessions: principal
-                ? [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId)
-                    .length
-                : sessions.size,
-              // Server-wide vs. this connection: a client asking "do I have a
-              // browser?" was previously indistinguishable from "is anything alive?"
-              hasSession: sessions.has(ws),
-            };
-            break;
-          }
-
-          // `streamLogs` is deliberately absent and falls through to -32601.
-          // It used to answer a hardcoded ['log1','log2'] — fabricated data a
-          // client cannot tell from real logs. Real streaming would mean a log
-          // buffer and a subscription mechanism, and this server is frozen
-          // legacy-experimental (docs/integration-surfaces.md), so that is the
-          // wrong place to build one. An honest "method not found" is the fix
-          // that decision calls for (issue #80).
-
-          default:
-            throw { code: -32601, message: 'Method not found' };
-        }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } catch (thrown: any) {
-        // `throw null` (or any primitive) must not make this catch block throw
-        // in turn — that escapes the listener exactly like the frame crash (#330).
-        const err = typeof thrown === 'object' && thrown !== null ? thrown : {};
-        // A refusal the client caused (no session, a session limit): not a server error.
-        refused = err.refused === true;
-        res.error = toRpcError(thrown);
-        if (res.error.code === -32603) {
-          log('error', 'rpc handler failed', {
-            ...requestFields,
-            method: rpcMethod(req),
-            err: thrown instanceof Error ? thrown.message : String(thrown),
-          });
-        }
+        const run = methodFor(req.method);
+        if (!run) throw { code: -32601, message: 'Method not found' };
+        const pending = run(req, res, requestFields);
+        return pending ? pending.then(() => false, fail) : false;
+      } catch (thrown: unknown) {
+        return fail(thrown);
       }
+    };
 
-      if (!notification) reply(res);
-      // executeBrowserAction: the action types that ran, never their selectors or values.
-      const ran = (res.result as { results?: ExecutionResult[] } | undefined)?.results;
-      const outcome = refused
-        ? 'client_error'
-        : ((res.result && resultOutcome.get(res.result)) ?? rpcOutcome(res.error?.code));
+    const handleMessage = (data: WebSocket.RawData): void | Promise<void> => {
+      // Per request (#275): an id for its log line, and the start of its latency.
+      const t0 = performance.now();
+      const requestId = randomUUID();
+      const requestFields = { requestId, ...who(principal) };
+      const req = admit(data, t0, requestFields);
+      if (!req) return;
+      const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id ?? null };
+      const refused = dispatch(req, res, requestFields);
+      const finish = (wasRefused: boolean) => answer(req, res, wasRefused, t0, requestFields);
+      return typeof refused === 'boolean' ? finish(refused) : refused.then(finish);
+    };
+
+    const answer = (
+      req: JsonRpcRequest,
+      res: JsonRpcResponse,
+      refused: boolean,
+      t0: number,
+      requestFields: Record<string, unknown>,
+    ): void => {
+      // No `id` member: a notification. It runs, and gets no reply, error or not (§4.1).
+      if (!isNotification(req)) reply(res);
       observeRequest(
         'rpc',
         rpcMethod(req),
-        outcome,
+        requestOutcome(res, refused),
         t0,
-        {
-          ...requestFields,
-          ...(res.error && { code: res.error.code }),
-          ...(Array.isArray(ran) && {
-            actions: ran.map((r) => r.action?.type),
-            success: res.result.success,
-          }),
-        },
+        requestLogFields(res, requestFields),
         !closed,
       );
     };
@@ -1532,12 +1684,7 @@ async function executeUnderPolicy(
     results.push(
       verdict.allowed
         ? await session.executor.executeAction(action, page, secrets, verdict.target)
-        : {
-            success: false,
-            action,
-            error: `Refused by agent policy: ${verdict.reason}`,
-            duration: 0,
-          },
+        : refusedResult(action, verdict),
     );
   }
   return results;

@@ -1417,6 +1417,12 @@ P1.25; criteria derived from the spec and #357's comments.
 - **Batches are not supported (#528, decided)**: an array is one `-32600` with `data`
   "Batch requests are not supported", and none of its elements runs; the reasons are in
   docs/integration-surfaces.md.
+- **A synchronous method stays synchronous (#518).** Handlers live in a `methods` table
+  (`Object.hasOwn` lookup); `dispatch` returns a plain boolean when the handler returned no
+  promise (`getStatus`, `executeCommand`), so `reply()` runs before ws emits the next frame
+  of the same chunk. An awaited dispatch let a later frame's synchronous refusal (rate,
+  shape) overtake the earlier reply; `protocol-auth`'s "malformed object without an id"
+  test pins the order.
 
 ### RPC Server Limits (issue #338)
 

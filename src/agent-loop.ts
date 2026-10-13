@@ -14,11 +14,11 @@ import type { Action } from './actions';
 import type { ActionExecutor, ExecutionResult } from './executor';
 import { loadConfig, validateAiConfig } from './config';
 import { createResolvedAIClient } from './ai-client';
-import { configFromCredentials } from './ai-client/credentials';
+import { configFromCredentials, type AICredentials } from './ai-client/credentials';
 import type { SettledAICall } from './ai-client/factory';
 import type { SecretSource } from './credential-refs';
 import { isIrisRefusal, resolveCredentials, type CredentialsSource } from './translator';
-import { checkPlannedAction, originOf, pinPage } from './agent-policy';
+import { checkPlannedAction, originOf, pinPage, refusedResult } from './agent-policy';
 import type { AgentPolicy } from './agent-policy';
 import { withPageTimeout } from './page-timeout';
 
@@ -166,218 +166,343 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     maxTurns = 8,
     log = () => {},
     policy = {},
-    startUrl,
-    orgId,
-    onUsage,
     secrets,
   } = options;
+  const pinned = await pinStart(options, policy, log);
+  if ('terminationReason' in pinned) return pinned;
+  const { startOrigin } = pinned;
 
-  // The origin the run is pinned to: what the caller ASKED for, falling back to
-  // where the page is now. Read once, before any turn can move it — and
-  // preferring the requested URL matters, because the caller has usually
-  // navigated already and a cross-origin redirect would otherwise pin the guard
-  // to the redirect's destination, which is exactly backwards.
-  const startOrigin = originOf(startUrl ?? page.url());
+  const client = await setupClient(options, log);
+  if (!('translateInstruction' in client)) return client;
 
-  // The per-action check refuses on the NEXT turn, by which point a same-origin
-  // click that navigated away has already made the request. Confinement has to
-  // be enforced before the request, so the loop installs it itself rather than
-  // trusting the caller to have done it — the default is advertised as safe, and
-  // a library caller gets the same guarantee the CLI does. Installing is
-  // idempotent: it merges into whatever policy the executor already set.
-  // No origin (about:blank, data:) means nothing to confine to. Running anyway
-  // would silently turn the advertised default into "any origin" (#337).
-  if (!(await pinPage(page, policy, startOrigin))) {
-    log(
-      'refusing to start: the starting page has no origin to pin to — opt out of pinning to run anyway',
-    );
-    return { goalMet: null, turns: 0, results: [], terminationReason: 'error', errorKind: 'other' };
+  const ctx: TurnContext = {
+    instruction,
+    executor,
+    page,
+    policy,
+    startOrigin,
+    secrets,
+    log,
+    client,
+  };
+  const state: LoopState = {
+    results: [],
+    executedActions: [],
+    recentFailures: [],
+    turns: 0,
+    emptyPlans: 0,
+    consecutiveFailures: 0,
+    goalMet: null,
+  };
+  while (state.turns < maxTurns) {
+    state.turns++;
+    const ended = await playTurn(ctx, state);
+    if (ended) return ended;
   }
+  return endRun(state, 'max_turns');
+}
 
-  const results: ExecutionResult[] = [];
-  const executedActions: Action[] = [];
+type TextClient = Awaited<ReturnType<typeof createResolvedAIClient>>;
+
+/** What every turn needs and nothing changes (#518: out of one long function). */
+interface TurnContext {
+  instruction: string;
+  executor: ActionExecutor;
+  page: Page;
+  policy: AgentPolicy;
+  startOrigin: string | null;
+  secrets: SecretSource | undefined;
+  log: (message: string) => void;
+  client: TextClient;
+}
+
+/** What the run accumulates across turns. */
+interface LoopState {
+  results: ExecutionResult[];
+  executedActions: Action[];
   /** Failure reasons shown back to the model, newest last. Bounded so a long run does not grow the prompt without limit. */
-  const recentFailures: string[] = [];
-  let turns = 0;
-  let emptyPlans = 0;
-  let consecutiveFailures = 0;
-  let goalMet: boolean | null = null;
+  recentFailures: string[];
+  turns: number;
+  emptyPlans: number;
+  consecutiveFailures: number;
+  goalMet: boolean | null;
+}
 
-  let client;
+/** This turn's checks made since its last executed action, and whether it acted (#351). */
+interface TurnChecks {
+  asserts: boolean[];
+  acted: boolean;
+}
+
+const endRun = (
+  state: LoopState,
+  terminationReason: TerminationReason,
+  errorKind?: 'provider' | 'other',
+): AgentRunResult => ({
+  goalMet: state.goalMet,
+  turns: state.turns,
+  results: state.results,
+  terminationReason,
+  ...(errorKind && { errorKind }),
+});
+
+/** An `error` ending before any turn ran (#510): `other` refusals, `provider` failures. */
+const endBeforeTurns = (errorKind: 'provider' | 'other'): AgentRunResult => ({
+  goalMet: null,
+  turns: 0,
+  results: [],
+  terminationReason: 'error',
+  errorKind,
+});
+
+/**
+ * The origin the run is pinned to: what the caller ASKED for, falling back to where the page
+ * is now. Read once, before any turn can move it; preferring the requested URL matters,
+ * because the caller has usually navigated already and a cross-origin redirect would
+ * otherwise pin the guard to the redirect's destination, which is exactly backwards.
+ *
+ * The per-action check refuses on the NEXT turn, by which point a same-origin click that
+ * navigated away has already made the request. Confinement has to be enforced before the
+ * request, so the loop installs it itself rather than trusting the caller to have done it:
+ * the default is advertised as safe, and a library caller gets the same guarantee the CLI
+ * does. Installing is idempotent: it merges into whatever policy the executor already set. No
+ * origin (about:blank, data:) means nothing to confine to; running anyway would silently turn
+ * the advertised default into "any origin" (#337).
+ */
+async function pinStart(
+  options: AgentLoopOptions,
+  policy: AgentPolicy,
+  log: (message: string) => void,
+): Promise<{ startOrigin: string | null } | AgentRunResult> {
+  const startOrigin = originOf(options.startUrl ?? options.page.url());
+  if (await pinPage(options.page, policy, startOrigin)) return { startOrigin };
+  log(
+    'refusing to start: the starting page has no origin to pin to — opt out of pinning to run anyway',
+  );
+  return endBeforeTurns('other');
+}
+
+/**
+ * The metered text client for the run, or the result that ends it first: no credentials for
+ * the org, or an AI that is not configured (#510 review: a configuration to fix, as one-shot
+ * `translate()` reports it), are `other`; an unsupported provider or a setup that throws is a
+ * reportable `provider` outcome, not a rejected promise.
+ */
+async function setupClient(
+  options: AgentLoopOptions,
+  log: (message: string) => void,
+): Promise<TextClient | AgentRunResult> {
   try {
     const credentials = await resolveCredentials(options.credentials);
     if (credentials === null) {
       log('no AI credentials for this organization');
-      return {
-        goalMet: null,
-        turns: 0,
-        results: [],
-        terminationReason: 'error',
-        errorKind: 'other',
-      };
+      return endBeforeTurns('other');
     }
-    const config = credentials
-      ? configFromCredentials(credentials, { kind: 'text' })
-      : loadConfig();
-    // No key or endpoint is a configuration to fix, not an outage (#510 review): one-shot
-    // `translate()` reports it as a plain empty plan from the same check.
+    const config = clientConfig(credentials);
     const configErrors = validateAiConfig(config);
     if (configErrors.length > 0) {
       log(`AI translation is not configured (${configErrors.join(', ')})`);
-      return {
-        goalMet: null,
-        turns: 0,
-        results: [],
-        terminationReason: 'error',
-        errorKind: 'other',
-      };
+      return endBeforeTurns('other');
     }
-    client = await createResolvedAIClient(config, { operation: 'agent_turn', orgId, onUsage });
+    return await createResolvedAIClient(config, {
+      operation: 'agent_turn',
+      orgId: options.orgId,
+      onUsage: options.onUsage,
+    });
   } catch (error) {
-    // An unsupported provider or unreadable config is a reportable outcome, not
-    // a rejected promise — every other failure mode here returns a result.
     log(`client setup failed — ${error instanceof Error ? error.message : error}`);
-    return {
-      goalMet: null,
-      turns: 0,
-      results: [],
-      terminationReason: 'error',
-      errorKind: 'provider',
-    };
+    return endBeforeTurns('provider');
   }
+}
 
-  while (turns < maxTurns) {
-    turns++;
+/** The org's injected credentials, else the process configuration (local mode). */
+function clientConfig(credentials: AICredentials | undefined) {
+  return credentials ? configFromCredentials(credentials, { kind: 'text' }) : loadConfig();
+}
 
-    // The digest shows what fields hold: a value typed from a credential
-    // reference must not reach the model (#352), nor what such a field holds now (#513).
-    await executor.refreshFieldValues();
-    const digest = await observePage(page, (text) => executor.redactSecrets(text));
-    log(`turn ${turns}: observing (${digest.length} chars)`);
+/** One observe → plan → act turn; the result when the run ends here, else null. */
+async function playTurn(ctx: TurnContext, state: LoopState): Promise<AgentRunResult | null> {
+  // The digest shows what fields hold: a value typed from a credential
+  // reference must not reach the model (#352), nor what such a field holds now (#513).
+  await ctx.executor.refreshFieldValues();
+  const digest = await observePage(ctx.page, (text) => ctx.executor.redactSecrets(text));
+  ctx.log(`turn ${state.turns}: observing (${digest.length} chars)`);
 
-    let plan;
-    try {
-      plan = await client.translateInstruction({
-        instruction,
-        // The scaffolding that existed but was never filled in.
-        context: {
-          // Capped for the same reason the digest header is: every provider
-          // interpolates this verbatim into the prompt, so an uncapped value
-          // here reintroduces the whole encoded data: URL by another route.
-          url: truncate(executor.redactSecrets(page.url()), MAX_URL_CHARS),
-          currentPage: digest,
-          // Snapshot, not the live array: passing the reference lets later turns
-          // mutate a request the client may still be holding, so what a provider
-          // serialises could differ from what the turn actually knew.
-          previousActions: [...executedActions],
-          // Without this the model sees what it tried but never how it went, so
-          // a refused or failed action just gets proposed again next turn.
-          recentFailures: recentFailures.slice(-MAX_REPORTED_FAILURES),
-        },
-      });
-    } catch (error) {
-      log(`turn ${turns}: translation failed — ${error instanceof Error ? error.message : error}`);
-      // IRIS's own budget breaker refused before the provider was asked: not an outage.
-      const errorKind = isIrisRefusal(error) ? 'other' : 'provider';
-      return { goalMet, turns, results, terminationReason: 'error', errorKind };
-    }
-    // The provider failed: asking again is not "letting the model think", and
-    // reporting it as no_actions blamed the model for an outage (#293).
-    if (plan.error) {
-      log(`turn ${turns}: translation failed — ${plan.error}`);
-      return { goalMet, turns, results, terminationReason: 'error', errorKind: 'provider' };
-    }
+  const plan = await askTurn(ctx, state, digest);
+  if ('terminationReason' in plan) return plan;
+  if (plan.actions.length === 0) return noPlan(ctx, state);
+  state.emptyPlans = 0;
 
-    if (plan.actions.length === 0) {
-      emptyPlans++;
-      log(`turn ${turns}: model proposed no actions (${emptyPlans}/2)`);
-      // Once can mean "thinking"; twice means it is stuck and re-asking will not help.
-      if (emptyPlans >= 2) {
-        return { goalMet, turns, results, terminationReason: 'no_actions' };
-      }
-      continue;
-    }
-    emptyPlans = 0;
+  const stopped = await runTurnActions(ctx, state, plan.actions);
+  if (stopped) return stopped;
 
-    /** This turn's checks made since its last executed action. */
-    const turnAsserts: boolean[] = [];
-    let acted = false;
-    // A check describes the page as it was when it ran. Once the agent acts
-    // again it describes nothing, so the verdict is only the checks made after
-    // the last executed action, and with none it is unverified (#351).
-    const settleVerdict = () => {
-      if (turnAsserts.length > 0) {
-        goalMet = turnAsserts.every(Boolean);
-      } else if (acted) {
-        goalMet = null;
-      }
-    };
+  return goalConfirmed(ctx, state, plan.actions);
+}
 
-    for (const action of plan.actions) {
-      // Policy is checked per action, immediately before it runs, because an
-      // earlier action in the same turn may have moved the page.
-      // The action, then what its selector hits on the page (#353), as on every path (#354).
-      const verdict = await checkPlannedAction(action, policy, page, startOrigin);
+/**
+ * Completion signal: the model spent this turn confirming rather than acting, and everything
+ * it confirmed held. An assert alongside further actions means it is still working.
+ */
+function goalConfirmed(
+  ctx: TurnContext,
+  state: LoopState,
+  actions: Action[],
+): AgentRunResult | null {
+  if (state.goalMet !== true || !actions.every((a) => a.type === 'assert')) return null;
+  ctx.log(`turn ${state.turns}: goal confirmed`);
+  return endRun(state, 'goal_met');
+}
 
-      // A refusal is recorded as a failed result rather than skipped silently:
-      // it goes into `previousActions`, so the next turn's prompt shows the
-      // model that the action was refused and why, and it counts toward the
-      // consecutive-failure cutoff so an agent that keeps retrying a forbidden
-      // action stops instead of burning the turn budget.
-      const result: ExecutionResult = verdict.allowed
-        ? await executor.executeAction(action, page, secrets, verdict.target)
-        : {
-            success: false,
-            action,
-            error: `Refused by agent policy: ${verdict.reason}`,
-            duration: 0,
-          };
+/** A turn with no actions: once can mean "thinking"; twice means it is stuck. */
+function noPlan(ctx: TurnContext, state: LoopState): AgentRunResult | null {
+  state.emptyPlans++;
+  ctx.log(`turn ${state.turns}: model proposed no actions (${state.emptyPlans}/2)`);
+  return state.emptyPlans >= 2 ? endRun(state, 'no_actions') : null;
+}
 
-      results.push(result);
-      executedActions.push(action);
-      if (!result.success) {
-        recentFailures.push(`${action.type} ${JSON.stringify(action)}: ${result.error}`);
-      }
-      log(`turn ${turns}: ${action.type} → ${result.success ? 'ok' : `failed (${result.error})`}`);
+/**
+ * The model's plan for this turn, or the `error` ending: a provider failure (#293: asking
+ * again is not "letting the model think", and no_actions blamed the model for an outage), or
+ * IRIS's own refusal (`other`, #510).
+ */
+async function askTurn(
+  ctx: TurnContext,
+  state: LoopState,
+  digest: string,
+): Promise<{ actions: Action[] } | AgentRunResult> {
+  let plan;
+  try {
+    plan = await ctx.client.translateInstruction({
+      instruction: ctx.instruction,
+      // The scaffolding that existed but was never filled in.
+      context: {
+        // Capped for the same reason the digest header is: every provider
+        // interpolates this verbatim into the prompt, so an uncapped value
+        // here reintroduces the whole encoded data: URL by another route.
+        url: truncate(ctx.executor.redactSecrets(ctx.page.url()), MAX_URL_CHARS),
+        currentPage: digest,
+        // Snapshot, not the live array: passing the reference lets later turns
+        // mutate a request the client may still be holding, so what a provider
+        // serialises could differ from what the turn actually knew.
+        previousActions: [...state.executedActions],
+        // Without this the model sees what it tried but never how it went, so
+        // a refused or failed action just gets proposed again next turn.
+        recentFailures: state.recentFailures.slice(-MAX_REPORTED_FAILURES),
+      },
+    });
+  } catch (error) {
+    ctx.log(
+      `turn ${state.turns}: translation failed — ${error instanceof Error ? error.message : error}`,
+    );
+    return endRun(state, 'error', isIrisRefusal(error) ? 'other' : 'provider');
+  }
+  if (plan.error) {
+    ctx.log(`turn ${state.turns}: translation failed — ${plan.error}`);
+    return endRun(state, 'error', 'provider');
+  }
+  return plan;
+}
 
-      if (action.type === 'assert') {
-        turnAsserts.push(result.success);
-      } else if (verdict.allowed) {
-        // Failed too: a click that threw may still have been dispatched. A
-        // refused action never ran, so the page the checks saw is unchanged.
-        turnAsserts.length = 0;
-        acted = true;
-      }
-
-      if (result.success) {
-        consecutiveFailures = 0;
-      } else {
-        consecutiveFailures++;
-        if (consecutiveFailures >= 3) {
-          log(`turn ${turns}: three consecutive failures, stopping`);
-          // Fold in this turn's verdict before bailing: this return jumps out
-          // from inside the action loop, past the settle below.
-          settleVerdict();
-          return { goalMet, turns, results, terminationReason: 'consecutive_failures' };
-        }
-      }
-    }
-
-    // The verdict is the LATEST checks, not every assertion ever run. A loop
-    // exists precisely so a failed check can be acted on and re-checked;
-    // carrying the first failure forward forever would make recovery impossible
-    // and could report terminationReason 'goal_met' alongside goalMet false.
-    settleVerdict();
-
-    // Completion signal: the model spent this turn confirming rather than
-    // acting, and everything it confirmed held. An assert alongside further
-    // actions means it is still working.
-    const onlyAsserted = plan.actions.every((a) => a.type === 'assert');
-    if (goalMet === true && onlyAsserted) {
-      log(`turn ${turns}: goal confirmed`);
-      return { goalMet, turns, results, terminationReason: 'goal_met' };
+/**
+ * Runs a turn's actions; the result when three consecutive failures stop the run. The verdict
+ * is the LATEST checks, not every assertion ever run: a loop exists so a failed check can be
+ * acted on and re-checked, and carrying the first failure forward would make recovery
+ * impossible and could report goal_met alongside goalMet false.
+ */
+async function runTurnActions(
+  ctx: TurnContext,
+  state: LoopState,
+  actions: Action[],
+): Promise<AgentRunResult | null> {
+  const checks: TurnChecks = { asserts: [], acted: false };
+  for (const action of actions) {
+    if (await runOneAction(ctx, state, checks, action)) {
+      ctx.log(`turn ${state.turns}: three consecutive failures, stopping`);
+      // Fold in this turn's verdict before bailing.
+      settleVerdict(state, checks);
+      return endRun(state, 'consecutive_failures');
     }
   }
+  settleVerdict(state, checks);
+  return null;
+}
 
-  return { goalMet, turns, results, terminationReason: 'max_turns' };
+/**
+ * A check describes the page as it was when it ran. Once the agent acts again it describes
+ * nothing, so the verdict is only the checks made after the last executed action, and with
+ * none it is unverified (#351).
+ */
+function settleVerdict(state: LoopState, checks: TurnChecks): void {
+  if (checks.asserts.length > 0) {
+    state.goalMet = checks.asserts.every(Boolean);
+  } else if (checks.acted) {
+    state.goalMet = null;
+  }
+}
+
+/**
+ * One planned action under the policy; true when it makes three consecutive failures. Policy
+ * is checked per action, immediately before it runs, because an earlier action in the same
+ * turn may have moved the page: the action, then what its selector hits (#353), as on every
+ * path (#354).
+ */
+async function runOneAction(
+  ctx: TurnContext,
+  state: LoopState,
+  checks: TurnChecks,
+  action: Action,
+): Promise<boolean> {
+  const verdict = await checkPlannedAction(action, ctx.policy, ctx.page, ctx.startOrigin);
+  const result = await actionResult(ctx, action, verdict);
+  recordResult(ctx, state, action, result);
+  noteCheck(checks, action, verdict.allowed, result.success);
+  state.consecutiveFailures = result.success ? 0 : state.consecutiveFailures + 1;
+  return state.consecutiveFailures >= 3;
+}
+
+/**
+ * The action run, or its refusal as a failed result. A refusal is recorded rather than
+ * skipped silently: it goes into `previousActions`, so the next turn's prompt shows the model
+ * that the action was refused and why, and it counts toward the consecutive-failure cutoff so
+ * an agent that keeps retrying a forbidden action stops instead of burning the turn budget.
+ */
+async function actionResult(
+  ctx: TurnContext,
+  action: Action,
+  verdict: Awaited<ReturnType<typeof checkPlannedAction>>,
+): Promise<ExecutionResult> {
+  if (verdict.allowed) {
+    return ctx.executor.executeAction(action, ctx.page, ctx.secrets, verdict.target);
+  }
+  return refusedResult(action, verdict);
+}
+
+/**
+ * An assert's outcome joins the turn's checks; an executed action clears them. Failed too: a
+ * click that threw may still have been dispatched. A refused action never ran, so the page
+ * the checks saw is unchanged.
+ */
+function noteCheck(checks: TurnChecks, action: Action, ran: boolean, success: boolean): void {
+  if (action.type === 'assert') {
+    checks.asserts.push(success);
+  } else if (ran) {
+    checks.asserts.length = 0;
+    checks.acted = true;
+  }
+}
+
+function recordResult(
+  ctx: TurnContext,
+  state: LoopState,
+  action: Action,
+  result: ExecutionResult,
+): void {
+  state.results.push(result);
+  state.executedActions.push(action);
+  if (!result.success) {
+    state.recentFailures.push(`${action.type} ${JSON.stringify(action)}: ${result.error}`);
+  }
+  ctx.log(
+    `turn ${state.turns}: ${action.type} → ${result.success ? 'ok' : `failed (${result.error})`}`,
+  );
 }
