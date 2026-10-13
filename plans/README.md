@@ -245,7 +245,7 @@ production.
 | `P3.4` | [#382](https://github.com/frankbria/iris/issues/382) | egress-proxy test assumes 127.0.0.1:1 refuses; it blackholes on WSL | — | DONE (#582) |
 | `P3.5` | [#383](https://github.com/frankbria/iris/issues/383) | ActionExecutor.createPage is not reentrant: concurrent calls can orphan a browser | P0.12 (#240) | DONE (#583) |
 | `P3.6` | [#386](https://github.com/frankbria/iris/issues/386) | Deprecated createAIClient / AIClientFactory.create(…, 'text') return unmetered text clients | P0.14 (#242) | TODO |
-| `P3.7` | [#388](https://github.com/frankbria/iris/issues/388) | Cost tracker pricing edges left by #243: ceiling above the table, flat-only parents, getPricing | P0.15 (#243) | TODO |
+| `P3.7` | [#388](https://github.com/frankbria/iris/issues/388) | Cost tracker pricing edges left by #243: ceiling above the table, flat-only parents, getPricing | P0.15 (#243) | DONE (#587) |
 | `P3.8` | [#390](https://github.com/frankbria/iris/issues/390) | Cost ledger follow-ups from #244: stale reservations, typed budget error, settle/close race | P0.16 (#244) | TODO |
 | `P3.9` | [#409](https://github.com/frankbria/iris/issues/409) | Portal org UX follow-ups from #250 | P0.22 (#250) | TODO |
 
