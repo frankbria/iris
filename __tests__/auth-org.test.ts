@@ -144,6 +144,22 @@ const PASSWORD = 'correct-horse-battery-staple';
   r.raceRows = (await pool.query("select count(*)::int as n from organization where name like 'race%'")).rows[0].n;
   r.G = G;
 
+  // #409: a new session starts in the org the user last made active, while still a member.
+  const ivan = await user('ivan');
+  const I = await active(ivan);
+  await accept(ivan, (await invite(alice, 'ivan@iris.test', 'member', A)).id);
+  r.remembered = [];
+  for (const target of [I, A, I, A]) {
+    await auth.api.setActiveOrganization({ headers: ivan, body: { organizationId: target } });
+    r.remembered.push((await active(await signIn('ivan@iris.test'))) === target);
+  }
+  // Removed from the remembered org (A): the next session starts in one he is still in.
+  const ivanInA = (await auth.api.listMembers({ headers: alice, query: { organizationId: A } }))
+    .members.find((m) => m.user.email === 'ivan@iris.test');
+  await auth.api.removeMember({ headers: alice, body: { memberIdOrEmail: ivanInA.id, organizationId: A } });
+  r.afterRemoval = (await active(await signIn('ivan@iris.test'))) === I;
+  r.I = I;
+
   r.A = A;
   r.B = B;
   await pool.end();
@@ -270,6 +286,15 @@ const PASSWORD = 'correct-horse-battery-staple';
       id: r.A,
       members: ['alice@iris.test', 'carol@iris.test', 'dave@iris.test'],
     });
+  });
+
+  // #409: last active org, per user.
+  it('starts a new session in the org the user last made active', () => {
+    expect(r.remembered).toEqual([true, true, true, true]);
+  });
+
+  it('falls back to an org the user is still in when the remembered one dropped them', () => {
+    expect(r.afterRemoval).toBe(true);
   });
 
   it('refuses to delete an org', () => {

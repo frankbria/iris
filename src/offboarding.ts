@@ -189,6 +189,8 @@ export function offboarding(db: Kysely<unknown>) {
     await sql`delete from visual_baselines where org_id = ${orgId}`.execute(tx);
     // The AI mode and who set it (#479): not billing data, so not kept on the tombstone.
     await sql`delete from org_ai_settings where org_id = ${orgId}`.execute(tx);
+    // Who last had it active (#409): its members are gone below.
+    await sql`delete from user_active_orgs where org_id = ${orgId}`.execute(tx);
     await sql`delete from member where "organizationId" = ${orgId}`.execute(tx);
     await sql`delete from invitation where "organizationId" = ${orgId}`.execute(tx);
     await sql`update session set "activeOrganizationId" = null

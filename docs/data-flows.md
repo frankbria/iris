@@ -47,12 +47,12 @@ Sign-in rate limits are counted per client IP in the portal process's memory (Be
 
 | | |
 |---|---|
-| Data | `organization` (name, slug), `member` (user, org, role), `invitation` (invitee **email**, role, inviter, status, expiry). |
+| Data | `organization` (name, slug), `member` (user, org, role), `invitation` (invitee **email**, role, inviter, status, expiry), `user_active_orgs` (the org each user last made active, #409). |
 | Purpose | Tenancy: the org is the tenant (#250, ADR 0001 §4). |
-| Where | Postgres, `0001_initial.ts`; plugin options in `src/auth/config.ts`. |
+| Where | Postgres, `0001_initial.ts`, `0019_user_active_orgs.ts`; plugin options in `src/auth/config.ts`. |
 | Access | Members of the org (roles owner/admin/member). Operators. |
 | Encryption | As above. |
-| Retention | Invitation: expires after 48 hours (BetterAuth default, not overridden); the row stays. Tenants cannot delete an org themselves (`disableOrganizationDeletion`); the operator does it on request (`iris admin delete-org`): suspended at once, restorable for **30 days** (`restore-org`), then purged. Members, invitations, keys, provider keys, plans, the AI setting (`org_ai_settings`, which names the user who set it) and runs are deleted; the org row stays as a tombstone (name "Deleted organization", a random `deleted-<uuid>` slug) holding only its billing records, for 7 years. |
+| Retention | Invitation: expires after 48 hours (BetterAuth default, not overridden); the row stays. Tenants cannot delete an org themselves (`disableOrganizationDeletion`); the operator does it on request (`iris admin delete-org`): suspended at once, restorable for **30 days** (`restore-org`), then purged. Members, invitations, keys, provider keys, plans, the AI setting (`org_ai_settings`, which names the user who set it), who last had it active (`user_active_orgs`) and runs are deleted; the org row stays as a tombstone (name "Deleted organization", a random `deleted-<uuid>` slug) holding only its billing records, for 7 years. |
 
 ### API keys
 

@@ -21,9 +21,10 @@ import { getAuth, getDb } from "@/lib/auth"
  * Cached per request (React `cache`): a layout can run it as an auth gate before a
  * streaming boundary (so a redirect is a real 307, not a 200 with a meta refresh, #270)
  * and the page below reuses the answer instead of asking BetterAuth again.
+
  *
- * ponytail: `getFullOrganization` returns the first 100 members, so `/org` lists only
- * those. Page it when an org outgrows that.
+ * `org.members` is `getFullOrganization`'s first 100 only: `/org` pages members itself
+ * (#409), so read the list from there, never from here.
  */
 export const requireOrg = cache(async function requireOrg() {
   // headers() first: it makes the page dynamic before getAuth() needs its secrets.

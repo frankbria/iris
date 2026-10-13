@@ -1,4 +1,8 @@
+import { headers } from "next/headers"
+import { redirect } from "next/navigation"
+
 import { LogInForm } from "@/components/auth-forms"
+import { getAuth } from "@/lib/auth"
 import { safeNext } from "@/lib/safe-next"
 
 const NOTICES: Record<string, string> = {
@@ -18,6 +22,11 @@ export default async function LogInPage({
 }) {
   const params = await searchParams
   const next = safeNext(params.next)
+  // Already signed in (#409): go where the login would have gone. headers() first: it makes
+  // the page dynamic before getAuth() needs its secrets.
+  const requestHeaders = await headers()
+  if (await getAuth().api.getSession({ headers: requestHeaders }))
+    redirect(next)
   // A failed verification comes back to the sign-up callbackURL with `&error=`
   // appended, next to its `verified=1`. The error wins. Logging in mails a fresh link.
   if (params.error)
