@@ -573,3 +573,12 @@ Write/Edit, not as a pre-push afterthought.
 - **`git add -A ':!path'` aborts when `path` is gitignored**, so nothing is committed; check the commit happened before posting anything that names the PR.
 - **Waiters: put the condition in a function (`busy() { … return 0; }`)**; an `exit 1` inside an `until` condition ends the whole script at the first pending check.
 - **Security PRs take several codex rounds.** #513 needed four, and each round found something real. Run codex again after every fix commit, not just once; the GLM bot stopped reviewing mid-day (#565), so codex was the only cross-family check.
+
+## 2026-10-12 (#386–#425 loop)
+
+- **Never `git stash` in a worktree.** The stash list is shared with the main checkout, which holds the user's stashes. A `git stash -- <file>` with nothing to save, then `git stash pop`, applied the user's stash into the #386 worktree. It conflicted, so the entry survived; a clean apply would have dropped it. For "fails without the fix" controls, commit first, then swap the file from a ref (`git show origin/main:<path> > <path>` … `git checkout HEAD -- <path>`).
+- **`git checkout HEAD -- <file>` on an uncommitted fix restores main's version.** That is how a swap-back deleted #420's fix. Commit before any swap.
+- **A guarded edit must gate the rest of its chain: `python3 edit.py && commit && reply`.** On separate lines, a failed anchor assert still ran the commit (nothing to commit), the push and a reply saying "Fixed" (#571). A `python … > body.md; gh pr edit --body-file body.md` with a failed assert cleared a PR body (#591). Check `[ -s file ]` before using generated output.
+- **Lizard misreads an optional call `x?.(…)`, and a spread ternary `...(c ? f() : {})`.** It drops every later function in the file from the CRAP gate, so `smart-client.ts` and `createAuth`'s hooks were never measured. Bisect by deleting line ranges on a scratch copy, then rewrite the construct (an early return, a local).
+- **Kysely's `sql\`…\`` receives cooked template strings,** so a regex `\s` inside one reaches Postgres as `s`. Write such SQL without backslash escapes (`string_to_array`, `any(...)`).
+- **Codex can repeat a rejected finding for as long as a doc over-claims the guarantee.** #513's sandbox spoof came back three times, citing CLAUDE.md's "a page lying about either is refused". Narrow the doc and the inline comment to the exact guarantee and its residual. A rejection that leaves the over-claim in place gets re-raised.
