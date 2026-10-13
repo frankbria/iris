@@ -587,3 +587,13 @@ Write/Edit, not as a pre-push afterthought.
 - **A multi-anchor edit must write once, after every anchor matched.** A helper that rewrote the file after each replacement left `vision.ts` half-edited when the second anchor missed (#573). Collect the replacements, assert all, then write.
 - **Lizard drops functions it cannot parse:** nested templates, `x?.(…)`, spread ternaries, multi-line arrow bodies, the commander action chain and `createAuth()`'s option object. Before calling a function "unchanged from main", check that main actually measures it; when it doesn't, convert the construct (a `function` declaration, an early return, a local) rather than quoting a number.
 - **Before a deterministic flake fix, count the resource, don't guess.** `keyboard-real-behavior` closed pages but never contexts; logging `browser.contexts().length` per test showed 1 → 65 (#595), the real cause of the late hook timeout.
+
+## 2026-10-13 — #518 batch 2 (PR #610)
+
+- **lizard stops reading a TypeScript file at a ternary whose else-branch is an object literal holding a template string** (`cond ? await x() : { error: `…${v}` }`): everything after it was unmeasured, about 1,100 lines of cli.ts. Found by deleting line ranges on a scratch copy and counting rows (`lizard f | grep -c @`). Moving the literal into a named function fixed it.
+- **lizard counts `?:` optional properties of an inline parameter type as branches.** `startServer` read cc 12, mostly from its signature. Name the options type (an exported interface), and the number drops to the body's real complexity.
+- **Quartermaster's gate fails closed when its scan and lizard disagree on where a function starts.** A multi-line inline parameter type put the scan at `async (` and lizard at `) => {`. Fix: a named options interface, so the head fits on one line.
+- **The `--cc-only` gate fails at cc >= 6, not > 6**: CRAP is never below cc, so a cc-6 function fails at any coverage. Target 5.
+- **Turning a switch into an awaited method table can reorder replies.** A synchronous case used to reply before ws emitted the next frame; after `await run()`, a later frame's synchronous refusal went first. Keep `dispatch` synchronous for handlers that return no promise. The existing order test caught it 2 out of 3 times: run a race-sensitive suite more than once before trusting a pass.
+- **In a demo script, `$!` of `npx …` is npx's pid**: SIGTERM killed the wrapper (exit 143) and never reached the CLI's handler. Use `node -r ts-node/register/transpile-only src/cli.ts`, and set `TS_NODE_PROJECT` when the cwd is outside the repo. Also, `python3 -m http.server` buffers stdout, so its port line needs `-u`.
+
