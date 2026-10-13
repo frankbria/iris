@@ -51,6 +51,31 @@ describe('credential references', () => {
       },
     );
 
+    // #513: a credential can be bound to the origin it belongs to.
+    it('resolves a bound reference on its own origin only, naming it when refused', () => {
+      const bound = mapSecrets({
+        LOGIN_PW: { value: SECRET, origin: 'https://shop.example/login' },
+      });
+      expect(resolveFillText('{{secret:LOGIN_PW}}', bound, 'https://shop.example')).toEqual({
+        value: SECRET,
+        fromReference: true,
+      });
+      for (const origin of ['https://evil.example', 'http://shop.example', 'null', undefined]) {
+        expect(() => resolveFillText('{{secret:LOGIN_PW}}', bound, origin)).toThrow(
+          /\{\{secret:LOGIN_PW\}\} is bound to https:\/\/shop\.example/,
+        );
+      }
+    });
+
+    // #513: a value this short cannot be kept out of results without cutting every match.
+    it('refuses a value shorter than 4 characters, naming the reference only', () => {
+      const short = mapSecrets({ PIN: '123' });
+      expect(() => resolveFillText('{{secret:PIN}}', short)).toThrow(
+        /\{\{secret:PIN\}\}.*at least 4/,
+      );
+      expect(() => resolveFillText('{{secret:PIN}}', short)).not.toThrow(/123/);
+    });
+
     it('does not resolve inherited object keys', () => {
       expect(() => resolveFillText('{{secret:constructor}}', mapSecrets({}))).toThrow(
         CredentialReferenceError,
@@ -62,6 +87,25 @@ describe('credential references', () => {
     const source = envSecrets({ IRIS_SECRET_PW: 'a', PW: 'b' });
     expect(source('PW')).toBe('a');
     expect(source('OTHER')).toBeUndefined();
+  });
+
+  it('envSecrets binds a value to IRIS_SECRET_ORIGIN_<NAME>, as an origin (#513)', () => {
+    const source = envSecrets({
+      IRIS_SECRET_PW: SECRET,
+      IRIS_SECRET_ORIGIN_PW: 'https://shop.example/any/path',
+      IRIS_SECRET_BAD: SECRET,
+      IRIS_SECRET_ORIGIN_BAD: 'not a url',
+      IRIS_SECRET_EMPTY: SECRET,
+      IRIS_SECRET_ORIGIN_EMPTY: '',
+    });
+    expect(source('PW')).toEqual({ value: SECRET, origin: 'https://shop.example' });
+    expect(() => resolveFillText('{{secret:BAD}}', source, 'https://shop.example')).toThrow(
+      /IRIS_SECRET_ORIGIN_BAD is not an http\(s\) origin/,
+    );
+    // PR bot: an empty binding (an unset variable in a template) fails too, never unbinds.
+    expect(() => resolveFillText('{{secret:EMPTY}}', source, 'https://shop.example')).toThrow(
+      /IRIS_SECRET_ORIGIN_EMPTY/,
+    );
   });
 
   // An ARIA snapshot collapses whitespace; Playwright's call log splits lines with ANSI codes.
@@ -110,6 +154,9 @@ describe('credential references', () => {
           <input id="mirror" oninput="this.setAttribute('value', this.value)">
           <div id="cover" style="position:fixed;inset:0;display:none"></div>
           <textarea id="notes" readonly></textarea>
+          <label>Code <input id="short" maxlength="6"></label>
+          <label>Renamed <input id="renames" maxlength="6" oninput="this.id = 'renamed'"></label>
+          <input name="dup"><input name="dup">
           <p id="done" hidden>Signed in</p>
         </body>`);
       });
@@ -135,6 +182,8 @@ describe('credential references', () => {
       jest.restoreAllMocks();
     });
 
+    // Never cleaned up on purpose: closing the page must release the field handles a
+    // reference fill keeps (#513), or browser.close() in afterAll takes tens of seconds.
     const executor = () => new ActionExecutor({ timeout: 1000, retryAttempts: 2, retryDelay: 0 });
 
     it('types the resolved value; the result keeps the reference', async () => {
@@ -259,6 +308,194 @@ describe('credential references', () => {
     });
 
     // The digest is an ARIA snapshot, and it shows what a field holds.
+    it('refuses a fill bound to another origin, typing nothing (#513)', async () => {
+      const r = await executor().executeAction(
+        { type: 'fill', selector: '#pw', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: { value: SECRET, origin: 'https://elsewhere.example' } }),
+      );
+      expect(r.success).toBe(false);
+      expect(r.error).toMatch(/\{\{secret:LOGIN_PW\}\} is bound to https:\/\/elsewhere\.example/);
+      expect(await page.inputValue('#pw')).toBe('');
+      // Positive control: bound to this page's origin, it is typed.
+      const ok = await executor().executeAction(
+        { type: 'fill', selector: '#pw', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: { value: SECRET, origin } }),
+      );
+      expect(ok.success).toBe(true);
+      expect(await page.inputValue('#pw')).toBe(SECRET);
+    });
+
+    // Codex review: the binding is checked against the frame the field is in, also when the
+    // selector enters a cross-origin iframe and no policy handle is given.
+    it("checks the binding against the iframe a selector enters, not the page's origin", async () => {
+      const inner = createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<!doctype html><title>Pay</title><body><input id="card"></body>');
+      });
+      await new Promise<void>((resolve) => inner.listen(0, '127.0.0.1', resolve));
+      // localhost, not 127.0.0.1: another origin on the same machine.
+      const innerOrigin = `http://localhost:${(inner.address() as AddressInfo).port}`;
+      try {
+        await page.setContent(`<iframe src="${innerOrigin}/"></iframe>`);
+        await page.frameLocator('iframe').locator('#card').waitFor();
+        const fill = (origin: string) =>
+          executor().executeAction(
+            {
+              type: 'fill',
+              selector: 'iframe >> internal:control=enter-frame >> #card',
+              text: '{{secret:LOGIN_PW}}',
+            },
+            page,
+            mapSecrets({ LOGIN_PW: { value: SECRET, origin } }),
+          );
+        const refused = await fill(origin); // bound to the parent page's origin
+        expect(refused.success).toBe(false);
+        expect(refused.error).toMatch(/is bound to/);
+        const typed = await fill(innerOrigin);
+        expect(typed.success).toBe(true);
+        expect(await page.frameLocator('iframe').locator('#card').inputValue()).toBe(SECRET);
+      } finally {
+        await new Promise((resolve) => inner.close(resolve));
+      }
+    }, 30_000);
+
+    // Codex review: a sandboxed iframe (no allow-same-origin) has an opaque origin whatever
+    // its URL says; a credential bound to that URL's site must not be typed into it.
+    it('refuses a sandboxed iframe whose origin is opaque, whatever its URL', async () => {
+      await page.setContent(`<iframe sandbox="allow-scripts" src="${origin}/"></iframe>`);
+      await page.frameLocator('iframe').locator('#user').waitFor();
+      const r = await executor().executeAction(
+        {
+          type: 'fill',
+          selector: 'iframe >> internal:control=enter-frame >> #user',
+          text: '{{secret:LOGIN_PW}}',
+        },
+        page,
+        mapSecrets({ LOGIN_PW: { value: SECRET, origin } }),
+      );
+      expect(r.success).toBe(false);
+      expect(r.error).toMatch(/is bound to .*this field is on null/);
+      expect(await page.frameLocator('iframe').locator('#user').inputValue()).toBe('');
+    }, 30_000);
+
+    // Codex review: page script can overwrite self.origin; the browser's URL origin must
+    // agree too, so a page that lies about its origin is refused, never let through.
+    it('refuses a page that rewrites self.origin to the bound one', async () => {
+      await page.evaluate(() => {
+        Object.defineProperty(self, 'origin', {
+          value: 'https://shop.example',
+          configurable: true,
+        });
+      });
+      const r = await executor().executeAction(
+        { type: 'fill', selector: '#pw', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: { value: SECRET, origin: 'https://shop.example' } }),
+      );
+      expect(r.success).toBe(false);
+      expect(await page.inputValue('#pw')).toBe('');
+    });
+
+    // Codex review: the reader keeps the filled element itself; replaying the selector
+    // misses a field whose id an input handler changed.
+    it('redacts what a field holds even after its selector stops matching', async () => {
+      const ex = executor();
+      const r = await ex.executeAction(
+        { type: 'fill', selector: '#renames', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: SECRET }),
+      );
+      expect(r.success).toBe(true);
+      expect(await page.locator('#renames').count()).toBe(0); // positive control: renamed
+      await ex.refreshFieldValues();
+      expect(ex.redactSecrets(`Renamed: ${SECRET.slice(0, 6)}`)).toBe('Renamed: <redacted>');
+    });
+
+    // PR bot: a reference fill keeps page.fill's strict mode: two matches type nothing.
+    it('refuses a reference fill whose selector matches two fields', async () => {
+      const r = await executor().executeAction(
+        { type: 'fill', selector: 'input[name=dup]', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: SECRET }),
+      );
+      expect(r.success).toBe(false);
+      expect(r.error).toMatch(/strict mode violation/);
+      expect(
+        await page
+          .locator('input[name=dup]')
+          .evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value)),
+      ).toEqual(['', '']);
+    });
+
+    // PR bot: a value seen once stays cut, though a later read of the field misses it.
+    it('keeps a field value it read once, after the field changes', async () => {
+      const ex = executor();
+      await ex.executeAction(
+        { type: 'fill', selector: '#short', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: SECRET }),
+      );
+      await ex.refreshFieldValues();
+      await page.fill('#short', 'other');
+      await ex.refreshFieldValues();
+      expect(ex.redactSecrets(`Code: ${SECRET.slice(0, 6)}`)).toBe('Code: <redacted>');
+    });
+
+    // PR bot: fill then submit in one turn: no refresh ever ran, yet the prefix is cut.
+    it('cuts what a field held at fill time, with no refresh before it navigates', async () => {
+      const ex = executor();
+      await ex.executeAction(
+        { type: 'fill', selector: '#short', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: SECRET }),
+      );
+      const prefix = SECRET.slice(0, 6);
+      await page.goto(`${origin}/confirm?otp=${prefix}`);
+      expect(ex.redactSecrets(page.url())).toBe(`${origin}/confirm?otp=<redacted>`);
+    });
+
+    // PR bot: the screenshot mask covers a field holding a truncated value too.
+    it('masks a field that holds only a prefix of the value', async () => {
+      const ex = executor();
+      await ex.executeAction(
+        { type: 'fill', selector: '#short', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: SECRET }),
+      );
+      await ex.refreshFieldValues();
+      const masked = await ex.secretFields(page);
+      const ids = await Promise.all(masked!.map((f) => f.getAttribute('id')));
+      expect(ids).toContain('short');
+    });
+
+    // #513: a field that keeps only a prefix (maxlength) shows a value the scrub never saw.
+    it('the agent loop never shows what a filled field holds, even a prefix', async () => {
+      process.env.IRIS_SECRET_LOGIN_PW = SECRET;
+      const translateInstruction = jest
+        .fn()
+        .mockResolvedValueOnce({
+          actions: [{ type: 'fill', selector: '#short', text: '{{secret:LOGIN_PW}}' }],
+          confidence: 0.9,
+        })
+        .mockResolvedValue({ actions: [], confidence: 0 });
+      jest
+        .spyOn(aiClient, 'createResolvedAIClient')
+        .mockResolvedValue({ translateInstruction, isAvailable: async () => true } as never);
+
+      await runAgentLoop({
+        instruction: 'enter the code',
+        executor: executor(),
+        page,
+        maxTurns: 2,
+      });
+
+      const prefix = SECRET.slice(0, 6);
+      expect(await page.inputValue('#short')).toBe(prefix); // positive control: truncated
+      expect(JSON.stringify(translateInstruction.mock.calls)).not.toContain(prefix);
+    });
+
     it('the agent loop never shows the model a resolved value', async () => {
       process.env.IRIS_SECRET_LOGIN_PW = SECRET;
       const translateInstruction = jest

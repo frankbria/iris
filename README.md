@@ -186,7 +186,10 @@ iris run "navigate to https://example.com"
 # Credentials by reference: the AI, results and history see {{secret:NAME}};
 # the value (from IRIS_SECRET_<NAME>) is typed at fill time only
 export IRIS_SECRET_LOGIN_PW='…'
+# Optional: bind it to its site; a fill on any other origin is refused
+export IRIS_SECRET_ORIGIN_LOGIN_PW=https://example.com
 iris run "fill #password with {{secret:LOGIN_PW}}" --url https://example.com
+# (values shorter than 4 characters are refused: they cannot be kept out of results)
 
 # Or set the starting page once for the session
 export IRIS_BASE_URL=http://localhost:3000

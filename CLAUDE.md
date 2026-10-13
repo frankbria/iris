@@ -1206,6 +1206,35 @@ reference.
   from references) before the model sees it.
 - No org vault: hosted fills arrive over the RPC from a client that holds its credentials. A
   vault would be one more `SecretSource`. `IRIS_SECRET_*` is scrubbed by `jest.setup.ts`.
+- **Hardening (#513)**:
+  - **Origin binding**: a source may return `{ value, origin }`
+    (`IRIS_SECRET_ORIGIN_<NAME>` locally; an RPC `secrets` entry `{ value, origin }`, zod-checked
+    URL). A reference fill resolves its element first (`fillFromReference`: the policy's handle,
+    else the selector's own `elementHandle`, frame-entry selectors included) and
+    `resolveFillText(text, source, pageOrigin)` refuses a bound reference unless that element's
+    document has exactly that http(s) origin (`effectiveOrigin`): the frame URL's origin (the
+    browser's) and `self.origin` (catches a sandboxed iframe, opaque `null` whatever its URL;
+    writable by page script) must both equal it. An unknown or opaque origin is refused. Not
+    refused: a sandboxed document *served by the bound origin* whose own script redefines
+    `self.origin`. Only the bound site can do that (a parent cannot script into an opaque
+    frame; `srcdoc`/`data:`/another site's `blob:` fail the URL check), and its own script can
+    already read its fields; a browser-side origin (CDP isolated world) would cost a CDP
+    session per fill for no change in who reads the value (codex review, rejected 3x). The value is
+    typed into that same element. A malformed env binding (empty included) fails the fill,
+    never unbinds it. The selector's handle is strict like `page.fill`: two matches refuse.
+  - **Redaction by element**: the executor keeps the handle of each field it filled from a
+    reference (a policy handle is retained, not disposed after the action; at most 50, the
+    oldest released first; released when the page closes, when a read finds the field gone,
+    and at `cleanup()`: handles kept into closed pages made `browser.close()` take tens of
+    seconds or hang) and
+    `refreshFieldValues()` re-reads what they hold, so `redactSecrets` also cuts a
+    `maxlength` prefix or a page rewrite of the value. The agent loop and RPC `observe` call it
+    before reading the page. Values under 4 characters read back are not cut. Values read are
+    kept for the executor's life (a later read that times out must not un-redact one), and the
+    screenshot mask (`secretFields`) matches them too, so a truncated field is masked.
+  - **Short values**: under `MIN_SECRET_LENGTH` (4) a reference is refused at fill time,
+    naming the reference only: cutting a 1-3 character value would cut every match of it
+    from errors and digests. A short non-secret value is filled literally.
 
 ### Hung Pages and Provider Failures (issue #293)
 
