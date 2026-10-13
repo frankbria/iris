@@ -122,10 +122,10 @@ function translationFailure(
 /** Token counts as each vendor reports them, or undefined when it did not. */
 const openAIUsage = (u?: { prompt_tokens: number; completion_tokens: number } | null) =>
   u ? { inputTokens: u.prompt_tokens, outputTokens: u.completion_tokens } : undefined;
-const ollamaUsage = (d: { prompt_eval_count?: unknown; eval_count?: unknown }) =>
-  typeof d.prompt_eval_count === 'number' && typeof d.eval_count === 'number'
-    ? { inputTokens: d.prompt_eval_count, outputTokens: d.eval_count }
-    : undefined;
+function ollamaUsage(d: { prompt_eval_count?: unknown; eval_count?: unknown }) {
+  if (typeof d.prompt_eval_count !== 'number' || typeof d.eval_count !== 'number') return undefined;
+  return { inputTokens: d.prompt_eval_count, outputTokens: d.eval_count };
+}
 const anthropicUsage = (u?: { input_tokens: number; output_tokens: number } | null) =>
   u ? { inputTokens: u.input_tokens, outputTokens: u.output_tokens } : undefined;
 

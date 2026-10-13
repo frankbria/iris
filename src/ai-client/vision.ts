@@ -187,22 +187,26 @@ const openAIImage = (image: Buffer) => ({
 });
 
 /** Baseline, current and, when one was sent, the diff. An empty diff buffer is no diff (#124). */
-const visionImages = (request: AIVisionRequest): Buffer[] =>
-  request.diff?.length
-    ? [request.baseline, request.current, request.diff]
-    : [request.baseline, request.current];
+function visionImages(request: AIVisionRequest): Buffer[] {
+  const images = [request.baseline, request.current];
+  return request.diff?.length ? [...images, request.diff] : images;
+}
 
 /** Token usage, defensive (it may be absent), so cost tracking sees real high-detail use. */
-const openAIVisionUsage = (
+function openAIVisionUsage(
   u?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null,
-) =>
-  u
-    ? {
-        inputTokens: u.prompt_tokens ?? 0,
-        outputTokens: u.completion_tokens ?? 0,
-        totalTokens: u.total_tokens,
-      }
-    : undefined;
+) {
+  if (!u) return undefined;
+  return {
+    inputTokens: orZero(u.prompt_tokens),
+    outputTokens: orZero(u.completion_tokens),
+    totalTokens: u.total_tokens,
+  };
+}
+
+function orZero(n: number | undefined): number {
+  return n ?? 0;
+}
 
 /**
  * OpenAI GPT-4V/GPT-4o vision client for visual diff analysis
