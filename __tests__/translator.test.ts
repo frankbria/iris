@@ -11,6 +11,7 @@ jest.mock('../src/config', () => ({
   }),
   validateConfig: jest.fn().mockReturnValue([]),
   validateAiConfig: jest.fn().mockReturnValue([]),
+  ConfigError: jest.requireActual('../src/config').ConfigError,
 }));
 
 jest.mock('../src/ai-client', () => ({

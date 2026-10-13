@@ -1,4 +1,4 @@
-import { loadConfig, validateAiConfig } from './config';
+import { ConfigError, loadConfig, validateAiConfig } from './config';
 import { configFromCredentials, type AICredentials } from './ai-client/credentials';
 import type { SettledAICall } from './ai-client/factory';
 import { isHostedMode } from './hosted';
@@ -47,6 +47,14 @@ function assertInstructionLength(instruction: string): void {
  * Translate a natural language instruction into Playwright actions.
  * First tries pattern matching, then falls back to AI if configured.
  */
+/**
+ * Whether IRIS itself refused before the provider was asked (#510, #603): its budget breaker,
+ * or a malformed budget setting. Not a provider outage, so never `iris run`'s retryable 3.
+ */
+export function isIrisRefusal(error: unknown): boolean {
+  return error instanceof BudgetExceededError || error instanceof ConfigError;
+}
+
 export async function translate(
   instruction: string,
   context?: { url?: string },
@@ -365,7 +373,7 @@ async function translateWithAI(
     const message = `AI translation error: ${error instanceof Error ? error.message : 'Unknown error'}`;
     // The budget breaker refused before the provider was asked (#510 review): a plain
     // failure, not `error`, which callers read as "the provider failed" (retryable).
-    if (error instanceof BudgetExceededError)
+    if (isIrisRefusal(error))
       return { actions: [], method: 'ai', confidence: 0, reasoning: message };
     return { actions: [], method: 'ai', confidence: 0, reasoning: message, error: message };
   }
