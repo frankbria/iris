@@ -53,6 +53,12 @@ export interface AgentRunResult {
   turns: number;
   results: ExecutionResult[];
   terminationReason: TerminationReason;
+  /**
+   * Why an `error` ending happened (#510): `provider` when the AI could not be built or
+   * asked (an outage, a bad model or key), `other` for a refusal before any AI call (an
+   * opaque start origin, no credentials for the org). Absent unless `error`.
+   */
+  errorKind?: 'provider' | 'other';
 }
 
 export interface AgentLoopOptions {
@@ -185,7 +191,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     log(
       'refusing to start: the starting page has no origin to pin to — opt out of pinning to run anyway',
     );
-    return { goalMet: null, turns: 0, results: [], terminationReason: 'error' };
+    return { goalMet: null, turns: 0, results: [], terminationReason: 'error', errorKind: 'other' };
   }
 
   const results: ExecutionResult[] = [];
@@ -202,7 +208,13 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     const credentials = await resolveCredentials(options.credentials);
     if (credentials === null) {
       log('no AI credentials for this organization');
-      return { goalMet: null, turns: 0, results: [], terminationReason: 'error' };
+      return {
+        goalMet: null,
+        turns: 0,
+        results: [],
+        terminationReason: 'error',
+        errorKind: 'other',
+      };
     }
     const config = credentials
       ? configFromCredentials(credentials, { kind: 'text' })
@@ -212,7 +224,13 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     // An unsupported provider or unreadable config is a reportable outcome, not
     // a rejected promise — every other failure mode here returns a result.
     log(`client setup failed — ${error instanceof Error ? error.message : error}`);
-    return { goalMet: null, turns: 0, results: [], terminationReason: 'error' };
+    return {
+      goalMet: null,
+      turns: 0,
+      results: [],
+      terminationReason: 'error',
+      errorKind: 'provider',
+    };
   }
 
   while (turns < maxTurns) {
@@ -246,13 +264,13 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
       });
     } catch (error) {
       log(`turn ${turns}: translation failed — ${error instanceof Error ? error.message : error}`);
-      return { goalMet, turns, results, terminationReason: 'error' };
+      return { goalMet, turns, results, terminationReason: 'error', errorKind: 'provider' };
     }
     // The provider failed: asking again is not "letting the model think", and
     // reporting it as no_actions blamed the model for an outage (#293).
     if (plan.error) {
       log(`turn ${turns}: translation failed — ${plan.error}`);
-      return { goalMet, turns, results, terminationReason: 'error' };
+      return { goalMet, turns, results, terminationReason: 'error', errorKind: 'provider' };
     }
 
     if (plan.actions.length === 0) {

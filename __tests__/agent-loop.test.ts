@@ -795,7 +795,12 @@ describe('agent loop', () => {
           log: (m) => log.push(m),
         });
 
-        expect(result).toMatchObject({ terminationReason: 'error', turns: 0, results: [] });
+        expect(result).toMatchObject({
+          terminationReason: 'error',
+          errorKind: 'other', // a policy refusal, not an outage (#510)
+          turns: 0,
+          results: [],
+        });
         expect(execute).not.toHaveBeenCalled();
         expect(log.join('\n')).toMatch(/no origin to pin/);
       });
@@ -846,6 +851,7 @@ describe('agent loop', () => {
       const result = await runAgentLoop({ instruction: 'anything', executor, page, maxTurns: 3 });
 
       expect(result.terminationReason).toBe('error');
+      expect(result.errorKind).toBe('provider'); // #510
       expect(result.turns).toBe(0);
     });
 
@@ -858,6 +864,7 @@ describe('agent loop', () => {
       const result = await runAgentLoop({ instruction: 'anything', executor, page, maxTurns: 3 });
 
       expect(result.terminationReason).toBe('error');
+      expect(result.errorKind).toBe('provider'); // #510
       expect(result.results).toEqual([]);
     });
 
@@ -884,6 +891,7 @@ describe('agent loop', () => {
         });
 
         expect(result.terminationReason).toBe('error');
+        expect(result.errorKind).toBe('provider'); // #510
         expect(result.turns).toBe(1);
         expect(calls).toBe(1);
         expect(log.join('\n')).toContain('Ollama request failed: 400');

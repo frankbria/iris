@@ -622,9 +622,10 @@ iris run --json --url https://example.com "click the sign in button"
   nothing — "no goal was stated" is never conflated with "the goal was met".
 - `agent` is `null` unless `--agent` was passed (see below).
 - `status` (`success` | `error`) and the exit code agree: `0` on success, `1` on
-  failure (an action failed, an assertion or the agent's goal did not hold, no actions,
-  the AI provider failed), `2` on invalid usage (`--agent` without a URL, `--agent
-  --dry-run`). See the exit-code table below.
+  failure (an action failed, an assertion or the agent's goal did not hold, no actions),
+  `2` on invalid usage (`--agent` without a URL, `--agent --dry-run`), `3` when the AI
+  provider could not be asked or answer (`translation.error`, or `agent.errorKind:
+  "provider"`), so CI can retry an outage. See the exit-code table below.
 
 ### `iris run --agent` — plan against the real page (experimental)
 
@@ -799,7 +800,7 @@ Every command signals its outcome through the exit code:
 | `0` | Completed successfully | all |
 | `1` | `run`: the run failed or its goal was not met (`status: "error"`). Elsewhere: unhandled error (for `connect`: an uncaught exception — the server exits rather than serve from unknown state) | `run`, `watch`, `connect`, top-level |
 | `2` | Invalid usage (bad flag or argument combination) | `run`, `watch`, `connect`, `worker`, `admin`, `visual-diff`, `a11y` |
-| `3` | Environment/runtime error (browser launch, filesystem, network; for `connect`: the port is already in use) | `visual-diff`, `a11y`, `connect` |
+| `3` | Environment/runtime error (browser launch, filesystem, network; for `connect`: the port is already in use; for `run`: the AI provider failed) | `run`, `visual-diff`, `a11y`, `connect` |
 | `4` | Accessibility violations found | `a11y` |
 | `5` | Visual regression detected | `visual-diff` |
 

@@ -1259,9 +1259,11 @@ reference.
 
 ### `iris run` Exit Codes (issue #294)
 
-- `0` success, `1` failure (`status: "error"`: failed action, unmet goal, no actions, a
-  provider outage with its reason in `translation.error`), `2` usage (`--agent` without a
-  URL, `--agent --dry-run`). Commander's own option errors exit 1 (#496).
+- `0` success, `1` failure (`status: "error"`: failed action, unmet goal, no actions), `2`
+  usage (`--agent` without a URL, `--agent --dry-run`), `3` a provider outage (#510): one-shot
+  when `translation.error` is set, `--agent` when `AgentRunResult.errorKind` is `provider`
+  (client setup threw, a turn's call threw or carried `error`; `other` is a refusal before
+  any AI call: opaque start origin, no org credentials). The JSON `agent` carries `errorKind`. Commander's own option errors exit 1 (#496).
 - **Set through `process.exitCode`, never `process.exit()`**: the `--json` payload is the
   last `console.log`, and on a pipe stdout is async, so `exit()` can truncate it.
 - In-process `runCli()` tests set `exitCode` on the Jest process; `jest.setup.ts` resets

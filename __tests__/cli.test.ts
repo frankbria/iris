@@ -886,7 +886,7 @@ describe('CLI Commands', () => {
       expect(payload.status).toBe('error');
       expect(payload.translation.error).toBe('Ollama request failed: 503');
       expect(stderr.join('\n')).toContain('Ollama request failed: 503');
-      expect(exitStatus()).toBe(1);
+      expect(exitStatus()).toBe(3); // an outage, not a failed test (#510)
     });
 
     test('translation.error is null when the translation succeeded', async () => {
@@ -1336,7 +1336,7 @@ describe('CLI Commands', () => {
           terminationReason: 'goal_met',
         });
 
-        expect(payload.agent).toEqual({ turns: 2, terminationReason: 'goal_met' });
+        expect(payload.agent).toEqual({ turns: 2, terminationReason: 'goal_met', errorKind: null });
         expect(payload.goalMet).toBe(true);
         expect(payload.executed).toBe(true);
         expect(payload.status).toBe('success');

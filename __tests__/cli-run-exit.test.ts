@@ -53,7 +53,8 @@ describe('iris run exit codes (#294)', () => {
 
   // A real Ollama-shaped provider that is up but fails the request: the reason must
   // reach the caller (#293's `error`), and the run must fail, not exit 0 with no actions.
-  test('1 when the AI provider fails, with its reason in translation.error', async () => {
+  // #510: an outage is the environment's (3, retryable), not a failed test (1).
+  test('3 when the AI provider fails, with its reason in translation.error', async () => {
     const provider = createServer((req, res) => {
       if (req.url === '/api/tags') res.end('{"models":[]}');
       else res.writeHead(503).end('overloaded');
@@ -67,9 +68,42 @@ describe('iris run exit codes (#294)', () => {
 
       expect(json.status).toBe('error');
       expect((json.translation as { error: string }).error).toMatch(/Ollama request failed: 503/);
-      expect(code).toBe(1);
+      expect(code).toBe(3);
     } finally {
       await new Promise((resolve) => provider.close(resolve));
     }
   }, 30_000);
+
+  test('3 when the provider fails in --agent mode too', async () => {
+    const site = createServer((_req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end('<!doctype html><title>Shop</title><button id="pay">Pay</button>');
+    });
+    const provider = createServer((req, res) => {
+      if (req.url === '/api/tags') res.end('{"models":[]}');
+      else res.writeHead(503).end('overloaded');
+    });
+    site.listen(0, '127.0.0.1');
+    provider.listen(0, '127.0.0.1');
+    await Promise.all([once(site, 'listening'), once(provider, 'listening')]);
+    try {
+      const { code, json } = await irisRun(
+        [
+          'pay for the order',
+          '--agent',
+          '--url',
+          `http://127.0.0.1:${(site.address() as AddressInfo).port}/`,
+          '--max-turns',
+          '2',
+        ],
+        { OLLAMA_ENDPOINT: `http://127.0.0.1:${(provider.address() as AddressInfo).port}` },
+      );
+
+      expect(json.status).toBe('error');
+      expect(json.agent).toMatchObject({ terminationReason: 'error', errorKind: 'provider' });
+      expect(code).toBe(3);
+    } finally {
+      await Promise.all([site, provider].map((s) => new Promise((resolve) => s.close(resolve))));
+    }
+  }, 90_000);
 });
