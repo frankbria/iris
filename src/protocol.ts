@@ -1,7 +1,7 @@
 import type { AuditEntry } from './audit-log';
 import WebSocket, { WebSocketServer } from 'ws';
 import { MAX_POPUPS_PER_CONTEXT } from './url-policy-guard';
-import { createServer, IncomingMessage, STATUS_CODES } from 'http';
+import { createServer, IncomingMessage, ServerResponse, STATUS_CODES } from 'http';
 import { handleJobsRequest, type ApiJobs, type RunReader } from './jobs-api';
 import type { ArtifactStore } from './artifact-store';
 import { randomUUID, timingSafeEqual } from 'crypto';
@@ -515,6 +515,44 @@ const REFUSAL_LOG_MS = 10_000;
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 
 /** The REST route a request names, with ids folded so the label set stays bounded. */
+const HEALTH_PATHS = new Set(['/health/live', '/health/ready']);
+const isHealthProbe = (req: IncomingMessage) =>
+  req.method === 'GET' && HEALTH_PATHS.has(req.url ?? '');
+
+/** Liveness and readiness (#309); true when it answered. */
+function answerHealth(req: IncomingMessage, res: ServerResponse, draining: boolean): boolean {
+  if (!isHealthProbe(req)) return false;
+  const ready = req.url === '/health/live' || !draining;
+  res.writeHead(ready ? 200 : 503, {
+    'content-type': 'application/json',
+    'cache-control': 'no-store',
+  });
+  res.end(JSON.stringify({ status: ready ? 'ok' : 'draining' }));
+  return true;
+}
+
+function answerDraining(res: ServerResponse): void {
+  res.writeHead(503, { 'content-type': 'application/json', 'retry-after': '1' });
+  res.end(JSON.stringify({ error: 'Server is shutting down' }));
+}
+
+/** What ws answers a plain HTTP request with when it owns the listener. */
+function answerUpgradeRequired(res: ServerResponse): void {
+  res.writeHead(426, {
+    'content-type': 'text/plain',
+    'content-length': STATUS_CODES[426]!.length,
+  });
+  res.end(STATUS_CODES[426]);
+}
+
+/** A REST request's outcome; a client that went away before the answer is not our error. */
+function restOutcome(status: number | undefined, rateLimited: boolean): Outcome {
+  if (status === undefined) return 'aborted';
+  if (status >= 500) return 'error';
+  if (rateLimited) return 'rate_limited';
+  return status >= 400 ? 'client_error' : 'ok';
+}
+
 function restRoute(req: IncomingMessage): string {
   const path = (req.url ?? '').split('?')[0];
   const route =
@@ -676,30 +714,14 @@ export function startServer(
   /** RPC messages and REST requests being handled; a drain waits for them to reach zero. */
   let inFlight = 0;
 
-  // One listener for both: the WebSocket upgrade, and the job REST API (#267).
-  const server = createServer((req, res) => {
-    // Liveness and readiness (#309), before auth and logging: probes run every few seconds,
-    // and a hosted deployment has no shared token to authenticate one with (#341).
-    if (req.method === 'GET' && (req.url === '/health/live' || req.url === '/health/ready')) {
-      const ready = req.url === '/health/live' || !draining;
-      res.writeHead(ready ? 200 : 503, {
-        'content-type': 'application/json',
-        'cache-control': 'no-store',
-      });
-      res.end(JSON.stringify({ status: ready ? 'ok' : 'draining' }));
-      return;
-    }
-    // Draining: no new REST work either (a job queued now would outlive the shutdown).
-    if (draining) {
-      res.writeHead(503, { 'content-type': 'application/json', 'retry-after': '1' });
-      res.end(JSON.stringify({ error: 'Server is shutting down' }));
-      return;
-    }
-    // In flight until answered: a drain waits for a REST request admitted before it began
-    // (its key check is async) as it does for an RPC message.
-    inFlight++;
-    res.on('close', () => inFlight--);
-    // One line per REST request, with the id echoed back so a client can quote it (#275).
+  /** One REST request's state, shared by its log line and its rate charge. */
+  interface RestRequest {
+    tenant: Principal | undefined;
+    rateLimited: boolean;
+  }
+
+  /** One line per REST request, with an id echoed back so a client can quote it (#275). */
+  const logRestRequest = (req: IncomingMessage, res: ServerResponse, rest: RestRequest) => {
     const t0 = performance.now();
     // Ours is always generated (a client's could collide with another's); a safe
     // client id is logged beside it.
@@ -708,72 +730,125 @@ export function startServer(
       typeof sent === 'string' && SAFE_REQUEST_ID.test(sent) ? sent : undefined;
     const requestId = randomUUID();
     res.setHeader('x-request-id', requestId);
-    let tenant: Principal | undefined;
-    let rateLimited = false;
     res.on('close', () => {
       const status = res.writableFinished ? res.statusCode : undefined;
-      const outcome: Outcome =
-        status === undefined
-          ? 'aborted' // the client went away before the answer: not ours to count as an error
-          : status >= 500
-            ? 'error'
-            : rateLimited
-              ? 'rate_limited'
-              : status >= 400
-                ? 'client_error'
-                : 'ok';
       observeRequest(
         'rest',
         restRoute(req),
-        outcome,
+        restOutcome(status, rest.rateLimited),
         t0,
-        { requestId, clientRequestId, status: status ?? 'aborted', ...who(tenant) },
+        { requestId, clientRequestId, status: status ?? 'aborted', ...who(rest.tenant) },
         !closed,
       );
     });
+  };
+
+  /** The job API's options for one request: its verification slot and its rate charge. */
+  const jobsOptions = (jobs: { forOrg(scope: TenantScope): ApiJobs }, rest: RestRequest) => ({
+    authenticate: authenticate!,
+    jobs,
+    runs: options?.runs,
+    artifacts: options?.artifacts,
+    artifactUrlTtlSeconds: options?.artifactUrlTtlSeconds,
+    entitlements: options?.entitlements,
+    maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
+    // REST verifications share the upgrades' `verifying` count, so a bad-key flood
+    // cannot pile onto the auth pool. Only pending ones count here: idle sockets
+    // should not make the API unavailable.
+    admit: () => {
+      if (verifying >= limits.maxConnections) return null;
+      verifying++;
+      return () => {
+        verifying--;
+      };
+    },
+    charge: (principal: Principal) => {
+      rest.tenant = principal;
+      // Both buckets need a token before either is spent (see the RPC path).
+      const now = performance.now();
+      const wait = Math.max(keyRate.wait(principal.keyId, now), orgRate.wait(principal.orgId, now));
+      if (wait === 0) {
+        keyRate.take(principal.keyId);
+        orgRate.take(principal.orgId);
+      } else rest.rateLimited = true;
+      return wait;
+    },
+  });
+
+  // One listener for both: the WebSocket upgrade, and the job REST API (#267).
+  const server = createServer((req, res) => {
+    // Liveness and readiness (#309), before auth and logging: probes run every few seconds,
+    // and a hosted deployment has no shared token to authenticate one with (#341).
+    if (answerHealth(req, res, draining)) return;
+    // Draining: no new REST work either (a job queued now would outlive the shutdown).
+    if (draining) return answerDraining(res);
+    // In flight until answered: a drain waits for a REST request admitted before it began
+    // (its key check is async) as it does for an RPC message.
+    inFlight++;
+    res.on('close', () => inFlight--);
+    const rest: RestRequest = { tenant: undefined, rateLimited: false };
+    logRestRequest(req, res, rest);
     if (options?.jobs) {
-      void handleJobsRequest(req, res, {
-        authenticate: authenticate!,
-        jobs: options.jobs,
-        runs: options.runs,
-        artifacts: options.artifacts,
-        artifactUrlTtlSeconds: options.artifactUrlTtlSeconds,
-        entitlements: options.entitlements,
-        maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
-        // REST verifications share the upgrades' `verifying` count, so a bad-key flood
-        // cannot pile onto the auth pool. Only pending ones count here: idle sockets
-        // should not make the API unavailable.
-        admit: () => {
-          if (verifying >= limits.maxConnections) return null;
-          verifying++;
-          return () => {
-            verifying--;
-          };
-        },
-        charge: (principal) => {
-          tenant = principal;
-          // Both buckets need a token before either is spent (see the RPC path).
-          const now = performance.now();
-          const wait = Math.max(
-            keyRate.wait(principal.keyId, now),
-            orgRate.wait(principal.orgId, now),
-          );
-          if (wait === 0) {
-            keyRate.take(principal.keyId);
-            orgRate.take(principal.orgId);
-          } else rateLimited = true;
-          return wait;
-        },
-      });
+      void handleJobsRequest(req, res, jobsOptions(options.jobs, rest));
       return;
     }
-    // What ws answers a plain HTTP request with when it owns the listener.
-    res.writeHead(426, {
-      'content-type': 'text/plain',
-      'content-length': STATUS_CODES[426]!.length,
-    });
-    res.end(STATUS_CODES[426]);
+    answerUpgradeRequired(res);
   });
+  /**
+   * What refuses a WebSocket upgrade before any key is checked, as [status, message, reason]:
+   * a draining server, a cross-site Origin (a browser page connecting to localhost sends one;
+   * trusted local tooling sends none), a missing or wrong shared token (the Authorization
+   * header, which a browser page cannot set on a WebSocket; absent Origin is NOT trusted), or
+   * the connection cap (one more for a loopback health probe, #342).
+   */
+  const upgradeRefusal = (req: IncomingMessage): [number, string, string] | null => {
+    if (draining) return [503, 'Server is shutting down', 'draining'];
+    const credentials = credentialRefusal(req);
+    if (credentials) return credentials;
+    const cap = limits.maxConnections + (isProbe(req) ? 1 : 0);
+    if (wss.clients.size + verifying >= cap)
+      return [503, 'Connection limit reached', 'connection_limit'];
+    return null;
+  };
+
+  /** A cross-site Origin, or a shared token that is missing or wrong. */
+  const credentialRefusal = (req: IncomingMessage): [number, string, string] | null => {
+    const origin = req.headers.origin;
+    if (origin && !allowedOrigins.includes(origin)) return [403, 'Origin not allowed', 'origin'];
+    const token = options?.authToken;
+    if (token && !hasValidToken(req.headers.authorization, token)) {
+      return [401, 'Unauthorized', 'token'];
+    }
+    return null;
+  };
+
+  /**
+   * Admits a verified key's connection, or refuses it: the drain may have begun while the key
+   * was being checked; an invalid key is 401; a valid key of a suspended org is 403, never the
+   * operator's reason (#348); an org at its connection cap is 429.
+   */
+  const admitPrincipal = (
+    principal: Principal | 'suspended' | null,
+    req: IncomingMessage,
+    refuse: (status: number, message: string, reason: string) => void,
+    done: (ok: boolean, status?: number, message?: string) => void,
+  ) => {
+    if (draining) return refuse(503, 'Server is shutting down', 'draining');
+    if (!principal) return refuse(401, 'Unauthorized', 'invalid_key');
+    if (principal === 'suspended') return refuse(403, 'Organization suspended', 'suspended');
+    const orgConnections = [...tenants.values()].filter((t) => t.orgId === principal.orgId).length;
+    if (orgConnections >= limits.maxConnectionsPerOrg) {
+      log('info', 'connection refused', {
+        reason: 'org_connection_limit',
+        status: 429,
+        ...who(principal),
+      });
+      return done(false, 429, 'Organization connection limit reached');
+    }
+    verified.set(req, principal);
+    done(true);
+  };
+
   const wss: WebSocketServer = new WebSocketServer({
     server,
     maxPayload: limits.maxPayloadBytes,
@@ -783,28 +858,13 @@ export function startServer(
     // synchronous, so the connection count read here cannot change before ws adds
     // the client; a key check is async, so upgrades in it are counted as `verifying`.
     verifyClient: ({ req }, done) => {
-      // Reject cross-site WebSocket hijacking: a browser page connecting to
-      // localhost sends an Origin header; trusted local tooling sends none.
-      const origin = req.headers.origin;
       // Refusals are logged with their reason only; never the header that was refused.
       const refuse = (status: number, message: string, reason: string) => {
         log('info', 'connection refused', { reason, status });
         done(false, status, message);
       };
-      if (draining) return refuse(503, 'Server is shutting down', 'draining');
-      if (origin && !allowedOrigins.includes(origin)) {
-        return refuse(403, 'Origin not allowed', 'origin');
-      }
-      // The token travels in the Authorization header, which a browser page
-      // cannot set on a WebSocket. Absent Origin is NOT treated as trusted: no
-      // token means rejected.
-      if (options?.authToken && !hasValidToken(req.headers.authorization, options.authToken)) {
-        return refuse(401, 'Unauthorized', 'token');
-      }
-      const cap = limits.maxConnections + (isProbe(req) ? 1 : 0);
-      if (wss.clients.size + verifying >= cap) {
-        return refuse(503, 'Connection limit reached', 'connection_limit');
-      }
+      const refusal = upgradeRefusal(req);
+      if (refusal) return refuse(...refusal);
       if (!authenticate) return done(true);
       verifying++;
       authenticate.verify(req.headers.authorization).then(
@@ -813,24 +873,7 @@ export function startServer(
           // and its 'connection' handler registers it in `tenants` before returning,
           // so the org count below cannot miss a client admitted a moment earlier.
           verifying--;
-          // The drain may have begun while the key was being checked.
-          if (draining) return refuse(503, 'Server is shutting down', 'draining');
-          if (!principal) return refuse(401, 'Unauthorized', 'invalid_key');
-          // A valid key of a suspended org (#348): 403, never the operator's reason.
-          if (principal === 'suspended') return refuse(403, 'Organization suspended', 'suspended');
-          const orgConnections = [...tenants.values()].filter(
-            (t) => t.orgId === principal.orgId,
-          ).length;
-          if (orgConnections >= limits.maxConnectionsPerOrg) {
-            log('info', 'connection refused', {
-              reason: 'org_connection_limit',
-              status: 429,
-              ...who(principal),
-            });
-            return done(false, 429, 'Organization connection limit reached');
-          }
-          verified.set(req, principal);
-          done(true);
+          admitPrincipal(principal, req, refuse, done);
         },
         (err: unknown) => {
           verifying--;
