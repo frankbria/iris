@@ -208,7 +208,9 @@ const MAX_SECRET_FIELDS = 50;
  * frame's URL, since a sandboxed iframe without `allow-same-origin` has an opaque origin
  * (`null`) whatever its URL (codex review). `undefined` when it cannot be read in time, which
  * a bound reference refuses. A string expression, so coverage instrumentation never reaches
- * the page.
+ * the page. `self.origin` is writable by the document's own script, so a sandboxed document
+ * served by the bound origin can pass; only the bound site controls that script (see
+ * CLAUDE.md, Credential References).
  */
 async function effectiveOrigin(handle: ElementHandle): Promise<string | undefined> {
   const frame = await handle.ownerFrame();

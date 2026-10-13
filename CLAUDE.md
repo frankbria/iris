@@ -1214,8 +1214,12 @@ reference.
     `resolveFillText(text, source, pageOrigin)` refuses a bound reference unless that element's
     document has exactly that http(s) origin (`effectiveOrigin`): the frame URL's origin (the
     browser's) and `self.origin` (catches a sandboxed iframe, opaque `null` whatever its URL;
-    writable by page script) must both equal it, so a page lying about either is refused. An
-    unknown or opaque origin is refused. The value is
+    writable by page script) must both equal it. An unknown or opaque origin is refused. Not
+    refused: a sandboxed document *served by the bound origin* whose own script redefines
+    `self.origin`. Only the bound site can do that (a parent cannot script into an opaque
+    frame; `srcdoc`/`data:`/another site's `blob:` fail the URL check), and its own script can
+    already read its fields; a browser-side origin (CDP isolated world) would cost a CDP
+    session per fill for no change in who reads the value (codex review, rejected 3x). The value is
     typed into that same element. A malformed env binding (empty included) fails the fill,
     never unbinds it. The selector's handle is strict like `page.fill`: two matches refuse.
   - **Redaction by element**: the executor keeps the handle of each field it filled from a
