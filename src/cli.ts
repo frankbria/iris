@@ -54,6 +54,21 @@ function parseFailOn(value: string): Record<string, boolean> | string {
 }
 
 /**
+ * `--tags` as a list, or the error message when a tag selects no axe rule (#500): such a
+ * tag scans with fewer rules, and a list of only misspelt tags scans nothing and passes.
+ */
+async function parseTags(value: string): Promise<string[] | string> {
+  const tags = value
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const unknown = await unknownAxeTags(tags);
+  if (tags.length > 0 && unknown.length === 0) return tags;
+  const detail = unknown.length ? `; axe-core has no rules tagged ${unknown.join(', ')}` : '';
+  return `Invalid --tags "${value}"${detail}.`;
+}
+
+/**
  * `--allow-asset-origin` (#378), repeatable: each value becomes its exact origin, so a path
  * or trailing slash cannot make an entry that never matches. http(s) only.
  */
@@ -1587,19 +1602,9 @@ program
         console.error(`\n❌ ${failureThreshold}`);
         process.exit(2); // Invalid usage
       }
-      // A tag axe does not know selects no rule: the scan finds nothing and passes (#500).
-      const tags: string[] = options.tags
-        .split(',')
-        .map((t: string) => t.trim())
-        .filter(Boolean);
-      const unknownTags = await unknownAxeTags(tags);
-      if (tags.length === 0 || unknownTags.length > 0) {
-        console.error(
-          `\n❌ Invalid --tags "${options.tags}"` +
-            (unknownTags.length
-              ? `; axe-core has no rules tagged ${unknownTags.join(', ')}.`
-              : '.'),
-        );
+      const tags = await parseTags(options.tags);
+      if (typeof tags === 'string') {
+        console.error(`\n❌ ${tags}`);
         process.exit(2); // Invalid usage
       }
 
