@@ -443,6 +443,19 @@ describe('credential references', () => {
       expect(ex.redactSecrets(`Code: ${SECRET.slice(0, 6)}`)).toBe('Code: <redacted>');
     });
 
+    // PR bot: fill then submit in one turn: no refresh ever ran, yet the prefix is cut.
+    it('cuts what a field held at fill time, with no refresh before it navigates', async () => {
+      const ex = executor();
+      await ex.executeAction(
+        { type: 'fill', selector: '#short', text: '{{secret:LOGIN_PW}}' },
+        page,
+        mapSecrets({ LOGIN_PW: SECRET }),
+      );
+      const prefix = SECRET.slice(0, 6);
+      await page.goto(`${origin}/confirm?otp=${prefix}`);
+      expect(ex.redactSecrets(page.url())).toBe(`${origin}/confirm?otp=<redacted>`);
+    });
+
     // PR bot: the screenshot mask covers a field holding a truncated value too.
     it('masks a field that holds only a prefix of the value', async () => {
       const ex = executor();

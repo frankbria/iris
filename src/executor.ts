@@ -491,6 +491,11 @@ export class ActionExecutor {
       throw error;
     }
     this.keepSecretField(handle, page);
+    // Read what the field holds now (PR bot): a fill followed in the same turn by a submit
+    // or the field's removal never reaches a later refresh, and a maxlength prefix would
+    // reach the next URL or digest uncut.
+    const held = await readField(handle);
+    if (held !== null && held.trim().length >= MIN_SECRET_LENGTH) this.fieldValues.add(held);
   }
 
   /**
