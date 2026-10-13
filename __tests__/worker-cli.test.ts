@@ -55,10 +55,13 @@ describe('runWorker heartbeat (#273)', () => {
     const { runWorker } = await import('../src/worker');
     const stop = new AbortController();
     let claims = 0;
+    // #564: the second claim stands in for a long job and returns only when released, so
+    // "the file was written while it ran" holds by order, not by a fixed sleep.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
     const jobs = {
-      // The second claim stands in for a long job: it does not return for 600ms.
       claim: jest.fn(async () => {
-        if (++claims === 2) await sleep(600);
+        if (++claims === 2) await released;
         return null;
       }),
       finish: jest.fn(),
@@ -76,10 +79,14 @@ describe('runWorker heartbeat (#273)', () => {
     try {
       while (claims < 2) await sleep(5); // inside the long claim now
       fs.rmSync(file, { force: true });
-      await sleep(200); // still inside it: only the timer can have written the file
-      expect(claims).toBe(2);
+      // Still inside it (it has not been released): only the timer can write the file.
+      // Bounded, so a worker that stopped beating fails here instead of hanging the run.
+      const deadline = performance.now() + 10_000;
+      while (!fs.existsSync(file) && performance.now() < deadline) await sleep(5);
       expect(fs.existsSync(file)).toBe(true);
+      expect(claims).toBe(2);
     } finally {
+      release();
       stop.abort();
       await done;
     }
@@ -150,20 +157,50 @@ describe('job claims (#435)', () => {
   afterEach(() => jest.dontMock('../src/a11y/a11y-runner'));
 
   it('heartbeats while the job runs; a failing heartbeat is logged and the job still finishes', async () => {
-    slowRunner(150);
+    // #564: the job ends only after the worker's second heartbeat, so "two beats while it
+    // runs" holds by order, not by how many real 20 ms ticks fit in a fixed sleep. The gate is
+    // bounded (codex review): a worker that stops heartbeating lets the job end after 10 s,
+    // and the count assertion below fails, with nothing left running.
+    let secondBeat!: () => void;
+    let bound: ReturnType<typeof setTimeout> | undefined;
+    const twoBeats = Promise.race([
+      new Promise<void>((resolve) => (secondBeat = resolve)),
+      new Promise<void>((resolve) => (bound = setTimeout(resolve, 10_000))),
+    ]).finally(() => clearTimeout(bound));
+    jest.resetModules();
+    jest.doMock('../src/a11y/a11y-runner', () => ({
+      AccessibilityRunner: class {
+        async run() {
+          await twoBeats;
+          return { summary: {}, results: [] };
+        }
+      },
+    }));
     const { processNextA11yJob } = await import('../src/worker');
     const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-    const heartbeat = jest.fn().mockRejectedValue(new Error('db blip'));
+    const heartbeat = jest.fn().mockImplementation(async () => {
+      if (heartbeat.mock.calls.length === 2) secondBeat();
+      throw new Error('db blip');
+    });
     const finish = jest.fn().mockResolvedValue(true);
-    await processNextA11yJob(
-      { claim: async () => job as never, finish, fail: jest.fn(), heartbeat, reapStuck: jest.fn() },
-      { heartbeatMs: 20 },
-    );
-    expect(heartbeat.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(heartbeat).toHaveBeenCalledWith(job);
-    expect(finish).toHaveBeenCalledTimes(1);
-    expect(log.mock.calls.flat().join(' ')).toContain('db blip');
-    log.mockRestore();
+    try {
+      await processNextA11yJob(
+        {
+          claim: async () => job as never,
+          finish,
+          fail: jest.fn(),
+          heartbeat,
+          reapStuck: jest.fn(),
+        },
+        { heartbeatMs: 20 },
+      );
+      expect(heartbeat.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(heartbeat).toHaveBeenCalledWith(job);
+      expect(finish).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls.flat().join(' ')).toContain('db blip');
+    } finally {
+      log.mockRestore();
+    }
     const calls = heartbeat.mock.calls.length;
     await sleep(60);
     expect(heartbeat.mock.calls.length).toBe(calls); // the timer stopped with the job
