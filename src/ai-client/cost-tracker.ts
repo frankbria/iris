@@ -271,6 +271,12 @@ const unpricedWarned = new Set<string>();
 /** Token-priced pairs already warned about being recorded without usage (#388). */
 const noUsageWarned = new Set<string>();
 
+/** The token-priced cost of `usage`, or undefined when `rates` has no token prices. */
+function tokenCost(rates: Partial<TokenRates>, usage: TokenUsage): number | undefined {
+  if (rates.input === undefined || rates.output === undefined) return undefined;
+  return usage.inputTokens * rates.input + usage.outputTokens * rates.output;
+}
+
 /**
  * A token-priced model charged its flat rate because the call came without valid usage
  * (#388): the recorded cost is a guess, so say so once per pair.
@@ -740,29 +746,34 @@ export class CostTracker {
     usage?: TokenUsage,
   ): { cost: number; estimated: boolean } {
     if (cached) return { cost: 0, estimated: false };
-
-    const key = this.resolveKey(provider, model);
-    if (key === undefined && FREE_PROVIDERS.has(provider.toLowerCase())) {
-      return { cost: 0, estimated: false };
-    }
-    const estimated = key === undefined;
-    const rates = estimated
-      ? this.estimatedRates()
-      : { ...this.tokenPricing.get(key), costPerImage: this.pricing.get(key) ?? 0 };
-    if (
-      usage &&
-      rates.input !== undefined &&
-      rates.output !== undefined &&
-      this.isValidUsage(usage)
-    ) {
-      return {
-        cost: usage.inputTokens * rates.input + usage.outputTokens * rates.output,
-        estimated,
-      };
-    }
-
+    const priced = this.ratesFor(provider, model);
+    if (priced === null) return { cost: 0, estimated: false };
+    const { rates, estimated } = priced;
+    const tokens = usage && this.isValidUsage(usage) ? tokenCost(rates, usage) : undefined;
+    if (tokens !== undefined) return { cost: tokens, estimated };
+    // A registered token price charged flat: the call came without usage (#388).
     if (!estimated && rates.input !== undefined) warnFlatFallback(`${provider}:${model}`);
     return { cost: rates.costPerImage, estimated };
+  }
+
+  /**
+   * The rates a model is charged: its registered or family row, else `estimatedRates()`
+   * (`estimated`); `null` for a model on a free provider with no row.
+   */
+  private ratesFor(
+    provider: string,
+    model: string,
+  ): { rates: Partial<TokenRates> & { costPerImage: number }; estimated: boolean } | null {
+    const key = this.resolveKey(provider, model);
+    if (key !== undefined) {
+      return {
+        rates: { ...this.tokenPricing.get(key), costPerImage: this.pricing.get(key) ?? 0 },
+        estimated: false,
+      };
+    }
+    return FREE_PROVIDERS.has(provider.toLowerCase())
+      ? null
+      : { rates: this.estimatedRates(), estimated: true };
   }
 
   /**
