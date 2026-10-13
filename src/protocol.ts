@@ -361,6 +361,104 @@ type Outcome = 'ok' | 'client_error' | 'rate_limited' | 'aborted' | 'error';
  * translation threw) is `error`, so the error rate sees a browser outage (#275).
  */
 const resultOutcome = new WeakMap<object, Outcome>();
+
+/** A frame as JSON, or `unparseable` (#357: charged first, then answered -32700). */
+function parseFrame(data: WebSocket.RawData): { parsed: unknown; unparseable: boolean } {
+  try {
+    return { parsed: JSON.parse(data.toString()), unparseable: false };
+  } catch {
+    return { parsed: undefined, unparseable: true };
+  }
+}
+
+/** The id a reply to `parsed` may echo: a string or number, else null. */
+function replyId(parsed: unknown): string | number | null {
+  const id = (parsed as { id?: unknown } | null)?.id;
+  return typeof id === 'string' || typeof id === 'number' ? id : null;
+}
+
+interface FrameError {
+  id: string | number | null;
+  error: { code: number; message: string; data?: string };
+}
+
+/**
+ * What is wrong with a frame as a JSON-RPC 2.0 request, or null (#330, #357, #528):
+ * unparseable is -32700; anything but an object (`null`, `1`, `[]`, `"x"` all parse) or a
+ * batch is -32600 with a null id; a request object needs `jsonrpc: "2.0"`, a string `method`
+ * and, when present, a string, number or null id, which is echoed only if it is one.
+ */
+function frameError(parsed: unknown, unparseable: boolean): FrameError | null {
+  if (unparseable) return { id: null, error: { code: -32700, message: 'Parse error' } };
+  return shapeError(parsed) ?? requestError(parsed as Record<string, unknown>);
+}
+
+/**
+ * Not an object at all. Reading `.id` off `null` used to throw outside every try and take the
+ * whole process down (#330). Batches are not supported (#528, docs/integration-surfaces.md):
+ * an array is one -32600 that says so, and none of its elements runs.
+ */
+function shapeError(parsed: unknown): FrameError | null {
+  if (Array.isArray(parsed)) {
+    return {
+      id: null,
+      error: { code: -32600, message: 'Invalid Request', data: 'Batch requests are not supported' },
+    };
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return { id: null, error: { code: -32600, message: 'Invalid Request' } };
+  }
+  return null;
+}
+
+function requestError(candidate: Record<string, unknown>): FrameError | null {
+  if (!invalidRequest(candidate)) return null;
+  const id = isRpcId(candidate.id) ? candidate.id : null;
+  return { id, error: { code: -32600, message: 'Invalid Request' } };
+}
+
+/**
+ * A method that threw: its error into `res` (-32603 is logged with the detail the client does
+ * not get). True when the client caused it (`refused`). `throw null` or any primitive must not
+ * make this throw in turn: that escapes the listener exactly like the frame crash (#330).
+ */
+function failRequest(
+  thrown: unknown,
+  req: JsonRpcRequest,
+  res: JsonRpcResponse,
+  requestFields: Record<string, unknown>,
+): boolean {
+  res.error = toRpcError(thrown);
+  if (res.error.code === -32603) {
+    log('error', 'rpc handler failed', {
+      ...requestFields,
+      method: rpcMethod(req),
+      err: thrown instanceof Error ? thrown.message : String(thrown),
+    });
+  }
+  return (thrown as { refused?: unknown } | null)?.refused === true;
+}
+
+/** How an answered request is counted: refused by the client, tagged by its handler, or by code. */
+function requestOutcome(res: JsonRpcResponse, refused: boolean): Outcome {
+  if (refused) return 'client_error';
+  const tagged = res.result && resultOutcome.get(res.result);
+  return tagged ?? rpcOutcome(res.error?.code);
+}
+
+/** A request's log fields; for executeBrowserAction the action types, never selectors or values. */
+function requestLogFields(res: JsonRpcResponse, requestFields: Record<string, unknown>) {
+  const ran = (res.result as { results?: ExecutionResult[] } | undefined)?.results;
+  return {
+    ...requestFields,
+    ...(res.error && { code: res.error.code }),
+    ...(Array.isArray(ran) && {
+      actions: ran.map((r) => r.action?.type),
+      success: res.result.success,
+    }),
+  };
+}
+
 const tagged = <T extends object>(result: T, outcome: Outcome): T => {
   resultOutcome.set(result, outcome);
   return result;
@@ -942,81 +1040,89 @@ export function startServer(
       t0: number,
       requestFields: Record<string, unknown>,
     ): JsonRpcRequest | null => {
-      let parsed: unknown;
-      let unparseable = false;
-      try {
-        parsed = JSON.parse(data.toString());
-      } catch {
-        unparseable = true;
-      }
-
-      // Tenant request budgets (#342), before anything else, so a malformed frame
-      // spends one too. Both must have a token before either is spent, so a refusal
-      // by the org costs the key nothing.
-      if (principal) {
-        const now = performance.now();
-        const wait = Math.max(
-          keyRate.wait(principal.keyId, now),
-          orgRate.wait(principal.orgId, now),
-        );
-        if (wait > 0) {
-          const id = (parsed as { id?: unknown } | null)?.id;
-          // A notification gets no reply, a rate refusal included (§4.1, #357); it is still
-          // charged and logged.
-          if (!isNotification(parsed)) {
-            reply({
-              jsonrpc: '2.0',
-              id: typeof id === 'string' || typeof id === 'number' ? id : null,
-              error: {
-                code: RATE_LIMITED,
-                message: 'Rate limit exceeded',
-                data: { retryAfterMs: wait },
-              },
-            });
-          }
-          refusal(rpcMethod(parsed), 'rate_limited', t0, { ...requestFields, code: RATE_LIMITED });
-          return null;
-        }
-        keyRate.take(principal.keyId);
-        orgRate.take(principal.orgId);
-      }
-      // Charged above. JSON-RPC 2.0 answers it with -32700 and a null id (#357).
-      if (unparseable) {
-        reply({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
-        refusal('unknown', 'client_error', t0, { ...requestFields, code: -32700 });
-        return null;
-      }
-
-      // Valid JSON is not necessarily a request: `null`, `1`, `[]` and `"x"`
-      // all parse. Reading `.id` off `null` used to throw here, outside every
-      // try, and the rejected listener took the whole process — and every
-      // session in it — down (#330). Batches are not supported (#528, decision in
-      // docs/integration-surfaces.md): an array is one -32600 that says so, and none of
-      // its elements runs.
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        const error = Array.isArray(parsed)
-          ? { code: -32600, message: 'Invalid Request', data: 'Batch requests are not supported' }
-          : { code: -32600, message: 'Invalid Request' };
-        reply({ jsonrpc: '2.0', id: null, error });
-        refusal('unknown', 'client_error', t0, { ...requestFields, code: -32600 });
-        return null;
-      }
-      // A request object needs `jsonrpc: "2.0"`, a string `method`, and an id that is a
-      // string, number or null when present (#357). The id is echoed only if it is one.
-      const candidate = parsed as Record<string, unknown>;
-      if (invalidRequest(candidate)) {
-        const id = isRpcId(candidate.id) ? candidate.id : null;
-        reply({ jsonrpc: '2.0', id, error: { code: -32600, message: 'Invalid Request' } });
-        refusal('unknown', 'client_error', t0, { ...requestFields, code: -32600 });
+      const { parsed, unparseable } = parseFrame(data);
+      if (rateLimited(parsed, t0, requestFields)) return null;
+      const bad = frameError(parsed, unparseable);
+      if (bad) {
+        reply({ jsonrpc: '2.0', id: bad.id, error: bad.error });
+        refusal('unknown', 'client_error', t0, { ...requestFields, code: bad.error.code });
         return null;
       }
       return parsed as JsonRpcRequest;
     };
 
     /**
+     * Tenant request budgets (#342), before anything else, so a malformed frame spends one
+     * too. Both must have a token before either is spent, so a refusal by the org costs the
+     * key nothing. True when refused (answered and logged here).
+     */
+    const rateLimited = (
+      parsed: unknown,
+      t0: number,
+      requestFields: Record<string, unknown>,
+    ): boolean => {
+      if (!principal) return false;
+      const now = performance.now();
+      const wait = Math.max(keyRate.wait(principal.keyId, now), orgRate.wait(principal.orgId, now));
+      if (wait <= 0) {
+        keyRate.take(principal.keyId);
+        orgRate.take(principal.orgId);
+        return false;
+      }
+      // A notification gets no reply, a rate refusal included (§4.1, #357); it is still
+      // charged and logged.
+      if (!isNotification(parsed)) {
+        reply({
+          jsonrpc: '2.0',
+          id: replyId(parsed),
+          error: {
+            code: RATE_LIMITED,
+            message: 'Rate limit exceeded',
+            data: { retryAfterMs: wait },
+          },
+        });
+      }
+      refusal(rpcMethod(parsed), 'rate_limited', t0, { ...requestFields, code: RATE_LIMITED });
+      return true;
+    };
+
+    /**
      * Each RPC method's handler (#518: a table instead of one switch). It writes `res`; a
      * refusal or failure is thrown, as before, and answered by handleMessage's catch.
      */
+    /**
+     * Throws when this connection may not start a session now (#342, #346): its org is at the
+     * plan's limit (never above the operator's ceiling), or the server is full. Synchronous,
+     * so the check and the caller's sessions.set have no await between them.
+     */
+    const assertSessionRoom = () => {
+      if (principal) assertOrgSessionRoom(principal);
+      if (sessions.size >= limits.maxSessions) {
+        throw {
+          code: -32000,
+          message: `Session limit reached (${limits.maxSessions}); try again later`,
+          refused: true,
+        };
+      }
+    };
+
+    /** The plan's session limit for the org, never above the operator's ceiling (#346). */
+    const assertOrgSessionRoom = (tenant: Principal) => {
+      const orgCap = Math.min(
+        limits.maxSessionsPerOrg,
+        tenant.maxSessions ?? Number.POSITIVE_INFINITY,
+      );
+      const open = [...sessions.values()].filter((s) => s.principal?.orgId === tenant.orgId).length;
+      if (open < orgCap) return;
+      throw {
+        code: -32000,
+        message: orgCap
+          ? `Organization session limit reached (${orgCap}); try again later`
+          : "The organization's plan allows no browser sessions",
+        refused: true,
+      };
+    };
+
     const methods: Record<
       string,
       (
@@ -1077,31 +1183,7 @@ export function startServer(
           // by every connection, and each connection has its own gate.
           // This connection's own session was cleaned up above, so a relaunch
           // is never counted against its org.
-          // The plan's limit, never above the operator's ceiling (#346).
-          const orgCap = Math.min(
-            limits.maxSessionsPerOrg,
-            principal?.maxSessions ?? Number.POSITIVE_INFINITY,
-          );
-          if (
-            principal &&
-            [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId).length >=
-              orgCap
-          ) {
-            throw {
-              code: -32000,
-              message: orgCap
-                ? `Organization session limit reached (${orgCap}); try again later`
-                : "The organization's plan allows no browser sessions",
-              refused: true,
-            };
-          }
-          if (sessions.size >= limits.maxSessions) {
-            throw {
-              code: -32000,
-              message: `Session limit reached (${limits.maxSessions}); try again later`,
-              refused: true,
-            };
-          }
+          assertSessionRoom();
           const session = createBrowserSession(
             launchOptions,
             principal,
@@ -1267,19 +1349,15 @@ export function startServer(
     // wrong place to build one. An honest "method not found" is the fix
     // that decision calls for (issue #80).
 
-    const handleMessage = async (data: WebSocket.RawData) => {
-      // Per request (#275): an id for its log line, and the start of its latency.
-      const t0 = performance.now();
-      const requestId = randomUUID();
-      const requestFields = { requestId, ...who(principal) };
-      const req = admit(data, t0, requestFields);
-      if (!req) return;
-      // No `id` member: a notification. It runs, and gets no reply, error or not (§4.1).
-      const notification = isNotification(req);
-
-      const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id ?? null };
-      let refused = false;
-
+    /**
+     * Runs an admitted request's method into `res`. A thrown refusal or failure becomes
+     * `res.error`; true when the client caused it (no session, a session limit).
+     */
+    const dispatch = async (
+      req: JsonRpcRequest,
+      res: JsonRpcResponse,
+      requestFields: Record<string, unknown>,
+    ): Promise<boolean> => {
       try {
         // Draining (#309): what is in flight finishes, nothing new starts.
         if (draining) {
@@ -1288,42 +1366,29 @@ export function startServer(
         const run = Object.hasOwn(methods, req.method) ? methods[req.method] : undefined;
         if (!run) throw { code: -32601, message: 'Method not found' };
         await run(req, res, requestFields);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } catch (thrown: any) {
-        // `throw null` (or any primitive) must not make this catch block throw
-        // in turn — that escapes the listener exactly like the frame crash (#330).
-        const err = typeof thrown === 'object' && thrown !== null ? thrown : {};
-        // A refusal the client caused (no session, a session limit): not a server error.
-        refused = err.refused === true;
-        res.error = toRpcError(thrown);
-        if (res.error.code === -32603) {
-          log('error', 'rpc handler failed', {
-            ...requestFields,
-            method: rpcMethod(req),
-            err: thrown instanceof Error ? thrown.message : String(thrown),
-          });
-        }
+        return false;
+      } catch (thrown: unknown) {
+        return failRequest(thrown, req, res, requestFields);
       }
+    };
 
-      if (!notification) reply(res);
-      // executeBrowserAction: the action types that ran, never their selectors or values.
-      const ran = (res.result as { results?: ExecutionResult[] } | undefined)?.results;
-      const outcome = refused
-        ? 'client_error'
-        : ((res.result && resultOutcome.get(res.result)) ?? rpcOutcome(res.error?.code));
+    const handleMessage = async (data: WebSocket.RawData) => {
+      // Per request (#275): an id for its log line, and the start of its latency.
+      const t0 = performance.now();
+      const requestId = randomUUID();
+      const requestFields = { requestId, ...who(principal) };
+      const req = admit(data, t0, requestFields);
+      if (!req) return;
+      const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id ?? null };
+      const refused = await dispatch(req, res, requestFields);
+      // No `id` member: a notification. It runs, and gets no reply, error or not (§4.1).
+      if (!isNotification(req)) reply(res);
       observeRequest(
         'rpc',
         rpcMethod(req),
-        outcome,
+        requestOutcome(res, refused),
         t0,
-        {
-          ...requestFields,
-          ...(res.error && { code: res.error.code }),
-          ...(Array.isArray(ran) && {
-            actions: ran.map((r) => r.action?.type),
-            success: res.result.success,
-          }),
-        },
+        requestLogFields(res, requestFields),
         !closed,
       );
     };
