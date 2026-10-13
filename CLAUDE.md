@@ -1263,7 +1263,10 @@ reference.
   usage (`--agent` without a URL, `--agent --dry-run`), `3` a provider outage (#510): one-shot
   when `translation.error` is set, `--agent` when `AgentRunResult.errorKind` is `provider`
   (client setup threw, a turn's call threw or carried `error`; `other` is a refusal before
-  any AI call: opaque start origin, no org credentials). The JSON `agent` carries `errorKind`. Commander's own option errors exit 1 (#496).
+  any AI call: opaque start origin, no org credentials). The JSON `agent` carries `errorKind`.
+  Commander's own usage errors exit 2 too (#496): `program.exitOverride` maps every commander
+  error with a non-zero code to `EXIT_USAGE`; help and `--version` keep 0. It is set before
+  any `.command()`, which copies it to each subcommand.
 - **Set through `process.exitCode`, never `process.exit()`**: the `--json` payload is the
   last `console.log`, and on a pipe stdout is async, so `exit()` can truncate it.
 - In-process `runCli()` tests set `exitCode` on the Jest process; `jest.setup.ts` resets
