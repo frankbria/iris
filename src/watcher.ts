@@ -11,6 +11,7 @@ import {
   originOf,
   pinPage,
   planPolicy,
+  refusedResult,
   type PolicyVerdict,
 } from './agent-policy';
 import { Page } from 'playwright';
@@ -22,6 +23,21 @@ import type { ProviderCredentials } from './config';
 import * as path from 'path';
 import { resolveDbPath } from './data-dir';
 import { pathToFileURL } from 'url';
+
+/**
+ * chokidar's `ignored` callback. Named, not inline: lizard reads the `isDirectory()`
+ * signature inside an inline function type as a function and misplaces every method after
+ * it, so the CRAP gate could not measure the watcher (#609).
+ */
+/** One watch-triggered run's outcome, written to history at the end. */
+interface WatchRun {
+  status: 'success' | 'error';
+  executionResults: ExecutionResult[];
+}
+
+type WatchTranslation = Awaited<ReturnType<typeof translate>>;
+
+type IgnoreFilter = (testPath: string, stats?: { isDirectory(): boolean }) => boolean;
 
 export interface WatchOptions {
   patterns?: string[];
@@ -239,7 +255,7 @@ export class FileWatcher {
    * include filter is applied again in handleFileEvent, so a file admitted here
    * for lack of stats is still dropped before it triggers a run.
    */
-  private buildIgnoreFilter(): (testPath: string, stats?: { isDirectory(): boolean }) => boolean {
+  private buildIgnoreFilter(): IgnoreFilter {
     // At any depth (#319): `node_modules/**` must skip a nested node_modules too, not
     // only the one at the watch root. Patterns already anchored (`**/`, `/`) stay as given.
     // gitignore's meaning (PR bot review): ignored when a pattern matches and no `!`
@@ -626,190 +642,219 @@ export class FileWatcher {
   }
 
   private async executeInstruction(event: WatchEvent): Promise<void> {
-    if (this.options.feedback) {
-      try {
-        await this.runFeedback(event);
-      } catch (error) {
-        this.logger.error(
-          `\n❌ Feedback failed: ${error instanceof Error ? error.message : error}`,
-        );
-      }
-      return;
-    }
+    if (this.options.feedback) return this.feedbackQuietly(event);
 
     // pathToFileURL escapes URL-reserved characters (#, %, ?) that plain string
     // concatenation would mis-parse when handed to page.goto().
     const fileUrl = pathToFileURL(path.resolve(this.options.cwd, event.path)).href;
     const target = this.executeTarget(event.path, fileUrl);
-    // A changed .ts or .css is no page (#319): navigating Chromium to its source and
-    // clicking there is what the README example used to do. Decided before translating,
-    // so nothing is paid for and no run is recorded (PR bot review). A deletion never runs
-    // either: the file is gone, and its plan would act on the stale reused page.
+    if (this.skipExecution(event, target)) return;
+
+    const startTime = new Date();
+    const run: WatchRun = { status: 'success', executionResults: [] };
+    try {
+      await this.translateAndRun(event, target, fileUrl, run);
+    } catch (error) {
+      run.status = 'error';
+      this.logger.error('❌ Error processing instruction:', error);
+    } finally {
+      this.persistWatchRun(event, run, startTime, new Date());
+    }
+  }
+
+  private async feedbackQuietly(event: WatchEvent): Promise<void> {
+    try {
+      await this.runFeedback(event);
+    } catch (error) {
+      this.logger.error(`\n❌ Feedback failed: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+
+  /**
+   * A changed .ts or .css is no page (#319): navigating Chromium to its source and
+   * clicking there is what the README example used to do. Decided before translating,
+   * so nothing is paid for and no run is recorded (PR bot review). A deletion never runs
+   * either: the file is gone, and its plan would act on the stale reused page.
+   */
+  private skipExecution(event: WatchEvent, target: string | null): boolean {
     if (this.options.execute && event.type === 'unlink') {
       this.logger.log(`⏭️  Not executed: ${event.path} was deleted.`);
-      return;
+      return true;
     }
     if (this.options.execute && target === null) {
       this.logger.log(
         `⏭️  Not executed: ${event.path} is not a page. Pass --url (or set IRIS_BASE_URL) for the page to run against.`,
       );
+      return true;
+    }
+    return false;
+  }
+
+  private async translateAndRun(
+    event: WatchEvent,
+    target: string | null,
+    fileUrl: string,
+    run: WatchRun,
+  ): Promise<void> {
+    this.logger.log(`🔄 File ${event.type}: ${event.path}`);
+    this.logger.log(`📝 Processing: "${this.options.instruction}"`);
+
+    // The page it will run against, else the changed file, as context for the AI.
+    const result = await translate(this.options.instruction, { url: target || fileUrl });
+    this.logTranslation(result);
+    if (this.planRefused(result, run)) return;
+
+    if (this.options.execute && target) {
+      await this.runInBrowser(result, target, run);
+    } else {
+      this.logger.log('\n🔍 Translation mode - actions not executed');
+    }
+  }
+
+  private logTranslation(result: WatchTranslation): void {
+    this.logger.log(`✨ Translation result (${result.method}):`);
+    this.logger.log(`   Actions: ${JSON.stringify(result.actions)}`);
+    this.logger.log(`   Confidence: ${result.confidence}`);
+    if (result.reasoning) {
+      this.logger.log(`   Reasoning: ${result.reasoning}`);
+    }
+  }
+
+  /** A translation with nothing to run: the run ends as an error. */
+  private planRefused(result: WatchTranslation, run: WatchRun): boolean {
+    // The provider could not be asked or answer (#511): say why, as `iris run` does,
+    // rather than "no actions", which blamed the model for an outage.
+    if (result.error) {
+      this.logger.error(`❌ AI translation failed: ${result.error}`);
+      run.status = 'error';
+      return true;
+    }
+    if (result.actions.length === 0) {
+      this.logger.log('⚠️  No actions generated from instruction');
+      run.status = 'error';
+      return true;
+    }
+    return false;
+  }
+
+  private async runInBrowser(result: WatchTranslation, target: string, run: WatchRun) {
+    this.logger.log('\n🚀 Executing actions in browser...');
+    try {
+      await this.executePlan(result, target, run);
+    } catch (executionError) {
+      run.status = 'error';
+      this.logger.error(
+        '\n❌ Browser execution failed:',
+        executionError instanceof Error ? executionError.message : executionError,
+      );
+
+      // Try to recover browser session
+      await this.recoverBrowserSession();
+    }
+  }
+
+  /** Ensure browser session is ready */
+  private async readySession(): Promise<{ page: Page; executor: ActionExecutor }> {
+    if (!this.browserSessionActive) {
+      await this.initializeBrowserSession();
+    }
+    if (!this.page || !this.executor) {
+      throw new Error('Browser session not initialized');
+    }
+    return { page: this.page, executor: this.executor };
+  }
+
+  private async executePlan(result: WatchTranslation, target: string, run: WatchRun) {
+    const { page, executor } = await this.readySession();
+
+    // An AI plan runs under the agent policy, as on every path (#354). A page URL
+    // pins the plan to its origin, as `iris run` does; a changed HTML file
+    // (`file://`) has no origin to pin to, so the pin is off there and the
+    // destructive checks remain. `watch` has no --allow* flags, and a literal
+    // instruction (a pattern plan) is the user's own, as in `iris run`.
+    const startOrigin = originOf(target);
+    const policy = planPolicy(result.method === 'ai', {
+      allowCrossOrigin: startOrigin === null,
+    });
+    // At the request layer too, before the first navigation (codex review): the
+    // per-action check sees an off-origin request only after a click made it. The
+    // pin stays on the reused page, which --url keeps on one origin anyway.
+    if (policy) await pinPage(page, policy, startOrigin);
+
+    // Navigate to the target first so DOM-targeting actions run against its real
+    // DOM rather than the blank page. This is execution setup, not a translated
+    // action, so it is not counted in executionResults.
+    this.logger.log(`   🌐 Navigating to ${target}`);
+    await guardedGoto(page, target);
+
+    // Execute each action and report progress
+    for (const [i, action] of result.actions.entries()) {
+      this.logger.log(
+        `   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`,
+      );
+      const verdict: PolicyVerdict = policy
+        ? await checkPlannedAction(action, policy, page, startOrigin)
+        : { allowed: true };
+      const execResult: ExecutionResult = verdict.allowed
+        ? await executor.executeAction(action, page, undefined, verdict.target)
+        : refusedResult(action, verdict);
+      run.executionResults.push(execResult);
+      this.logActionResult(execResult, run);
+    }
+    this.logActionCounts(run);
+  }
+
+  private logActionResult(execResult: ExecutionResult, run: WatchRun): void {
+    if (!execResult.success) {
+      this.logger.log(`   ❌ Failed: ${execResult.error}`);
+      run.status = 'error';
+      // Continue with remaining actions instead of stopping
       return;
     }
-
-    const startTime = new Date();
-    let status: 'success' | 'error' = 'success';
-    const executionResults: ExecutionResult[] = [];
-
-    try {
-      this.logger.log(`🔄 File ${event.type}: ${event.path}`);
-      this.logger.log(`📝 Processing: "${this.options.instruction}"`);
-
-      const result = await translate(this.options.instruction, {
-        url: target ?? fileUrl,
-      });
-
-      this.logger.log(`✨ Translation result (${result.method}):`);
-      this.logger.log(`   Actions: ${JSON.stringify(result.actions)}`);
-      this.logger.log(`   Confidence: ${result.confidence}`);
-      if (result.reasoning) {
-        this.logger.log(`   Reasoning: ${result.reasoning}`);
-      }
-
-      // The provider could not be asked or answer (#511): say why, as `iris run` does,
-      // rather than "no actions", which blamed the model for an outage.
-      if (result.error) {
-        this.logger.error(`❌ AI translation failed: ${result.error}`);
-        status = 'error';
-        return;
-      }
-
-      if (result.actions.length === 0) {
-        this.logger.log('⚠️  No actions generated from instruction');
-        status = 'error';
-        return;
-      }
-
-      if (this.options.execute && target) {
-        this.logger.log('\n🚀 Executing actions in browser...');
-
-        try {
-          // Ensure browser session is ready
-          if (!this.browserSessionActive) {
-            await this.initializeBrowserSession();
-          }
-
-          if (!this.page || !this.executor) {
-            throw new Error('Browser session not initialized');
-          }
-
-          // An AI plan runs under the agent policy, as on every path (#354). A page URL
-          // pins the plan to its origin, as `iris run` does; a changed HTML file
-          // (`file://`) has no origin to pin to, so the pin is off there and the
-          // destructive checks remain. `watch` has no --allow* flags, and a literal
-          // instruction (a pattern plan) is the user's own, as in `iris run`.
-          const startOrigin = originOf(target);
-          const policy = planPolicy(result.method === 'ai', {
-            allowCrossOrigin: startOrigin === null,
-          });
-          // At the request layer too, before the first navigation (codex review): the
-          // per-action check sees an off-origin request only after a click made it. The
-          // pin stays on the reused page, which --url keeps on one origin anyway.
-          if (policy) await pinPage(this.page, policy, startOrigin);
-
-          // Navigate to the target first so DOM-targeting actions run against its real
-          // DOM rather than the blank page. This is execution setup, not a translated
-          // action, so it is not counted in executionResults.
-          this.logger.log(`   🌐 Navigating to ${target}`);
-          await guardedGoto(this.page, target);
-
-          // Execute each action and report progress
-          for (let i = 0; i < result.actions.length; i++) {
-            const action = result.actions[i];
-            this.logger.log(
-              `   [${i + 1}/${result.actions.length}] Executing: ${describeAction(action)}`,
-            );
-
-            const verdict: PolicyVerdict = policy
-              ? await checkPlannedAction(action, policy, this.page, startOrigin)
-              : { allowed: true };
-            const execResult: ExecutionResult = verdict.allowed
-              ? await this.executor.executeAction(action, this.page, undefined, verdict.target)
-              : {
-                  success: false,
-                  action,
-                  error: `Refused by agent policy: ${verdict.reason}`,
-                  duration: 0,
-                };
-            executionResults.push(execResult);
-
-            if (execResult.success) {
-              this.logger.log(`   ✅ Success (${execResult.duration}ms)`);
-              if (execResult.context?.url) {
-                this.logger.log(`      Current page: ${execResult.context.url}`);
-              }
-            } else {
-              this.logger.log(`   ❌ Failed: ${execResult.error}`);
-              status = 'error';
-              // Continue with remaining actions instead of stopping
-            }
-          }
-
-          // Final execution status
-          const successCount = executionResults.filter((r) => r.success).length;
-          const totalCount = executionResults.length;
-
-          if (successCount === totalCount) {
-            this.logger.log(`\n🎉 All ${totalCount} actions completed successfully!`);
-          } else {
-            this.logger.log(`\n⚠️  ${successCount}/${totalCount} actions completed successfully`);
-            status = 'error';
-          }
-        } catch (executionError) {
-          status = 'error';
-          this.logger.error(
-            '\n❌ Browser execution failed:',
-            executionError instanceof Error ? executionError.message : executionError,
-          );
-
-          // Try to recover browser session
-          await this.recoverBrowserSession();
-        }
-      } else {
-        this.logger.log('\n🔍 Translation mode - actions not executed');
-      }
-    } catch (error) {
-      status = 'error';
-      this.logger.error('❌ Error processing instruction:', error);
-    } finally {
-      const endTime = new Date();
-
-      // Persist to database
-      try {
-        const dbPath = resolveDbPath();
-        const db = initializeDatabase(dbPath);
-
-        try {
-          // Include execution details in the instruction field
-          let instructionDetail = `${this.options.instruction} (triggered by ${event.type}: ${event.path})`;
-          if (this.options.execute && executionResults.length > 0) {
-            const successCount = executionResults.filter((r) => r.success).length;
-            instructionDetail += ` - Executed: ${successCount}/${executionResults.length} actions`;
-          }
-
-          insertTestRun(db, {
-            instruction: instructionDetail,
-            status,
-            startTime,
-            endTime,
-          });
-        } finally {
-          // Always close, even if insertTestRun throws, so the handle never leaks.
-          db.close();
-        }
-      } catch (dbError) {
-        this.logger.error('⚠️  Failed to persist watch execution to database:', dbError);
-      }
+    this.logger.log(`   ✅ Success (${execResult.duration}ms)`);
+    if (execResult.context?.url) {
+      this.logger.log(`      Current page: ${execResult.context.url}`);
     }
+  }
+
+  /** Final execution status */
+  private logActionCounts(run: WatchRun): void {
+    const successCount = run.executionResults.filter((r) => r.success).length;
+    const totalCount = run.executionResults.length;
+    if (successCount === totalCount) {
+      this.logger.log(`\n🎉 All ${totalCount} actions completed successfully!`);
+    } else {
+      this.logger.log(`\n⚠️  ${successCount}/${totalCount} actions completed successfully`);
+      run.status = 'error';
+    }
+  }
+
+  /** Persist to database */
+  private persistWatchRun(event: WatchEvent, run: WatchRun, startTime: Date, endTime: Date): void {
+    try {
+      const db = initializeDatabase(resolveDbPath());
+      try {
+        insertTestRun(db, {
+          instruction: this.runDetail(event, run),
+          status: run.status,
+          startTime,
+          endTime,
+        });
+      } finally {
+        // Always close, even if insertTestRun throws, so the handle never leaks.
+        db.close();
+      }
+    } catch (dbError) {
+      this.logger.error('⚠️  Failed to persist watch execution to database:', dbError);
+    }
+  }
+
+  /** Include execution details in the instruction field */
+  private runDetail(event: WatchEvent, run: WatchRun): string {
+    const detail = `${this.options.instruction} (triggered by ${event.type}: ${event.path})`;
+    if (!this.options.execute || run.executionResults.length === 0) return detail;
+    const successCount = run.executionResults.filter((r) => r.success).length;
+    return `${detail} - Executed: ${successCount}/${run.executionResults.length} actions`;
   }
 
   /**
