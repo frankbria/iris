@@ -932,11 +932,16 @@ export function startServer(
       if (ws.readyState === WebSocket.OPEN) ws.send(serializeResponse(res));
     };
 
-    const handleMessage = async (data: WebSocket.RawData) => {
-      // Per request (#275): an id for its log line, and the start of its latency.
-      const t0 = performance.now();
-      const requestId = randomUUID();
-      const requestFields = { requestId, ...who(principal) };
+    /**
+     * Admission before dispatch, synchronous (#128: no await may reorder pipelined
+     * messages): the tenant's rate budget (#342), then the frame's shape (#330, #357). Returns
+     * the request, or null when it was answered (or, for a notification, dropped) here.
+     */
+    const admit = (
+      data: WebSocket.RawData,
+      t0: number,
+      requestFields: Record<string, unknown>,
+    ): JsonRpcRequest | null => {
       let parsed: unknown;
       let unparseable = false;
       try {
@@ -970,7 +975,7 @@ export function startServer(
             });
           }
           refusal(rpcMethod(parsed), 'rate_limited', t0, { ...requestFields, code: RATE_LIMITED });
-          return;
+          return null;
         }
         keyRate.take(principal.keyId);
         orgRate.take(principal.orgId);
@@ -979,7 +984,7 @@ export function startServer(
       if (unparseable) {
         reply({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
         refusal('unknown', 'client_error', t0, { ...requestFields, code: -32700 });
-        return;
+        return null;
       }
 
       // Valid JSON is not necessarily a request: `null`, `1`, `[]` and `"x"`
@@ -994,7 +999,7 @@ export function startServer(
           : { code: -32600, message: 'Invalid Request' };
         reply({ jsonrpc: '2.0', id: null, error });
         refusal('unknown', 'client_error', t0, { ...requestFields, code: -32600 });
-        return;
+        return null;
       }
       // A request object needs `jsonrpc: "2.0"`, a string `method`, and an id that is a
       // string, number or null when present (#357). The id is echoed only if it is one.
@@ -1003,9 +1008,272 @@ export function startServer(
         const id = isRpcId(candidate.id) ? candidate.id : null;
         reply({ jsonrpc: '2.0', id, error: { code: -32600, message: 'Invalid Request' } });
         refusal('unknown', 'client_error', t0, { ...requestFields, code: -32600 });
-        return;
+        return null;
       }
-      const req = parsed as JsonRpcRequest;
+      return parsed as JsonRpcRequest;
+    };
+
+    /**
+     * Each RPC method's handler (#518: a table instead of one switch). It writes `res`; a
+     * refusal or failure is thrown, as before, and answered by handleMessage's catch.
+     */
+    const methods: Record<
+      string,
+      (
+        req: JsonRpcRequest,
+        res: JsonRpcResponse,
+        requestFields: Record<string, unknown>,
+      ) => Promise<void>
+    > = {
+      executeCommand: async (req, res) => {
+        const parsed = ExecuteCommandParams.safeParse(req.params);
+        if (!parsed.success) {
+          res.error = { code: -32602, message: 'Invalid params' };
+          return;
+        }
+        res.result = translateSync(parsed.data.instruction);
+      },
+      launchBrowser: async (req, res) => {
+        const parsedOptions = LaunchBrowserOptions.safeParse(req.params?.options ?? {});
+        if (!parsedOptions.success) {
+          res.error = { code: -32602, message: 'Invalid params' };
+          return;
+        }
+        const launchOptions = clampLaunchOptions(parsedOptions.data, limits);
+        // A missing browser is a setup fault, so report it HERE rather than
+        // letting it surface later as the failure of whatever action runs
+        // first (issue #194). Cheap on purpose — a path resolve and a stat,
+        // no process spawned — because this call must stay fast and the
+        // browser is still started lazily below.
+        //
+        // Before the gate, so a rejected launch has NO side effects: an
+        // existing session survives rather than being torn down to make room
+        // for a replacement that was never going to be created. Deleting the
+        // browser binary does not kill an already-running Chromium, so that
+        // session stays usable, and the inactivity sweeper still reclaims it.
+        if (!chromiumIsInstalled()) {
+          res.error = {
+            code: -32000,
+            message: 'Playwright browsers are not installed. Run: npx playwright install chromium',
+          };
+          return;
+        }
+
+        // Exclusive: cleanup + create + map-write must be indivisible, or a
+        // second pipelined launch interleaves at one of those awaits and
+        // orphans an executor (issue #128).
+        res.result = await gate.write(async () => {
+          // Tear down any existing session first so its Chromium process
+          // isn't orphaned when the map entry is overwritten (issue #69).
+          await cleanupSession(ws, sessions, 'replaced');
+          // This callback can resume after the socket closed: it waits on
+          // in-flight actions and on the old session's teardown. Its 'close'
+          // cleanup has then already run, so a session set now would hold a
+          // maxSessions slot until the idle sweep.
+          if (ws.readyState !== WebSocket.OPEN) {
+            throw { code: -32000, message: 'Connection closed during launch', refused: true };
+          }
+          // Check and insert with no await between them: the map is shared
+          // by every connection, and each connection has its own gate.
+          // This connection's own session was cleaned up above, so a relaunch
+          // is never counted against its org.
+          // The plan's limit, never above the operator's ceiling (#346).
+          const orgCap = Math.min(
+            limits.maxSessionsPerOrg,
+            principal?.maxSessions ?? Number.POSITIVE_INFINITY,
+          );
+          if (
+            principal &&
+            [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId).length >=
+              orgCap
+          ) {
+            throw {
+              code: -32000,
+              message: orgCap
+                ? `Organization session limit reached (${orgCap}); try again later`
+                : "The organization's plan allows no browser sessions",
+              refused: true,
+            };
+          }
+          if (sessions.size >= limits.maxSessions) {
+            throw {
+              code: -32000,
+              message: `Session limit reached (${limits.maxSessions}); try again later`,
+              refused: true,
+            };
+          }
+          const session = createBrowserSession(
+            launchOptions,
+            principal,
+            principal && meterMinutes(principal),
+          );
+          sessions.set(ws, session);
+          log('info', 'session started', { sessionId: session.id, ...who(principal) });
+          if (principal) {
+            audit({
+              orgId: principal.orgId,
+              actor: { apiKeyId: principal.keyId },
+              action: 'session.start',
+              target: `session:${session.id}`,
+            });
+          }
+          return {
+            success: true,
+            // Says what happened. This used to claim "Browser launched
+            // successfully" while createBrowserSession returns page: null and
+            // starts nothing — a statement about the world that was untrue
+            // when sent, and the reason a container healthcheck built on this
+            // RPC reported a browser-less container as healthy (issue #194).
+            //
+            // The deferral itself is kept: a client that calls this and never
+            // acts should not be holding a Chromium.
+            message: 'Session created; browser starts on the first action',
+            sessionId: getSessionId(ws),
+            // What the session will actually use, after clamping.
+            options: {
+              timeout: launchOptions.timeout,
+              retryAttempts: launchOptions.retryAttempts,
+              retryDelay: launchOptions.retryDelay,
+              slowMo: launchOptions.browserOptions.slowMo,
+            },
+          };
+        });
+      },
+      closeBrowser: async (req, res) => {
+        res.result = await gate.write(async () => {
+          // Read the session inside the gate: a launch queued ahead of this
+          // one may have replaced it since the message arrived.
+          const session = sessions.get(ws);
+          if (!session) {
+            throw { code: -32000, message: 'No active browser session', refused: true };
+          }
+          await cleanupSession(ws, sessions, 'closed');
+          return { success: true, message: 'Browser closed successfully' };
+        });
+      },
+      getBrowserStatus: async (req, res) => {
+        res.result = await gate.read(async () => getBrowserSessionStatus(sessions.get(ws)));
+      },
+      executeBrowserAction: async (req, res, requestFields) => {
+        const parsed = ActionParams.safeParse(req.params);
+        if (!parsed.success) {
+          res.error = { code: -32602, message: 'Invalid params' };
+          return;
+        }
+        const { instruction, actions, url, secrets, policy } = parsed.data;
+        const startedAt = new Date();
+
+        // Shared: actions still run concurrently with each other, but never
+        // alongside a session mutation. Resolving the session inside the
+        // callback is the point — reading it before waiting would hand this
+        // action an executor a queued launch is about to destroy (#128).
+        res.result = await gate.read(async () => {
+          const session = sessions.get(ws);
+          if (!session) {
+            throw {
+              code: -32000,
+              message: 'No active browser session. Call launchBrowser first.',
+              refused: true,
+            };
+          }
+          return executeBrowserActions(
+            session,
+            instruction,
+            actions,
+            url,
+            limits.maxActionsPerRequest,
+            { aiCredentials: options?.aiCredentials, usage: options?.usage },
+            secrets ?? {},
+            policy,
+          );
+        });
+        if (principal && options?.history) {
+          // A side effect of the request, like local history (#77): a failed
+          // write is logged, and the caller still gets the actions' result.
+          await options.history
+            .forOrg({ orgId: principal.orgId, apiKeyId: principal.keyId })
+            .record({
+              kind: 'rpc',
+              success: res.result.success,
+              results: res.result.results,
+              startedAt,
+              finishedAt: new Date(),
+            })
+            .catch((err: unknown) =>
+              log('error', 'failed to record run history', {
+                ...requestFields,
+                err: errMessage(err),
+              }),
+            );
+        }
+      },
+      observe: async (req, res, requestFields) => {
+        const parsed = ObserveParams.safeParse(req.params);
+        if (!parsed.success) {
+          res.error = { code: -32602, message: 'Invalid params' };
+          return;
+        }
+        // Exclusive (codex review): an action running alongside could fill a credential
+        // after the mask was chosen and before the capture.
+        res.result = await gate.write(async () => {
+          const session = sessions.get(ws);
+          if (!session?.page || session.page.isClosed()) {
+            throw {
+              code: -32000,
+              message: 'Nothing to observe yet: run an action first.',
+              refused: true,
+            };
+          }
+          return observeSession(session, parsed.data?.screenshot ?? true);
+        });
+        // Metered per call (#312), best effort: the tenant has its answer either way.
+        if (principal && options?.usage) {
+          options.usage
+            .record(principal.orgId, [
+              { kind: 'observation', quantity: 1, idempotencyKey: `observe:${randomUUID()}` },
+            ])
+            .catch((err: unknown) =>
+              log('error', 'failed to record an observation', {
+                ...requestFields,
+                err: errMessage(err),
+              }),
+            );
+        }
+      },
+      getStatus: async (req, res) => {
+        // Real state, not a constant. `status` stays 'ready' because
+        // answering at all means the server is serving — the fields beside
+        // it are what make that claim checkable (issue #80).
+        res.result = {
+          status: 'ready',
+          uptimeMs: Date.now() - startedAt,
+          // A tenant sees its own org's sessions only: another org's activity
+          // is not its business (#341).
+          activeSessions: principal
+            ? [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId).length
+            : sessions.size,
+          // Server-wide vs. this connection: a client asking "do I have a
+          // browser?" was previously indistinguishable from "is anything alive?"
+          hasSession: sessions.has(ws),
+        };
+      },
+    };
+
+    // `streamLogs` is deliberately absent and falls through to -32601.
+    // It used to answer a hardcoded ['log1','log2'] — fabricated data a
+    // client cannot tell from real logs. Real streaming would mean a log
+    // buffer and a subscription mechanism, and this server is frozen
+    // legacy-experimental (docs/integration-surfaces.md), so that is the
+    // wrong place to build one. An honest "method not found" is the fix
+    // that decision calls for (issue #80).
+
+    const handleMessage = async (data: WebSocket.RawData) => {
+      // Per request (#275): an id for its log line, and the start of its latency.
+      const t0 = performance.now();
+      const requestId = randomUUID();
+      const requestFields = { requestId, ...who(principal) };
+      const req = admit(data, t0, requestFields);
+      if (!req) return;
       // No `id` member: a notification. It runs, and gets no reply, error or not (§4.1).
       const notification = isNotification(req);
 
@@ -1017,266 +1285,9 @@ export function startServer(
         if (draining) {
           throw { code: -32000, message: 'Server is shutting down', refused: true };
         }
-        switch (req.method) {
-          case 'executeCommand': {
-            const parsed = ExecuteCommandParams.safeParse(req.params);
-            if (!parsed.success) {
-              res.error = { code: -32602, message: 'Invalid params' };
-              break;
-            }
-            res.result = translateSync(parsed.data.instruction);
-            break;
-          }
-
-          case 'launchBrowser': {
-            const parsedOptions = LaunchBrowserOptions.safeParse(req.params?.options ?? {});
-            if (!parsedOptions.success) {
-              res.error = { code: -32602, message: 'Invalid params' };
-              break;
-            }
-            const launchOptions = clampLaunchOptions(parsedOptions.data, limits);
-            // A missing browser is a setup fault, so report it HERE rather than
-            // letting it surface later as the failure of whatever action runs
-            // first (issue #194). Cheap on purpose — a path resolve and a stat,
-            // no process spawned — because this call must stay fast and the
-            // browser is still started lazily below.
-            //
-            // Before the gate, so a rejected launch has NO side effects: an
-            // existing session survives rather than being torn down to make room
-            // for a replacement that was never going to be created. Deleting the
-            // browser binary does not kill an already-running Chromium, so that
-            // session stays usable, and the inactivity sweeper still reclaims it.
-            if (!chromiumIsInstalled()) {
-              res.error = {
-                code: -32000,
-                message:
-                  'Playwright browsers are not installed. Run: npx playwright install chromium',
-              };
-              break;
-            }
-
-            // Exclusive: cleanup + create + map-write must be indivisible, or a
-            // second pipelined launch interleaves at one of those awaits and
-            // orphans an executor (issue #128).
-            res.result = await gate.write(async () => {
-              // Tear down any existing session first so its Chromium process
-              // isn't orphaned when the map entry is overwritten (issue #69).
-              await cleanupSession(ws, sessions, 'replaced');
-              // This callback can resume after the socket closed: it waits on
-              // in-flight actions and on the old session's teardown. Its 'close'
-              // cleanup has then already run, so a session set now would hold a
-              // maxSessions slot until the idle sweep.
-              if (ws.readyState !== WebSocket.OPEN) {
-                throw { code: -32000, message: 'Connection closed during launch', refused: true };
-              }
-              // Check and insert with no await between them: the map is shared
-              // by every connection, and each connection has its own gate.
-              // This connection's own session was cleaned up above, so a relaunch
-              // is never counted against its org.
-              // The plan's limit, never above the operator's ceiling (#346).
-              const orgCap = Math.min(
-                limits.maxSessionsPerOrg,
-                principal?.maxSessions ?? Number.POSITIVE_INFINITY,
-              );
-              if (
-                principal &&
-                [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId)
-                  .length >= orgCap
-              ) {
-                throw {
-                  code: -32000,
-                  message: orgCap
-                    ? `Organization session limit reached (${orgCap}); try again later`
-                    : "The organization's plan allows no browser sessions",
-                  refused: true,
-                };
-              }
-              if (sessions.size >= limits.maxSessions) {
-                throw {
-                  code: -32000,
-                  message: `Session limit reached (${limits.maxSessions}); try again later`,
-                  refused: true,
-                };
-              }
-              const session = createBrowserSession(
-                launchOptions,
-                principal,
-                principal && meterMinutes(principal),
-              );
-              sessions.set(ws, session);
-              log('info', 'session started', { sessionId: session.id, ...who(principal) });
-              if (principal) {
-                audit({
-                  orgId: principal.orgId,
-                  actor: { apiKeyId: principal.keyId },
-                  action: 'session.start',
-                  target: `session:${session.id}`,
-                });
-              }
-              return {
-                success: true,
-                // Says what happened. This used to claim "Browser launched
-                // successfully" while createBrowserSession returns page: null and
-                // starts nothing — a statement about the world that was untrue
-                // when sent, and the reason a container healthcheck built on this
-                // RPC reported a browser-less container as healthy (issue #194).
-                //
-                // The deferral itself is kept: a client that calls this and never
-                // acts should not be holding a Chromium.
-                message: 'Session created; browser starts on the first action',
-                sessionId: getSessionId(ws),
-                // What the session will actually use, after clamping.
-                options: {
-                  timeout: launchOptions.timeout,
-                  retryAttempts: launchOptions.retryAttempts,
-                  retryDelay: launchOptions.retryDelay,
-                  slowMo: launchOptions.browserOptions.slowMo,
-                },
-              };
-            });
-            break;
-          }
-
-          case 'closeBrowser': {
-            res.result = await gate.write(async () => {
-              // Read the session inside the gate: a launch queued ahead of this
-              // one may have replaced it since the message arrived.
-              const session = sessions.get(ws);
-              if (!session) {
-                throw { code: -32000, message: 'No active browser session', refused: true };
-              }
-              await cleanupSession(ws, sessions, 'closed');
-              return { success: true, message: 'Browser closed successfully' };
-            });
-            break;
-          }
-
-          case 'getBrowserStatus': {
-            res.result = await gate.read(async () => getBrowserSessionStatus(sessions.get(ws)));
-            break;
-          }
-
-          case 'executeBrowserAction': {
-            const parsed = ActionParams.safeParse(req.params);
-            if (!parsed.success) {
-              res.error = { code: -32602, message: 'Invalid params' };
-              break;
-            }
-            const { instruction, actions, url, secrets, policy } = parsed.data;
-            const startedAt = new Date();
-
-            // Shared: actions still run concurrently with each other, but never
-            // alongside a session mutation. Resolving the session inside the
-            // callback is the point — reading it before waiting would hand this
-            // action an executor a queued launch is about to destroy (#128).
-            res.result = await gate.read(async () => {
-              const session = sessions.get(ws);
-              if (!session) {
-                throw {
-                  code: -32000,
-                  message: 'No active browser session. Call launchBrowser first.',
-                  refused: true,
-                };
-              }
-              return executeBrowserActions(
-                session,
-                instruction,
-                actions,
-                url,
-                limits.maxActionsPerRequest,
-                { aiCredentials: options?.aiCredentials, usage: options?.usage },
-                secrets ?? {},
-                policy,
-              );
-            });
-            if (principal && options?.history) {
-              // A side effect of the request, like local history (#77): a failed
-              // write is logged, and the caller still gets the actions' result.
-              await options.history
-                .forOrg({ orgId: principal.orgId, apiKeyId: principal.keyId })
-                .record({
-                  kind: 'rpc',
-                  success: res.result.success,
-                  results: res.result.results,
-                  startedAt,
-                  finishedAt: new Date(),
-                })
-                .catch((err: unknown) =>
-                  log('error', 'failed to record run history', {
-                    ...requestFields,
-                    err: errMessage(err),
-                  }),
-                );
-            }
-            break;
-          }
-
-          case 'observe': {
-            const parsed = ObserveParams.safeParse(req.params);
-            if (!parsed.success) {
-              res.error = { code: -32602, message: 'Invalid params' };
-              break;
-            }
-            // Exclusive (codex review): an action running alongside could fill a credential
-            // after the mask was chosen and before the capture.
-            res.result = await gate.write(async () => {
-              const session = sessions.get(ws);
-              if (!session?.page || session.page.isClosed()) {
-                throw {
-                  code: -32000,
-                  message: 'Nothing to observe yet: run an action first.',
-                  refused: true,
-                };
-              }
-              return observeSession(session, parsed.data?.screenshot ?? true);
-            });
-            // Metered per call (#312), best effort: the tenant has its answer either way.
-            if (principal && options?.usage) {
-              options.usage
-                .record(principal.orgId, [
-                  { kind: 'observation', quantity: 1, idempotencyKey: `observe:${randomUUID()}` },
-                ])
-                .catch((err: unknown) =>
-                  log('error', 'failed to record an observation', {
-                    ...requestFields,
-                    err: errMessage(err),
-                  }),
-                );
-            }
-            break;
-          }
-
-          case 'getStatus': {
-            // Real state, not a constant. `status` stays 'ready' because
-            // answering at all means the server is serving — the fields beside
-            // it are what make that claim checkable (issue #80).
-            res.result = {
-              status: 'ready',
-              uptimeMs: Date.now() - startedAt,
-              // A tenant sees its own org's sessions only: another org's activity
-              // is not its business (#341).
-              activeSessions: principal
-                ? [...sessions.values()].filter((s) => s.principal?.orgId === principal.orgId)
-                    .length
-                : sessions.size,
-              // Server-wide vs. this connection: a client asking "do I have a
-              // browser?" was previously indistinguishable from "is anything alive?"
-              hasSession: sessions.has(ws),
-            };
-            break;
-          }
-
-          // `streamLogs` is deliberately absent and falls through to -32601.
-          // It used to answer a hardcoded ['log1','log2'] — fabricated data a
-          // client cannot tell from real logs. Real streaming would mean a log
-          // buffer and a subscription mechanism, and this server is frozen
-          // legacy-experimental (docs/integration-surfaces.md), so that is the
-          // wrong place to build one. An honest "method not found" is the fix
-          // that decision calls for (issue #80).
-
-          default:
-            throw { code: -32601, message: 'Method not found' };
-        }
+        const run = Object.hasOwn(methods, req.method) ? methods[req.method] : undefined;
+        if (!run) throw { code: -32601, message: 'Method not found' };
+        await run(req, res, requestFields);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (thrown: any) {
         // `throw null` (or any primitive) must not make this catch block throw
