@@ -94,27 +94,27 @@ function visionContextBlock(context: AIVisionRequest['context']): string {
  * claimed for years.
  */
 function detectImageMimeType(buffer: Buffer): 'image/jpeg' | 'image/png' | 'image/webp' {
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return 'image/jpeg';
-  }
-  if (
-    buffer.length >= 8 &&
-    buffer[0] === 0x89 &&
-    buffer[1] === 0x50 &&
-    buffer[2] === 0x4e &&
-    buffer[3] === 0x47
-  ) {
-    return 'image/png';
-  }
-  // RIFF....WEBP — the four-byte size field sits between the two markers.
-  if (
+  if (startsWithBytes(buffer, JPEG_MAGIC, 3)) return 'image/jpeg';
+  if (startsWithBytes(buffer, PNG_MAGIC, 8)) return 'image/png';
+  if (isWebp(buffer)) return 'image/webp';
+  return 'image/png';
+}
+
+const JPEG_MAGIC = [0xff, 0xd8, 0xff];
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47];
+
+/** `buffer` is at least `minLength` long and starts with `magic`. */
+function startsWithBytes(buffer: Buffer, magic: number[], minLength: number): boolean {
+  return buffer.length >= minLength && magic.every((byte, i) => buffer[i] === byte);
+}
+
+/** RIFF....WEBP — the four-byte size field sits between the two markers. */
+function isWebp(buffer: Buffer): boolean {
+  return (
     buffer.length >= 12 &&
     buffer.toString('ascii', 0, 4) === 'RIFF' &&
     buffer.toString('ascii', 8, 12) === 'WEBP'
-  ) {
-    return 'image/webp';
-  }
-  return 'image/png';
+  );
 }
 
 /**
@@ -204,7 +204,7 @@ function openAIVisionUsage(
   };
 }
 
-function orZero(n: number | undefined): number {
+function orZero(n: number | null | undefined): number {
   return n ?? 0;
 }
 
@@ -298,6 +298,59 @@ export class OpenAIVisionClient extends BaseAIVisionClient {
   }
 }
 
+/** The Anthropic vision instructions, sent as the first text part (#518: out of the request). */
+const ANTHROPIC_VISION_SYSTEM_PROMPT = `You are an expert at analyzing visual differences in web UIs for regression testing.
+
+Classify visual changes between baseline and current screenshots into severity levels:
+- "none": No meaningful visual differences
+- "minor": Small changes not affecting functionality (slight color shifts, minor spacing)
+- "moderate": Noticeable changes needing review (text changes, layout shifts)
+- "breaking": Major changes likely indicating bugs (missing elements, broken layouts)
+
+Identify affected categories: layout, text, color, spacing, content
+
+Provide confidence score (0-1) and clear reasoning with optional suggestions.
+
+${SCREENSHOT_TEXT_NOTE}`;
+
+/** The Anthropic vision user message: context, the comparison ask, a diff note, the schema. */
+function anthropicVisionUserMessage(request: AIVisionRequest): string {
+  // Not nested inside the returned template: lizard (the CRAP gate) misreads nested ones.
+  const diffNote = request.diff?.length ? `\n\n${DIFF_IMAGE_PROMPT}` : '';
+  return `Analyze these two screenshots and classify the visual differences.
+
+${visionContextBlock(request.context)}
+
+Compare the baseline (first image) with the current (second image).${diffNote}
+
+Respond with JSON:
+{
+  "severity": "none" | "minor" | "moderate" | "breaking",
+  "confidence": number,
+  "reasoning": string,
+  "categories": string[],
+  "suggestions": string[]
+}`;
+}
+
+/** One image as an Anthropic content part, typed per image (JPEG screenshots, PNG diff mask). */
+function anthropicImage(image: Buffer) {
+  return {
+    type: 'image' as const,
+    source: {
+      type: 'base64' as const,
+      media_type: detectImageMimeType(image),
+      data: image.toString('base64'),
+    },
+  };
+}
+
+/** Token usage, defensive (it may be absent), for real cost accounting. */
+function anthropicVisionUsage(u?: { input_tokens?: number; output_tokens?: number } | null) {
+  if (!u) return undefined;
+  return { inputTokens: orZero(u.input_tokens), outputTokens: orZero(u.output_tokens) };
+}
+
 /**
  * Anthropic Claude vision client for visual diff analysis
  */
@@ -317,110 +370,8 @@ export class AnthropicVisionClient extends BaseAIVisionClient {
     }
 
     try {
-      const { Anthropic } = await import('@anthropic-ai/sdk');
-      const anthropic = new Anthropic({
-        apiKey: this.config.apiKey,
-        // Explicit, so the SDK cannot send the process's ANTHROPIC_AUTH_TOKEN as a
-        // second credential next to this key (#258).
-        authToken: null,
-        timeout: this.config.timeout ?? DEFAULT_TIMEOUT_MS,
-        maxRetries: 0, // retries are driven by our withRetry below
-      });
-
-      // Convert buffers to base64
-      const baselineBase64 = request.baseline.toString('base64');
-      const currentBase64 = request.current.toString('base64');
-      const diffBase64 = request.diff?.toString('base64');
-      // Per image: the shipped pipeline mixes JPEG screenshots with a PNG diff
-      // mask, so a single per-request type would have to be wrong for one.
-      const baselineType = detectImageMimeType(request.baseline);
-      const currentType = detectImageMimeType(request.current);
-      const diffType = request.diff ? detectImageMimeType(request.diff) : undefined;
-
-      const systemPrompt = `You are an expert at analyzing visual differences in web UIs for regression testing.
-
-Classify visual changes between baseline and current screenshots into severity levels:
-- "none": No meaningful visual differences
-- "minor": Small changes not affecting functionality (slight color shifts, minor spacing)
-- "moderate": Noticeable changes needing review (text changes, layout shifts)
-- "breaking": Major changes likely indicating bugs (missing elements, broken layouts)
-
-Identify affected categories: layout, text, color, spacing, content
-
-Provide confidence score (0-1) and clear reasoning with optional suggestions.
-
-${SCREENSHOT_TEXT_NOTE}`;
-
-      const diffNote = diffBase64 ? `\n\n${DIFF_IMAGE_PROMPT}` : '';
-      const userMessage = `Analyze these two screenshots and classify the visual differences.
-
-${visionContextBlock(request.context)}
-
-Compare the baseline (first image) with the current (second image).${diffNote}
-
-Respond with JSON:
-{
-  "severity": "none" | "minor" | "moderate" | "breaking",
-  "confidence": number,
-  "reasoning": string,
-  "categories": string[],
-  "suggestions": string[]
-}`;
-
-      const response = await withRetry(
-        () =>
-          anthropic.messages.create({
-            model: this.config.model || DEFAULT_MODELS.vision.anthropic,
-            max_tokens: 1000,
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: systemPrompt },
-                  { type: 'text', text: userMessage },
-                  {
-                    type: 'image',
-                    source: {
-                      type: 'base64',
-                      media_type: baselineType,
-                      data: baselineBase64,
-                    },
-                  },
-                  {
-                    type: 'image',
-                    source: {
-                      type: 'base64',
-                      media_type: currentType,
-                      data: currentBase64,
-                    },
-                  },
-                  ...(diffBase64
-                    ? [
-                        {
-                          type: 'image' as const,
-                          source: {
-                            type: 'base64' as const,
-                            media_type: diffType!,
-                            data: diffBase64,
-                          },
-                        },
-                      ]
-                    : []),
-                ],
-              },
-            ],
-          }),
-        this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
-      );
-
-      // Attach token usage (defensive: may be absent) for real cost accounting.
-      const usage = response.usage
-        ? {
-            inputTokens: response.usage.input_tokens ?? 0,
-            outputTokens: response.usage.output_tokens ?? 0,
-          }
-        : undefined;
-
+      const response = await this.ask(request);
+      const usage = anthropicVisionUsage(response.usage);
       // Validate before use (see OpenAI path): invalid severity throws.
       const parsed = acceptReply(usage, () => {
         const content = response.content[0];
@@ -434,6 +385,41 @@ Respond with JSON:
     } catch (error) {
       return this.handleVisionError(error, 'Anthropic vision analysis');
     }
+  }
+
+  private async client() {
+    const { Anthropic } = await import('@anthropic-ai/sdk');
+    return new Anthropic({
+      apiKey: this.config.apiKey,
+      // Explicit, so the SDK cannot send the process's ANTHROPIC_AUTH_TOKEN as a
+      // second credential next to this key (#258).
+      authToken: null,
+      timeout: this.config.timeout ?? DEFAULT_TIMEOUT_MS,
+      maxRetries: 0, // retries are driven by our withRetry below
+    });
+  }
+
+  /** One message over the baseline, current and (when sent) diff images. */
+  private async ask(request: AIVisionRequest) {
+    const anthropic = await this.client();
+    return withRetry(
+      () =>
+        anthropic.messages.create({
+          model: this.config.model || DEFAULT_MODELS.vision.anthropic,
+          max_tokens: 1000,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: ANTHROPIC_VISION_SYSTEM_PROMPT },
+                { type: 'text', text: anthropicVisionUserMessage(request) },
+                ...visionImages(request).map(anthropicImage),
+              ],
+            },
+          ],
+        }),
+      this.config.retryConfig ?? DEFAULT_RETRY_CONFIG,
+    );
   }
 
   async isAvailable(): Promise<boolean> {
@@ -450,6 +436,48 @@ Respond with JSON:
   // multimodal, so the base class's unconditional `true` is the honest answer;
   // an unreachable model is the request's problem to report, not this method's
   // to guess at. Don't reintroduce a name match here.
+}
+
+/** The single prompt Ollama's vision model gets (#518: out of the request, unnested). */
+function ollamaVisionPrompt(request: AIVisionRequest): string {
+  // Not nested inside the returned template: lizard (the CRAP gate) misreads nested ones.
+  const diffNote = request.diff?.length ? DIFF_IMAGE_PROMPT : '';
+  return `You are an expert at analyzing visual differences in web UIs for regression testing.
+
+Compare these two screenshots (baseline vs current) and classify the visual differences.
+
+${SCREENSHOT_TEXT_NOTE}
+
+Severity levels:
+- "none": No meaningful differences
+- "minor": Small changes not affecting functionality
+- "moderate": Noticeable changes needing review
+- "breaking": Major changes likely indicating bugs
+
+Categories: layout, text, color, spacing, content
+${diffNote}
+${visionContextBlock(request.context)}
+
+Respond with JSON only:
+{
+  "severity": "none"|"minor"|"moderate"|"breaking",
+  "confidence": 0.8,
+  "reasoning": "description of changes",
+  "categories": ["layout", "text"],
+  "suggestions": ["optional recommendations"]
+}`;
+}
+
+/**
+ * Ollama reports token counts via prompt_eval_count/eval_count when present. If absent, usage
+ * stays undefined: the cost tracker falls back to the flat per-image price (Ollama is free).
+ */
+function ollamaVisionUsage(data: {
+  prompt_eval_count?: number | null;
+  eval_count?: number | null;
+}) {
+  if (data.prompt_eval_count == null && data.eval_count == null) return undefined;
+  return { inputTokens: orZero(data.prompt_eval_count), outputTokens: orZero(data.eval_count) };
 }
 
 /**
@@ -471,78 +499,8 @@ export class OllamaVisionClient extends BaseAIVisionClient {
     }
 
     try {
-      // Convert buffers to base64
-      const baselineBase64 = request.baseline.toString('base64');
-      const currentBase64 = request.current.toString('base64');
-      const diffBase64 = request.diff?.toString('base64');
-
-      const prompt = `You are an expert at analyzing visual differences in web UIs for regression testing.
-
-Compare these two screenshots (baseline vs current) and classify the visual differences.
-
-${SCREENSHOT_TEXT_NOTE}
-
-Severity levels:
-- "none": No meaningful differences
-- "minor": Small changes not affecting functionality
-- "moderate": Noticeable changes needing review
-- "breaking": Major changes likely indicating bugs
-
-Categories: layout, text, color, spacing, content
-${diffBase64 ? DIFF_IMAGE_PROMPT : ''}
-${visionContextBlock(request.context)}
-
-Respond with JSON only:
-{
-  "severity": "none"|"minor"|"moderate"|"breaking",
-  "confidence": 0.8,
-  "reasoning": "description of changes",
-  "categories": ["layout", "text"],
-  "suggestions": ["optional recommendations"]
-}`;
-
-      const data = await withRetry(async () => {
-        const response = await fetchWithTimeout(
-          `${this.config.endpoint}/api/generate`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: this.config.model || DEFAULT_MODELS.vision.ollama,
-              prompt,
-              images: diffBase64
-                ? [baselineBase64, currentBase64, diffBase64]
-                : [baselineBase64, currentBase64],
-              stream: false,
-              options: {
-                temperature: 0.1,
-              },
-            }),
-          },
-          this.config.timeout ?? DEFAULT_TIMEOUT_MS,
-        );
-
-        if (!response.ok) {
-          // Attach status so withRetry can distinguish transient 5xx/429 from 4xx.
-          throw Object.assign(new Error(`Ollama request failed: ${response.status}`), {
-            status: response.status,
-          });
-        }
-
-        return response.json();
-      }, this.config.retryConfig ?? DEFAULT_RETRY_CONFIG);
-
-      // Ollama reports token counts via prompt_eval_count/eval_count when
-      // present. If absent, leave usage undefined — the cost tracker falls back
-      // to the flat per-image price (Ollama pricing is zero anyway).
-      const usage =
-        data.prompt_eval_count != null || data.eval_count != null
-          ? {
-              inputTokens: data.prompt_eval_count ?? 0,
-              outputTokens: data.eval_count ?? 0,
-            }
-          : undefined;
-
+      const data = await this.generate(request);
+      const usage = ollamaVisionUsage(data);
       // Validate before use (see OpenAI path): invalid severity throws.
       const parsed = acceptReply(usage, () =>
         AIVisionResponseSchema.parse(parseModelJson(data.response)),
@@ -552,6 +510,37 @@ Respond with JSON only:
     } catch (error) {
       return this.handleVisionError(error, 'Ollama vision analysis');
     }
+  }
+
+  private generate(request: AIVisionRequest) {
+    return withRetry(() => this.post(request), this.config.retryConfig ?? DEFAULT_RETRY_CONFIG);
+  }
+
+  private async post(request: AIVisionRequest) {
+    const response = await fetchWithTimeout(
+      `${this.config.endpoint}/api/generate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.config.model || DEFAULT_MODELS.vision.ollama,
+          prompt: ollamaVisionPrompt(request),
+          images: visionImages(request).map((image) => image.toString('base64')),
+          stream: false,
+          options: {
+            temperature: 0.1,
+          },
+        }),
+      },
+      this.config.timeout ?? DEFAULT_TIMEOUT_MS,
+    );
+    if (!response.ok) {
+      // Attach status so withRetry can distinguish transient 5xx/429 from 4xx.
+      throw Object.assign(new Error(`Ollama request failed: ${response.status}`), {
+        status: response.status,
+      });
+    }
+    return response.json();
   }
 
   async isAvailable(): Promise<boolean> {

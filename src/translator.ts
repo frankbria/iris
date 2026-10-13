@@ -160,110 +160,87 @@ function looksLikeUrl(target: string): boolean {
   return !/\s/.test(target) && URL.canParse(target);
 }
 
-function translateWithPatterns(instruction: string): TranslationResult {
-  const trimmed = instruction.trim();
+/** One pattern: what it matches, its name in the reasoning, and the action it yields (#518). */
+interface PatternRule {
+  pattern: RegExp;
+  label: string;
+  /** The action, or null when the match's target is prose (#297), so the next rule is tried. */
+  build(match: RegExpExecArray, instruction: string): Action | null;
+}
 
-  // Enhanced click patterns
-  const clickPatterns = [/^click (.+)$/i, /^click on (.+)$/i, /^press (.+)$/i, /^tap (.+)$/i];
+const clickAction = (m: RegExpExecArray): Action | null =>
+  looksLikeSelector(m[1]) ? { type: 'click', selector: m[1] } : null;
+/** `fill <selector> with <text>` */
+const fillAction = (m: RegExpExecArray): Action | null =>
+  looksLikeSelector(m[1]) ? { type: 'fill', selector: m[1], text: m[2] } : null;
+/** `enter <text> into <selector>` and the other text-first forms */
+const fillReversed = (m: RegExpExecArray): Action | null =>
+  looksLikeSelector(m[2]) ? { type: 'fill', selector: m[2], text: m[1] } : null;
+const navigateAction = (m: RegExpExecArray): Action | null =>
+  looksLikeUrl(m[1]) ? { type: 'navigate', url: m[1] } : null;
+/** An element_absent target is a selector (page.locator); the others are text or a URL part. */
+function assertAction(kind: AssertKind): PatternRule['build'] {
+  return function build(m: RegExpExecArray, instruction: string): Action | null {
+    if (kind === 'element_absent' && !looksLikeSelector(m[1])) return null;
+    return { type: 'assert', kind, target: m[1], description: instruction };
+  };
+}
 
-  for (const pattern of clickPatterns) {
-    const match = pattern.exec(trimmed);
-    if (match && looksLikeSelector(match[1])) {
-      return {
-        actions: [{ type: 'click', selector: match[1] }],
-        method: 'pattern',
-        confidence: 0.9,
-        reasoning: `Matched click pattern: ${pattern.source}`,
-      };
-    }
-  }
+const rules = (label: string, build: PatternRule['build'], patterns: RegExp[]): PatternRule[] =>
+  patterns.map((pattern) => ({ pattern, label, build }));
 
-  // Enhanced fill patterns
-  const fillPatterns = [/^fill (.+) with (.+)$/i];
-
-  for (const pattern of fillPatterns) {
-    const match = pattern.exec(trimmed);
-    if (match && looksLikeSelector(match[1])) {
-      return {
-        actions: [{ type: 'fill', selector: match[1], text: match[2] }],
-        method: 'pattern',
-        confidence: 0.9,
-        reasoning: `Matched fill pattern: ${pattern.source}`,
-      };
-    }
-  }
-
-  // Additional fill patterns with different order
-  const fillPatterns2 = [
+/**
+ * Every pattern, in the order they are tried. Assertions come before navigation so "verify ...
+ * is visible" isn't eaten by a broader verb pattern. Only the unambiguous explicit assertion
+ * forms are here: anything richer ("make sure users can complete checkout") needs the AI path,
+ * and a greedy pattern would silently mistranslate it into a single check.
+ */
+const PATTERN_RULES: PatternRule[] = [
+  ...rules('click', clickAction, [
+    /^click (.+)$/i,
+    /^click on (.+)$/i,
+    /^press (.+)$/i,
+    /^tap (.+)$/i,
+  ]),
+  ...rules('fill', fillAction, [/^fill (.+) with (.+)$/i]),
+  ...rules('fill', fillReversed, [
     /^enter (.+) into (.+)$/i,
     /^type (.+) in (.+)$/i,
     /^input (.+) to (.+)$/i,
-  ];
+  ]),
+  ...rules('assertion', assertAction('text_visible'), [
+    /^(?:verify|make sure|check|confirm) (.+) is visible$/i,
+  ]),
+  ...rules('assertion', assertAction('element_absent'), [
+    /^(?:verify|make sure|check|confirm) (.+) is not visible$/i,
+    /^(?:verify|make sure|check|confirm) (.+) is hidden$/i,
+  ]),
+  ...rules('assertion', assertAction('url_matches'), [
+    /^(?:verify|make sure|check|confirm) (?:the )?url contains (.+)$/i,
+  ]),
+  ...rules('navigation', navigateAction, [
+    /^navigate to (.+)$/i,
+    /^go to (.+)$/i,
+    /^visit (.+)$/i,
+    /^open (.+)$/i,
+  ]),
+];
 
-  for (const pattern of fillPatterns2) {
+function translateWithPatterns(instruction: string): TranslationResult {
+  const trimmed = instruction.trim();
+  for (const { pattern, label, build } of PATTERN_RULES) {
     const match = pattern.exec(trimmed);
-    if (match && looksLikeSelector(match[2])) {
+    const action = match && build(match, trimmed);
+    if (action) {
       return {
-        actions: [{ type: 'fill', selector: match[2], text: match[1] }],
+        actions: [action],
         method: 'pattern',
         confidence: 0.9,
-        reasoning: `Matched fill pattern: ${pattern.source}`,
+        reasoning: `Matched ${label} pattern: ${pattern.source}`,
       };
     }
   }
-
-  // Assertion patterns. Only the unambiguous explicit forms are handled here —
-  // anything richer ("make sure users can complete checkout") needs the AI path,
-  // and a greedy pattern would silently mistranslate it into a single check.
-  // Ordered before navigation so "verify ... is visible" isn't eaten by a
-  // broader verb pattern.
-  const assertPatterns: Array<{ pattern: RegExp; kind: AssertKind }> = [
-    { pattern: /^(?:verify|make sure|check|confirm) (.+) is visible$/i, kind: 'text_visible' },
-    {
-      pattern: /^(?:verify|make sure|check|confirm) (.+) is not visible$/i,
-      kind: 'element_absent',
-    },
-    { pattern: /^(?:verify|make sure|check|confirm) (.+) is hidden$/i, kind: 'element_absent' },
-    {
-      pattern: /^(?:verify|make sure|check|confirm) (?:the )?url contains (.+)$/i,
-      kind: 'url_matches',
-    },
-  ];
-
-  for (const { pattern, kind } of assertPatterns) {
-    const match = pattern.exec(trimmed);
-    // An element_absent target is a selector (page.locator); the others are text or a URL part.
-    if (match && (kind !== 'element_absent' || looksLikeSelector(match[1]))) {
-      return {
-        actions: [{ type: 'assert', kind, target: match[1], description: trimmed }],
-        method: 'pattern',
-        confidence: 0.9,
-        reasoning: `Matched assertion pattern: ${pattern.source}`,
-      };
-    }
-  }
-
-  // Enhanced navigation patterns
-  const navPatterns = [/^navigate to (.+)$/i, /^go to (.+)$/i, /^visit (.+)$/i, /^open (.+)$/i];
-
-  for (const pattern of navPatterns) {
-    const match = pattern.exec(trimmed);
-    if (match && looksLikeUrl(match[1])) {
-      return {
-        actions: [{ type: 'navigate', url: match[1] }],
-        method: 'pattern',
-        confidence: 0.9,
-        reasoning: `Matched navigation pattern: ${pattern.source}`,
-      };
-    }
-  }
-
-  return {
-    actions: [],
-    method: 'pattern',
-    confidence: 0,
-    reasoning: 'No patterns matched',
-  };
+  return { actions: [], method: 'pattern', confidence: 0, reasoning: 'No patterns matched' };
 }
 
 /**
@@ -300,81 +277,82 @@ export async function resolveCredentials(
   return source === undefined && isHostedMode() ? null : source;
 }
 
+/** Who a translation is for: the org charged, its credentials, the usage callback. */
+interface TranslateScope {
+  orgId?: string;
+  credentials?: CredentialsSource;
+  onUsage?: (call: SettledAICall) => void | Promise<void>;
+}
+
+/** An AI translation that produced no plan: the reason, and `error` when a provider failed. */
+function noAi(reasoning: string, error?: string): TranslationResult {
+  return { actions: [], method: 'ai', confidence: 0, reasoning, ...(error && { error }) };
+}
+
 async function translateWithAI(
   instruction: string,
   context: { url?: string } | undefined,
-  scope: {
-    orgId?: string;
-    credentials?: CredentialsSource;
-    onUsage?: (call: SettledAICall) => void | Promise<void>;
-  },
+  scope: TranslateScope,
 ): Promise<TranslationResult> {
   // Asked for only now, after patterns failed: a lookup can cost a database read.
   const credentials = await resolveCredentials(scope.credentials);
   if (credentials === null) {
-    return {
-      actions: [],
-      method: 'ai',
-      confidence: 0,
-      reasoning: 'AI translation unavailable: no AI credentials for this organization',
-    };
+    return noAi('AI translation unavailable: no AI credentials for this organization');
   }
   try {
     const config = credentials
       ? configFromCredentials(credentials, { kind: 'text' })
       : loadConfig();
     const configErrors = validateAiConfig(config);
-
     if (configErrors.length > 0) {
-      return {
-        actions: [],
-        method: 'ai',
-        confidence: 0,
-        reasoning:
-          `No pattern matched, and AI translation is not configured (${configErrors.join(', ')}). ` +
+      return noAi(
+        `No pattern matched, and AI translation is not configured (${configErrors.join(', ')}). ` +
           'Without AI, name the element or page: click #submit, fill #email with x, ' +
           'navigate to https://example.com',
-      };
+      );
     }
-
-    // Resolved, not just constructed: a retired pin or a typo'd model is
-    // caught here and reported by name instead of returning an opaque 404 (#184).
-    const aiClient = await createResolvedAIClient(config, {
-      orgId: scope.orgId,
-      onUsage: scope.onUsage,
-    });
-    const isAvailable = await aiClient.isAvailable();
-
-    if (!isAvailable) {
-      return {
-        actions: [],
-        method: 'ai',
-        confidence: 0,
-        reasoning: 'AI client not available',
-        error: 'AI client not available',
-      };
-    }
-
-    const request: AITranslationRequest = {
-      instruction,
-      context: context ? { url: context.url } : undefined,
-    };
-
-    const response = await aiClient.translateInstruction(request);
-
-    return {
-      actions: response.actions,
-      method: 'ai',
-      confidence: response.confidence,
-      reasoning: response.reasoning,
-      error: response.error,
-    };
+    return await askModel(config, instruction, context, scope);
   } catch (error) {
-    const message = `AI translation error: ${error instanceof Error ? error.message : 'Unknown error'}`;
-    // The budget breaker refused before the provider was asked (#510 review): a plain
-    // failure, not `error`, which callers read as "the provider failed" (retryable).
-    if (isIrisRefusal(error))
-      return { actions: [], method: 'ai', confidence: 0, reasoning: message };
-    return { actions: [], method: 'ai', confidence: 0, reasoning: message, error: message };
+    return aiFailure(error);
   }
+}
+
+/** The model's plan for `instruction`, through the resolved and metered client. */
+async function askModel(
+  config: ReturnType<typeof loadConfig>,
+  instruction: string,
+  context: { url?: string } | undefined,
+  scope: TranslateScope,
+): Promise<TranslationResult> {
+  // Resolved, not just constructed: a retired pin or a typo'd model is
+  // caught here and reported by name instead of returning an opaque 404 (#184).
+  const aiClient = await createResolvedAIClient(config, {
+    orgId: scope.orgId,
+    onUsage: scope.onUsage,
+  });
+  if (!(await aiClient.isAvailable())) {
+    return noAi('AI client not available', 'AI client not available');
+  }
+  const request: AITranslationRequest = {
+    instruction,
+    context: context ? { url: context.url } : undefined,
+  };
+  const response = await aiClient.translateInstruction(request);
+  return {
+    actions: response.actions,
+    method: 'ai',
+    confidence: response.confidence,
+    reasoning: response.reasoning,
+    error: response.error,
+  };
+}
+
+/**
+ * A translation that threw. IRIS's own refusals (the budget breaker, a malformed budget
+ * setting) are plain failures without `error`, which callers read as "the provider failed"
+ * and so retryable (#510, #603).
+ */
+function aiFailure(error: unknown): TranslationResult {
+  const message = `AI translation error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  return isIrisRefusal(error) ? noAi(message) : noAi(message, message);
 }

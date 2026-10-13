@@ -822,6 +822,11 @@ const sortById = <T extends { id?: number }>(rows: T[]) =>
  * summary, and rows `iris run` and `iris watch` write (other summaries) are not runs
  * of this store.
  */
+/** The run kind a local history row's summary names, or undefined for rows `iris run` wrote. */
+function runKindOf(summary: string): RunKind | undefined {
+  return SUMMARY_KIND.exec(summary)?.[1] as RunKind | undefined;
+}
+
 export function sqliteHistoryStore(dbPath: string): HistoryStore {
   const withDb = <T>(use: (db: Database.Database) => T): T => {
     const db = initializeDatabase(dbPath);
@@ -832,7 +837,7 @@ export function sqliteHistoryStore(dbPath: string): HistoryStore {
     }
   };
   const toRun = (row: TestRun): StoredRun | null => {
-    const kind = SUMMARY_KIND.exec(row.instruction)?.[1] as RunKind | undefined;
+    const kind = runKindOf(row.instruction);
     if (!kind) return null;
     return {
       id: String(row.id),
