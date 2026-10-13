@@ -12,7 +12,7 @@ import {
 } from './base';
 import { AIClientFactory } from './factory';
 import { AIVisionCache } from './cache';
-import { CostTracker } from './cost-tracker';
+import { BudgetExceededError, CostTracker } from './cost-tracker';
 import { ImagePreprocessor } from './preprocessor';
 import { DEFAULT_MODELS, ModelProvider, ModelUnavailableError, resolveModel } from './models';
 import { hostedLog } from '../log';
@@ -139,15 +139,16 @@ export class SmartAIVisionClient {
 
   constructor(irisConfig: IrisConfig, smartConfig: SmartClientConfig = {}) {
     const defaults = defaultConfig();
+    // Only when it can matter: a malformed variable should not break a client that tracks
+    // no cost, or one given both limits explicitly. (A local: lizard misreads it inline.)
+    const envBudget = this.needsBudget(smartConfig) ? resolveBudget() : {};
     this.config = {
       ...defaults,
       ...smartConfig,
       cacheConfig: { ...defaults.cacheConfig, ...smartConfig.cacheConfig },
       costConfig: {
         ...defaults.costConfig,
-        // Only when it can matter: a malformed variable should not break a
-        // client that tracks no cost, or one given both limits explicitly.
-        ...(this.needsBudget(smartConfig) ? resolveBudget() : {}),
+        ...envBudget,
         ...smartConfig.costConfig,
       },
     };
@@ -177,12 +178,39 @@ export class SmartAIVisionClient {
   }
 
   /**
+   * Settle an answered call (#244). A ledger that cannot take it (the client was closed
+   * while the call was in flight, #390) is logged, never thrown: the answer is paid for,
+   * and throwing it away would pay for it again. Its reservation stays pending until a
+   * tracker sweeps it.
+   */
+  private async settlePaid(
+    reservation: number,
+    provider: string,
+    model: string,
+    result: AIVisionResponse,
+  ): Promise<void> {
+    let costUsd: number;
+    try {
+      costUsd = this.costTracker!.settle(reservation, result.usage);
+    } catch (error) {
+      hostedLog('warn', 'could not record a paid vision call', { err: formatError(error) }, () =>
+        console.warn('⚠️  Could not record a paid vision call:', formatError(error)),
+      );
+      return;
+    }
+    await this.reportUsage(provider, model, costUsd);
+  }
+
+  /**
    * Report a billed vision call to the usage ledger (#263). Never throws: the call was
    * made and paid for, and its cost is on the budget ledger already.
    */
   private async reportUsage(provider: string, model: string, costUsd: number): Promise<void> {
+    // Not `onUsage?.(…)`: lizard misreads an optional call and drops every later function.
+    const onUsage = this.config.onUsage;
+    if (!onUsage) return;
     try {
-      await this.config.onUsage?.({
+      await onUsage({
         callId: randomUUID(),
         operation: 'vision-analysis',
         provider,
@@ -234,6 +262,13 @@ export class SmartAIVisionClient {
     const contextKey = request.context ? JSON.stringify(request.context) : '';
 
     let lastError: Error | null = null;
+    // Whether anything but a budget refusal failed: if not, the caller gets the typed
+    // BudgetExceededError (#390), not "All providers failed".
+    let otherFailure = false;
+    const failed = (error: unknown) => {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!(error instanceof BudgetExceededError)) otherFailure = true;
+    };
 
     for (const providerName of providers) {
       // Resolve the provider+model pair once per attempt so cache read, cache
@@ -248,7 +283,7 @@ export class SmartAIVisionClient {
         model = await this.resolveModel(providerName);
       } catch (error) {
         if (error instanceof ModelUnavailableError) throw error;
-        lastError = error instanceof Error ? error : new Error(String(error));
+        failed(error);
         continue;
       }
 
@@ -288,6 +323,7 @@ export class SmartAIVisionClient {
         // Check if provider is available
         const available = await client.isAvailable();
         if (!available) {
+          otherFailure = true;
           lastError ??= new Error(`${providerName} is not available`);
           continue;
         }
@@ -318,17 +354,15 @@ export class SmartAIVisionClient {
         // next vendor only reprints it as "all providers failed" (#184). Keep
         // the guard here at the swallow site, not only where it is thrown.
         if (error instanceof ModelUnavailableError) throw error;
-        lastError = error instanceof Error ? error : new Error(String(error));
+        failed(error);
         // Continue to next provider in fallback chain
         continue;
       }
 
       // From here on the call is paid for and answered. Nothing below may send
       // it to the next vendor, which would pay for the same answer twice.
-      if (reservation !== undefined) {
-        const costUsd = this.costTracker!.settle(reservation, result.usage);
-        await this.reportUsage(providerName, model, costUsd);
-      }
+      if (reservation !== undefined)
+        await this.settlePaid(reservation, providerName, model, result);
 
       if (this.cache && cacheKey) {
         try {
@@ -344,7 +378,7 @@ export class SmartAIVisionClient {
     }
 
     // With fallback off only one vendor was tried; say what happened to it.
-    if (providers.length === 1 && lastError) throw lastError;
+    if (lastError && (providers.length === 1 || !otherFailure)) throw lastError;
     throw new Error(`All providers failed. Last error: ${lastError?.message || 'Unknown error'}`);
   }
 
