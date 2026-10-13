@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { ensureDatabaseDir } from '../db';
-import { DEFAULT_BUDGET_LIMITS } from '../config';
+import { DEFAULT_BUDGET_LIMITS, resolveBudget } from '../config';
 import { hostedLog } from '../log';
 import { dropLegacyIndexes } from './cache';
 
@@ -964,8 +964,13 @@ export class CostTracker {
 }
 
 /**
- * Create a cost tracker instance
+ * Create a cost tracker instance. Limits not given come from `resolveBudget()` (env, then
+ * the config file, then the defaults), as the smart client's do (#365): this used to fall
+ * back to the built-in $10/$200 whatever the user had configured.
  */
 export function createCostTracker(dbPath?: string, budget?: BudgetConfig): CostTracker {
-  return new CostTracker(dbPath, budget);
+  // Both limits given: nothing to resolve, so a malformed env or config value cannot break
+  // an explicit configuration (codex review; the smart client's needsBudget() rule).
+  const explicit = budget?.dailyLimit !== undefined && budget.monthlyLimit !== undefined;
+  return new CostTracker(dbPath, explicit ? budget : { ...resolveBudget(), ...budget });
 }

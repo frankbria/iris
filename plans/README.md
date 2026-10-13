@@ -226,19 +226,24 @@ production.
 | `P2.15` | [#412](https://github.com/frankbria/iris/issues/412) | Portal: rename and disable API keys | P0.23 (#340) | DONE (#559) |
 | `P2.19` | [#457](https://github.com/frankbria/iris/issues/457) | Account-level bans (user suspension) | P1 (#348) | DONE (#560) |
 | `P2.20` | [#475](https://github.com/frankbria/iris/issues/475) | Collect superseded visual baseline images | P1 (#472) | DONE (#561) |
+| `P2.22` | [#482](https://github.com/frankbria/iris/issues/482) | Reserve managed AI credit before the call, in Postgres | P1 (#479) | DONE (#567) |
 | `P2.21` | [#476](https://github.com/frankbria/iris/issues/476) | Re-sweep a purged org's object prefix after in-flight jobs | P1 (#472) | DONE (#563) |
 | `P2.23` | [#491](https://github.com/frankbria/iris/issues/491) | Keyboard tester: judge Escape on the dialog under test | P1 (#286) | DONE (#566) |
 | `P2.24` | [#498](https://github.com/frankbria/iris/issues/498) | Hosted a11y results: needs-review count per page | P1 (#290) | DONE (#562) |
+| `P2.25` | [#504](https://github.com/frankbria/iris/issues/504) | Assertions that pass before the page settles (element_absent, url_matches) | — | DONE (#568) |
+| `P2.27` | [#520](https://github.com/frankbria/iris/issues/520) | OpenAI o-series: omit temperature | — | DONE (#572) |
+| `P2.28` | [#522](https://github.com/frankbria/iris/issues/522) | fetchWithTimeout covers the response body | — | DONE (#574) |
+| `P2.30` | [#528](https://github.com/frankbria/iris/issues/528) | RPC server: JSON-RPC batch requests (decided: not supported) | — | DONE (#575) |
 
 ### P3 — Polish / test trust / hygiene
 
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
-| `P3.1` | [#325](https://github.com/frankbria/iris/issues/325) | Test trust: AI client fakes must return usage; cover the persistent cache | P0.16 (#244) | TODO |
-| `P3.2` | [#364](https://github.com/frankbria/iris/issues/364) | Test suite: protocol test configuration | P0.24 (#341) | TODO |
-| `P3.3` | [#365](https://github.com/frankbria/iris/issues/365) | Hygiene: comments and dead code in RPC and AI layers | — | TODO |
-| `P3.4` | [#382](https://github.com/frankbria/iris/issues/382) | egress-proxy test assumes 127.0.0.1:1 refuses; it blackholes on WSL | — | TODO |
-| `P3.5` | [#383](https://github.com/frankbria/iris/issues/383) | ActionExecutor.createPage is not reentrant: concurrent calls can orphan a browser | P0.12 (#240) | TODO |
+| `P3.1` | [#325](https://github.com/frankbria/iris/issues/325) | Test trust: AI client fakes must return usage; cover the persistent cache | P0.16 (#244) | DONE (#578) |
+| `P3.2` | [#364](https://github.com/frankbria/iris/issues/364) | Test suite: protocol test configuration | P0.24 (#341) | DONE (#579, #584) |
+| `P3.3` | [#365](https://github.com/frankbria/iris/issues/365) | Hygiene: comments and dead code in RPC and AI layers | — | DONE (#580) |
+| `P3.4` | [#382](https://github.com/frankbria/iris/issues/382) | egress-proxy test assumes 127.0.0.1:1 refuses; it blackholes on WSL | — | DONE (#582) |
+| `P3.5` | [#383](https://github.com/frankbria/iris/issues/383) | ActionExecutor.createPage is not reentrant: concurrent calls can orphan a browser | P0.12 (#240) | DONE (#583) |
 | `P3.6` | [#386](https://github.com/frankbria/iris/issues/386) | Deprecated createAIClient / AIClientFactory.create(…, 'text') return unmetered text clients | P0.14 (#242) | TODO |
 | `P3.7` | [#388](https://github.com/frankbria/iris/issues/388) | Cost tracker pricing edges left by #243: ceiling above the table, flat-only parents, getPricing | P0.15 (#243) | TODO |
 | `P3.8` | [#390](https://github.com/frankbria/iris/issues/390) | Cost ledger follow-ups from #244: stale reservations, typed budget error, settle/close race | P0.16 (#244) | TODO |

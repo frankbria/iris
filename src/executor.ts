@@ -281,6 +281,10 @@ export class ActionExecutor {
    * Launch a new browser instance.
    */
   async launchBrowser(): Promise<Browser> {
+    // A launch already in flight is joined, not repeated (#383): two concurrent
+    // createPage() calls both saw no browser, both launched, and `this.browser` kept only
+    // the last, orphaning the first Chromium.
+    if (this.launching) return this.launching;
     const launching = this.launch();
     this.launching = launching;
     try {

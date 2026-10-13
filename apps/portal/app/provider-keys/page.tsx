@@ -12,7 +12,7 @@ import {
 } from "@/components/provider-key-forms"
 import { getDb } from "@/lib/auth"
 import { SuspendedBanner } from "@/components/contact-link"
-import { requireOrg } from "@/lib/org"
+import { isManager, requireOrg } from "@/lib/org"
 import { getProviderKeys } from "@/lib/provider-keys"
 
 const PROVIDERS = [
@@ -33,7 +33,7 @@ export default async function ProviderKeysPage() {
   const { org, role, suspended } = await requireOrg()
   const stored = await getProviderKeys().list(org.id)
   // A member may hold several roles, stored comma-separated.
-  const manager = role.split(",").some((r) => r === "owner" || r === "admin")
+  const manager = isManager(role)
   // How the org pays for AI (#479) and what is left of this month's credit.
   const db = getDb()
   const [mode, plan, spent] = await Promise.all([

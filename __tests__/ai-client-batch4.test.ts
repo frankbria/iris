@@ -11,7 +11,11 @@ import {
   SmartAIVisionClient,
   SmartClientConfig,
 } from '../src/ai-client';
-import { AIResponseRejectedError } from '../src/ai-client/base';
+import {
+  AIResponseRejectedError,
+  type AIVisionClient,
+  type AIVisionResponse,
+} from '../src/ai-client/base';
 import { BudgetExceededError, toMicros } from '../src/ai-client/cost-tracker';
 import { AIClientFactory } from '../src/ai-client/factory';
 import { DEFAULT_MODELS, ModelUnavailableError } from '../src/ai-client/models';
@@ -853,6 +857,30 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         }
       });
 
+      // #365: limits not given come from resolveBudget(), not the built-in defaults.
+      it('createCostTracker takes unset limits from the environment and config', () => {
+        const before = process.env.IRIS_DAILY_BUDGET_USD;
+        process.env.IRIS_DAILY_BUDGET_USD = '3';
+        try {
+          const t = createCostTracker(':memory:');
+          expect(t.getBudgetStatus().dailyLimit).toBe(3);
+          expect(t.getBudgetStatus().monthlyLimit).toBe(200); // the default, still
+          t.close();
+          // An explicit limit still wins.
+          const u = createCostTracker(':memory:', { dailyLimit: 7 });
+          expect(u.getBudgetStatus().dailyLimit).toBe(7);
+          u.close();
+          // Both limits explicit: a malformed environment value is never read (codex review).
+          process.env.IRIS_DAILY_BUDGET_USD = 'not-a-number';
+          const v = createCostTracker(':memory:', { dailyLimit: 7, monthlyLimit: 70 });
+          expect(v.getBudgetStatus().monthlyLimit).toBe(70);
+          v.close();
+        } finally {
+          if (before === undefined) delete process.env.IRIS_DAILY_BUDGET_USD;
+          else process.env.IRIS_DAILY_BUDGET_USD = before;
+        }
+      });
+
       it('converts USD to micros, rounding a paid fraction up and float noise away', () => {
         expect(toMicros(0)).toBe(0);
         expect(toMicros(2.5e-5)).toBe(25); // 2.5e-5 * 1e6 is 25.000000000000004 in floats
@@ -1262,7 +1290,12 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         ...mockConfig,
         ai: { provider: 'anthropic', model: 'claude-sonnet-5', apiKey: 'sk-ant-test' },
       };
-      const verdict = { severity: 'minor', confidence: 0.9, reasoning: 'r', categories: ['color'] };
+      const verdict: AIVisionResponse = {
+        severity: 'minor',
+        confidence: 0.9,
+        reasoning: 'r',
+        categories: ['color'],
+      };
       // Three images and a full reply on Sonnet 5: $0.033.
       const usage = { inputTokens: 6000, outputTokens: 1000 };
       const callCost = 6000 * 3e-6 + 1000 * 1.5e-5;
@@ -1276,12 +1309,21 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         });
 
       // Every provider in the chain gets the same fake, so a second paid call
-      // on "the next vendor" shows up as a second call on this spy.
-      const provider = (analyzeVisualDiff: jest.Mock) =>
-        jest.spyOn(AIClientFactory, 'create').mockReturnValue({
+      // on "the next vendor" shows up as a second call on this spy. Typed against the
+      // vision client interface (#325): a fake whose reply drifts from what providers
+      // return (e.g. without `usage`) no longer compiles quietly as `never`.
+      const provider = (analyzeVisualDiff: AIVisionClient['analyzeVisualDiff']) => {
+        const fake = {
           analyzeVisualDiff,
-          isAvailable: jest.fn().mockResolvedValue(true),
-        } as never);
+          isAvailable: jest.fn<Promise<boolean>, []>().mockResolvedValue(true),
+        } satisfies Pick<AIVisionClient, 'analyzeVisualDiff' | 'isAvailable'>;
+        return jest.spyOn(AIClientFactory, 'create').mockReturnValue(fake as never);
+      };
+      /** A provider reply as the vision clients build one: the verdict and the call's usage. */
+      const reply = jest.fn<
+        ReturnType<AIVisionClient['analyzeVisualDiff']>,
+        Parameters<AIVisionClient['analyzeVisualDiff']>
+      >;
 
       const request = (n = 0) => ({
         baseline: Buffer.from(`base-${n}`),
@@ -1299,7 +1341,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       it('returns and records a paid answer that takes spend past the limit', async () => {
         // The bug: recording threw once this answer crossed the limit, so it was
         // discarded unrecorded and the next vendor was paid to answer again.
-        const analyze = jest.fn().mockResolvedValue({ ...verdict, usage });
+        const analyze = reply().mockResolvedValue({ ...verdict, usage });
         provider(analyze);
         const smart = client(0.01);
 
@@ -1311,9 +1353,9 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       });
 
       it('records a reply the provider billed but IRIS rejected', async () => {
-        const analyze = jest
-          .fn()
-          .mockRejectedValue(new AIResponseRejectedError('Invalid JSON from model', usage));
+        const analyze = reply().mockRejectedValue(
+          new AIResponseRejectedError('Invalid JSON from model', usage),
+        );
         provider(analyze);
         const smart = client(10, { enableFallback: false });
 
@@ -1325,7 +1367,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       });
 
       it('leaves no row for a call that failed before the provider replied', async () => {
-        provider(jest.fn().mockRejectedValue(new Error('ECONNRESET')));
+        provider(reply().mockRejectedValue(new Error('ECONNRESET')));
         const smart = client(10, { enableFallback: false });
 
         await expect(smart.analyzeVisualDiff(request())).rejects.toThrow(/ECONNRESET/);
@@ -1336,7 +1378,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       });
 
       it('logs a cache-write failure instead of paying another vendor', async () => {
-        const analyze = jest.fn().mockResolvedValue({ ...verdict, usage });
+        const analyze = reply().mockResolvedValue({ ...verdict, usage });
         provider(analyze);
         jest.spyOn(AIVisionCache.prototype, 'set').mockImplementation(() => {
           throw new Error('SQLITE_FULL: database or disk is full');

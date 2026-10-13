@@ -563,3 +563,13 @@ Write/Edit, not as a pre-push afterthought.
 - **In one picomatch array a `!pattern` matches everything outside it**, so `['dist/**', '!dist/public/**']` ignored nearly every file. Gitignore semantics need two matchers (ignored by a positive, kept by a negative), and directories must not be pruned while negations exist.
 - **Codex keeps finding the lifecycle edges**: FK cascade vs. tombstones, reserve-before-write vs. crash, cancel signals for work that outlives a deadline, a concurrent refused request consuming shared state (BetterAuth after hooks run on errors too). Ask those four questions of any new table, ledger or hook before review.
 - **A private-backlog issue with no comments has no checkable criteria** (#362, #363): comment the measured state and candidate readings, label `needs-owner`, move on.
+
+## 2026-10-12 (#319–#541 loop)
+
+- **Never `sed "${n}s/…/"` with a line number from grep.** When the row was missing, `n` was empty and the substitution hit every line; 35 TODO rows went to DONE on main before a revert. Edit README rows with a python anchor (`assert s.count(old) == 1`) and read `git diff` before committing.
+- **A `src/` module the portal imports must survive `next build`, not only `tsc --noEmit`.** A BigInt literal (`123n`) passed both local typechecks and broke the portal image build (target below ES2020). Run `npm run build -w @iris/portal` when touching such a module.
+- **ElementHandles kept into pages that were closed make `browser.close()` take 20+ s or hang.** Anything that retains handles must release them on the page's `close` event (one listener per page), not only at its own cleanup.
+- **Squash subjects carry the issue's P-tag: read the issue title, don't recall it.** #319 and #378 merged with wrong tags.
+- **`git add -A ':!path'` aborts when `path` is gitignored**, so nothing is committed; check the commit happened before posting anything that names the PR.
+- **Waiters: put the condition in a function (`busy() { … return 0; }`)**; an `exit 1` inside an `until` condition ends the whole script at the first pending check.
+- **Security PRs take several codex rounds.** #513 needed four, and each round found something real. Run codex again after every fix commit, not just once; the GLM bot stopped reviewing mid-day (#565), so codex was the only cross-family check.
