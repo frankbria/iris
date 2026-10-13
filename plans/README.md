@@ -258,7 +258,10 @@ production.
 | `P3.17` | [#508](https://github.com/frankbria/iris/issues/508) | a11y: close a timed-out page's context at once instead of at run end | — | DONE (#597) |
 | `P3.19` | [#511](https://github.com/frankbria/iris/issues/511) | iris watch: report a provider outage as a failure with its reason | — | DONE (#599) |
 | `P3.22` | [#564](https://github.com/frankbria/iris/issues/564) | worker-cli heartbeat test counts wall-clock beats: flaky on a loaded runner | — | DONE (#602) |
+| `P3.21` | [#519](https://github.com/frankbria/iris/issues/519) | Pattern translator: reject prose with a selector token glued in | — | DONE (#600) |
+| `P3.25` | [#570](https://github.com/frankbria/iris/issues/570) | backup.sh: a container that stops between discovery and exec fails with Docker's message | — | DONE (#605) |
 | `P3.27` | [#581](https://github.com/frankbria/iris/issues/581) | vision cache auto-prune test: a 10 ms TTL lets the fresh entry expire on a slow host | — | DONE (#601) |
+| `P3.29` | [#595](https://github.com/frankbria/iris/issues/595) | keyboard-real-behavior: trap-check hook times out on CI | — | DONE (#604) |
 
 ---
 
