@@ -24,18 +24,21 @@ const cfg = (provider: string, model?: string): IrisConfig =>
     browser: { headless: true, timeout: 30000 },
   }) as IrisConfig;
 
+/** The provider client a metered text client wraps (#386). */
+const inner = (client: unknown) => (client as { inner: unknown }).inner;
+
 describe('AIClientFactory', () => {
   describe('text clients', () => {
     it.each([
       ['openai', OpenAITextClient],
       ['anthropic', AnthropicTextClient],
       ['ollama', OllamaTextClient],
-    ])('maps %s → its text client', (provider, ctor) => {
-      expect(AIClientFactory.create(cfg(provider), 'text')).toBeInstanceOf(ctor);
+    ])('maps %s → its text client, inside the meter (#386)', (provider, ctor) => {
+      expect(inner(AIClientFactory.create(cfg(provider), 'text'))).toBeInstanceOf(ctor);
     });
 
     it('defaults to a text client when type is omitted', () => {
-      expect(AIClientFactory.create(cfg('openai'))).toBeInstanceOf(OpenAITextClient);
+      expect(inner(AIClientFactory.create(cfg('openai')))).toBeInstanceOf(OpenAITextClient);
     });
 
     it('throws on an unsupported text provider', () => {
@@ -76,7 +79,7 @@ describe('AIClientFactory', () => {
   });
 
   it('createAIClient() returns a text client for backward compatibility', () => {
-    expect(createAIClient(cfg('anthropic'))).toBeInstanceOf(AnthropicTextClient);
+    expect(inner(createAIClient(cfg('anthropic')))).toBeInstanceOf(AnthropicTextClient);
   });
 
   // Issue #184: the text path used to trust config.ai.model verbatim, so a pin
