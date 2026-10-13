@@ -166,7 +166,7 @@ describe('Translator', () => {
 
     it('should handle config validation errors', async () => {
       const { validateAiConfig } = await import('../src/config');
-      (validateAiConfig as jest.Mock).mockReturnValue(['API key missing']);
+      (validateAiConfig as jest.Mock).mockReturnValueOnce(['API key missing']);
 
       const result = await translate('complex instruction');
 
