@@ -708,6 +708,46 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       const bigVision = { inputTokens: 6000, outputTokens: 1000 };
       const bigVisionCost = 6000 * 3e-6 + 1000 * 1.5e-5;
 
+      // #390: reports show settled spend; the budget still counts what is in flight.
+      it('leaves a pending reservation out of getStats, not out of the budget', () => {
+        tracker.reserve('anthropic', 'claude-sonnet-5');
+        const stats = tracker.getStats();
+        expect(stats.totalCost).toBe(0);
+        expect(stats.operationCount).toBe(0);
+        expect(stats.costByProvider).toEqual({});
+        expect(tracker.getDailyCost()).toBeGreaterThan(0);
+      });
+
+      // #390: a process killed mid-call leaves its reservation pending; the next tracker on
+      // the file sweeps it once it is older than any call can take, and keeps a live one.
+      it('sweeps stale pending reservations when a tracker opens the ledger', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-ledger-'));
+        const file = path.join(dir, 'cost.db');
+        try {
+          const crashed = new CostTracker(file, { dailyLimit: 5, monthlyLimit: 100 });
+          const stale = crashed.reserve('anthropic', 'claude-sonnet-5');
+          const live = crashed.reserve('anthropic', 'claude-sonnet-5');
+          crashed.close();
+          const db = new Database(file);
+          db.prepare('UPDATE cost_tracking SET timestamp = ? WHERE id = ?').run(
+            Date.now() - 2 * 60 * 60 * 1000,
+            stale,
+          );
+          db.close();
+
+          const next = new CostTracker(file, { dailyLimit: 5, monthlyLimit: 100 });
+          next.close();
+          const check = new Database(file);
+          const ids = (check.prepare('SELECT id FROM cost_tracking').all() as { id: number }[]).map(
+            (r) => r.id,
+          );
+          check.close();
+          expect(ids).toEqual([live]);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+
       it('holds an estimate at least as large as a real call, counted against the budget', () => {
         tracker.reserve('anthropic', 'claude-sonnet-5');
         expect(tracker.getDailyCost()).toBeGreaterThanOrEqual(bigVisionCost);
@@ -1336,6 +1376,34 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
       afterEach(() => {
         jest.restoreAllMocks();
+      });
+
+      // #390: hosted enforcement branches on the type, not on "All providers failed".
+      it('rejects with BudgetExceededError when every vendor was refused for budget', async () => {
+        const analyze = reply().mockResolvedValue({ ...verdict, usage });
+        provider(analyze);
+        const smart = client(0, { enableFallback: true });
+
+        await expect(smart.analyzeVisualDiff(request())).rejects.toBeInstanceOf(
+          BudgetExceededError,
+        );
+        expect(analyze).not.toHaveBeenCalled();
+        smart.close();
+      });
+
+      // #390: closing while a reply settles must not throw the paid answer away.
+      it('returns a paid answer when the client is closed while it is in flight', async () => {
+        const warn = jest.spyOn(console, 'warn').mockImplementation();
+        const smart = client(10, { enableFallback: true });
+        const analyze = reply().mockImplementation(async () => {
+          smart.close();
+          return { ...verdict, usage };
+        });
+        provider(analyze);
+
+        await expect(smart.analyzeVisualDiff(request())).resolves.toMatchObject(verdict);
+        expect(analyze).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls.map((c) => c.join(' ')).join('\n')).toMatch(/could not record/i);
       });
 
       it('returns and records a paid answer that takes spend past the limit', async () => {

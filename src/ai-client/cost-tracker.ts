@@ -231,9 +231,18 @@ const SNAPSHOT_SUFFIX = /^-(\d{8}|\d{4}-\d{2}-\d{2}|latest)$/;
  *
  * ponytail: a fixed ceiling; a call larger than this (an agent turn carrying a
  * very large page) can overshoot the limit by the difference. Callers that
- * know their input is larger pass their own ceiling to `reserve()`.
+ * know their input is larger pass their own ceiling to `reserve()`. Vision keeps the
+ * fixed one (#390): the preprocessor caps each image at 2048x2048 and a request carries at
+ * most three, which this covers; scale it with the request if either limit grows.
  */
 export const RESERVATION_CEILING: TokenUsage = { inputTokens: 8000, outputTokens: 1000 };
+
+/**
+ * A pending reservation older than this was left by a process that died mid-call (#390):
+ * a call takes at most ~90 s at the default timeout and retries, and an hour leaves room for
+ * long configured timeouts. Swept when a tracker opens the ledger.
+ */
+const STALE_RESERVATION_MS = 60 * 60 * 1000;
 
 /**
  * The most one managed AI call can cost (#482): the reservation ceiling (#244) plus one input
@@ -423,6 +432,10 @@ export class CostTracker {
     this.db.exec(
       'CREATE INDEX IF NOT EXISTS idx_org_timestamp ON cost_tracking(org_id, timestamp)',
     );
+    // Every org's: a crashed process's reservation is nobody's spend (#390).
+    this.db
+      .prepare('DELETE FROM cost_tracking WHERE pending = 1 AND timestamp < ?')
+      .run(Date.now() - STALE_RESERVATION_MS);
   }
 
   /**
@@ -823,7 +836,12 @@ export class CostTracker {
   getStats(): CostStats {
     // This tracker's run when it has one, else its whole scope (#255): a run's
     // summary must not report another run's, or another org's, spend.
-    const where = this.runId === null ? 'org_id IS ?' : 'org_id IS ? AND run_id = ?';
+    // Settled rows only (#390): a call in flight is not spend yet. The budget queries
+    // (getDailyCost, getMonthlyCost) still count reservations.
+    const where =
+      this.runId === null
+        ? 'org_id IS ? AND pending = 0'
+        : 'org_id IS ? AND run_id = ? AND pending = 0';
     const params = this.runId === null ? [this.orgId] : [this.orgId, this.runId];
     const totalStmt = this.db.prepare(
       `SELECT SUM(${MICROS}) as total, COUNT(*) as count FROM cost_tracking WHERE ${where}`,
