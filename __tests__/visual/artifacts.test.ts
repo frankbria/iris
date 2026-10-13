@@ -13,6 +13,7 @@ import {
   artifactName,
   legacyArtifactName,
   newRunId,
+  pruneRuns,
   runArtifactPath,
 } from '../../src/visual/artifacts';
 
@@ -115,5 +116,43 @@ describe('runArtifactPath', () => {
   it('refuses a run id or name that would leave the run directory', () => {
     expect(() => runArtifactPath(root, '../escape', 'current', 'x')).toThrow(/run id/);
     expect(() => runArtifactPath(root, 'run-1', 'current', '../x')).toThrow(/artifact name/);
+  });
+});
+
+// #425: run directories are kept to the newest N; the current one is never removed.
+describe('pruneRuns', () => {
+  let root: string;
+  const runs = () => fs.readdirSync(path.join(root, 'runs')).sort();
+  /** A run directory dated `ageS` seconds ago. */
+  const run = (id: string, ageS: number) => {
+    runArtifactPath(root, id, 'current', 'page');
+    const when = new Date(Date.now() - ageS * 1000);
+    fs.utimesSync(path.join(root, 'runs', id), when, when);
+  };
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-prune-'));
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('keeps the newest runs, the current one counted among them', () => {
+    for (let i = 1; i <= 5; i++) run(`r${i}`, i * 60); // r1 newest
+    run('current', 3600); // oldest by time, but it is this run
+    expect(pruneRuns(root, 3, 'current').sort()).toEqual(['r3', 'r4', 'r5']);
+    expect(runs()).toEqual(['current', 'r1', 'r2']);
+  });
+
+  it('keeps everything with keep 0, and leaves what is not a run directory', () => {
+    run('r1', 60);
+    run('r2', 120);
+    fs.writeFileSync(path.join(root, 'runs', 'notes.txt'), 'x');
+    fs.mkdirSync(path.join(root, 'runs', 'not a run'));
+    expect(pruneRuns(root, 0, 'r1')).toEqual([]);
+    expect(pruneRuns(root, 1, 'r1')).toEqual(['r2']);
+    expect(runs()).toEqual(['not a run', 'notes.txt', 'r1']);
+  });
+
+  it('does nothing when there is no runs directory', () => {
+    expect(pruneRuns(root, 1, 'r1')).toEqual([]);
   });
 });
