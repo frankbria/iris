@@ -12,7 +12,7 @@
 import type { Page } from 'playwright';
 import type { Action } from './actions';
 import type { ActionExecutor, ExecutionResult } from './executor';
-import { loadConfig, validateAiConfig } from './config';
+import { ConfigError, loadConfig, validateAiConfig } from './config';
 import { BudgetExceededError } from './ai-client/cost-tracker';
 import { createResolvedAIClient } from './ai-client';
 import { configFromCredentials } from './ai-client/credentials';
@@ -279,7 +279,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
     } catch (error) {
       log(`turn ${turns}: translation failed — ${error instanceof Error ? error.message : error}`);
       // IRIS's own budget breaker refused before the provider was asked: not an outage.
-      const errorKind = error instanceof BudgetExceededError ? 'other' : 'provider';
+      // ...nor is a malformed budget setting (#603).
+      const ours = error instanceof BudgetExceededError || error instanceof ConfigError;
+      const errorKind = ours ? 'other' : 'provider';
       return { goalMet, turns, results, terminationReason: 'error', errorKind };
     }
     // The provider failed: asking again is not "letting the model think", and

@@ -129,4 +129,42 @@ describe('iris run exit codes (#294)', () => {
       await Promise.all([site, provider].map((s) => new Promise((resolve) => s.close(resolve))));
     }
   }, 90_000);
+
+  // #603: a malformed budget is a configuration to fix, never retried as an outage (3).
+  test('1, not 3, when the budget variable is malformed (one-shot)', async () => {
+    const { code, json } = await irisRun(['make sure the cart total is right'], {
+      OPENAI_API_KEY: 'sk-test',
+      IRIS_DAILY_BUDGET_USD: 'abc',
+    });
+
+    expect(json.status).toBe('error');
+    expect((json.translation as { error: unknown; reasoning: string }).error).toBeNull();
+    expect((json.translation as { reasoning: string }).reasoning).toMatch(/IRIS_DAILY_BUDGET_USD/);
+    expect(code).toBe(1);
+  }, 30_000);
+
+  test('1, not 3, when the budget variable is malformed (--agent)', async () => {
+    const site = createServer((_req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end('<!doctype html><title>Shop</title><button id="pay">Pay</button>');
+    });
+    site.listen(0, '127.0.0.1');
+    await once(site, 'listening');
+    try {
+      const { code, json } = await irisRun(
+        [
+          'pay for the order',
+          '--agent',
+          '--url',
+          `http://127.0.0.1:${(site.address() as AddressInfo).port}/`,
+        ],
+        { OPENAI_API_KEY: 'sk-test', IRIS_DAILY_BUDGET_USD: 'abc' },
+      );
+
+      expect(json.agent).toMatchObject({ terminationReason: 'error', errorKind: 'other' });
+      expect(code).toBe(1);
+    } finally {
+      await new Promise((resolve) => site.close(resolve));
+    }
+  }, 90_000);
 });

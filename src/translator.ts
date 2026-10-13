@@ -1,4 +1,4 @@
-import { loadConfig, validateAiConfig } from './config';
+import { ConfigError, loadConfig, validateAiConfig } from './config';
 import { configFromCredentials, type AICredentials } from './ai-client/credentials';
 import type { SettledAICall } from './ai-client/factory';
 import { isHostedMode } from './hosted';
@@ -365,7 +365,8 @@ async function translateWithAI(
     const message = `AI translation error: ${error instanceof Error ? error.message : 'Unknown error'}`;
     // The budget breaker refused before the provider was asked (#510 review): a plain
     // failure, not `error`, which callers read as "the provider failed" (retryable).
-    if (error instanceof BudgetExceededError)
+    // A malformed budget setting is IRIS's own configuration, not the provider either (#603).
+    if (error instanceof BudgetExceededError || error instanceof ConfigError)
       return { actions: [], method: 'ai', confidence: 0, reasoning: message };
     return { actions: [], method: 'ai', confidence: 0, reasoning: message, error: message };
   }

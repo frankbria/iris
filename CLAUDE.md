@@ -2228,7 +2228,9 @@ upgrade transaction; the cache would need one added).
   so tests and long-lived processes follow the environment of the moment.
 - `resolveBudget()` (src/config.ts): `IRIS_DAILY_BUDGET_USD` / `IRIS_MONTHLY_BUDGET_USD`
   > `budget` in `~/.iris/config.json` > `DEFAULT_BUDGET_LIMITS` ($10 / $200), per field.
-  Malformed values throw. An explicit `costConfig` passed to the client still wins.
+  Malformed values throw `ConfigError` (#603), which `translate()` and the agent loop treat like
+  the budget breaker: a plain failure (`iris run` exit 1), never a provider outage (3). An
+  explicit `costConfig` passed to the client still wins.
   `createCostTracker(dbPath, budget?)` fills omitted limits the same way (#365); with both
   limits given it never reads `resolveBudget()`, so a malformed variable cannot throw there.
 - Container: compose sets `IRIS_DATA_DIR: /data`, the only durable writable path

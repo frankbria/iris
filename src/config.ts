@@ -245,6 +245,17 @@ function loadConfigFile(): Partial<IrisConfig> {
  * A malformed value throws. Falling back quietly would run under a limit the
  * user did not ask for. 0 is valid and means "free providers only".
  */
+/**
+ * A configuration value IRIS cannot use (#603): a configuration to fix, never retried as a
+ * provider outage, so `iris run` exits 1 for it rather than 3.
+ */
+export class ConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConfigError';
+  }
+}
+
 export function resolveBudget(): BudgetLimits {
   const file = loadConfigFile().budget ?? {};
   const pick = (key: keyof BudgetLimits, envVar: string): number => {
@@ -255,14 +266,16 @@ export function resolveBudget(): BudgetLimits {
       // isFinite as well: 309 digits pass the pattern and parse to Infinity,
       // which is no limit at all.
       if (!/^\d+(\.\d+)?$/.test(raw.trim()) || !Number.isFinite(value)) {
-        throw new Error(`${envVar} must be a non-negative number of US dollars, got "${raw}"`);
+        throw new ConfigError(
+          `${envVar} must be a non-negative number of US dollars, got "${raw}"`,
+        );
       }
       return value;
     }
     const value = file[key];
     if (value === undefined) return DEFAULT_BUDGET_LIMITS[key];
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-      throw new Error(
+      throw new ConfigError(
         `budget.${key} in ${getConfigPath()} must be a non-negative number, got ${JSON.stringify(value)}`,
       );
     }
