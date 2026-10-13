@@ -1,6 +1,6 @@
 import { recordAudit } from './audit-log';
 import { StorageQuotaExceededError, storageUsage } from './storage-quota';
-import { stripUserinfo } from './report-encoding';
+import { stripAnsi, stripUserinfo } from './report-encoding';
 import type Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
 import { describeAction } from './actions';
@@ -127,8 +127,13 @@ function violationCounts(page: AccessibilityTestResult['results'][number]) {
   return counts;
 }
 
-/** A comparison's error as stored: URL userinfo stripped, at most 500 characters. */
-const boundedError = (error: string): string => [...stripUserinfo(error)].slice(0, 500).join('');
+/**
+ * An error as stored: terminal colour codes (#420) and URL userinfo stripped, at most `max`
+ * characters, cut by code point (a cut inside a surrogate pair leaves a lone half, which
+ * Postgres's json input rejects, losing the whole run).
+ */
+const boundedError = (error: string, max = 500): string =>
+  [...stripUserinfo(stripAnsi(error))].slice(0, max).join('');
 
 /**
  * One result per page, comparison or action. An RPC action is stored as
@@ -206,7 +211,7 @@ function resultsOf(run: RunInput): StoredRunResult[] {
             // also quotes URLs (guardedGoto, Playwright's goto), credentials and all.
             // Cut by code point: a cut inside a surrogate pair leaves a lone half,
             // which Postgres's json input rejects, losing the whole run.
-            ...(r.error && { error: [...stripUserinfo(r.error)].slice(0, 500).join('') }),
+            ...(r.error && { error: boundedError(r.error) }),
           },
         };
       });
@@ -634,7 +639,7 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
 
     async fail(job, message) {
       // Cut by code point, like an action error: the text may quote the page.
-      const error = [...stripUserinfo(wellFormed(message))].slice(0, JOB_ERROR_MAX).join('');
+      const error = boundedError(wellFormed(message), JOB_ERROR_MAX);
       const updated = await sql`
         update runs set status = 'failed', error = ${error}, finished_at = now()
         where id = ${job.id} and org_id = ${job.orgId} and status = 'running'

@@ -359,6 +359,30 @@ const a11yRun = {
     );
   });
 
+  // #420: Playwright colours its call log; stored text is read in the portal and the API.
+  it('stores an error without terminal colour codes', async () => {
+    const esc = String.fromCharCode(27);
+    const id = await history()
+      .forOrg(A)
+      .record({
+        kind: 'rpc',
+        success: false,
+        startedAt: started,
+        finishedAt: finished,
+        results: [
+          {
+            success: false,
+            action: { type: 'click', selector: '#password' },
+            error: `page.fill: Timeout 30000ms exceeded.\nCall log:\n${esc}[2m  - waiting for locator('#password')${esc}[22m\n`,
+          },
+        ],
+      });
+    const run = await history().forOrg(A).get(id);
+    expect(run!.results[0].result.error).toBe(
+      "page.fill: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator('#password')\n",
+    );
+  });
+
   it('keeps the run when its key is deleted, with no key recorded', async () => {
     await sql`insert into apikey (id, "configId", "referenceId", key, "createdAt", "updatedAt")
       values ('key-temp', 'default', 'org-a', 'hash-temp', now(), now())`.execute(db);
