@@ -17,7 +17,12 @@ import type { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { createResolvedAIClient, CostTracker } from '../src/ai-client';
+import {
+  AIClientFactory,
+  createAIClient,
+  createResolvedAIClient,
+  CostTracker,
+} from '../src/ai-client';
 import { translate } from '../src/translator';
 import { IrisConfig } from '../src/config';
 import { resolveDataDir } from '../src/data-dir';
@@ -147,6 +152,25 @@ describe('text LLM metering (#242)', () => {
         output_tokens: 200,
       },
     ]);
+  });
+
+  // #386: the library's other public text entry points are metered too.
+  it.each([
+    ['createAIClient', (c: IrisConfig) => createAIClient(c)],
+    ["AIClientFactory.create(…, 'text')", (c: IrisConfig) => AIClientFactory.create(c, 'text')],
+  ])('%s writes a ledger row and is budget-gated', async (_name, build) => {
+    mockOpenAICreate.mockResolvedValue(openaiReply);
+    await build(config({ apiKey: 'sk-test' })).translateInstruction({ instruction: 'click go' });
+    expect(rows()).toEqual([
+      expect.objectContaining({ provider: 'openai', model: 'gpt-4o-mini', operation: 'text' }),
+    ]);
+
+    exhaustBudget();
+    mockOpenAICreate.mockClear();
+    await expect(
+      build(config({ apiKey: 'sk-test' })).translateInstruction({ instruction: 'click go' }),
+    ).rejects.toThrow(/budget/i);
+    expect(mockOpenAICreate).not.toHaveBeenCalled();
   });
 
   it('records an Anthropic call made for the agent loop as an `agent_turn` row', async () => {
