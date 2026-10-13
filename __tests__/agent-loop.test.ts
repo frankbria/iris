@@ -873,6 +873,22 @@ describe('agent loop', () => {
       expect(result).toMatchObject({ terminationReason: 'error', errorKind: 'other', turns: 0 });
     });
 
+    // #510 review: only the AI part of the configuration gates the loop, as in one-shot.
+    it('runs with an out-of-range non-AI setting in the config file', async () => {
+      fs.writeFileSync(
+        process.env.IRIS_CONFIG_PATH!,
+        JSON.stringify({ browser: { timeout: 500 } }),
+      );
+      try {
+        scriptAI([[]]);
+        const result = await runAgentLoop({ instruction: 'look', executor, page, maxTurns: 1 });
+        expect(result.errorKind).toBeUndefined();
+        expect(result.turns).toBe(1);
+      } finally {
+        fs.rmSync(process.env.IRIS_CONFIG_PATH!, { force: true });
+      }
+    });
+
     it("classifies IRIS's own budget refusal as other", async () => {
       const { BudgetExceededError } = jest.requireActual('../src/ai-client/cost-tracker');
       jest.spyOn(aiClient, 'createResolvedAIClient').mockResolvedValue({

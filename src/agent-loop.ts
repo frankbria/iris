@@ -12,7 +12,7 @@
 import type { Page } from 'playwright';
 import type { Action } from './actions';
 import type { ActionExecutor, ExecutionResult } from './executor';
-import { loadConfig, validateConfig } from './config';
+import { loadConfig, validateAiConfig } from './config';
 import { BudgetExceededError } from './ai-client/cost-tracker';
 import { createResolvedAIClient } from './ai-client';
 import { configFromCredentials } from './ai-client/credentials';
@@ -222,7 +222,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentRunR
       : loadConfig();
     // No key or endpoint is a configuration to fix, not an outage (#510 review): one-shot
     // `translate()` reports it as a plain empty plan from the same check.
-    const configErrors = validateConfig(config);
+    const configErrors = validateAiConfig(config);
     if (configErrors.length > 0) {
       log(`AI translation is not configured (${configErrors.join(', ')})`);
       return {

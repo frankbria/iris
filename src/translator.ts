@@ -1,4 +1,4 @@
-import { loadConfig, validateConfig } from './config';
+import { loadConfig, validateAiConfig } from './config';
 import { configFromCredentials, type AICredentials } from './ai-client/credentials';
 import type { SettledAICall } from './ai-client/factory';
 import { isHostedMode } from './hosted';
@@ -284,7 +284,7 @@ async function translateWithAI(
     const config = credentials
       ? configFromCredentials(credentials, { kind: 'text' })
       : loadConfig();
-    const configErrors = validateConfig(config);
+    const configErrors = validateAiConfig(config);
 
     if (configErrors.length > 0) {
       return {

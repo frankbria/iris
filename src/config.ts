@@ -340,7 +340,11 @@ function loadFromEnvironment(): EnvironmentLayer {
   return { provider, credentials, models };
 }
 
-export function validateConfig(config: IrisConfig): string[] {
+/**
+ * What stops AI translation (#510 review): a provider with no key or endpoint. Translation
+ * checks this alone; an out-of-range watch or browser setting is not an AI problem.
+ */
+export function validateAiConfig(config: Pick<IrisConfig, 'ai'>): string[] {
   const errors: string[] = [];
 
   if (config.ai.provider === 'openai' && !config.ai.apiKey) {
@@ -360,6 +364,12 @@ export function validateConfig(config: IrisConfig): string[] {
       'Ollama endpoint is required. Set OLLAMA_ENDPOINT environment variable or configure in ~/.iris/config.json',
     );
   }
+
+  return errors;
+}
+
+export function validateConfig(config: IrisConfig): string[] {
+  const errors = validateAiConfig(config);
 
   if (config.watch.debounceMs < 100) {
     errors.push('Watch debounce must be at least 100ms');

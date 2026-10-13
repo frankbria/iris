@@ -10,6 +10,7 @@ jest.mock('../src/config', () => ({
     },
   }),
   validateConfig: jest.fn().mockReturnValue([]),
+  validateAiConfig: jest.fn().mockReturnValue([]),
 }));
 
 jest.mock('../src/ai-client', () => ({
@@ -164,8 +165,8 @@ describe('Translator', () => {
     });
 
     it('should handle config validation errors', async () => {
-      const { validateConfig } = await import('../src/config');
-      (validateConfig as jest.Mock).mockReturnValue(['API key missing']);
+      const { validateAiConfig } = await import('../src/config');
+      (validateAiConfig as jest.Mock).mockReturnValue(['API key missing']);
 
       const result = await translate('complex instruction');
 
