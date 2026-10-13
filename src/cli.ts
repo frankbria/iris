@@ -12,7 +12,7 @@ import { DEFAULT_KEEP_RUNS } from './visual/artifacts';
 import type { TranslationResult } from './translator';
 import { describeAction } from './actions';
 import type { ExecutionResult } from './executor';
-import { wcagTags } from './a11y/wcag';
+import { unknownAxeTags, wcagTags } from './a11y/wcag';
 
 /**
  * `--pages` collector (#289): repeatable. Within one value, a URL with a scheme (`data:`,
@@ -52,6 +52,21 @@ function parseFailOn(value: string): Record<string, boolean> | string {
     return `Invalid --fail-on "${value}"; expected a comma list of ${IMPACTS.join(', ')}.`;
   }
   return Object.fromEntries(impacts.map((i) => [i, true]));
+}
+
+/**
+ * `--tags` as a list, or the error message when a tag selects no axe rule (#500): such a
+ * tag scans with fewer rules, and a list of only misspelt tags scans nothing and passes.
+ */
+async function parseTags(value: string): Promise<string[] | string> {
+  const tags = value
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const unknown = await unknownAxeTags(tags);
+  if (tags.length > 0 && unknown.length === 0) return tags;
+  const detail = unknown.length ? `; axe-core has no rules tagged ${unknown.join(', ')}` : '';
+  return `Invalid --tags "${value}"${detail}.`;
 }
 
 /**
@@ -1601,6 +1616,11 @@ program
         console.error(`\n❌ ${failureThreshold}`);
         process.exit(2); // Invalid usage
       }
+      const tags = await parseTags(options.tags);
+      if (typeof tags === 'string') {
+        console.error(`\n❌ ${tags}`);
+        process.exit(2); // Invalid usage
+      }
 
       const { AccessibilityRunner } = await import('./a11y/a11y-runner');
 
@@ -1608,7 +1628,7 @@ program
         pages: options.pages ?? ['/'],
         axe: {
           rules: {},
-          tags: options.tags.split(',').map((t: string) => t.trim()),
+          tags,
           // --rules means "run only these rules", which is axe's runOnly. Feeding
           // them to `rules` instead would merely toggle them and still scan
           // everything — the silent-widening bug this wiring fixes (issue #72).

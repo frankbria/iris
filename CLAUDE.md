@@ -273,7 +273,9 @@ plans/
   `incomplete` is "needs review": MCP `needsReview`, a CLI count, the HTML report and
   JUnit `<system-out>`; never a failure. Hosted runs store it per page (#498:
   `needsReview` count, up to 20 `needsReviewRules`, scanned pages only), shown by the
-  Results API and the portal run detail
+  Results API and the portal run detail. An explicit `--tags` is checked against the
+  installed axe-core (`unknownAxeTags`, #500): a tag that selects no rule is refused with
+  exit 2, since an all-typo list scanned nothing and passed
 - **One a11y verdict per page (#288).** The runner sets `passed` and `failureReasons` on
   every result (`withVerdict`: axe violations at `--fail-on`, a failed keyboard or
   screen-reader check, or an error), and everything reads it: `summary.passed` (the exit

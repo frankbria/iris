@@ -16,3 +16,13 @@ export type WcagLevel = keyof typeof TAGS;
 export function wcagTags(level: WcagLevel): string[] {
   return [...TAGS[level]];
 }
+
+/**
+ * The tags in `tags` that select no rule in the installed axe-core (#500). axe runs the
+ * union of a tag list, so a misspelt tag silently scans with fewer rules, and a list of only
+ * misspelt tags scans with none and passes. axe-core is loaded only when this is asked.
+ */
+export async function unknownAxeTags(tags: string[]): Promise<string[]> {
+  const { default: axe } = await import('axe-core');
+  return tags.filter((tag) => axe.getRules([tag]).length === 0);
+}

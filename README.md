@@ -1122,7 +1122,8 @@ Options:
                             repeat --pages); empty exits 2
   --rules <rules>           Specific axe rules (comma-separated)
   --tags <tags>             axe rule tags, comma-separated (default: WCAG 2.2 AA,
-                            wcag2a,wcag21a,wcag2aa,wcag21aa,wcag22aa)
+                            wcag2a,wcag21a,wcag2aa,wcag21aa,wcag22aa); a tag
+                            axe-core does not know exits 2
   --exclude <selectors>     CSS selectors to exclude from the scan (comma-separated)
   --fail-on <impacts>       Impact levels: critical,serious,moderate,minor, any case
                             (default: critical,serious); anything else exits 2

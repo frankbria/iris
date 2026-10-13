@@ -188,6 +188,22 @@ describe('a11y CLI command', () => {
       expect((await configFor(['--pages', data])).pages).toEqual([data]);
     });
 
+    // #500: a misspelt tag selected no rule, and the empty scan passed.
+    it.each([['wcg21aa'], ['wcag2a,nope'], [' , ']])(
+      'refuses --tags %p instead of scanning with no rules (exit 2)',
+      async (value) => {
+        const config = await configFor(['--tags', value]);
+        expect(config).toBeUndefined(); // no scan ran
+        expect(processExitSpy).toHaveBeenCalledWith(2);
+        expect(consoleErrorSpy.mock.calls.flat().join(' ')).toMatch(/--tags/);
+      },
+    );
+
+    it('runs a valid custom --tags list', async () => {
+      const config = await configFor(['--tags', 'wcag2a, best-practice']);
+      expect(config.axe.tags).toEqual(['wcag2a', 'best-practice']);
+    });
+
     // #496: an option-level refusal (commander, before the action) and an action-level one
     // exit with the same documented code, so a wrapper can tell usage from a failed run.
     it('exits EXIT_USAGE for an option-level and an action-level usage error alike', async () => {
