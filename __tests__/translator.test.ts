@@ -10,6 +10,7 @@ jest.mock('../src/config', () => ({
     },
   }),
   validateConfig: jest.fn().mockReturnValue([]),
+  validateAiConfig: jest.fn().mockReturnValue([]),
 }));
 
 jest.mock('../src/ai-client', () => ({
@@ -129,6 +130,22 @@ describe('Translator', () => {
       expect(createResolvedAIClient).toHaveBeenCalled();
     });
 
+    // #510 review: IRIS's own budget breaker is not a provider outage (exit 3 = retry).
+    it('reports a budget refusal as a plain failure, not a provider error', async () => {
+      const { createResolvedAIClient } = await import('../src/ai-client');
+      const { BudgetExceededError } = jest.requireActual('../src/ai-client/cost-tracker');
+      (createResolvedAIClient as jest.Mock).mockResolvedValueOnce({
+        isAvailable: jest.fn().mockResolvedValue(true),
+        translateInstruction: jest.fn().mockRejectedValue(new BudgetExceededError()),
+      });
+
+      const result = await translate('find the blue button and click it');
+
+      expect(result.actions).toEqual([]);
+      expect(result.error).toBeUndefined();
+      expect(result.reasoning).toMatch(/Budget limit exceeded/);
+    });
+
     it('should handle AI client not available', async () => {
       const { createResolvedAIClient } = await import('../src/ai-client');
       const mockClient = {
@@ -148,8 +165,8 @@ describe('Translator', () => {
     });
 
     it('should handle config validation errors', async () => {
-      const { validateConfig } = await import('../src/config');
-      (validateConfig as jest.Mock).mockReturnValue(['API key missing']);
+      const { validateAiConfig } = await import('../src/config');
+      (validateAiConfig as jest.Mock).mockReturnValueOnce(['API key missing']);
 
       const result = await translate('complex instruction');
 

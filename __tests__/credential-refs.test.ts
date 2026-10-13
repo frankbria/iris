@@ -179,6 +179,7 @@ describe('credential references', () => {
     afterEach(async () => {
       await page?.close();
       delete process.env.IRIS_SECRET_LOGIN_PW;
+      delete process.env.OPENAI_API_KEY;
       jest.restoreAllMocks();
     });
 
@@ -473,6 +474,7 @@ describe('credential references', () => {
     // #513: a field that keeps only a prefix (maxlength) shows a value the scrub never saw.
     it('the agent loop never shows what a filled field holds, even a prefix', async () => {
       process.env.IRIS_SECRET_LOGIN_PW = SECRET;
+      process.env.OPENAI_API_KEY = 'sk-test'; // a configured AI; the client is stubbed below
       const translateInstruction = jest
         .fn()
         .mockResolvedValueOnce({
@@ -498,6 +500,7 @@ describe('credential references', () => {
 
     it('the agent loop never shows the model a resolved value', async () => {
       process.env.IRIS_SECRET_LOGIN_PW = SECRET;
+      process.env.OPENAI_API_KEY = 'sk-test'; // a configured AI; the client is stubbed below
       const translateInstruction = jest
         .fn()
         .mockResolvedValueOnce({

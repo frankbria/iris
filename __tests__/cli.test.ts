@@ -886,7 +886,7 @@ describe('CLI Commands', () => {
       expect(payload.status).toBe('error');
       expect(payload.translation.error).toBe('Ollama request failed: 503');
       expect(stderr.join('\n')).toContain('Ollama request failed: 503');
-      expect(exitStatus()).toBe(1);
+      expect(exitStatus()).toBe(3); // an outage, not a failed test (#510)
     });
 
     test('translation.error is null when the translation succeeded', async () => {
@@ -1035,6 +1035,26 @@ describe('CLI Commands', () => {
         expect(launch).not.toHaveBeenCalled();
         expect(consoleOutput.some((l) => l.includes('--agent needs a starting page'))).toBe(true);
         expect(exitStatus()).toBe(2);
+      });
+
+      // #510 review: 3 promises a retry is safe; after the loop acted, it is not.
+      test.each([
+        [[], 3],
+        [[{ success: true, action: { type: 'click', selector: '#buy' } }], 1],
+      ])('a provider outage after %j loop results exits %d', async (results, code) => {
+        process.env.IRIS_BASE_URL = 'https://example.com';
+        stubExecutor();
+        stubAgentLoop({
+          goalMet: null,
+          turns: 2,
+          results,
+          terminationReason: 'error',
+          errorKind: 'provider',
+        } as never);
+
+        await runCli(['node', 'iris', 'run', 'place the order', '--agent']);
+
+        expect(exitStatus()).toBe(code);
       });
 
       test('IRIS_BASE_URL satisfies the start-URL requirement', async () => {
@@ -1336,7 +1356,7 @@ describe('CLI Commands', () => {
           terminationReason: 'goal_met',
         });
 
-        expect(payload.agent).toEqual({ turns: 2, terminationReason: 'goal_met' });
+        expect(payload.agent).toEqual({ turns: 2, terminationReason: 'goal_met', errorKind: null });
         expect(payload.goalMet).toBe(true);
         expect(payload.executed).toBe(true);
         expect(payload.status).toBe('success');

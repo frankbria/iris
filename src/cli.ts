@@ -190,9 +190,13 @@ program
       // null = the plan contained no assertions, i.e. no goal was stated.
       let goalMet: boolean | null = null;
       // Populated only in --agent mode; stays null so the one-shot envelope is unchanged.
-      let agent: { turns: number; terminationReason: string } | null = null;
+      let agent: { turns: number; terminationReason: string; errorKind: string | null } | null =
+        null;
       // Exit 2 rather than 1: the flags were wrong, nothing was run (#294).
       let usageError = false;
+      // Exit 3 rather than 1: the AI provider could not be asked or answer (#510), as
+      // visual-diff and a11y use 3 for "could not run here"; CI can retry an outage.
+      let providerOutage = false;
 
       /**
        * Executor options shared by the one-shot and agent paths, so the two
@@ -298,7 +302,14 @@ program
 
               executionResults.push(...outcome.results);
               goalMet = outcome.goalMet;
-              agent = { turns: outcome.turns, terminationReason: outcome.terminationReason };
+              agent = {
+                turns: outcome.turns,
+                terminationReason: outcome.terminationReason,
+                errorKind: outcome.errorKind ?? null,
+              };
+              // 3 says a retry is safe: only when the loop dispatched nothing (#510 review).
+              // After a click, a retry would repeat it (#296).
+              providerOutage = outcome.errorKind === 'provider' && outcome.results.length === 0;
 
               // A failed action is NOT a failed agent run — recovering from one is
               // the entire point of re-planning, so the one-shot path's "every
@@ -363,6 +374,7 @@ program
         // The provider could not be asked: say why, rather than "no actions" (#293).
         if (result.error) {
           status = 'error';
+          providerOutage = true;
           console.error(`❌ AI translation failed: ${result.error}`);
           return;
         }
@@ -574,7 +586,7 @@ program
         }
 
         // exitCode, not exit(): a piped --json payload is flushed before the process ends.
-        if (status === 'error') process.exitCode = usageError ? 2 : 1;
+        if (status === 'error') process.exitCode = usageError ? 2 : providerOutage ? 3 : 1;
       }
     },
   );

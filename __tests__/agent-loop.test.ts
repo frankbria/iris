@@ -7,6 +7,7 @@
  * the model.
  */
 
+import * as fs from 'fs';
 import { chromium, Browser, Page } from 'playwright';
 import { createServer, Server } from 'http';
 import type { AddressInfo } from 'net';
@@ -119,6 +120,15 @@ describe('agent loop', () => {
 
   describe('runAgentLoop', () => {
     const executor = new ActionExecutor({ timeout: 1000, retryAttempts: 0, trackContext: false });
+
+    // The loop checks the AI configuration before building a client (#510 review), as
+    // one-shot does: these tests stub the client, so they describe a configured AI.
+    beforeEach(() => {
+      process.env.OPENAI_API_KEY = 'sk-test';
+    });
+    afterEach(() => {
+      delete process.env.OPENAI_API_KEY;
+    });
 
     /** Stub the AI client with a scripted sequence of plans, one per turn. */
     const scriptAI = (plans: Action[][]) => {
@@ -795,7 +805,12 @@ describe('agent loop', () => {
           log: (m) => log.push(m),
         });
 
-        expect(result).toMatchObject({ terminationReason: 'error', turns: 0, results: [] });
+        expect(result).toMatchObject({
+          terminationReason: 'error',
+          errorKind: 'other', // a policy refusal, not an outage (#510)
+          turns: 0,
+          results: [],
+        });
         expect(execute).not.toHaveBeenCalled();
         expect(log.join('\n')).toMatch(/no origin to pin/);
       });
@@ -846,7 +861,45 @@ describe('agent loop', () => {
       const result = await runAgentLoop({ instruction: 'anything', executor, page, maxTurns: 3 });
 
       expect(result.terminationReason).toBe('error');
+      expect(result.errorKind).toBe('provider'); // #510
       expect(result.turns).toBe(0);
+    });
+
+    // #510 review: not an outage, so not exit 3 (retry); one-shot treats both as plain failures.
+    it('classifies an unconfigured AI as other, as one-shot does', async () => {
+      // No provider key (jest.setup scrubs them; this file's beforeEach sets one), no config file.
+      delete process.env.OPENAI_API_KEY;
+      const result = await runAgentLoop({ instruction: 'anything', executor, page, maxTurns: 3 });
+
+      expect(result).toMatchObject({ terminationReason: 'error', errorKind: 'other', turns: 0 });
+    });
+
+    // #510 review: only the AI part of the configuration gates the loop, as in one-shot.
+    it('runs with an out-of-range non-AI setting in the config file', async () => {
+      fs.writeFileSync(
+        process.env.IRIS_CONFIG_PATH!,
+        JSON.stringify({ browser: { timeout: 500 } }),
+      );
+      try {
+        scriptAI([[]]);
+        const result = await runAgentLoop({ instruction: 'look', executor, page, maxTurns: 1 });
+        expect(result.errorKind).toBeUndefined();
+        expect(result.turns).toBe(1);
+      } finally {
+        fs.rmSync(process.env.IRIS_CONFIG_PATH!, { force: true });
+      }
+    });
+
+    it("classifies IRIS's own budget refusal as other", async () => {
+      const { BudgetExceededError } = jest.requireActual('../src/ai-client/cost-tracker');
+      jest.spyOn(aiClient, 'createResolvedAIClient').mockResolvedValue({
+        translateInstruction: jest.fn().mockRejectedValue(new BudgetExceededError()),
+        isAvailable: async () => true,
+      } as never);
+
+      const result = await runAgentLoop({ instruction: 'anything', executor, page, maxTurns: 3 });
+
+      expect(result).toMatchObject({ terminationReason: 'error', errorKind: 'other' });
     });
 
     it('returns error rather than throwing when translation fails', async () => {
@@ -858,6 +911,7 @@ describe('agent loop', () => {
       const result = await runAgentLoop({ instruction: 'anything', executor, page, maxTurns: 3 });
 
       expect(result.terminationReason).toBe('error');
+      expect(result.errorKind).toBe('provider'); // #510
       expect(result.results).toEqual([]);
     });
 
@@ -873,6 +927,7 @@ describe('agent loop', () => {
       await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve));
       const saved = process.env.OLLAMA_ENDPOINT;
       process.env.OLLAMA_ENDPOINT = `http://127.0.0.1:${(provider.address() as AddressInfo).port}`;
+      delete process.env.OPENAI_API_KEY; // the provider under test is this Ollama
       const log: string[] = [];
       try {
         const result = await runAgentLoop({
@@ -884,6 +939,7 @@ describe('agent loop', () => {
         });
 
         expect(result.terminationReason).toBe('error');
+        expect(result.errorKind).toBe('provider'); // #510
         expect(result.turns).toBe(1);
         expect(calls).toBe(1);
         expect(log.join('\n')).toContain('Ollama request failed: 400');
