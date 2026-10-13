@@ -133,7 +133,18 @@ export function useAuthAction(explain = describe) {
 export const text = (form: FormData, name: string) =>
   String(form.get(name) ?? "")
 
-export function SignUpForm() {
+/** `?next=` for a link, only when there is somewhere to go back to (#409). */
+const withNext = (path: string, next: string | undefined) =>
+  next
+    ? `${path}${path.includes("?") ? "&" : "?"}next=${encodeURIComponent(next)}`
+    : path
+
+export function SignUpForm({
+  next,
+}: {
+  /** Where to go after verifying and logging in; the page has already checked it. */
+  next?: string
+} = {}) {
   const { busy, error, run } = useAuthAction()
   const [sentTo, setSentTo] = useState<string | null>(null)
 
@@ -163,7 +174,7 @@ export function SignUpForm() {
             name: text(form, "name"),
             email,
             password: text(form, "password"),
-            callbackURL: "/login?verified=1",
+            callbackURL: withNext("/login?verified=1", next),
             // The server refuses a sign-up without this (#276).
             acceptedTerms: ACCEPTED_TERMS,
           } as Parameters<typeof authClient.signUp.email>[0])
@@ -173,7 +184,7 @@ export function SignUpForm() {
       footer={
         <p className="text-sm text-muted-foreground">
           Already have an account?{" "}
-          <Link href="/login" className="underline">
+          <Link href={withNext("/login", next)} className="underline">
             Log in
           </Link>
         </p>
@@ -236,7 +247,10 @@ export function LogInForm({
       }}
       footer={
         <div className="flex w-full justify-between text-sm text-muted-foreground">
-          <Link href="/signup" className="underline">
+          <Link
+            href={withNext("/signup", next === "/dashboard" ? undefined : next)}
+            className="underline"
+          >
             Create an account
           </Link>
           <Link href="/forgot-password" className="underline">

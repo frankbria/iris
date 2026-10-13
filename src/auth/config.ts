@@ -217,22 +217,7 @@ export function createAuth(
             message: 'Accept the Terms of Service and Acceptable Use Policy to create an account.',
           });
       }),
-      after: createAuthMiddleware(async (ctx) => {
-        if (API_KEY_WRITES.has(ctx.path)) return auditKeyWrite(ctx, rest.database);
-        if (MEMBER_WRITES.has(ctx.path)) return afterMemberWrite(ctx, rest.database);
-        if (ctx.path === '/organization/create')
-          return undoOrgCreateOverFreeLimit(ctx, rest.database);
-        if (ctx.path !== '/sign-up/email') return;
-        const userId = (ctx.context.returned as { user?: { id?: string } } | undefined)?.user?.id;
-        if (!userId) return;
-        const source = ctx.request ?? (ctx.headers ? { headers: ctx.headers } : undefined);
-        const ip = source ? getIP(source as Request, ctx.context.options) : null;
-        // The user exists already: a failed write is logged, and the portal asks for
-        // the acceptance again at the next page (/accept-terms) rather than losing it.
-        await recordCurrentAcceptance(termsDb(rest.database), userId, ip).catch((err) =>
-          log('error', 'recording terms acceptance failed', { err: String(err?.message ?? err) }),
-        );
-      }),
+      after: createAuthMiddleware((ctx) => afterAuthCall(ctx, rest.database)),
     },
     databaseHooks: {
       session: {
@@ -289,12 +274,13 @@ export function createAuth(
    * verified address, so an abandoned sign-up leaves no org, and a failed creation is
    * retried at the next sign-in rather than leaving a user with no tenant.
    *
-   * ponytail: any membership will do. Remember the last active org per user once people
-   * belong to several. Two first sign-ins at the same moment can each create an org: these
+   * The org the user last made active comes first (#409), else any membership. Two first sign-ins at the same moment can each create an org: these
    * server calls carry no session, so the one-free-org cap (#260) does not see them. That
    * needs two simultaneous first sign-ins and yields at most one extra free org.
    */
   const activeOrgFor = async (userId: string): Promise<string> => {
+    const remembered = await rememberedOrg(rest.database, userId);
+    if (remembered) return remembered;
     const ctx = await auth.$context;
     const member = await ctx.adapter.findOne<{ organizationId: string }>({
       model: 'member',
@@ -361,6 +347,85 @@ async function rememberDeletedKeyOrg(
 }
 
 /** BetterAuth's member endpoints that change who is in an org, or their role (#408). */
+/**
+ * Every BetterAuth call, after it ran: remember the active org (#409), audit key and member
+ * writes, undo an org over the free cap, record the terms accepted at sign-up (#276).
+ */
+async function afterAuthCall(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  if (ACTIVATES_ORG.has(ctx.path)) await rememberActiveOrg(ctx, database);
+  if (API_KEY_WRITES.has(ctx.path)) return auditKeyWrite(ctx, database);
+  if (MEMBER_WRITES.has(ctx.path)) return afterMemberWrite(ctx, database);
+  if (ctx.path === '/organization/create') return undoOrgCreateOverFreeLimit(ctx, database);
+  if (ctx.path === '/sign-up/email') return recordSignUpTerms(ctx, database);
+}
+
+/** The terms a new user accepted at sign-up, with the client IP (#276). */
+async function recordSignUpTerms(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  const userId = (ctx.context.returned as { user?: { id?: string } } | undefined)?.user?.id;
+  if (!userId) return;
+  const source = ctx.request ?? (ctx.headers ? { headers: ctx.headers } : undefined);
+  const ip = source ? getIP(source as Request, ctx.context.options) : null;
+  // The user exists already: a failed write is logged, and the portal asks for
+  // the acceptance again at the next page (/accept-terms) rather than losing it.
+  await recordCurrentAcceptance(termsDb(database), userId, ip).catch((err) =>
+    log('error', 'recording terms acceptance failed', { err: String(err?.message ?? err) }),
+  );
+}
+
+/** Calls that leave the caller's session in an org: switching, joining, creating (#409). */
+const ACTIVATES_ORG = new Set([
+  '/organization/set-active',
+  '/organization/accept-invitation',
+  '/organization/create',
+]);
+
+/**
+ * Records the org a call just made active for the calling user (#409), so their next session
+ * starts there. Logged on failure, not thrown: the switch itself happened.
+ */
+async function rememberActiveOrg(
+  ctx: Parameters<Parameters<typeof createAuthMiddleware>[0]>[0],
+  database: BetterAuthOptions['database'],
+): Promise<void> {
+  const returned = ctx.context.returned as
+    { id?: string; member?: { organizationId?: string } } | null | undefined;
+  const orgId =
+    ctx.path === '/organization/accept-invitation'
+      ? returned?.member?.organizationId
+      : returned?.id;
+  // A create that keeps the current org active (codex review) activated nothing.
+  const kept = (ctx.body as { keepCurrentActiveOrganization?: unknown } | undefined)
+    ?.keepCurrentActiveOrganization;
+  if (!orgId || (ctx.path === '/organization/create' && kept === true)) return;
+  const userId = (await getSessionFromCtx(ctx))?.user.id;
+  if (!userId) return;
+  await sql`
+    insert into user_active_orgs (user_id, org_id) values (${userId}, ${orgId})
+    on conflict (user_id) do update set org_id = excluded.org_id, updated_at = now()`
+    .execute(termsDb(database))
+    .catch((err) =>
+      log('error', 'remembering the active org failed', { err: String(err?.message ?? err) }),
+    );
+}
+
+/** The org `userId` last made active, while they are still a member of it (#409). */
+async function rememberedOrg(
+  database: BetterAuthOptions['database'],
+  userId: string,
+): Promise<string | undefined> {
+  const { rows } = await sql<{ org: string }>`
+    select u.org_id as org from user_active_orgs u
+    join member m on m."organizationId" = u.org_id and m."userId" = u.user_id
+    where u.user_id = ${userId}`.execute(termsDb(database));
+  return rows[0]?.org;
+}
+
 const MEMBER_WRITES = new Set([
   '/organization/remove-member',
   '/organization/leave',

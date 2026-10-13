@@ -1,3 +1,5 @@
+import { sql } from "kysely"
+import { headers } from "next/headers"
 import Link from "next/link"
 
 import { liveKeysByCreator } from "../../../../src/audit-log"
@@ -7,15 +9,47 @@ import {
   MemberControls,
 } from "@/components/org-forms"
 import { SuspendedBanner } from "@/components/contact-link"
-import { getDb } from "@/lib/auth"
+import { getAuth, getDb } from "@/lib/auth"
 import { requireOrg } from "@/lib/org"
 
 /** BetterAuth keeps several roles as one comma string (`admin,owner`). */
 const hasRole = (roles: string, role: string) =>
   roles.split(",").some((r) => r.trim() === role)
 
-export default async function OrgPage() {
+/** Members per page (#409): BetterAuth's own default page. */
+const PAGE = 100
+
+/** The `page` query as a 1-based page number; anything else is the first page. */
+const pageNumber = (raw: string | string[] | undefined) =>
+  typeof raw === "string" && /^[1-9][0-9]{0,5}$/.test(raw) ? Number(raw) : 1
+
+/** Owners across the whole org, not one page: the last owner is protected (#409). */
+async function ownerCount(orgId: string): Promise<number> {
+  const { rows } = await sql<{ n: number }>`
+    select count(*)::int as n from member
+    where "organizationId" = ${orgId} and 'owner' = any(string_to_array(replace(role, ' ', ''), ','))`.execute(
+    getDb()
+  )
+  return rows[0].n
+}
+
+export default async function OrgPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string | string[] }>
+}) {
   const { session, org, role, suspended } = await requireOrg()
+  const page = pageNumber((await searchParams).page)
+  const { members, total } = await getAuth().api.listMembers({
+    headers: await headers(),
+    query: {
+      organizationId: org.id,
+      limit: PAGE,
+      offset: (page - 1) * PAGE,
+      sortBy: "createdAt",
+      sortDirection: "asc",
+    },
+  })
   const now = new Date()
   const pending = org.invitations.filter(
     (i) => i.status === "pending" && new Date(i.expiresAt) > now
@@ -23,7 +57,7 @@ export default async function OrgPage() {
   const manages = hasRole(role, "owner") || hasRole(role, "admin")
   const isOwner = hasRole(role, "owner")
   // BetterAuth refuses to remove, demote or let go the last owner; say so instead.
-  const owners = org.members.filter((m) => hasRole(m.role, "owner")).length
+  const owners = await ownerCount(org.id)
   const soleOwner = (memberRole: string) =>
     hasRole(memberRole, "owner") && owners === 1
   const keys = await liveKeysByCreator(getDb(), org.id)
@@ -41,7 +75,7 @@ export default async function OrgPage() {
           Members
         </h2>
         <ul aria-labelledby="members" className="flex flex-col gap-2 text-sm">
-          {org.members.map((m) => {
+          {members.map((m) => {
             const self = m.userId === session.user.id
             // An admin cannot act on an owner; nobody acts on the last owner.
             const editable =
@@ -73,6 +107,24 @@ export default async function OrgPage() {
             )
           })}
         </ul>
+        {(page > 1 || total > page * PAGE) && (
+          <nav aria-label="Member pages" className="flex gap-4 text-sm">
+            {page > 1 && (
+              <Link href={`/org?page=${page - 1}`} className="underline">
+                Previous members
+              </Link>
+            )}
+            <span className="text-muted-foreground">
+              {Math.min((page - 1) * PAGE + 1, total)}–
+              {Math.min(page * PAGE, total)} of {total}
+            </span>
+            {total > page * PAGE && (
+              <Link href={`/org?page=${page + 1}`} className="underline">
+                More members
+              </Link>
+            )}
+          </nav>
+        )}
         {manages && owners === 1 && (
           <p className="text-sm text-muted-foreground">
             The only owner cannot be removed, demoted or leave. Make someone

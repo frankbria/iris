@@ -595,6 +595,15 @@ The org is the tenant (ADR 0001 §4). The organization plugin's options live in
   address, so an abandoned sign-up leaves no org, and a failed creation is retried at
   the next sign-in. BetterAuth sets no active org on sign-in by itself. `createAuth()`
   therefore takes no `databaseHooks` from its caller.
+- **A new session starts in the org the user last made active (#409)**: `user_active_orgs`
+  (migration 0019, one row per user) is written by a `hooks.after` on set-active,
+  accept-invitation and create, and read by `activeOrgFor` only while the user is still a
+  member. Sessions cannot hold it: sign-out deletes the row. Org purge deletes its rows.
+- **`/org` pages its members (#409)** with `listMembers` (100 a page, `?page=N`): `org.members`
+  from `requireOrg()` is `getFullOrganization`'s first 100 only. The sole-owner count is one
+  query over the whole org. `/login` redirects a signed-in visitor to `next` (or
+  `/dashboard`), and `/signup?next=` carries it into the verification `callbackURL`, so an
+  invitee who signs up from the invitation lands back on it after verifying and logging in.
 - **Portal pages get their org from `requireOrg()`** (`apps/portal/lib/org.ts`), which
   calls BetterAuth with the session headers and no org id. Never read an org id from
   the request. A form rendered for that org sends its id back (`InviteForm`), because
