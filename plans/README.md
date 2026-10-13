@@ -263,6 +263,7 @@ production.
 | `P3.25` | [#570](https://github.com/frankbria/iris/issues/570) | backup.sh: a container that stops between discovery and exec fails with Docker's message | — | DONE (#605) |
 | `P3.26` | [#573](https://github.com/frankbria/iris/issues/573) | AI client request builders are CC 16: split translateInstruction / analyzeVisualDiff | — | DONE (#606) |
 | `P3.27` | [#581](https://github.com/frankbria/iris/issues/581) | vision cache auto-prune test: a 10 ms TTL lets the fresh entry expire on a slow host | — | DONE (#601) |
+| `P3.28` | [#586](https://github.com/frankbria/iris/issues/586) | text-metering: Ollama test hangs intermittently | — | CLOSED: load-driven, not a defect (#142) |
 | `P3.29` | [#595](https://github.com/frankbria/iris/issues/595) | keyboard-real-behavior: trap-check hook times out on CI | — | DONE (#604) |
 | `P3.30` | [#603](https://github.com/frankbria/iris/issues/603) | iris run: a malformed budget variable exits 3 instead of a config error | P3.18 (#510) | DONE (#607) |
 
