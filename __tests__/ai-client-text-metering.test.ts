@@ -26,6 +26,7 @@ import {
 import { translate } from '../src/translator';
 import { IrisConfig } from '../src/config';
 import { resolveDataDir } from '../src/data-dir';
+import { DEFAULT_MODELS } from '../src/ai-client/models';
 
 const mockOpenAICreate = jest.fn();
 jest.mock('openai', () => ({
@@ -171,6 +172,18 @@ describe('text LLM metering (#242)', () => {
       build(config({ apiKey: 'sk-test' })).translateInstruction({ instruction: 'click go' }),
     ).rejects.toThrow(/budget/i);
     expect(mockOpenAICreate).not.toHaveBeenCalled();
+  });
+
+  // PR bot: a hand-built config without a model gets the default, on the wire and the ledger.
+  it('meters a factory client built without a model under the default model', async () => {
+    mockOpenAICreate.mockResolvedValue(openaiReply);
+    const bare = config({ apiKey: 'sk-test' });
+    delete (bare.ai as { model?: string }).model;
+    await AIClientFactory.create(bare, 'text').translateInstruction({ instruction: 'click go' });
+    expect(mockOpenAICreate.mock.calls[0][0].model).toBe(DEFAULT_MODELS.text.openai);
+    expect(rows()).toEqual([
+      expect.objectContaining({ model: DEFAULT_MODELS.text.openai, operation: 'text' }),
+    ]);
   });
 
   it('records an Anthropic call made for the agent loop as an `agent_turn` row', async () => {

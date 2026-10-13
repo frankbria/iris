@@ -6,7 +6,7 @@ import { AIClient, AIVisionClient, AITranslationRequest, AITranslationResponse }
 import { CostOperation, CostTracker, RESERVATION_CEILING } from './cost-tracker';
 import { OpenAITextClient, AnthropicTextClient, OllamaTextClient } from './text';
 import { OpenAIVisionClient, AnthropicVisionClient, OllamaVisionClient } from './vision';
-import { resolveModel } from './models';
+import { DEFAULT_MODELS, resolveModel } from './models';
 import { hostedLog } from '../log';
 
 /**
@@ -39,10 +39,13 @@ export class AIClientFactory {
    */
   static create(config: IrisConfig, type: ClientType = 'text'): AIClient {
     if (type === 'text') {
+      // A hand-built config may omit the model (PR bot): default it as loadConfig() does, so
+      // the ledger and the request name the same one.
+      const model = config.ai.model ?? DEFAULT_MODELS.text[config.ai.provider];
       return new MeteredTextClient(
-        createTextClient(config),
+        createTextClient({ ...config, ai: { ...config.ai, model } }),
         config.ai.provider,
-        config.ai.model,
+        model,
         'text',
       );
     } else {
