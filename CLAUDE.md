@@ -1274,8 +1274,9 @@ reference.
   the mask hides). Locator calls, screenshots and `waitForFunction` have their own.
 - **The a11y runner has one deadline per page** (`pageTimeoutMs`, default
   `A11Y_PAGE_TIMEOUT_MS` = 120 s) instead of bounding its ~20 `evaluate` sites: a hang is
-  not a throw, so #287's page isolation never fired. The hung page is abandoned and closed
-  with the browser at the end of the run; the next page gets a fresh context.
+  not a throw, so #287's page isolation never fired. The hung page is abandoned, and its
+  context (with the spinning renderer) is closed before the next page starts, bounded at 5 s
+  (#508); one opened after the deadline closes itself. The next page gets a fresh context.
 - Tests: `__tests__/hung-page.test.ts` (real Chromium, `setTimeout(() => { for (;;) {} })`,
   with a positive control that the page really is hung). Closing a context whose renderer
   spins can take seconds under load, hence the 15 s `afterEach`.
