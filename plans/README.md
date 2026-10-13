@@ -234,6 +234,7 @@ production.
 | `P2.27` | [#520](https://github.com/frankbria/iris/issues/520) | OpenAI o-series: omit temperature | — | DONE (#572) |
 | `P2.28` | [#522](https://github.com/frankbria/iris/issues/522) | fetchWithTimeout covers the response body | — | DONE (#574) |
 | `P2.30` | [#528](https://github.com/frankbria/iris/issues/528) | RPC server: JSON-RPC batch requests (decided: not supported) | — | DONE (#575) |
+| `P2.26` | [#513](https://github.com/frankbria/iris/issues/513) | Credential references: origin binding, field redaction, minimum length | P1.29 (#352) | DONE (#571) |
 
 ### P3 — Polish / test trust / hygiene
 
@@ -244,10 +245,10 @@ production.
 | `P3.3` | [#365](https://github.com/frankbria/iris/issues/365) | Hygiene: comments and dead code in RPC and AI layers | — | DONE (#580) |
 | `P3.4` | [#382](https://github.com/frankbria/iris/issues/382) | egress-proxy test assumes 127.0.0.1:1 refuses; it blackholes on WSL | — | DONE (#582) |
 | `P3.5` | [#383](https://github.com/frankbria/iris/issues/383) | ActionExecutor.createPage is not reentrant: concurrent calls can orphan a browser | P0.12 (#240) | DONE (#583) |
-| `P3.6` | [#386](https://github.com/frankbria/iris/issues/386) | Deprecated createAIClient / AIClientFactory.create(…, 'text') return unmetered text clients | P0.14 (#242) | TODO |
+| `P3.6` | [#386](https://github.com/frankbria/iris/issues/386) | Deprecated createAIClient / AIClientFactory.create(…, 'text') return unmetered text clients | P0.14 (#242) | DONE (#585) |
 | `P3.7` | [#388](https://github.com/frankbria/iris/issues/388) | Cost tracker pricing edges left by #243: ceiling above the table, flat-only parents, getPricing | P0.15 (#243) | DONE (#587) |
 | `P3.8` | [#390](https://github.com/frankbria/iris/issues/390) | Cost ledger follow-ups from #244: stale reservations, typed budget error, settle/close race | P0.16 (#244) | DONE (#588) |
-| `P3.9` | [#409](https://github.com/frankbria/iris/issues/409) | Portal org UX follow-ups from #250 | P0.22 (#250) | TODO |
+| `P3.9` | [#409](https://github.com/frankbria/iris/issues/409) | Portal org UX follow-ups from #250 | P0.22 (#250) | DONE (#589) |
 | `P3.10` | [#420](https://github.com/frankbria/iris/issues/420) | Strip ANSI escape codes from errors stored in run history | — | DONE (#590) |
 
 ---
