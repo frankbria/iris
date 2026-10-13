@@ -24,6 +24,7 @@ import { mapSecrets, type SecretEntry, type SecretSource } from './credential-re
 import {
   checkPlannedAction,
   planPolicy,
+  refusedResult,
   startOriginOf,
   type AgentPolicy,
   type PolicyFlags,
@@ -629,77 +630,86 @@ function isProbe(req: IncomingMessage): boolean {
   return loopback && req.headers['x-iris-probe'] === '1';
 }
 
+/** Option combinations `startServer` refuses. */
+function assertServerOptions(options: StartServerOptions | undefined): void {
+  if (options?.authenticate && options.authToken) {
+    throw new Error('Pass authToken or authenticate, one at a time');
+  }
+  if (options?.jobs && !options.authenticate) throw new Error('The job API needs authenticate');
+}
+
+/** `startServer` options. */
+export interface StartServerOptions {
+  sessionTimeout?: number;
+  host?: string;
+  allowedOrigins?: string[];
+  /** Local mode: one shared bearer token. */
+  authToken?: string;
+  /** Hosted mode: per-tenant API keys (#341). Exclusive with `authToken`. */
+  authenticate?: Authenticator;
+  /** How often a connected key is verified again, so revoking it ends the connection. */
+  authRecheckMs?: number;
+  /**
+   * Hosted run history (#254): each `executeBrowserAction` of a tenant connection
+   * is recorded under its org and API key. Local connections record nothing.
+   */
+  history?: { forOrg(scope: TenantScope): Pick<HistoryStore, 'record'> };
+  /**
+   * A tenant's AI credentials (#258): BYOK (#344) or managed credits (#346). `null`,
+   * or no resolver at all, means the tenant has no AI: its instructions get pattern
+   * translation only, and the process-wide `*_API_KEY` is never used for it
+   * (ADR 0001 §5). Local (token) connections keep the process configuration.
+   */
+  aiCredentials?: (
+    principal: Principal,
+    request?: { inputChars?: number },
+  ) => Promise<TenantCredentials | null>;
+  /**
+   * The usage ledger (#263): a tenant session's browser minutes when it ends, and
+   * each AI call its translations make. Local connections record nothing.
+   */
+  usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
+  /** Hosted: writes a tenant audit entry (#361): session start and end. Failures are logged. */
+  audit?: (entry: AuditEntry) => Promise<void>;
+  /**
+   * How often an open tenant session's browser minutes are written (#263), so a
+   * crash or a forced restart loses at most one interval, and a session spanning a
+   * month boundary is billed to both months.
+   */
+  usageCheckpointMs?: number;
+  /**
+   * The hosted job API (#267), served over HTTP on the same port: `POST
+   * /v1/a11y/jobs`, `GET /v1/jobs/:id`. Needs `authenticate`; it shares the key and
+   * org request budgets with the RPC messages. Unset, plain HTTP gets 426 as before.
+   */
+  jobs?: { forOrg(scope: TenantScope): ApiJobs };
+  /** The results API (#269), `GET /v1/runs[/:id]`, served beside the job API. */
+  runs?: RunReader;
+  /** Signs run-detail artifacts (#460); unset, run detail carries none. */
+  artifacts?: ArtifactStore;
+  /** The org's plan limits for job submits (#346). */
+  entitlements?: (
+    orgId: string,
+  ) => Promise<{ runsPerMonth: number; artifactStorageBytes?: number }>;
+  /** Signed URL lifetime in seconds (default 300, at most 900). */
+  artifactUrlTtlSeconds?: number;
+  /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
+  limits?: Partial<ServerLimits>;
+}
+
 /**
  * Start a JSON-RPC 2.0 over WebSocket server on the given port.
  */
-export function startServer(
-  port: number,
-  options?: {
-    sessionTimeout?: number;
-    host?: string;
-    allowedOrigins?: string[];
-    /** Local mode: one shared bearer token. */
-    authToken?: string;
-    /** Hosted mode: per-tenant API keys (#341). Exclusive with `authToken`. */
-    authenticate?: Authenticator;
-    /** How often a connected key is verified again, so revoking it ends the connection. */
-    authRecheckMs?: number;
-    /**
-     * Hosted run history (#254): each `executeBrowserAction` of a tenant connection
-     * is recorded under its org and API key. Local connections record nothing.
-     */
-    history?: { forOrg(scope: TenantScope): Pick<HistoryStore, 'record'> };
-    /**
-     * A tenant's AI credentials (#258): BYOK (#344) or managed credits (#346). `null`,
-     * or no resolver at all, means the tenant has no AI: its instructions get pattern
-     * translation only, and the process-wide `*_API_KEY` is never used for it
-     * (ADR 0001 §5). Local (token) connections keep the process configuration.
-     */
-    aiCredentials?: (
-      principal: Principal,
-      request?: { inputChars?: number },
-    ) => Promise<TenantCredentials | null>;
-    /**
-     * The usage ledger (#263): a tenant session's browser minutes when it ends, and
-     * each AI call its translations make. Local connections record nothing.
-     */
-    usage?: { record(orgId: string, events: UsageEvent[]): Promise<void> };
-    /** Hosted: writes a tenant audit entry (#361): session start and end. Failures are logged. */
-    audit?: (entry: AuditEntry) => Promise<void>;
-    /**
-     * How often an open tenant session's browser minutes are written (#263), so a
-     * crash or a forced restart loses at most one interval, and a session spanning a
-     * month boundary is billed to both months.
-     */
-    usageCheckpointMs?: number;
-    /**
-     * The hosted job API (#267), served over HTTP on the same port: `POST
-     * /v1/a11y/jobs`, `GET /v1/jobs/:id`. Needs `authenticate`; it shares the key and
-     * org request budgets with the RPC messages. Unset, plain HTTP gets 426 as before.
-     */
-    jobs?: { forOrg(scope: TenantScope): ApiJobs };
-    /** The results API (#269), `GET /v1/runs[/:id]`, served beside the job API. */
-    runs?: RunReader;
-    /** Signs run-detail artifacts (#460); unset, run detail carries none. */
-    artifacts?: ArtifactStore;
-    /** The org's plan limits for job submits (#346). */
-    entitlements?: (
-      orgId: string,
-    ) => Promise<{ runsPerMonth: number; artifactStorageBytes?: number }>;
-    /** Signed URL lifetime in seconds (default 300, at most 900). */
-    artifactUrlTtlSeconds?: number;
-    /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
-    limits?: Partial<ServerLimits>;
-  },
-): WebSocketServer {
+export function startServer(port: number, options?: StartServerOptions): WebSocketServer {
+  assertServerOptions(options);
   const authenticate = options?.authenticate;
-  if (authenticate && options?.authToken) {
-    throw new Error('Pass authToken or authenticate, one at a time');
-  }
-  if (options?.jobs && !authenticate) throw new Error('The job API needs authenticate');
-  const host = options?.host ?? '127.0.0.1';
+  const {
+    host = '127.0.0.1',
+    allowedOrigins = [],
+    usageCheckpointMs = 5 * 60_000,
+    authRecheckMs = 60_000,
+  } = options ?? {};
   const limits: ServerLimits = { ...DEFAULT_SERVER_LIMITS, ...options?.limits };
-  const allowedOrigins = options?.allowedOrigins ?? [];
   const ActionParams = ExecuteBrowserActionParams.extend({
     actions: z.array(ActionSchema).max(limits.maxActionsPerRequest).optional(),
   });
@@ -721,7 +731,7 @@ export function startServer(
   }
 
   /** One line per REST request, with an id echoed back so a client can quote it (#275). */
-  const logRestRequest = (req: IncomingMessage, res: ServerResponse, rest: RestRequest) => {
+  function logRestRequest(req: IncomingMessage, res: ServerResponse, rest: RestRequest): void {
     const t0 = performance.now();
     // Ours is always generated (a client's could collide with another's); a safe
     // client id is logged beside it.
@@ -741,39 +751,44 @@ export function startServer(
         !closed,
       );
     });
-  };
+  }
 
   /** The job API's options for one request: its verification slot and its rate charge. */
-  const jobsOptions = (jobs: { forOrg(scope: TenantScope): ApiJobs }, rest: RestRequest) => ({
-    authenticate: authenticate!,
-    jobs,
-    runs: options?.runs,
-    artifacts: options?.artifacts,
-    artifactUrlTtlSeconds: options?.artifactUrlTtlSeconds,
-    entitlements: options?.entitlements,
-    maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
-    // REST verifications share the upgrades' `verifying` count, so a bad-key flood
-    // cannot pile onto the auth pool. Only pending ones count here: idle sockets
-    // should not make the API unavailable.
-    admit: () => {
-      if (verifying >= limits.maxConnections) return null;
-      verifying++;
-      return () => {
-        verifying--;
-      };
-    },
-    charge: (principal: Principal) => {
-      rest.tenant = principal;
-      // Both buckets need a token before either is spent (see the RPC path).
-      const now = performance.now();
-      const wait = Math.max(keyRate.wait(principal.keyId, now), orgRate.wait(principal.orgId, now));
-      if (wait === 0) {
-        keyRate.take(principal.keyId);
-        orgRate.take(principal.orgId);
-      } else rest.rateLimited = true;
-      return wait;
-    },
-  });
+  function jobsOptions(jobs: { forOrg(scope: TenantScope): ApiJobs }, rest: RestRequest) {
+    return {
+      authenticate: authenticate!,
+      jobs,
+      runs: options?.runs,
+      artifacts: options?.artifacts,
+      artifactUrlTtlSeconds: options?.artifactUrlTtlSeconds,
+      entitlements: options?.entitlements,
+      maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
+      // REST verifications share the upgrades' `verifying` count, so a bad-key flood
+      // cannot pile onto the auth pool. Only pending ones count here: idle sockets
+      // should not make the API unavailable.
+      admit: () => {
+        if (verifying >= limits.maxConnections) return null;
+        verifying++;
+        return () => {
+          verifying--;
+        };
+      },
+      charge: (principal: Principal) => {
+        rest.tenant = principal;
+        // Both buckets need a token before either is spent (see the RPC path).
+        const now = performance.now();
+        const wait = Math.max(
+          keyRate.wait(principal.keyId, now),
+          orgRate.wait(principal.orgId, now),
+        );
+        if (wait === 0) {
+          keyRate.take(principal.keyId);
+          orgRate.take(principal.orgId);
+        } else rest.rateLimited = true;
+        return wait;
+      },
+    };
+  }
 
   // One listener for both: the WebSocket upgrade, and the job REST API (#267).
   const server = createServer((req, res) => {
@@ -942,15 +957,12 @@ export function startServer(
       target: `session:${session.id}`,
     });
   };
-  const checkpoint = setInterval(
-    () => {
-      const now = Date.now();
-      for (const session of sessions.values()) {
-        if (session.isActive) billMinutes(session, now);
-      }
-    },
-    options?.usageCheckpointMs ?? 5 * 60_000,
-  );
+  const checkpoint = setInterval(() => {
+    const now = Date.now();
+    for (const session of sessions.values()) {
+      if (session.isActive) billMinutes(session, now);
+    }
+  }, usageCheckpointMs);
   checkpoint.unref();
   if (!options?.usage) clearInterval(checkpoint);
   const sessions = new Map<WebSocket, BrowserSession>();
@@ -1030,7 +1042,7 @@ export function startServer(
     } finally {
       rechecking = false;
     }
-  }, options?.authRecheckMs ?? 60_000);
+  }, authRecheckMs);
   recheck.unref();
   if (!authenticate) clearInterval(recheck);
 
@@ -1131,7 +1143,10 @@ export function startServer(
 
     /**
      * Each RPC method's handler (#518: a table instead of one switch). It writes `res`; a
-     * refusal or failure is thrown, as before, and answered by handleMessage's catch.
+     * refusal or failure is thrown, as before, and answered by dispatch. A handler with
+     * nothing to wait for stays synchronous: its reply then goes out before ws emits the
+     * next frame, as the switch's did, so a later frame's synchronous refusal cannot
+     * overtake it.
      */
     /**
      * Throws when this connection may not start a session now (#342, #346): its org is at the
@@ -1172,9 +1187,9 @@ export function startServer(
         req: JsonRpcRequest,
         res: JsonRpcResponse,
         requestFields: Record<string, unknown>,
-      ) => Promise<void>
+      ) => void | Promise<void>
     > = {
-      executeCommand: async (req, res) => {
+      executeCommand: (req, res) => {
         const parsed = ExecuteCommandParams.safeParse(req.params);
         if (!parsed.success) {
           res.error = { code: -32602, message: 'Invalid params' };
@@ -1365,7 +1380,7 @@ export function startServer(
             );
         }
       },
-      getStatus: async (req, res) => {
+      getStatus: (req, res) => {
         // Real state, not a constant. `status` stays 'ready' because
         // answering at all means the server is serving — the fields beside
         // it are what make that claim checkable (issue #80).
@@ -1392,30 +1407,37 @@ export function startServer(
     // wrong place to build one. An honest "method not found" is the fix
     // that decision calls for (issue #80).
 
+    /** Own properties only: `toString` or `__proto__` is no method. */
+    function methodFor(name: string) {
+      return Object.hasOwn(methods, name) ? methods[name] : undefined;
+    }
+
     /**
      * Runs an admitted request's method into `res`. A thrown refusal or failure becomes
      * `res.error`; true when the client caused it (no session, a session limit).
+     * Synchronous when the handler is (see `methods`).
      */
-    const dispatch = async (
+    const dispatch = (
       req: JsonRpcRequest,
       res: JsonRpcResponse,
       requestFields: Record<string, unknown>,
-    ): Promise<boolean> => {
+    ): boolean | Promise<boolean> => {
+      const fail = (thrown: unknown) => failRequest(thrown, req, res, requestFields);
       try {
         // Draining (#309): what is in flight finishes, nothing new starts.
         if (draining) {
           throw { code: -32000, message: 'Server is shutting down', refused: true };
         }
-        const run = Object.hasOwn(methods, req.method) ? methods[req.method] : undefined;
+        const run = methodFor(req.method);
         if (!run) throw { code: -32601, message: 'Method not found' };
-        await run(req, res, requestFields);
-        return false;
+        const pending = run(req, res, requestFields);
+        return pending ? pending.then(() => false, fail) : false;
       } catch (thrown: unknown) {
-        return failRequest(thrown, req, res, requestFields);
+        return fail(thrown);
       }
     };
 
-    const handleMessage = async (data: WebSocket.RawData) => {
+    const handleMessage = (data: WebSocket.RawData): void | Promise<void> => {
       // Per request (#275): an id for its log line, and the start of its latency.
       const t0 = performance.now();
       const requestId = randomUUID();
@@ -1423,7 +1445,18 @@ export function startServer(
       const req = admit(data, t0, requestFields);
       if (!req) return;
       const res: JsonRpcResponse = { jsonrpc: '2.0', id: req.id ?? null };
-      const refused = await dispatch(req, res, requestFields);
+      const refused = dispatch(req, res, requestFields);
+      const finish = (wasRefused: boolean) => answer(req, res, wasRefused, t0, requestFields);
+      return typeof refused === 'boolean' ? finish(refused) : refused.then(finish);
+    };
+
+    const answer = (
+      req: JsonRpcRequest,
+      res: JsonRpcResponse,
+      refused: boolean,
+      t0: number,
+      requestFields: Record<string, unknown>,
+    ): void => {
       // No `id` member: a notification. It runs, and gets no reply, error or not (§4.1).
       if (!isNotification(req)) reply(res);
       observeRequest(
@@ -1651,12 +1684,7 @@ async function executeUnderPolicy(
     results.push(
       verdict.allowed
         ? await session.executor.executeAction(action, page, secrets, verdict.target)
-        : {
-            success: false,
-            action,
-            error: `Refused by agent policy: ${verdict.reason}`,
-            duration: 0,
-          },
+        : refusedResult(action, verdict),
     );
   }
   return results;
