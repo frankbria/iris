@@ -120,6 +120,15 @@ describe('agent loop', () => {
   describe('runAgentLoop', () => {
     const executor = new ActionExecutor({ timeout: 1000, retryAttempts: 0, trackContext: false });
 
+    // The loop checks the AI configuration before building a client (#510 review), as
+    // one-shot does: these tests stub the client, so they describe a configured AI.
+    beforeEach(() => {
+      process.env.OPENAI_API_KEY = 'sk-test';
+    });
+    afterEach(() => {
+      delete process.env.OPENAI_API_KEY;
+    });
+
     /** Stub the AI client with a scripted sequence of plans, one per turn. */
     const scriptAI = (plans: Action[][]) => {
       const translateInstruction = jest.fn();
@@ -855,6 +864,27 @@ describe('agent loop', () => {
       expect(result.turns).toBe(0);
     });
 
+    // #510 review: not an outage, so not exit 3 (retry); one-shot treats both as plain failures.
+    it('classifies an unconfigured AI as other, as one-shot does', async () => {
+      // No provider key (jest.setup scrubs them; this file's beforeEach sets one), no config file.
+      delete process.env.OPENAI_API_KEY;
+      const result = await runAgentLoop({ instruction: 'anything', executor, page, maxTurns: 3 });
+
+      expect(result).toMatchObject({ terminationReason: 'error', errorKind: 'other', turns: 0 });
+    });
+
+    it("classifies IRIS's own budget refusal as other", async () => {
+      const { BudgetExceededError } = jest.requireActual('../src/ai-client/cost-tracker');
+      jest.spyOn(aiClient, 'createResolvedAIClient').mockResolvedValue({
+        translateInstruction: jest.fn().mockRejectedValue(new BudgetExceededError()),
+        isAvailable: async () => true,
+      } as never);
+
+      const result = await runAgentLoop({ instruction: 'anything', executor, page, maxTurns: 3 });
+
+      expect(result).toMatchObject({ terminationReason: 'error', errorKind: 'other' });
+    });
+
     it('returns error rather than throwing when translation fails', async () => {
       jest.spyOn(aiClient, 'createResolvedAIClient').mockResolvedValue({
         translateInstruction: jest.fn().mockRejectedValue(new Error('provider down')),
@@ -880,6 +910,7 @@ describe('agent loop', () => {
       await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve));
       const saved = process.env.OLLAMA_ENDPOINT;
       process.env.OLLAMA_ENDPOINT = `http://127.0.0.1:${(provider.address() as AddressInfo).port}`;
+      delete process.env.OPENAI_API_KEY; // the provider under test is this Ollama
       const log: string[] = [];
       try {
         const result = await runAgentLoop({

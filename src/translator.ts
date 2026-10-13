@@ -9,6 +9,7 @@ import { isHostedMode } from './hosted';
  */
 export type CredentialsSource = AICredentials | null | (() => Promise<AICredentials | null>);
 import { createResolvedAIClient, AITranslationRequest } from './ai-client';
+import { BudgetExceededError } from './ai-client/cost-tracker';
 
 // The action vocabulary lives in its own leaf module so the AI client can share
 // the schema without creating an import cycle (translator -> ai-client -> here).
@@ -331,6 +332,10 @@ async function translateWithAI(
     };
   } catch (error) {
     const message = `AI translation error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    // The budget breaker refused before the provider was asked (#510 review): a plain
+    // failure, not `error`, which callers read as "the provider failed" (retryable).
+    if (error instanceof BudgetExceededError)
+      return { actions: [], method: 'ai', confidence: 0, reasoning: message };
     return { actions: [], method: 'ai', confidence: 0, reasoning: message, error: message };
   }
 }

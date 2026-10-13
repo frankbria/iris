@@ -292,7 +292,9 @@ program
                 terminationReason: outcome.terminationReason,
                 errorKind: outcome.errorKind ?? null,
               };
-              providerOutage = outcome.errorKind === 'provider';
+              // 3 says a retry is safe: only when the loop dispatched nothing (#510 review).
+              // After a click, a retry would repeat it (#296).
+              providerOutage = outcome.errorKind === 'provider' && outcome.results.length === 0;
 
               // A failed action is NOT a failed agent run — recovering from one is
               // the entire point of re-planning, so the one-shot path's "every

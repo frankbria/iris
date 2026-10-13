@@ -1037,6 +1037,26 @@ describe('CLI Commands', () => {
         expect(exitStatus()).toBe(2);
       });
 
+      // #510 review: 3 promises a retry is safe; after the loop acted, it is not.
+      test.each([
+        [[], 3],
+        [[{ success: true, action: { type: 'click', selector: '#buy' } }], 1],
+      ])('a provider outage after %j loop results exits %d', async (results, code) => {
+        process.env.IRIS_BASE_URL = 'https://example.com';
+        stubExecutor();
+        stubAgentLoop({
+          goalMet: null,
+          turns: 2,
+          results,
+          terminationReason: 'error',
+          errorKind: 'provider',
+        } as never);
+
+        await runCli(['node', 'iris', 'run', 'place the order', '--agent']);
+
+        expect(exitStatus()).toBe(code);
+      });
+
       test('IRIS_BASE_URL satisfies the start-URL requirement', async () => {
         process.env.IRIS_BASE_URL = 'https://example.com';
         stubExecutor();

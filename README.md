@@ -625,7 +625,8 @@ iris run --json --url https://example.com "click the sign in button"
   failure (an action failed, an assertion or the agent's goal did not hold, no actions),
   `2` on invalid usage (`--agent` without a URL, `--agent --dry-run`), `3` when the AI
   provider could not be asked or answer (`translation.error`, or `agent.errorKind:
-  "provider"`), so CI can retry an outage. See the exit-code table below.
+  "provider"` before the agent acted), so CI can retry an outage. A missing key or IRIS's
+  own budget limit is a plain failure (`1`). See the exit-code table below.
 
 ### `iris run --agent` — plan against the real page (experimental)
 
