@@ -281,6 +281,10 @@ describe('prose is not a selector or a URL (issue #297)', () => {
     ['click form .row button', 'form .row button'],
     ['click ul li.active', 'ul li.active'],
     ['click app-shell .menu', 'app-shell .menu'],
+    // codex review: every standard element counts, English-looking ones too.
+    ['click svg > text', 'svg > text'],
+    ['click head > title', 'head > title'],
+    ['click svg use.icon', 'svg use.icon'],
   ])('%s keeps the selector %s', (instruction, selector) => {
     expect(translateSync(instruction)).toEqual([{ type: 'click', selector }]);
   });

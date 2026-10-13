@@ -107,8 +107,10 @@ const ELEMENT_NAMES = new Set(
     'html i iframe img input ins kbd label legend li main map mark menu meter nav noscript ' +
     'object ol optgroup option output p picture pre progress q rp rt ruby s samp search ' +
     'section select slot small source span strong sub summary sup table tbody td template ' +
-    'textarea tfoot th thead time tr track u ul var video wbr svg g path rect circle ellipse ' +
-    'polygon polyline'
+    'textarea tfoot th thead time tr track u ul var video wbr title script style meta link ' +
+    'base math svg g path rect circle ellipse line polygon polyline text tspan textpath use ' +
+    'symbol defs image marker mask pattern stop lineargradient radialgradient clippath ' +
+    'filter foreignobject switch view desc'
   ).split(' '),
 );
 
