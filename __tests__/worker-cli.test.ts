@@ -80,7 +80,10 @@ describe('runWorker heartbeat (#273)', () => {
       while (claims < 2) await sleep(5); // inside the long claim now
       fs.rmSync(file, { force: true });
       // Still inside it (it has not been released): only the timer can write the file.
-      while (!fs.existsSync(file)) await sleep(5);
+      // Bounded, so a worker that stopped beating fails here instead of hanging the run.
+      const deadline = performance.now() + 10_000;
+      while (!fs.existsSync(file) && performance.now() < deadline) await sleep(5);
+      expect(fs.existsSync(file)).toBe(true);
       expect(claims).toBe(2);
     } finally {
       release();
