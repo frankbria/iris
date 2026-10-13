@@ -251,7 +251,9 @@ production.
 | `P3.9` | [#409](https://github.com/frankbria/iris/issues/409) | Portal org UX follow-ups from #250 | P0.22 (#250) | DONE (#589) |
 | `P3.10` | [#420](https://github.com/frankbria/iris/issues/420) | Strip ANSI escape codes from errors stored in run history | — | DONE (#590) |
 | `P3.11` | [#425](https://github.com/frankbria/iris/issues/425) | Retention for local visual run artifacts (.iris/runs) | — | DONE (#591) |
+| `P3.13` | [#484](https://github.com/frankbria/iris/issues/484) | Visual reports: run-level 'AI unavailable' count, and count model-config failures | P1 (#281) | DONE (#592) |
 | `P3.14` | [#496](https://github.com/frankbria/iris/issues/496) | CLI usage errors exit 1 or 2 depending on where they are caught | — | DONE (#593) |
+| `P3.17` | [#508](https://github.com/frankbria/iris/issues/508) | a11y: close a timed-out page's context at once instead of at run end | — | DONE (#597) |
 
 ---
 
