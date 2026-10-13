@@ -14,6 +14,7 @@
 
 import type { ElementHandle, Locator, Page } from 'playwright';
 import type { Action } from './actions';
+import type { ExecutionResult } from './executor';
 import { isWithinPinnedOrigin } from './url-policy';
 import { installUrlPolicyGuard } from './url-policy-guard';
 import { withPageTimeout } from './page-timeout';
@@ -117,6 +118,16 @@ export interface PolicyVerdict {
 }
 
 const ALLOWED: PolicyVerdict = { allowed: true };
+
+/** The result of an action the policy refused: it never ran. */
+export function refusedResult(action: Action, verdict: PolicyVerdict): ExecutionResult {
+  return {
+    success: false,
+    action,
+    error: `Refused by agent policy: ${verdict.reason}`,
+    duration: 0,
+  };
+}
 
 /** Origin of a URL, or null when it has none (about:blank, data:, malformed). */
 export function originOf(url: string): string | null {

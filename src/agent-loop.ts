@@ -14,11 +14,11 @@ import type { Action } from './actions';
 import type { ActionExecutor, ExecutionResult } from './executor';
 import { loadConfig, validateAiConfig } from './config';
 import { createResolvedAIClient } from './ai-client';
-import { configFromCredentials } from './ai-client/credentials';
+import { configFromCredentials, type AICredentials } from './ai-client/credentials';
 import type { SettledAICall } from './ai-client/factory';
 import type { SecretSource } from './credential-refs';
 import { isIrisRefusal, resolveCredentials, type CredentialsSource } from './translator';
-import { checkPlannedAction, originOf, pinPage } from './agent-policy';
+import { checkPlannedAction, originOf, pinPage, refusedResult } from './agent-policy';
 import type { AgentPolicy } from './agent-policy';
 import { withPageTimeout } from './page-timeout';
 
@@ -298,9 +298,7 @@ async function setupClient(
       log('no AI credentials for this organization');
       return endBeforeTurns('other');
     }
-    const config = credentials
-      ? configFromCredentials(credentials, { kind: 'text' })
-      : loadConfig();
+    const config = clientConfig(credentials);
     const configErrors = validateAiConfig(config);
     if (configErrors.length > 0) {
       log(`AI translation is not configured (${configErrors.join(', ')})`);
@@ -315,6 +313,11 @@ async function setupClient(
     log(`client setup failed — ${error instanceof Error ? error.message : error}`);
     return endBeforeTurns('provider');
   }
+}
+
+/** The org's injected credentials, else the process configuration (local mode). */
+function clientConfig(credentials: AICredentials | undefined) {
+  return credentials ? configFromCredentials(credentials, { kind: 'text' }) : loadConfig();
 }
 
 /** One observe → plan → act turn; the result when the run ends here, else null. */
@@ -471,12 +474,7 @@ async function actionResult(
   if (verdict.allowed) {
     return ctx.executor.executeAction(action, ctx.page, ctx.secrets, verdict.target);
   }
-  return {
-    success: false,
-    action,
-    error: `Refused by agent policy: ${verdict.reason}`,
-    duration: 0,
-  };
+  return refusedResult(action, verdict);
 }
 
 /**
