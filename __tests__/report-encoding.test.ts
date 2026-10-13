@@ -25,7 +25,7 @@ import { launchBrowser, newHardenedContext } from '../src/browser';
 import { VisualReporter } from '../src/visual/reporter';
 import type { VisualTestResult } from '../src/visual/visual-runner';
 import { AccessibilityRunner, AccessibilityTestResult } from '../src/a11y/a11y-runner';
-import { escapeHtml, escapeMarkdown, escapeXml, safeHref } from '../src/report-encoding';
+import { escapeHtml, escapeMarkdown, escapeXml, safeHref, stripAnsi } from '../src/report-encoding';
 
 // Every markup-significant character for HTML, XML and Markdown, plus a forged
 // line after a newline. No XML-illegal characters: those get their own case, since
@@ -403,5 +403,18 @@ describe('a11y reports', () => {
     expect(hostile.text).toContain(HOSTILE.slice(0, 40));
     // Every illegal character is replaced, not dropped.
     expect(hostile.text).toContain(XML_ILLEGAL.replace(/[^a-h]/g, '\uFFFD'));
+  });
+});
+
+// #420: terminal control sequences in error text, as Playwright's call log carries them.
+describe('stripAnsi', () => {
+  const esc = String.fromCharCode(27);
+  it('removes CSI sequences and keeps the text', () => {
+    expect(stripAnsi(`${esc}[2m  - waiting${esc}[22m ${esc}[31;1mred${esc}[0m ${esc}[?25l`)).toBe(
+      '  - waiting red ',
+    );
+  });
+  it('leaves text without escapes as it was', () => {
+    expect(stripAnsi('a [2m b')).toBe('a [2m b');
   });
 });

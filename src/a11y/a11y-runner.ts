@@ -18,7 +18,7 @@ import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
 import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
-import { escapeHtml, escapeXml, safeHref, stripUserinfo } from '../report-encoding';
+import { escapeHtml, escapeXml, safeHref, stripAnsi, stripUserinfo } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 import { withPageTimeout } from '../page-timeout';
 
@@ -147,7 +147,7 @@ function erroredPage(page: string, error: unknown): AccessibilityTestResult['res
     // Stripped here, once: the CLI prints it and every report and store carries it.
     // Never empty: an empty reason must not read as no error anywhere it is shown.
     error:
-      stripUserinfo(error instanceof Error ? error.message : String(error ?? '')) ||
+      stripUserinfo(stripAnsi(error instanceof Error ? error.message : String(error ?? ''))) ||
       'Unknown error',
     passed: false,
     failureReasons: ['could not be scanned'],

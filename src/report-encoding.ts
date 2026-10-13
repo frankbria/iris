@@ -76,6 +76,13 @@ export function safeHref(url: string): string | null {
   }
 }
 
+/**
+ * Terminal control sequences (CSI: ESC `[` parameters, intermediates, final byte) cut from
+ * error text (#420): Playwright colours its call log, and stored errors are read in the portal
+ * and the API, where they show as junk.
+ */
+export const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+
 /** Every `scheme://user:password@` in free text, without the userinfo (#254, #287). */
 export const stripUserinfo = (text: string): string =>
   text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
