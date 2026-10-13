@@ -129,7 +129,7 @@ export interface BudgetStatus {
 /**
  * Default pricing for common providers (as of 2025)
  */
-const DEFAULT_PRICING: ProviderPricing[] = [
+export const DEFAULT_PRICING: readonly ProviderPricing[] = [
   // OpenAI GPT-4o: $2.50/1M input tokens, $10/1M output tokens (2025 published
   // rates). costPerImage retained as the fallback when usage is unavailable.
   {
@@ -159,7 +159,6 @@ const DEFAULT_PRICING: ProviderPricing[] = [
     costPerInputToken: 5e-6,
     costPerOutputToken: 1.5e-5,
   },
-  { provider: 'openai', model: 'gpt-4-vision-preview', costPerImage: 0.003 },
 
   // Anthropic Claude Sonnet 5: $3/1M input tokens, $15/1M output tokens — the
   // same per-token rates Claude 3.5 Sonnet carried, so issue #183's retirement
@@ -269,6 +268,24 @@ export class BudgetExceededError extends Error {
  * (#242), and a per-instance set would warn on every one of them.
  */
 const unpricedWarned = new Set<string>();
+/** Token-priced pairs already warned about being recorded without usage (#388). */
+const noUsageWarned = new Set<string>();
+
+/**
+ * A token-priced model charged its flat rate because the call came without valid usage
+ * (#388): the recorded cost is a guess, so say so once per pair.
+ */
+function warnFlatFallback(key: string): void {
+  if (noUsageWarned.has(key)) return;
+  noUsageWarned.add(key);
+  hostedLog(
+    'warn',
+    'call recorded without token usage; charged the flat rate',
+    { model: key },
+    () =>
+      console.warn(`⚠️  ${key} was recorded without token usage; charged its flat per-call rate.`),
+  );
+}
 
 /**
  * Default budget configuration
@@ -457,11 +474,12 @@ export class CostTracker {
    *
    * @param provider - Provider name
    * @param model - Model identifier
-   * @returns Cost per image in USD, or 0 if not configured
+   * @returns Cost per image in USD, resolved like the ledger charges it (a dated ID gets
+   *   its family's, #388), or 0 if not configured
    */
   getPricing(provider: string, model: string): number {
-    const key = `${provider}:${model}`;
-    return this.pricing.get(key) || 0;
+    const key = this.resolveKey(provider, model);
+    return key === undefined ? 0 : (this.pricing.get(key) ?? 0);
   }
 
   /**
@@ -521,7 +539,8 @@ export class CostTracker {
    * over-report rather than record $0 and never trip it.
    *
    * ponytail: capped at the dearest *known* rate; a model priced above every
-   * registered one (o1-pro class) still under-reports until it gets a row.
+   * registered one (o1-pro class) still under-reports until it gets a row. Kept on
+   * purpose (#388): a floor above the table would trip a default budget in a few calls.
    */
   private estimatedRates(): TokenRates & { costPerImage: number } {
     const tokens = [...this.tokenPricing.values()];
@@ -742,6 +761,7 @@ export class CostTracker {
       };
     }
 
+    if (!estimated && rates.input !== undefined) warnFlatFallback(`${provider}:${model}`);
     return { cost: rates.costPerImage, estimated };
   }
 
