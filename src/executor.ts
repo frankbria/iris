@@ -216,8 +216,9 @@ async function effectiveOrigin(handle: ElementHandle): Promise<string | undefine
   const frame = await handle.ownerFrame();
   if (!frame) return undefined;
   // The URL's origin is the browser's and cannot be faked by the page; `self.origin` catches
-  // an opaque (sandboxed) document but is writable by page script. Both must agree, so a
-  // page lying about either is refused, never let through (codex review).
+  // an opaque (sandboxed) document but is writable by page script. Both must equal the
+  // binding: a spoofed `self.origin` passes only when the URL's origin is the bound one too,
+  // i.e. the bound site's own script (the residual in the doc comment above).
   const fromDocument = await documentOrigin(frame);
   if (fromDocument === 'null') return 'null'; // opaque: named as such in the refusal
   return fromDocument === urlOrigin(frame.url()) ? fromDocument : undefined;
