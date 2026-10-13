@@ -92,14 +92,38 @@ const ENGINE_OR_XPATH = /^(?:[a-z][\w-]*=\S|\(?\/\/)/i;
  * engine selector such as `text=Logout`), `#id`, `.class`, `[attr]`, `:pseudo` or `*`.
  */
 const SELECTOR_TOKEN =
-  /^(?:>>?|\+|~)$|[\w\])"'][>+~]|^[>+~]\S|[#.][a-z_-]|\[|:[a-z-]|\*|^[a-z][\w-]*=\S/i;
+  /^(?:>>?|\+|~)$|[\w\])"'][>+~]|^[>+~][a-z_#.[*:-]|[#.][a-z_-]|\[|:[a-z-]|\*|^[a-z][\w-]*=\S/i;
+
+/**
+ * HTML and common SVG element names (#519): the only bare words that may sit beside selector
+ * syntax, as a descendant selector (`form .row button`). Any other word makes the target prose
+ * (`the #name field`). A custom element (lowercase, with a hyphen: `app-shell`) counts too.
+ */
+const ELEMENT_NAMES = new Set(
+  (
+    'a abbr address area article aside audio b bdi bdo blockquote body br button canvas ' +
+    'caption cite code col colgroup data datalist dd del details dfn dialog div dl dt em ' +
+    'embed fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 head header hgroup hr ' +
+    'html i iframe img input ins kbd label legend li main map mark menu meter nav noscript ' +
+    'object ol optgroup option output p picture pre progress q rp rt ruby s samp search ' +
+    'section select slot small source span strong sub summary sup table tbody td template ' +
+    'textarea tfoot th thead time tr track u ul var video wbr title script style meta link ' +
+    'base math svg g path rect circle ellipse line polygon polyline text tspan textpath use ' +
+    'symbol defs image marker mask pattern stop lineargradient radialgradient clippath ' +
+    'filter foreignobject switch view desc'
+  ).split(' '),
+);
+
+/** A bare word that is an element type: a known element or a custom element name. */
+const isElementName = (word: string) =>
+  ELEMENT_NAMES.has(word.toLowerCase()) || /^[a-z][a-z0-9]*-[a-z0-9-]*$/.test(word);
 
 /**
  * Whether a pattern's target may go to Playwright as a selector (#297). Prose does not:
  * `click submit` became `page.click("submit")`, a CSS type selector no page has. Accepted:
  * an engine selector or XPath, or CSS with at least one token of selector syntax and only
- * bare identifiers beside it. So `form > button` is a selector, and `the login button` or a
- * bare `submit` (even a tag name) is prose for the AI.
+ * element names beside it (#519). So `form > button` is a selector, and `the login button`,
+ * `the #name field` or a bare `submit` (even a tag name) is prose for the AI.
  */
 function looksLikeSelector(target: string): boolean {
   if (ENGINE_OR_XPATH.test(target)) return true;
@@ -109,9 +133,16 @@ function looksLikeSelector(target: string): boolean {
     // A selector list (`#save, button`) splits at its commas too.
     .split(/[\s,]+/)
     .filter(Boolean);
+  // Words continuing an engine value (`#menu >> text=Log out`) are part of the selector too
+  // (PR bot): they follow an `engine=value` token, up to the next `>>`.
+  let afterEngineToken = false;
   return (
     tokens.some((t) => SELECTOR_TOKEN.test(t)) &&
-    tokens.every((t) => SELECTOR_TOKEN.test(t) || /^[a-z][\w-]*$/i.test(t))
+    tokens.every((t) => {
+      const partOfSelector = SELECTOR_TOKEN.test(t) || isElementName(t) || afterEngineToken;
+      afterEngineToken = ENGINE_OR_XPATH.test(t) || (afterEngineToken && /^[\w-]+$/i.test(t));
+      return partOfSelector;
+    })
   );
 }
 
