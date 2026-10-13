@@ -3,13 +3,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
-import {
-  CreateBucketCommand,
-  DeleteBucketCommand,
-  DeleteObjectsCommand,
-  ListObjectsV2Command,
-  S3Client,
-} from '@aws-sdk/client-s3';
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { removeBucket } from './utils/s3-bucket';
 import {
   baselineKey,
   FilesystemArtifactStore,
@@ -259,11 +254,7 @@ if (!s3Configured) {
   });
 
   afterAll(async () => {
-    const listed = await admin.send(new ListObjectsV2Command({ Bucket: bucket }));
-    const objects = (listed.Contents ?? []).map((o) => ({ Key: o.Key! }));
-    if (objects.length)
-      await admin.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: objects } }));
-    await admin.send(new DeleteBucketCommand({ Bucket: bucket }));
+    await removeBucket(admin, bucket);
     admin.destroy();
     store.close();
   });
