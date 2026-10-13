@@ -159,68 +159,88 @@ export function checkAction(
   currentUrl: string,
   startOrigin: string | null,
 ): PolicyVerdict {
-  const allow = policy.allow ?? ALL_ACTION_TYPES;
-  if (!allow.includes(action.type)) {
-    return {
-      allowed: false,
-      reason: `action type "${action.type}" is not permitted this run (allowed: ${allow.join(', ')})`,
-    };
+  // In order: the first refusal wins.
+  for (const check of [typeVerdict, originVerdict, destructiveVerdict]) {
+    const verdict = check(action, policy, currentUrl, startOrigin);
+    if (verdict) return verdict;
   }
+  return ALLOWED;
+}
 
-  if (policy.pinOrigin !== false && !startOrigin) {
+/** Refused when this run does not permit the action's type. */
+function typeVerdict(action: Action, policy: AgentPolicy): PolicyVerdict | null {
+  const allow = policy.allow ?? ALL_ACTION_TYPES;
+  if (allow.includes(action.type)) return null;
+  return {
+    allowed: false,
+    reason: `action type "${action.type}" is not permitted this run (allowed: ${allow.join(', ')})`,
+  };
+}
+
+/** Under origin pinning: refused with no origin to pin to, off-origin, or leaving it. */
+function originVerdict(
+  action: Action,
+  policy: AgentPolicy,
+  currentUrl: string,
+  startOrigin: string | null,
+): PolicyVerdict | null {
+  if (policy.pinOrigin === false) return null;
+  if (!startOrigin) {
     return {
       allowed: false,
       reason:
         'no starting origin to pin to (about:blank, data:) — pass --allow-cross-origin to run unpinned',
     };
   }
+  return driftVerdict(action, currentUrl, startOrigin) ?? leavingVerdict(action, startOrigin);
+}
 
-  if (policy.pinOrigin !== false && startOrigin) {
-    // Drift first: if the page already moved, nothing proposed against it should
-    // run, whatever the action is.
-    // An opaque current URL (about:blank, data:, blob:) is NOT same-origin with
-    // anything. Treating "no origin" as "no problem" would let a page that
-    // navigated itself somewhere opaque keep taking actions.
-    // Same predicate the request-layer guard uses, so the two layers cannot
-    // disagree — they did once, and an http→https upgrade would load fine and
-    // then have every action on it refused.
-    // A navigation into the pinned origin is let through from anywhere: it is how a fresh
-    // page (about:blank) reaches the start origin, and it cannot leak (codex, #354). Every
-    // other action on an off-origin page is refused.
-    const intoPinned = action.type === 'navigate' && isWithinPinnedOrigin(action.url, startOrigin);
-    if (!intoPinned && !isWithinPinnedOrigin(currentUrl, startOrigin)) {
-      return {
-        allowed: false,
-        reason: `page is on ${originOf(currentUrl) ?? 'an opaque origin'}, not the starting origin ${startOrigin} — refusing to act off-origin`,
-      };
-    }
-    if (action.type === 'navigate') {
-      // A relative URL has no origin to compare and stays put, so only an
-      // absolute one that resolves elsewhere is refused.
-      const target = originOf(action.url);
-      if (target && !isWithinPinnedOrigin(action.url, startOrigin)) {
-        return {
-          allowed: false,
-          reason: `navigation to ${target} leaves the starting origin ${startOrigin}`,
-        };
-      }
-    }
-  }
+/**
+ * Drift first: if the page already moved, nothing proposed against it should run, whatever
+ * the action is. An opaque current URL (about:blank, data:, blob:) is NOT same-origin with
+ * anything: treating "no origin" as "no problem" would let a page that navigated itself
+ * somewhere opaque keep taking actions. Same predicate the request-layer guard uses, so the
+ * two layers cannot disagree (they did once, and an http→https upgrade would load fine and
+ * then have every action on it refused). A navigation into the pinned origin is let through
+ * from anywhere: it is how a fresh page (about:blank) reaches the start origin, and it cannot
+ * leak (codex, #354).
+ */
+function driftVerdict(
+  action: Action,
+  currentUrl: string,
+  startOrigin: string,
+): PolicyVerdict | null {
+  const intoPinned = action.type === 'navigate' && isWithinPinnedOrigin(action.url, startOrigin);
+  if (intoPinned || isWithinPinnedOrigin(currentUrl, startOrigin)) return null;
+  return {
+    allowed: false,
+    reason: `page is on ${originOf(currentUrl) ?? 'an opaque origin'}, not the starting origin ${startOrigin} — refusing to act off-origin`,
+  };
+}
 
-  if (!policy.allowDestructive && action.type !== 'assert') {
-    // Asserts are read-only by construction, so they are exempt — checking them
-    // would refuse to *verify* that a delete button exists, which is a
-    // legitimate and harmless thing to ask.
-    const term = destructiveTerm(targetText(action));
-    if (term) {
-      return {
-        allowed: false,
-        reason: `target looks destructive ("${term}") — pass --allow-destructive to permit it`,
-      };
-    }
-  }
+/** A navigation to an absolute URL elsewhere; a relative URL has no origin and stays put. */
+function leavingVerdict(action: Action, startOrigin: string): PolicyVerdict | null {
+  if (action.type !== 'navigate') return null;
+  const target = originOf(action.url);
+  if (!target || isWithinPinnedOrigin(action.url, startOrigin)) return null;
+  return {
+    allowed: false,
+    reason: `navigation to ${target} leaves the starting origin ${startOrigin}`,
+  };
+}
 
-  return ALLOWED;
+/**
+ * A destructive-looking target, unless allowed. Asserts are read-only by construction, so
+ * they are exempt: checking them would refuse to *verify* that a delete button exists.
+ */
+function destructiveVerdict(action: Action, policy: AgentPolicy): PolicyVerdict | null {
+  if (policy.allowDestructive || action.type === 'assert') return null;
+  const term = destructiveTerm(targetText(action));
+  if (!term) return null;
+  return {
+    allowed: false,
+    reason: `target looks destructive ("${term}") — pass --allow-destructive to permit it`,
+  };
 }
 
 /** Reading an attached element's attributes and text is quick; this only bounds a hung page. */

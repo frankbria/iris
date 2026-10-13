@@ -1277,23 +1277,26 @@ function resolveSemanticAI(
   // otherwise `--provider ollama` on a machine whose config points at, say, an
   // OpenAI-compatible proxy would aim the ollama client at that proxy.
   if (provider === 'ollama') {
-    const configuredEndpoint = config.ai.provider === 'ollama' ? config.ai.endpoint : undefined;
-    return {
-      provider,
-      model,
-      endpoint: configuredEndpoint || process.env.OLLAMA_ENDPOINT || DEFAULT_OLLAMA_ENDPOINT,
-      credentials,
-      fallback,
-    };
+    return { provider, model, endpoint: semanticOllamaEndpoint(config), credentials, fallback };
   }
+  return { provider, model, apiKey: semanticApiKey(config, provider), credentials, fallback };
+}
 
+/** The configured endpoint only when it was configured *for* ollama, else env, else the default. */
+function semanticOllamaEndpoint(config: ReturnType<typeof loadConfig>): string {
+  const configuredEndpoint = config.ai.provider === 'ollama' ? config.ai.endpoint : undefined;
+  return configuredEndpoint || process.env.OLLAMA_ENDPOINT || DEFAULT_OLLAMA_ENDPOINT;
+}
+
+/** The config's key when the config is for this vendor, else the vendor's environment key. */
+function semanticApiKey(
+  config: ReturnType<typeof loadConfig>,
+  provider: AIProvider,
+): string | undefined {
   const configProvider = provider === 'openai' ? 'openai' : 'anthropic';
-  const apiKey =
-    config.ai.provider === configProvider && config.ai.apiKey
-      ? config.ai.apiKey
-      : process.env[semanticKeyEnvVar(provider)];
-
-  return { provider, model, apiKey, credentials, fallback };
+  return config.ai.provider === configProvider && config.ai.apiKey
+    ? config.ai.apiKey
+    : process.env[semanticKeyEnvVar(provider)];
 }
 
 /** The `connect` flags that only act on API-key (hosted) connections (#342). */
