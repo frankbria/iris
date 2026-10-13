@@ -1259,7 +1259,7 @@ reference.
   carries it as `TranslationResult.error` (#294), also set when the client is unavailable
   or throws; no AI configured / no tenant credentials stays a plain empty plan. The RPC
   reply returns the whole `TranslationResult`, so on IRIS's managed key `error` gets the
-  same rewrite as `reasoning` (#479). The watcher still ignores it.
+  same rewrite as `reasoning` (#479). `iris watch` logs it (`❌ AI translation failed: <reason>`) and records the run as an error (#511).
 
 ### `iris run` Exit Codes (issue #294)
 
