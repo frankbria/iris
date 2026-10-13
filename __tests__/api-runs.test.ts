@@ -14,6 +14,7 @@ import { migrateToLatest } from '../src/db/migrate';
 import { postgresHistory, postgresJobs, RunInput } from '../src/history-store';
 import { metrics } from '../src/metrics';
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { removeBucket } from './utils/s3-bucket';
 import { baselineKey, runArtifactKey, S3ArtifactStore } from '../src/artifact-store';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
@@ -284,6 +285,8 @@ if (ADMIN_URL && !S3_READY && process.env.CI) throw new Error('IRIS_TEST_S3_* is
 (ADMIN_URL && S3_READY ? describe : describe.skip)('run detail artifacts (#460)', () => {
   const dbName = `iris_runs_art_${process.pid}_${randomBytes(4).toString('hex')}`;
   const bucket = `iris-art-${randomBytes(4).toString('hex')}`;
+  /** Kept to remove the bucket afterwards (#502). */
+  let s3: S3Client | undefined;
   const credentials = { accessKeyId: S3.accessKeyId!, secretAccessKey: S3.secretAccessKey! };
   const store = new S3ArtifactStore({
     endpoint: S3.endpoint!,
@@ -348,7 +351,7 @@ if (ADMIN_URL && !S3_READY && process.env.CI) throw new Error('IRIS_TEST_S3_* is
       await sql`insert into organization (id, name, slug, "createdAt")
         values (${org}, ${org}, ${org}, now())`.execute(db);
     }
-    const s3 = new S3Client({
+    s3 = new S3Client({
       endpoint: S3.endpoint,
       region: 'us-east-1',
       forcePathStyle: true,
@@ -407,6 +410,7 @@ if (ADMIN_URL && !S3_READY && process.env.CI) throw new Error('IRIS_TEST_S3_* is
 
   afterAll(async () => {
     await Promise.all([server, bare].map((s) => new Promise((r) => s?.close(() => r(null)))));
+    if (s3) await removeBucket(s3, bucket).finally(() => s3?.destroy());
     store.close();
     await db?.destroy();
     await admin(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);

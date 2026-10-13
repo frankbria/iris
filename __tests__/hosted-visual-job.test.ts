@@ -16,6 +16,7 @@ import * as http from 'http';
 import * as net from 'net';
 import { AddressInfo } from 'net';
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { removeBucket } from './utils/s3-bucket';
 import { Kysely, sql } from 'kysely';
 import { Client } from 'pg';
 import { S3ArtifactStore } from '../src/artifact-store';
@@ -53,6 +54,8 @@ const page = (color: string, extra = 0) =>
 (READY ? describe : describe.skip)('hosted visual-diff job API, end to end (#268)', () => {
   const dbName = `iris_vis_${process.pid}_${randomBytes(4).toString('hex')}`;
   const bucket = `iris-vis-${randomBytes(4).toString('hex')}`;
+  /** Kept to remove the bucket afterwards (#502). */
+  let s3: S3Client | undefined;
   const credentials = { accessKeyId: S3.accessKeyId!, secretAccessKey: S3.secretAccessKey! };
   const store = new S3ArtifactStore({
     endpoint: S3.endpoint!,
@@ -104,7 +107,7 @@ const page = (color: string, extra = 0) =>
       await sql`insert into apikey (id, "configId", "referenceId", key, "createdAt", "updatedAt")
         values (${`key-${org}`}, 'default', ${org}, ${`hash-${org}`}, now(), now())`.execute(db);
     }
-    const s3 = new S3Client({
+    s3 = new S3Client({
       endpoint: S3.endpoint,
       region: 'us-east-1',
       forcePathStyle: true,
@@ -150,6 +153,7 @@ const page = (color: string, extra = 0) =>
 
   afterAll(async () => {
     await new Promise((r) => server?.close(() => r(null)));
+    if (s3) await removeBucket(s3, bucket).finally(() => s3?.destroy());
     site?.close();
     store.close();
     await db?.destroy();
