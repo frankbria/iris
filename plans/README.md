@@ -250,6 +250,7 @@ production.
 | `P3.8` | [#390](https://github.com/frankbria/iris/issues/390) | Cost ledger follow-ups from #244: stale reservations, typed budget error, settle/close race | P0.16 (#244) | DONE (#588) |
 | `P3.9` | [#409](https://github.com/frankbria/iris/issues/409) | Portal org UX follow-ups from #250 | P0.22 (#250) | DONE (#589) |
 | `P3.10` | [#420](https://github.com/frankbria/iris/issues/420) | Strip ANSI escape codes from errors stored in run history | — | DONE (#590) |
+| `P3.11` | [#425](https://github.com/frankbria/iris/issues/425) | Retention for local visual run artifacts (.iris/runs) | — | DONE (#591) |
 
 ---
 
