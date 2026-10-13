@@ -159,6 +159,13 @@ describe('pruneRuns', () => {
     expect(runs()).toEqual(['r1']);
   });
 
+  it.each(['', '.', '..'])('gives no slot to a malformed current run id %p', (id) => {
+    run('r1', 60);
+    run('r2', 120);
+    expect(pruneRuns(root, 1, id)).toEqual(['r2']);
+    expect(runs()).toEqual(['r1']);
+  });
+
   it('does nothing when there is no runs directory', () => {
     expect(pruneRuns(root, 1, 'r1')).toEqual([]);
   });
