@@ -255,6 +255,8 @@ production.
 | `P3.14` | [#496](https://github.com/frankbria/iris/issues/496) | CLI usage errors exit 1 or 2 depending on where they are caught | — | DONE (#593) |
 | `P3.16` | [#502](https://github.com/frankbria/iris/issues/502) | api-runs and hosted-visual-job tests leak an S3 bucket per run | — | DONE (#596) |
 | `P3.17` | [#508](https://github.com/frankbria/iris/issues/508) | a11y: close a timed-out page's context at once instead of at run end | — | DONE (#597) |
+| `P3.19` | [#511](https://github.com/frankbria/iris/issues/511) | iris watch: report a provider outage as a failure with its reason | — | DONE (#599) |
+| `P3.27` | [#581](https://github.com/frankbria/iris/issues/581) | vision cache auto-prune test: a 10 ms TTL lets the fresh entry expire on a slow host | — | DONE (#601) |
 
 ---
 
