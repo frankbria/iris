@@ -8,6 +8,7 @@ import type { PolicyVerdict } from './agent-policy';
 import type { IrisConfig, ProviderCredentials } from './config';
 import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-options';
 import type { AIProvider } from './visual/ai-classifier';
+import { DEFAULT_KEEP_RUNS } from './visual/artifacts';
 import type { TranslationResult } from './translator';
 import { describeAction } from './actions';
 import type { ExecutionResult } from './executor';
@@ -1408,6 +1409,12 @@ program
     'Origin for relative --pages patterns (or set IRIS_BASE_URL). Defaults to http://localhost:3000',
   )
   .option('--show-cost', 'Print a read-only AI cost/cache summary after the run', false)
+  .option(
+    '--keep-runs <n>',
+    'Run directories to keep under .iris/runs, this one included (0 keeps all)',
+    (v) => parseIntOption(v, { min: 0, max: 100_000, name: 'keep-runs' }),
+    DEFAULT_KEEP_RUNS,
+  )
   .action(async (options) => {
     const startTime = Date.now();
 
@@ -1467,6 +1474,7 @@ program
           format: options.format,
           path: options.output,
         },
+        keepRuns: options.keepRuns,
       });
 
       const result = await runner.run();
