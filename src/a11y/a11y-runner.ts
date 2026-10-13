@@ -147,12 +147,31 @@ interface PageContextSlot {
 }
 
 /**
- * Closes a timed-out page's context (#508). Bounded: closing a context whose renderer spins
+ * A timed-out page's result, after closing its context (#508). Bounded: closing a context whose renderer spins
  * can take seconds under load, and one that never closes is left to `browser.close()`.
  */
-async function abandon(slot: PageContextSlot): Promise<void> {
+async function timedOutPage(
+  pagePattern: string,
+  slot: PageContextSlot,
+  pageTimeoutMs: number,
+): Promise<AccessibilityTestResult['results'][0]> {
   slot.abandoned = true;
   if (slot.context) await withPageTimeout(slot.context.close(), undefined, 5_000).catch(() => {});
+  return erroredPage(
+    pagePattern,
+    new Error(`The page did not finish within ${Math.round(pageTimeoutMs / 1000)} s`),
+  );
+}
+
+/** A page's context, recorded in its slot; one opened after the deadline closes at once. */
+async function openContext(browser: Browser, slot: PageContextSlot): Promise<BrowserContext> {
+  const context = await newHardenedContext(browser);
+  slot.context = context;
+  if (slot.abandoned) {
+    await context.close().catch(() => undefined);
+    throw new Error('The page was abandoned');
+  }
+  return context;
 }
 
 function erroredPage(page: string, error: unknown): AccessibilityTestResult['results'][0] {
@@ -251,14 +270,8 @@ export class AccessibilityRunner {
           TIMED_OUT,
           pageTimeoutMs,
         ).catch((error: unknown) => erroredPage(pagePattern, error));
-        if (outcome === TIMED_OUT) await abandon(slot);
         const result =
-          outcome === TIMED_OUT
-            ? erroredPage(
-                pagePattern,
-                new Error(`The page did not finish within ${Math.round(pageTimeoutMs / 1000)} s`),
-              )
-            : outcome;
+          outcome === TIMED_OUT ? await timedOutPage(pagePattern, slot, pageTimeoutMs) : outcome;
         results.push(result);
         if (result.error !== undefined && this.config.failFast) break;
 
@@ -335,13 +348,7 @@ export class AccessibilityRunner {
       throw new Error('Browser not initialized');
     }
 
-    const context = await newHardenedContext(this.browser);
-    slot.context = context;
-    // Opened after its page's deadline (#508): close it now, nothing will wait for it.
-    if (slot.abandoned) {
-      await context.close().catch(() => undefined);
-      throw new Error('The page was abandoned');
-    }
+    const context = await openContext(this.browser, slot);
     const page = await context.newPage();
 
     try {
