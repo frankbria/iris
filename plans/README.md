@@ -251,6 +251,7 @@ production.
 | `P3.9` | [#409](https://github.com/frankbria/iris/issues/409) | Portal org UX follow-ups from #250 | P0.22 (#250) | DONE (#589) |
 | `P3.10` | [#420](https://github.com/frankbria/iris/issues/420) | Strip ANSI escape codes from errors stored in run history | — | DONE (#590) |
 | `P3.11` | [#425](https://github.com/frankbria/iris/issues/425) | Retention for local visual run artifacts (.iris/runs) | — | DONE (#591) |
+| `P3.14` | [#496](https://github.com/frankbria/iris/issues/496) | CLI usage errors exit 1 or 2 depending on where they are caught | — | DONE (#593) |
 
 ---
 
