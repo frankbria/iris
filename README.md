@@ -798,13 +798,13 @@ Every command signals its outcome through the exit code:
 |------|---------|----------|
 | `0` | Completed successfully | all |
 | `1` | `run`: the run failed or its goal was not met (`status: "error"`). Elsewhere: unhandled error (for `connect`: an uncaught exception — the server exits rather than serve from unknown state) | `run`, `watch`, `connect`, top-level |
-| `2` | Invalid usage (bad flag or argument combination) | `run`, `watch`, `connect`, `worker`, `admin`, `visual-diff`, `a11y` |
+| `2` | Invalid usage: a rejected option value, an unknown option or command, a missing argument, or a bad combination | all |
 | `3` | Environment/runtime error (browser launch, filesystem, network; for `connect`: the port is already in use) | `visual-diff`, `a11y`, `connect` |
 | `4` | Accessibility violations found | `a11y` |
 | `5` | Visual regression detected | `visual-diff` |
 
-A rejected option value (e.g. `--max-turns lots`) exits `1` from the argument parser,
-before the command runs (#496).
+A usage error exits `2` whether the argument parser or the command itself refuses it
+(#496), so a CI wrapper can treat `2` as "fix the configuration, don't retry".
 
 ### MCP (experimental)
 

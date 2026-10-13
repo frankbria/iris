@@ -1261,7 +1261,7 @@ reference.
 
 - `0` success, `1` failure (`status: "error"`: failed action, unmet goal, no actions, a
   provider outage with its reason in `translation.error`), `2` usage (`--agent` without a
-  URL, `--agent --dry-run`). Commander's own option errors exit 1 (#496).
+  URL, `--agent --dry-run`). Commander's own usage errors exit 2 too (#496): `program.exitOverride` maps every commander error with a non-zero code to `EXIT_USAGE`; help and `--version` keep 0. It is set before any `.command()`, which copies it to each subcommand.
 - **Set through `process.exitCode`, never `process.exit()`**: the `--json` payload is the
   last `console.log`, and on a pipe stdout is async, so `exit()` can truncate it.
 - In-process `runCli()` tests set `exitCode` on the Jest process; `jest.setup.ts` resets

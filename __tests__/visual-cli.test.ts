@@ -199,7 +199,7 @@ describe('visual-diff CLI command', () => {
       await expect(freshRunCli(['node', 'iris', 'visual-diff', '--pages', ','])).rejects.toThrow(
         'process.exit called',
       );
-      expect(processExitSpy).toHaveBeenCalledWith(1);
+      expect(processExitSpy).toHaveBeenCalledWith(2); // a usage error (#496)
       expect(VisualTestRunner).not.toHaveBeenCalled();
     });
 

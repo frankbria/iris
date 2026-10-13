@@ -278,7 +278,7 @@ describe('CLI Commands', () => {
         throw new Error(`exit ${code}`);
       }) as never);
       await expect(runCli(['node', 'iris', 'connect', '--max-sessions', '0'])).rejects.toThrow(
-        'exit 1',
+        'exit 2',
       );
       expect(protocolModule.startServer).not.toHaveBeenCalled();
     });
@@ -1113,7 +1113,7 @@ describe('CLI Commands', () => {
           ]),
         ).rejects.toThrow('process.exit called');
 
-        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(exitSpy).toHaveBeenCalledWith(2); // a usage error (#496)
       });
     });
 
@@ -1224,7 +1224,7 @@ describe('CLI Commands', () => {
           ]),
         ).rejects.toThrow('process.exit called');
 
-        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(exitSpy).toHaveBeenCalledWith(2); // a usage error (#496)
       });
 
       test('--max-turns is passed through to the loop', async () => {
