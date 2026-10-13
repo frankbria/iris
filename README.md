@@ -798,13 +798,13 @@ Every command signals its outcome through the exit code:
 |------|---------|----------|
 | `0` | Completed successfully | all |
 | `1` | `run`: the run failed or its goal was not met (`status: "error"`). Elsewhere: unhandled error (for `connect`: an uncaught exception — the server exits rather than serve from unknown state) | `run`, `watch`, `connect`, top-level |
-| `2` | Invalid usage (bad flag or argument combination) | `run`, `watch`, `connect`, `worker`, `admin`, `visual-diff`, `a11y` |
+| `2` | Invalid usage: a rejected option value, an unknown option or command, a missing argument, or a bad combination | all |
 | `3` | Environment/runtime error (browser launch, filesystem, network; for `connect`: the port is already in use) | `visual-diff`, `a11y`, `connect` |
 | `4` | Accessibility violations found | `a11y` |
 | `5` | Visual regression detected | `visual-diff` |
 
-A rejected option value (e.g. `--max-turns lots`) exits `1` from the argument parser,
-before the command runs (#496).
+A usage error exits `2` whether the argument parser or the command itself refuses it
+(#496), so a CI wrapper can treat `2` as "fix the configuration, don't retry".
 
 ### MCP (experimental)
 
@@ -1051,8 +1051,8 @@ iris visual-diff [options]
 Options:
   --pages <pattern>        Page to test; repeat for several (default: /). A scheme-less
                            value may list paths with commas (/,/about); a URL
-                           (data:, https:) is one page (several URLs in one value exit 1:
-                           repeat --pages); empty exits 1
+                           (data:, https:) is one page (several URLs in one value exit 2:
+                           repeat --pages); empty exits 2
   --baseline <reference>   Baseline branch/commit (default: main)
   --baseline-strategy <s>  Interpret --baseline as branch|commit|tag (default: branch)
   --semantic              Enable AI semantic analysis
@@ -1118,8 +1118,8 @@ iris a11y [options]
 Options:
   --pages <pattern>         Page to test; repeat for several (default: /). A scheme-less
                             value may list paths with commas (/,/about); a URL
-                            (data:, https:) is one page (several URLs in one value exit 1:
-                            repeat --pages); empty exits 1
+                            (data:, https:) is one page (several URLs in one value exit 2:
+                            repeat --pages); empty exits 2
   --rules <rules>           Specific axe rules (comma-separated)
   --tags <tags>             axe rule tags, comma-separated (default: WCAG 2.2 AA,
                             wcag2a,wcag21a,wcag2aa,wcag21aa,wcag22aa)
