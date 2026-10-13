@@ -4,6 +4,7 @@ import fs from 'fs';
 import { AddressInfo } from 'net';
 import { startServer, JsonRpcResponse } from '../src/protocol';
 import * as browserModule from '../src/browser';
+import { ActionExecutor } from '../src/executor';
 
 /**
  * Browser session lifecycle (#240), over a real socket with a real Chromium.
@@ -213,4 +214,20 @@ describe('inactivity sweep', () => {
     await eventually(async () => !(await call(ws, 'getStatus')).result.hasSession);
     await exited();
   }, 60000);
+});
+
+// #383: two concurrent createPage() calls on one executor both saw no browser and both
+// launched one; the first was orphaned. The second now joins the launch in flight.
+describe('ActionExecutor.createPage is reentrant (#383)', () => {
+  it('starts exactly one Chromium for two concurrent createPage() calls', async () => {
+    const executor = new ActionExecutor({ browserOptions: { headless: true } });
+    try {
+      const [a, b] = await Promise.all([executor.createPage(), executor.createPage()]);
+      expect(a.context().browser()).toBe(b.context().browser());
+      expect(chromiumChildren()).toHaveLength(1);
+    } finally {
+      await executor.cleanup();
+    }
+    await exited();
+  }, 60_000);
 });
