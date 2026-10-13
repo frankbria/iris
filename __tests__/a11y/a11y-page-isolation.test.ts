@@ -170,4 +170,36 @@ describe('a11y runner page isolation (#287)', () => {
     expect(result.results[1].axeResult.passes.length).toBeGreaterThan(0);
     expect(result.summary.pagesErrored).toBe(1);
   }, 60000);
+
+  // #508: a timed-out page's context (and its spinning renderer) is closed before the next
+  // page starts, not parked until the browser closes at the end of the run.
+  it('closes a timed-out page context before the next page starts', async () => {
+    const browserModule = require('../../src/browser');
+    const real = browserModule.newHardenedContext;
+    const openAtCreate: number[] = [];
+    const spy = jest
+      .spyOn(browserModule, 'newHardenedContext')
+      .mockImplementation(async (browser: any) => {
+        openAtCreate.push(browser.contexts().length);
+        return real(browser);
+      });
+    const hung = (title: string) =>
+      'data:text/html;charset=utf-8,' +
+      encodeURIComponent(`<!doctype html><html lang="en"><head><title>${title}</title></head>
+        <body><main><h1>${title}</h1><button>One</button><button>Two</button></main>
+        <script>addEventListener('keydown', () => { for (;;) {} });</script></body></html>`);
+    try {
+      const base = config([hung('First'), hung('Second'), PAGE('After')]);
+      const result = await new AccessibilityRunner({
+        ...base,
+        keyboard: { ...base.keyboard, testFocusOrder: true },
+        pageTimeoutMs: 3000,
+      }).run();
+      expect(result.results.map((r) => r.error === undefined)).toEqual([false, false, true]);
+      // Each page found no other context open: the hung ones were closed on their timeout.
+      expect(openAtCreate).toEqual([0, 0, 0]);
+    } finally {
+      spy.mockRestore();
+    }
+  }, 120_000);
 });

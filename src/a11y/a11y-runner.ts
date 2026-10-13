@@ -11,7 +11,7 @@
  * e2e suite, not Istanbul.
  */
 
-import type { Browser, Page } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
 import { launchBrowser, newHardenedContext } from '../browser';
 import { AxeRunner } from './axe-integration';
 import type { AxeConfig } from './axe-integration';
@@ -140,6 +140,21 @@ export interface AccessibilityTestResult {
 export const A11Y_PAGE_TIMEOUT_MS = 120_000;
 const TIMED_OUT = Symbol('timed out');
 
+/** The context a page is scanned in, so a timeout can close it (#508). */
+interface PageContextSlot {
+  context?: BrowserContext;
+  abandoned: boolean;
+}
+
+/**
+ * Closes a timed-out page's context (#508). Bounded: closing a context whose renderer spins
+ * can take seconds under load, and one that never closes is left to `browser.close()`.
+ */
+async function abandon(slot: PageContextSlot): Promise<void> {
+  slot.abandoned = true;
+  if (slot.context) await withPageTimeout(slot.context.close(), undefined, 5_000).catch(() => {});
+}
+
 function erroredPage(page: string, error: unknown): AccessibilityTestResult['results'][0] {
   const empty = { total: 0, violations: 0, passes: 0, incomplete: 0, inapplicable: 0 };
   return {
@@ -227,13 +242,16 @@ export class AccessibilityRunner {
         // One page that fails (navigation, timeout, a check that throws on hostile markup)
         // is that page's errored result; the others still run (#287). Hosted jobs, which
         // fail as a whole, turn it back into a throw in the worker.
-        // A hung page is abandoned, not awaited: its context is closed with the browser.
+        // A hung page is abandoned, not awaited, and its context (with the renderer spinning
+        // in it) is closed before the next page starts (#508).
         const pageTimeoutMs = this.config.pageTimeoutMs ?? A11Y_PAGE_TIMEOUT_MS;
+        const slot: PageContextSlot = { abandoned: false };
         const outcome = await withPageTimeout(
-          this.testPage(pagePattern),
+          this.testPage(pagePattern, slot),
           TIMED_OUT,
           pageTimeoutMs,
         ).catch((error: unknown) => erroredPage(pagePattern, error));
+        if (outcome === TIMED_OUT) await abandon(slot);
         const result =
           outcome === TIMED_OUT
             ? erroredPage(
@@ -309,12 +327,21 @@ export class AccessibilityRunner {
   /**
    * Test a single page for accessibility issues
    */
-  private async testPage(pagePattern: string): Promise<AccessibilityTestResult['results'][0]> {
+  private async testPage(
+    pagePattern: string,
+    slot: PageContextSlot,
+  ): Promise<AccessibilityTestResult['results'][0]> {
     if (!this.browser) {
       throw new Error('Browser not initialized');
     }
 
     const context = await newHardenedContext(this.browser);
+    slot.context = context;
+    // Opened after its page's deadline (#508): close it now, nothing will wait for it.
+    if (slot.abandoned) {
+      await context.close().catch(() => undefined);
+      throw new Error('The page was abandoned');
+    }
     const page = await context.newPage();
 
     try {
