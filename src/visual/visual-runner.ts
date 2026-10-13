@@ -13,7 +13,8 @@ import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
 import { AIVisualClassifier } from './ai-classifier';
 import { artifactName, legacyArtifactName, newRunId, runArtifactPath } from './artifacts';
-import { VisualReporter } from './reporter';
+import { MODEL_UNAVAILABLE, VisualReporter } from './reporter';
+import { ModelUnavailableError } from '../ai-client/models';
 import type { ProviderCredentials } from '../config';
 import type { AIProvider } from './ai-classifier';
 import type { CostStats } from '../ai-client/cost-tracker';
@@ -96,6 +97,8 @@ export interface VisualTestResult {
      * severity is the pixel estimate, not a verdict (#281). Absent when AI was not asked.
      */
     aiUnavailable?: number;
+    /** Why, when the configured model is not served by the provider (#484). */
+    aiUnavailableReason?: string;
   };
   results: Array<{
     page: string;
@@ -249,6 +252,8 @@ export class VisualTestRunner {
 
           if (result.aiAnalysis?.analysisFailed) {
             summary.aiUnavailable = (summary.aiUnavailable ?? 0) + 1;
+            if (result.aiAnalysis.classification === MODEL_UNAVAILABLE)
+              summary.aiUnavailableReason ??= result.aiAnalysis.description;
           }
           // Track severity counts
           if (result.severity) {
@@ -328,6 +333,18 @@ export class VisualTestRunner {
               severity: 'breaking',
               screenshotPath: '',
               error: error.message,
+              // A model the provider does not serve (#484): AI was asked and could not
+              // answer, so it counts in aiUnavailable, with the cause named.
+              ...(error instanceof ModelUnavailableError && {
+                aiAnalysis: {
+                  classification: MODEL_UNAVAILABLE,
+                  confidence: 0,
+                  description: error.message,
+                  severity: 'breaking',
+                  suggestions: [],
+                  analysisFailed: true,
+                },
+              }),
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
             }) as any,
         );

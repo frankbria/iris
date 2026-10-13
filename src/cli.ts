@@ -1426,6 +1426,7 @@ program
       console.log('🎯 Starting visual regression testing...');
 
       const { VisualTestRunner } = await import('./visual/visual-runner');
+      const { aiUnavailableNote } = await import('./visual/reporter');
 
       const runner = new VisualTestRunner({
         pages: options.pages ?? ['/'],
@@ -1498,12 +1499,9 @@ program
         console.log(`   Breaking: ${result.summary.severityCounts.breaking || 0}`);
         console.log(`   Moderate: ${result.summary.severityCounts.moderate || 0}`);
         console.log(`   Minor: ${result.summary.severityCounts.minor || 0}`);
-        if (result.summary.aiUnavailable) {
-          // #281: these severities are the pixel estimate, not an AI verdict.
-          console.log(
-            `   AI: unavailable for ${result.summary.aiUnavailable} comparison(s); severity from pixel difference`,
-          );
-        }
+        // #281, #484: these severities are not an AI verdict; say why when it is known.
+        const note = aiUnavailableNote(result.summary);
+        if (note) console.log(`   AI: ${note}`);
 
         if (options.format === 'html' && result.reportPath) {
           console.log(`\n📋 Report generated: ${result.reportPath}`);
