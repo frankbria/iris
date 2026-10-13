@@ -133,9 +133,16 @@ function looksLikeSelector(target: string): boolean {
     // A selector list (`#save, button`) splits at its commas too.
     .split(/[\s,]+/)
     .filter(Boolean);
+  // Words continuing an engine value (`#menu >> text=Log out`) are part of the selector too
+  // (PR bot): they follow an `engine=value` token, up to the next `>>`.
+  let afterEngineToken = false;
   return (
     tokens.some((t) => SELECTOR_TOKEN.test(t)) &&
-    tokens.every((t) => SELECTOR_TOKEN.test(t) || isElementName(t))
+    tokens.every((t) => {
+      const partOfSelector = SELECTOR_TOKEN.test(t) || isElementName(t) || afterEngineToken;
+      afterEngineToken = ENGINE_OR_XPATH.test(t) || (afterEngineToken && /^[\w-]+$/i.test(t));
+      return partOfSelector;
+    })
   );
 }
 

@@ -285,6 +285,8 @@ describe('prose is not a selector or a URL (issue #297)', () => {
     ['click svg > text', 'svg > text'],
     ['click head > title', 'head > title'],
     ['click svg use.icon', 'svg use.icon'],
+    // PR bot: an unquoted multi-word engine value after `>>` is one segment.
+    ['click #menu >> text=Log out', '#menu >> text=Log out'],
   ])('%s keeps the selector %s', (instruction, selector) => {
     expect(translateSync(instruction)).toEqual([{ type: 'click', selector }]);
   });
