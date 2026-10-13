@@ -675,6 +675,14 @@ export class FileWatcher {
         this.logger.log(`   Reasoning: ${result.reasoning}`);
       }
 
+      // The provider could not be asked or answer (#511): say why, as `iris run` does,
+      // rather than "no actions", which blamed the model for an outage.
+      if (result.error) {
+        this.logger.error(`❌ AI translation failed: ${result.error}`);
+        status = 'error';
+        return;
+      }
+
       if (result.actions.length === 0) {
         this.logger.log('⚠️  No actions generated from instruction');
         status = 'error';
