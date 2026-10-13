@@ -1263,7 +1263,7 @@ reference.
 
 - `0` success, `1` failure (`status: "error"`: failed action, unmet goal, no actions, a
   provider outage with its reason in `translation.error`), `2` usage (`--agent` without a
-  URL, `--agent --dry-run`). Commander's own option errors exit 1 (#496).
+  URL, `--agent --dry-run`). Commander's own usage errors exit 2 too (#496): `program.exitOverride` maps every commander error with a non-zero code to `EXIT_USAGE`; help and `--version` keep 0. It is set before any `.command()`, which copies it to each subcommand.
 - **Set through `process.exitCode`, never `process.exit()`**: the `--json` payload is the
   last `console.log`, and on a pipe stdout is async, so `exit()` can truncate it.
 - In-process `runCli()` tests set `exitCode` on the Jest process; `jest.setup.ts` resets
@@ -2062,6 +2062,10 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   old-name baseline wins over main's new one. The next `--update-baseline` writes the
   new name. Pages that used to collide (`/a/b`, `/a_b`) share the legacy file until
   then: update their baselines after upgrading.
+- **Old runs are pruned at the end of a run (#425)**: `pruneRuns()` keeps the newest
+  `keepRuns` run directories (default `DEFAULT_KEEP_RUNS` = 20, `--keep-runs`, 0 keeps all),
+  this run counted and never removed; newest by mtime (a caller's run id need not sort).
+  Only directories named like a run id go. A prune failure is logged, never fails the run.
 - **The run id is on every surface**: the result, the JSON report (`runId`) and the
   `iris visual` summary line. A caller-supplied `runId` is trusted to be unique; reuse
   writes into the same run directory.

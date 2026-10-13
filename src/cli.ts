@@ -8,6 +8,7 @@ import type { PolicyVerdict } from './agent-policy';
 import type { IrisConfig, ProviderCredentials } from './config';
 import { parseIntOption, parseFloatOption, parseEnumOption } from './utils/cli-options';
 import type { AIProvider } from './visual/ai-classifier';
+import { DEFAULT_KEEP_RUNS } from './visual/artifacts';
 import type { TranslationResult } from './translator';
 import { describeAction } from './actions';
 import type { ExecutionResult } from './executor';
@@ -84,7 +85,15 @@ function collectOrigin(value: string, previous: string[] = []): string[] {
   return [...previous, origin];
 }
 
+/** The exit code of every usage error (#496): a bad option value or a check in an action. */
+export const EXIT_USAGE = 2;
+
 const program = new Command();
+// Before any subcommand exists: `.command()` copies this to each one. Commander's own
+// usage errors (a rejected option value, an unknown option, a missing argument) exited 1,
+// like a failed run; they exit EXIT_USAGE, as an action's own usage checks do (#496). Help
+// and --version still exit 0.
+program.exitOverride((err) => process.exit(err.exitCode === 0 ? 0 : EXIT_USAGE));
 program.name('iris').description('Interface Recognition & Interaction Suite').version('0.0.1');
 
 program
@@ -1423,6 +1432,12 @@ program
     'Origin for relative --pages patterns (or set IRIS_BASE_URL). Defaults to http://localhost:3000',
   )
   .option('--show-cost', 'Print a read-only AI cost/cache summary after the run', false)
+  .option(
+    '--keep-runs <n>',
+    'Run directories to keep under .iris/runs, this one included (0 keeps all)',
+    (v) => parseIntOption(v, { min: 0, max: 100_000, name: 'keep-runs' }),
+    DEFAULT_KEEP_RUNS,
+  )
   .action(async (options) => {
     const startTime = Date.now();
 
@@ -1482,6 +1497,7 @@ program
           format: options.format,
           path: options.output,
         },
+        keepRuns: options.keepRuns,
       });
 
       const result = await runner.run();

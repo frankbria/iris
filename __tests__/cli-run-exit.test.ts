@@ -51,6 +51,29 @@ describe('iris run exit codes (#294)', () => {
     expect(code).toBe(2);
   }, 30_000);
 
+  // #496: a value the argument parser rejects is a usage error too, not exit 1.
+  test('2 on an option value the parser rejects, before the command runs', async () => {
+    const proc = spawn(
+      process.execPath,
+      [
+        '-r',
+        'ts-node/register',
+        path.join(REPO_ROOT, 'src/cli.ts'),
+        'run',
+        'x',
+        '--max-turns',
+        'lots',
+      ],
+      { cwd: REPO_ROOT, env: { ...process.env, TS_NODE_TRANSPILE_ONLY: '1' } },
+    );
+    let stderr = '';
+    proc.stderr.on('data', (d) => (stderr += d));
+    const [code] = await once(proc, 'exit');
+
+    expect(stderr).toMatch(/max-turns/);
+    expect(code).toBe(2);
+  }, 30_000);
+
   // A real Ollama-shaped provider that is up but fails the request: the reason must
   // reach the caller (#293's `error`), and the run must fail, not exit 0 with no actions.
   test('1 when the AI provider fails, with its reason in translation.error', async () => {

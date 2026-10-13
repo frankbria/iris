@@ -199,7 +199,7 @@ describe('visual-diff CLI command', () => {
       await expect(freshRunCli(['node', 'iris', 'visual-diff', '--pages', ','])).rejects.toThrow(
         'process.exit called',
       );
-      expect(processExitSpy).toHaveBeenCalledWith(1);
+      expect(processExitSpy).toHaveBeenCalledWith(2); // a usage error (#496)
       expect(VisualTestRunner).not.toHaveBeenCalled();
     });
 
@@ -265,6 +265,34 @@ describe('visual-diff CLI command', () => {
       ]);
 
       expect(mockRun).toHaveBeenCalled();
+    });
+
+    // #425: the run-directory retention count reaches the runner; 20 when not given.
+    it.each([
+      [[], 20],
+      [['--keep-runs', '0'], 0],
+      [['--keep-runs', '5'], 5],
+    ])('passes --keep-runs %j to the runner as keepRuns %d', async (args, expected) => {
+      const mockRun = jest.fn().mockResolvedValue({
+        summary: {
+          totalComparisons: 1,
+          passed: 1,
+          failed: 0,
+          newBaselines: 0,
+          overallStatus: 'passed',
+          severityCounts: {},
+        },
+        results: [],
+        duration: 1000,
+      });
+      const ctor = jest.fn().mockImplementation(() => ({ run: mockRun }));
+      jest.doMock('../src/visual/visual-runner', () => ({ VisualTestRunner: ctor }));
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+
+      await freshRunCli(['node', 'iris', 'visual-diff', ...(args as string[])]);
+
+      expect(ctor.mock.calls[0][0].keepRuns).toBe(expected);
     });
 
     it('should use IRIS_BASE_URL when --base-url is absent, with the flag taking precedence', async () => {

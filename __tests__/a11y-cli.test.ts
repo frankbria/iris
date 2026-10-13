@@ -161,7 +161,7 @@ describe('a11y CLI command', () => {
       async (value) => {
         const config = await configFor(['--pages', value]);
         expect(config).toBeUndefined(); // no scan ran
-        expect(processExitSpy).toHaveBeenCalledWith(1);
+        expect(processExitSpy).toHaveBeenCalledWith(2); // a usage error (#496)
       },
     );
 
@@ -175,7 +175,7 @@ describe('a11y CLI command', () => {
         try {
           const config = await configFor(['--pages', value]);
           expect(config).toBeUndefined();
-          expect(processExitSpy).toHaveBeenCalledWith(1);
+          expect(processExitSpy).toHaveBeenCalledWith(2); // a usage error (#496)
           expect(stderr.mock.calls.flat().join(' ')).toMatch(/repeat --pages.*%2C/);
         } finally {
           stderr.mockRestore();
@@ -202,6 +202,22 @@ describe('a11y CLI command', () => {
     it('runs a valid custom --tags list', async () => {
       const config = await configFor(['--tags', 'wcag2a, best-practice']);
       expect(config.axe.tags).toEqual(['wcag2a', 'best-practice']);
+    });
+
+    // #496: an option-level refusal (commander, before the action) and an action-level one
+    // exit with the same documented code, so a wrapper can tell usage from a failed run.
+    it('exits EXIT_USAGE for an option-level and an action-level usage error alike', async () => {
+      const { EXIT_USAGE } = await import('../src/cli');
+      jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      // The first exit of each: the mocked exit throws, and an action's catch then exits 3.
+      const firstExit = async (args: string[]) => {
+        processExitSpy.mockClear();
+        await configFor(args);
+        return processExitSpy.mock.calls[0]?.[0];
+      };
+      expect(EXIT_USAGE).toBe(2);
+      expect(await firstExit(['--pages', ''])).toBe(EXIT_USAGE); // commander's argParser
+      expect(await firstExit(['--fail-on', 'bogus'])).toBe(EXIT_USAGE); // the action's check
     });
 
     it('accepts --fail-on in any case', async () => {
