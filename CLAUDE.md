@@ -296,7 +296,11 @@ plans/
   breaker with a fallback (`analysisFailed: true`, `severity: 'medium'`). The visual runner
   grades such a comparison by its pixels (`estimateSeverity`), counts it in
   `summary.aiUnavailable`, and `iris visual-diff` prints `AI: unavailable for N comparison(s)`.
-  Mapped as `moderate`, a full-page change passed the default `--fail-on breaking`
+  Mapped as `moderate`, a full-page change passed the default `--fail-on breaking`. The
+  HTML, JUnit (`iris.aiUnavailable` testsuite property) and Markdown reports carry the same
+  run-level note (`aiUnavailableNote()`, src/visual/reporter.ts, #484). A `ModelUnavailableError`
+  (a model the provider does not serve) still fails the comparison closed as `breaking`, and now
+  counts in `aiUnavailable` with `summary.aiUnavailableReason` naming it
 - **Vision capability is a table, Ollama's is its own answer (#298).** `isVisionModel(provider,
   model)` (src/ai-client/models.ts) is the one capability check: id prefixes per family
   (`gpt-4o`, `gpt-4.1`, `gpt-5`, `o1`/`o3`/`o4`; `llava`, `llama3.2-vision`, `gemma3`, `qwen2.5vl`
