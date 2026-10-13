@@ -45,7 +45,9 @@ describe('keyboard + ARIA checks observe real behaviour (issue #73)', () => {
   });
 
   afterEach(async () => {
-    await page?.close();
+    // The whole context, not only the page (#595): one context per test was left open, 65
+    // by the end of the file, and on a busy runner a late test's newContext() timed out.
+    await page?.context().close();
   });
 
   describe('arrow key navigation', () => {
