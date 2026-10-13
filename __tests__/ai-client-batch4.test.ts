@@ -857,6 +857,30 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         }
       });
 
+      // #365: limits not given come from resolveBudget(), not the built-in defaults.
+      it('createCostTracker takes unset limits from the environment and config', () => {
+        const before = process.env.IRIS_DAILY_BUDGET_USD;
+        process.env.IRIS_DAILY_BUDGET_USD = '3';
+        try {
+          const t = createCostTracker(':memory:');
+          expect(t.getBudgetStatus().dailyLimit).toBe(3);
+          expect(t.getBudgetStatus().monthlyLimit).toBe(200); // the default, still
+          t.close();
+          // An explicit limit still wins.
+          const u = createCostTracker(':memory:', { dailyLimit: 7 });
+          expect(u.getBudgetStatus().dailyLimit).toBe(7);
+          u.close();
+          // Both limits explicit: a malformed environment value is never read (codex review).
+          process.env.IRIS_DAILY_BUDGET_USD = 'not-a-number';
+          const v = createCostTracker(':memory:', { dailyLimit: 7, monthlyLimit: 70 });
+          expect(v.getBudgetStatus().monthlyLimit).toBe(70);
+          v.close();
+        } finally {
+          if (before === undefined) delete process.env.IRIS_DAILY_BUDGET_USD;
+          else process.env.IRIS_DAILY_BUDGET_USD = before;
+        }
+      });
+
       it('converts USD to micros, rounding a paid fraction up and float noise away', () => {
         expect(toMicros(0)).toBe(0);
         expect(toMicros(2.5e-5)).toBe(25); // 2.5e-5 * 1e6 is 25.000000000000004 in floats
