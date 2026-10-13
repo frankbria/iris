@@ -174,7 +174,9 @@ is processed in Chromium's memory for the duration of the job.
 ### Screenshots and visual artifacts
 
 The local CLI writes screenshots, diffs and baselines under `<artifactsDir>/runs/<runId>/`
-and `.iris/baselines` on the user's own machine (`src/visual/artifacts.ts`, #343).
+and `.iris/baselines` on the user's own machine (`src/visual/artifacts.ts`, #343). Each run
+keeps the newest 20 run directories and deletes older ones when it ends (`--keep-runs`, #425);
+baselines are not pruned by it.
 
 The RPC `observe` method (#312) sends a viewport screenshot and an ARIA snapshot of the
 session's page to the connected client and stores neither; fields filled from a credential

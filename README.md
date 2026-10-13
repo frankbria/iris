@@ -1033,8 +1033,9 @@ Visual and accessibility options are command-line flags (`iris visual-diff --hel
 never overwrites what an earlier report points at. The run id (UTC time plus a random
 suffix) is in the JSON result as `runId`. File names are a readable slug of the page and
 device plus a hash of the exact pair, so `/a/b` and `/a_b` no longer share a screenshot
-or a baseline. Baselines saved under the old names are still found. Prune old runs with
-`rm -rf .iris/runs/<run-id>`.
+or a baseline. Baselines saved under the old names are still found. Each run keeps the
+newest 20 run directories, itself included, and removes older ones when it ends (newest by
+modification time): `--keep-runs <n>` changes the count, `--keep-runs 0` keeps every run.
 
 **Reporting:**
 - Interactive HTML reports with diff viewer

@@ -76,3 +76,34 @@ export function runArtifactPath(
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, `${name}.png`);
 }
+
+/** Run directories kept by default (#425): `iris visual-diff --keep-runs`, `keepRuns`. */
+export const DEFAULT_KEEP_RUNS = 20;
+
+/**
+ * Removes all but the newest `keep` run directories under `<root>/runs` (#425), counting
+ * `currentRunId` among the kept and never removing it. Newest by modification time: a
+ * caller's run id need not sort by date. Only directories named like a run id are touched
+ * (no symlinks, nothing a person put there). `keep` 0 keeps everything. Returns the ids
+ * removed.
+ *
+ * ponytail: a concurrent run started earlier than the newest `keep - 1` can lose its
+ * directory mid-run; give each concurrent job its own artifactsDir if that bites.
+ */
+export function pruneRuns(root: string, keep: number, currentRunId: string): string[] {
+  const runsDir = path.join(path.resolve(root), 'runs');
+  if (keep <= 0 || !fs.existsSync(runsDir)) return [];
+  const others = fs
+    .readdirSync(runsDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && e.name !== currentRunId && SAFE_NAME.test(e.name))
+    .map((e) => ({ id: e.name, mtime: fs.statSync(path.join(runsDir, e.name)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+  // The current run takes a slot only if it wrote something (codex review): one that failed
+  // before its first artifact must not cost an older run its place.
+  // Only a well-formed id can have a directory here; '' or '..' would name runs/ or its parent.
+  const reserved =
+    SAFE_NAME.test(currentRunId) && fs.existsSync(path.join(runsDir, currentRunId)) ? 1 : 0;
+  const removed = others.slice(Math.max(0, keep - reserved)).map((r) => r.id);
+  for (const id of removed) fs.rmSync(path.join(runsDir, id), { recursive: true, force: true });
+  return removed;
+}
