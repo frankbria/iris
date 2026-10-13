@@ -11,7 +11,7 @@ import type { AIProvider } from './visual/ai-classifier';
 import type { TranslationResult } from './translator';
 import { describeAction } from './actions';
 import type { ExecutionResult } from './executor';
-import { wcagTags } from './a11y/wcag';
+import { unknownAxeTags, wcagTags } from './a11y/wcag';
 
 /**
  * `--pages` collector (#289): repeatable. Within one value, a URL with a scheme (`data:`,
@@ -1587,6 +1587,21 @@ program
         console.error(`\n❌ ${failureThreshold}`);
         process.exit(2); // Invalid usage
       }
+      // A tag axe does not know selects no rule: the scan finds nothing and passes (#500).
+      const tags: string[] = options.tags
+        .split(',')
+        .map((t: string) => t.trim())
+        .filter(Boolean);
+      const unknownTags = await unknownAxeTags(tags);
+      if (tags.length === 0 || unknownTags.length > 0) {
+        console.error(
+          `\n❌ Invalid --tags "${options.tags}"` +
+            (unknownTags.length
+              ? `; axe-core has no rules tagged ${unknownTags.join(', ')}.`
+              : '.'),
+        );
+        process.exit(2); // Invalid usage
+      }
 
       const { AccessibilityRunner } = await import('./a11y/a11y-runner');
 
@@ -1594,7 +1609,7 @@ program
         pages: options.pages ?? ['/'],
         axe: {
           rules: {},
-          tags: options.tags.split(',').map((t: string) => t.trim()),
+          tags,
           // --rules means "run only these rules", which is axe's runOnly. Feeding
           // them to `rules` instead would merely toggle them and still scan
           // everything — the silent-widening bug this wiring fixes (issue #72).
