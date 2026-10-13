@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { ensureDatabaseDir } from '../db';
-import { DEFAULT_BUDGET_LIMITS } from '../config';
+import { DEFAULT_BUDGET_LIMITS, resolveBudget } from '../config';
 import { hostedLog } from '../log';
 import { dropLegacyIndexes } from './cache';
 
@@ -129,7 +129,7 @@ export interface BudgetStatus {
 /**
  * Default pricing for common providers (as of 2025)
  */
-const DEFAULT_PRICING: ProviderPricing[] = [
+export const DEFAULT_PRICING: readonly ProviderPricing[] = [
   // OpenAI GPT-4o: $2.50/1M input tokens, $10/1M output tokens (2025 published
   // rates). costPerImage retained as the fallback when usage is unavailable.
   {
@@ -159,7 +159,6 @@ const DEFAULT_PRICING: ProviderPricing[] = [
     costPerInputToken: 5e-6,
     costPerOutputToken: 1.5e-5,
   },
-  { provider: 'openai', model: 'gpt-4-vision-preview', costPerImage: 0.003 },
 
   // Anthropic Claude Sonnet 5: $3/1M input tokens, $15/1M output tokens — the
   // same per-token rates Claude 3.5 Sonnet carried, so issue #183's retirement
@@ -269,6 +268,30 @@ export class BudgetExceededError extends Error {
  * (#242), and a per-instance set would warn on every one of them.
  */
 const unpricedWarned = new Set<string>();
+/** Token-priced pairs already warned about being recorded without usage (#388). */
+const noUsageWarned = new Set<string>();
+
+/** The token-priced cost of `usage`, or undefined when `rates` has no token prices. */
+function tokenCost(rates: Partial<TokenRates>, usage: TokenUsage): number | undefined {
+  if (rates.input === undefined || rates.output === undefined) return undefined;
+  return usage.inputTokens * rates.input + usage.outputTokens * rates.output;
+}
+
+/**
+ * A token-priced model charged its flat rate because the call came without valid usage
+ * (#388): the recorded cost is a guess, so say so once per pair.
+ */
+function warnFlatFallback(key: string): void {
+  if (noUsageWarned.has(key)) return;
+  noUsageWarned.add(key);
+  hostedLog(
+    'warn',
+    'call recorded without token usage; charged the flat rate',
+    { model: key },
+    () =>
+      console.warn(`⚠️  ${key} was recorded without token usage; charged its flat per-call rate.`),
+  );
+}
 
 /**
  * Default budget configuration
@@ -457,11 +480,12 @@ export class CostTracker {
    *
    * @param provider - Provider name
    * @param model - Model identifier
-   * @returns Cost per image in USD, or 0 if not configured
+   * @returns Cost per image in USD, resolved like the ledger charges it (a dated ID gets
+   *   its family's, #388), or 0 if not configured
    */
   getPricing(provider: string, model: string): number {
-    const key = `${provider}:${model}`;
-    return this.pricing.get(key) || 0;
+    const key = this.resolveKey(provider, model);
+    return key === undefined ? 0 : (this.pricing.get(key) ?? 0);
   }
 
   /**
@@ -521,7 +545,8 @@ export class CostTracker {
    * over-report rather than record $0 and never trip it.
    *
    * ponytail: capped at the dearest *known* rate; a model priced above every
-   * registered one (o1-pro class) still under-reports until it gets a row.
+   * registered one (o1-pro class) still under-reports until it gets a row. Kept on
+   * purpose (#388): a floor above the table would trip a default budget in a few calls.
    */
   private estimatedRates(): TokenRates & { costPerImage: number } {
     const tokens = [...this.tokenPricing.values()];
@@ -721,28 +746,34 @@ export class CostTracker {
     usage?: TokenUsage,
   ): { cost: number; estimated: boolean } {
     if (cached) return { cost: 0, estimated: false };
+    const priced = this.ratesFor(provider, model);
+    if (priced === null) return { cost: 0, estimated: false };
+    const { rates, estimated } = priced;
+    const tokens = usage && this.isValidUsage(usage) ? tokenCost(rates, usage) : undefined;
+    if (tokens !== undefined) return { cost: tokens, estimated };
+    // A registered token price charged flat: the call came without usage (#388).
+    if (!estimated && rates.input !== undefined) warnFlatFallback(`${provider}:${model}`);
+    return { cost: rates.costPerImage, estimated };
+  }
 
+  /**
+   * The rates a model is charged: its registered or family row, else `estimatedRates()`
+   * (`estimated`); `null` for a model on a free provider with no row.
+   */
+  private ratesFor(
+    provider: string,
+    model: string,
+  ): { rates: Partial<TokenRates> & { costPerImage: number }; estimated: boolean } | null {
     const key = this.resolveKey(provider, model);
-    if (key === undefined && FREE_PROVIDERS.has(provider.toLowerCase())) {
-      return { cost: 0, estimated: false };
-    }
-    const estimated = key === undefined;
-    const rates = estimated
-      ? this.estimatedRates()
-      : { ...this.tokenPricing.get(key), costPerImage: this.pricing.get(key) ?? 0 };
-    if (
-      usage &&
-      rates.input !== undefined &&
-      rates.output !== undefined &&
-      this.isValidUsage(usage)
-    ) {
+    if (key !== undefined) {
       return {
-        cost: usage.inputTokens * rates.input + usage.outputTokens * rates.output,
-        estimated,
+        rates: { ...this.tokenPricing.get(key), costPerImage: this.pricing.get(key) ?? 0 },
+        estimated: false,
       };
     }
-
-    return { cost: rates.costPerImage, estimated };
+    return FREE_PROVIDERS.has(provider.toLowerCase())
+      ? null
+      : { rates: this.estimatedRates(), estimated: true };
   }
 
   /**
@@ -964,8 +995,13 @@ export class CostTracker {
 }
 
 /**
- * Create a cost tracker instance
+ * Create a cost tracker instance. Limits not given come from `resolveBudget()` (env, then
+ * the config file, then the defaults), as the smart client's do (#365): this used to fall
+ * back to the built-in $10/$200 whatever the user had configured.
  */
 export function createCostTracker(dbPath?: string, budget?: BudgetConfig): CostTracker {
-  return new CostTracker(dbPath, budget);
+  // Both limits given: nothing to resolve, so a malformed env or config value cannot break
+  // an explicit configuration (codex review; the smart client's needsBudget() rule).
+  const explicit = budget?.dailyLimit !== undefined && budget.monthlyLimit !== undefined;
+  return new CostTracker(dbPath, explicit ? budget : { ...resolveBudget(), ...budget });
 }

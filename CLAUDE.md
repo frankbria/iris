@@ -341,7 +341,7 @@ plans/
   - `listModels(provider, creds)` hits `/v1/models` (OpenAI, Anthropic) or `/api/tags` (Ollama), memoized per provider per process. It returns `null` for "could not check" — never an empty list — so a 401 cannot be mistaken for "no models exist". `IRIS_MODEL_PROBE=0` disables it; `jest.setup.ts` sets that so the suite stays hermetic
   - `resolveModel({provider, kind, model, creds})` returns a listed model as-is, rescues a **retired built-in pin** via longest-prefix match within the same family root, and throws `ModelUnavailableError` for a **user-named** model the provider does not serve. It needs no "was this explicit?" flag: a missing model that equals the pin is our rot, one that differs is the user's typo
   - `SmartAIVisionClient` rethrows `ModelUnavailableError` instead of stepping to the next vendor — that swallow is what made a retired model read as "all providers failed". Text clients resolve via `createResolvedAIClient()`; `loadConfig()` stays synchronous
-  - `CostTracker` prices a model with no exact row by its family (#243), but only when the rest of the ID is one snapshot suffix (`-20260514`, `-2024-08-06`, `-latest`): a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) or dated snapshot gets its family's rate, while a variant (`gpt-4o-realtime-preview`, `gpt-4oz`) does not, because variants are priced differently. A snapshot that kept a different price needs its own row (`gpt-4o-2024-05-13`). Anything unmatched is charged the dearest registered rate per field (including `setPricing` rows), recorded with `estimated = 1` on its ledger row, and warned about once per pair. It used to record $0, which a budget breaker never trips on. A model dearer than every registered row still under-reports until it gets one. Free providers (Ollama) stay $0 for every model
+  - `CostTracker` prices a model with no exact row by its family (#243), but only when the rest of the ID is one snapshot suffix (`-20260514`, `-2024-08-06`, `-latest`): a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) or dated snapshot gets its family's rate, while a variant (`gpt-4o-realtime-preview`, `gpt-4oz`) does not, because variants are priced differently. A snapshot that kept a different price needs its own row (`gpt-4o-2024-05-13`). Anything unmatched is charged the dearest registered rate per field (including `setPricing` rows), recorded with `estimated = 1` on its ledger row, and warned about once per pair. It used to record $0, which a budget breaker never trips on. A model dearer than every registered row still under-reports until it gets one. That ceiling stays by decision (#388): a floor above the table (o1-pro class) would make every unpriced model's reservation ~$1.80 and trip a $10 day in a handful of calls; the estimate is flagged and warned, and `setPricing` is the remedy. Every paid default row carries token rates (a test fails on a flat-only one, whose snapshots would ignore usage); `getPricing` resolves a family like the ledger; a token-priced call recorded without usage is charged its flat rate and warns once per pair Free providers (Ollama) stay $0 for every model
 
 ### Audit Log Page (issue #541)
 
@@ -2075,6 +2075,9 @@ tables.
 - **`ActionExecutor.cleanup()` waits for an in-flight launch**, then closes what
   it yields. A cleanup that landed mid-launch used to find no browser yet; if
   page creation then failed, that Chromium ran with nothing to close it.
+- **Concurrent `createPage()` calls share one launch (#383).** `launchBrowser()` returns
+  the in-flight `launching` promise first; two callers each used to start a Chromium, and
+  the first one's process was never closed.
 - **A dead browser is dropped, not reused.** The executor clears it on
   `disconnected`, and the protocol clears a `session.page` that `isClosed()`,
   so the next action relaunches. Playwright notices a kill ~100ms after the
@@ -2167,6 +2170,8 @@ upgrade transaction; the cache would need one added).
 - `resolveBudget()` (src/config.ts): `IRIS_DAILY_BUDGET_USD` / `IRIS_MONTHLY_BUDGET_USD`
   > `budget` in `~/.iris/config.json` > `DEFAULT_BUDGET_LIMITS` ($10 / $200), per field.
   Malformed values throw. An explicit `costConfig` passed to the client still wins.
+  `createCostTracker(dbPath, budget?)` fills omitted limits the same way (#365); with both
+  limits given it never reads `resolveBudget()`, so a malformed variable cannot throw there.
 - Container: compose sets `IRIS_DATA_DIR: /data`, the only durable writable path
   under the read-only root filesystem.
 - Under Jest, `process.env.HOME` does not move `os.homedir()` (the env is a copy);

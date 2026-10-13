@@ -16,7 +16,7 @@ import {
   type AIVisionClient,
   type AIVisionResponse,
 } from '../src/ai-client/base';
-import { BudgetExceededError, toMicros } from '../src/ai-client/cost-tracker';
+import { BudgetExceededError, DEFAULT_PRICING, toMicros } from '../src/ai-client/cost-tracker';
 import { AIClientFactory } from '../src/ai-client/factory';
 import { DEFAULT_MODELS, ModelUnavailableError } from '../src/ai-client/models';
 import { ImagePreprocessor } from '../src/ai-client/preprocessor';
@@ -463,7 +463,8 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
         tracker.trackOperation('custom', 'metered', false); // no usage supplied
 
-        expect(warn).not.toHaveBeenCalled();
+        // It says the usage was missing (#388), never that the pricing is.
+        expect(warn.mock.calls.flat().join(' ')).not.toMatch(/No pricing registered/);
         warn.mockRestore();
       });
 
@@ -531,6 +532,34 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         expect(tracker.trackOperation('openai', 'o9-ultra', false, big)).toBeGreaterThanOrEqual(5);
         expect(tracker.getBudgetStatus().circuitBreakerTriggered).toBe(true);
         expect(() => tracker.reserve('openai', 'o9-ultra')).toThrow(/Budget limit exceeded/);
+      });
+
+      // #388: a paid row without token rates would charge its snapshots the flat rate
+      // whatever their usage.
+      it('gives every paid default row token rates', () => {
+        const flatOnly = DEFAULT_PRICING.filter(
+          (p) =>
+            p.costPerImage > 0 &&
+            (p.costPerInputToken === undefined || p.costPerOutputToken === undefined),
+        );
+        expect(flatOnly).toEqual([]);
+      });
+
+      // #388: getPricing resolves a snapshot like the ledger charges it, not as "free".
+      it('getPricing answers a dated ID with its family price', () => {
+        expect(tracker.getPricing('anthropic', 'claude-sonnet-5-20260514')).toBe(0.0015);
+        expect(tracker.getPricing('openai', 'gpt-4oz')).toBe(0);
+      });
+
+      // #388: a token-priced model recorded without usage is charged its flat rate; say so.
+      it('warns once when a token-priced call is recorded without usage', () => {
+        tracker.setPricing('custom', 'metered-388', 0.001, 1e-6, 2e-6);
+        expect(tracker.trackOperation('custom', 'metered-388', false)).toBe(0.001);
+        tracker.trackOperation('custom', 'metered-388', false);
+        expect(tracker.trackOperation('custom', 'metered-388', true)).toBe(0); // cached: no warning
+        const warned = warn.mock.calls.filter((c) => /without token usage/.test(String(c[0])));
+        expect(warned).toHaveLength(1);
+        expect(String(warned[0][0])).toContain('custom:metered-388');
       });
 
       it('keeps every model on a free provider at $0', () => {
@@ -857,6 +886,30 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         }
       });
 
+      // #365: limits not given come from resolveBudget(), not the built-in defaults.
+      it('createCostTracker takes unset limits from the environment and config', () => {
+        const before = process.env.IRIS_DAILY_BUDGET_USD;
+        process.env.IRIS_DAILY_BUDGET_USD = '3';
+        try {
+          const t = createCostTracker(':memory:');
+          expect(t.getBudgetStatus().dailyLimit).toBe(3);
+          expect(t.getBudgetStatus().monthlyLimit).toBe(200); // the default, still
+          t.close();
+          // An explicit limit still wins.
+          const u = createCostTracker(':memory:', { dailyLimit: 7 });
+          expect(u.getBudgetStatus().dailyLimit).toBe(7);
+          u.close();
+          // Both limits explicit: a malformed environment value is never read (codex review).
+          process.env.IRIS_DAILY_BUDGET_USD = 'not-a-number';
+          const v = createCostTracker(':memory:', { dailyLimit: 7, monthlyLimit: 70 });
+          expect(v.getBudgetStatus().monthlyLimit).toBe(70);
+          v.close();
+        } finally {
+          if (before === undefined) delete process.env.IRIS_DAILY_BUDGET_USD;
+          else process.env.IRIS_DAILY_BUDGET_USD = before;
+        }
+      });
+
       it('converts USD to micros, rounding a paid fraction up and float noise away', () => {
         expect(toMicros(0)).toBe(0);
         expect(toMicros(2.5e-5)).toBe(25); // 2.5e-5 * 1e6 is 25.000000000000004 in floats
@@ -951,8 +1004,8 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       });
 
       it('should fall back to per-image price when the model has no token rates', () => {
-        // gpt-4-vision-preview has only a per-image price configured.
-        const cost = tracker.trackOperation('openai', 'gpt-4-vision-preview', false, {
+        tracker.setPricing('custom', 'flat-only', 0.003);
+        const cost = tracker.trackOperation('custom', 'flat-only', false, {
           inputTokens: 500,
           outputTokens: 100,
         });
