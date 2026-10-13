@@ -1216,7 +1216,8 @@ reference.
     browser's) and `self.origin` (catches a sandboxed iframe, opaque `null` whatever its URL;
     writable by page script) must both equal it, so a page lying about either is refused. An
     unknown or opaque origin is refused. The value is
-    typed into that same element. A malformed env binding fails the fill, never unbinds it.
+    typed into that same element. A malformed env binding (empty included) fails the fill,
+    never unbinds it. The selector's handle is strict like `page.fill`: two matches refuse.
   - **Redaction by element**: the executor keeps the handle of each field it filled from a
     reference (a policy handle is retained, not disposed after the action; at most 50, the
     oldest released first; released when the page closes, when a read finds the field gone,
@@ -1224,7 +1225,9 @@ reference.
     seconds or hang) and
     `refreshFieldValues()` re-reads what they hold, so `redactSecrets` also cuts a
     `maxlength` prefix or a page rewrite of the value. The agent loop and RPC `observe` call it
-    before reading the page. Values under 4 characters read back are not cut.
+    before reading the page. Values under 4 characters read back are not cut. Values read are
+    kept for the executor's life (a later read that times out must not un-redact one), and the
+    screenshot mask (`secretFields`) matches them too, so a truncated field is masked.
   - **Short values**: under `MIN_SECRET_LENGTH` (4) a reference is refused at fill time,
     naming the reference only: cutting a 1-3 character value would cut every match of it
     from errors and digests. A short non-secret value is filled literally.
