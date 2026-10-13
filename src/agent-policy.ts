@@ -160,13 +160,8 @@ export function checkAction(
   startOrigin: string | null,
 ): PolicyVerdict {
   // In order: the first refusal wins.
-  const checks = [
-    () => typeVerdict(action, policy),
-    () => originVerdict(action, policy, currentUrl, startOrigin),
-    () => destructiveVerdict(action, policy),
-  ];
-  for (const check of checks) {
-    const verdict = check();
+  for (const check of [typeVerdict, originVerdict, destructiveVerdict]) {
+    const verdict = check(action, policy, currentUrl, startOrigin);
     if (verdict) return verdict;
   }
   return ALLOWED;

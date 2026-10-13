@@ -179,12 +179,12 @@ const fillReversed = (m: RegExpExecArray): Action | null =>
 const navigateAction = (m: RegExpExecArray): Action | null =>
   looksLikeUrl(m[1]) ? { type: 'navigate', url: m[1] } : null;
 /** An element_absent target is a selector (page.locator); the others are text or a URL part. */
-const assertAction =
-  (kind: AssertKind) =>
-  (m: RegExpExecArray, instruction: string): Action | null =>
-    kind !== 'element_absent' || looksLikeSelector(m[1])
-      ? { type: 'assert', kind, target: m[1], description: instruction }
-      : null;
+function assertAction(kind: AssertKind): PatternRule['build'] {
+  return function build(m: RegExpExecArray, instruction: string): Action | null {
+    if (kind === 'element_absent' && !looksLikeSelector(m[1])) return null;
+    return { type: 'assert', kind, target: m[1], description: instruction };
+  };
+}
 
 const rules = (label: string, build: PatternRule['build'], patterns: RegExp[]): PatternRule[] =>
   patterns.map((pattern) => ({ pattern, label, build }));
