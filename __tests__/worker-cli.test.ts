@@ -55,10 +55,13 @@ describe('runWorker heartbeat (#273)', () => {
     const { runWorker } = await import('../src/worker');
     const stop = new AbortController();
     let claims = 0;
+    // #564: the second claim stands in for a long job and returns only when released, so
+    // "the file was written while it ran" holds by order, not by a fixed sleep.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
     const jobs = {
-      // The second claim stands in for a long job: it does not return for 600ms.
       claim: jest.fn(async () => {
-        if (++claims === 2) await sleep(600);
+        if (++claims === 2) await released;
         return null;
       }),
       finish: jest.fn(),
@@ -76,10 +79,11 @@ describe('runWorker heartbeat (#273)', () => {
     try {
       while (claims < 2) await sleep(5); // inside the long claim now
       fs.rmSync(file, { force: true });
-      await sleep(200); // still inside it: only the timer can have written the file
+      // Still inside it (it has not been released): only the timer can write the file.
+      while (!fs.existsSync(file)) await sleep(5);
       expect(claims).toBe(2);
-      expect(fs.existsSync(file)).toBe(true);
     } finally {
+      release();
       stop.abort();
       await done;
     }
@@ -150,10 +154,26 @@ describe('job claims (#435)', () => {
   afterEach(() => jest.dontMock('../src/a11y/a11y-runner'));
 
   it('heartbeats while the job runs; a failing heartbeat is logged and the job still finishes', async () => {
-    slowRunner(150);
+    // #564: the job ends only after the worker's second heartbeat, so "two beats while it
+    // runs" holds by order, not by how many real 20 ms ticks fit in a fixed sleep. A worker
+    // that stops heartbeating never lets the job end, and the test times out.
+    let secondBeat!: () => void;
+    const twoBeats = new Promise<void>((resolve) => (secondBeat = resolve));
+    jest.resetModules();
+    jest.doMock('../src/a11y/a11y-runner', () => ({
+      AccessibilityRunner: class {
+        async run() {
+          await twoBeats;
+          return { summary: {}, results: [] };
+        }
+      },
+    }));
     const { processNextA11yJob } = await import('../src/worker');
     const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-    const heartbeat = jest.fn().mockRejectedValue(new Error('db blip'));
+    const heartbeat = jest.fn().mockImplementation(async () => {
+      if (heartbeat.mock.calls.length === 2) secondBeat();
+      throw new Error('db blip');
+    });
     const finish = jest.fn().mockResolvedValue(true);
     await processNextA11yJob(
       { claim: async () => job as never, finish, fail: jest.fn(), heartbeat, reapStuck: jest.fn() },
