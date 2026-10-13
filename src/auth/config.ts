@@ -399,7 +399,10 @@ async function rememberActiveOrg(
     ctx.path === '/organization/accept-invitation'
       ? returned?.member?.organizationId
       : returned?.id;
-  if (!orgId) return;
+  // A create that keeps the current org active (codex review) activated nothing.
+  const kept = (ctx.body as { keepCurrentActiveOrganization?: unknown } | undefined)
+    ?.keepCurrentActiveOrganization;
+  if (!orgId || (ctx.path === '/organization/create' && kept === true)) return;
   const userId = (await getSessionFromCtx(ctx))?.user.id;
   if (!userId) return;
   await sql`

@@ -158,6 +158,16 @@ const PASSWORD = 'correct-horse-battery-staple';
     .members.find((m) => m.user.email === 'ivan@iris.test');
   await auth.api.removeMember({ headers: alice, body: { memberIdOrEmail: ivanInA.id, organizationId: A } });
   r.afterRemoval = (await active(await signIn('ivan@iris.test'))) === I;
+  // A create that keeps the current org active is not a switch (codex review).
+  const jules = await user('jules');
+  const J = await active(jules);
+  await pool.query("insert into org_plans (org_id, plan) values ($1, 'pro')", [J]);
+  await auth.api.setActiveOrganization({ headers: jules, body: { organizationId: J } });
+  await auth.api.createOrganization({
+    headers: jules,
+    body: { name: 'kept', slug: 'kept-' + Date.now(), keepCurrentActiveOrganization: true },
+  });
+  r.keptActive = (await active(await signIn('jules@iris.test'))) === J;
   r.I = I;
 
   r.A = A;
@@ -295,6 +305,10 @@ const PASSWORD = 'correct-horse-battery-staple';
 
   it('falls back to an org the user is still in when the remembered one dropped them', () => {
     expect(r.afterRemoval).toBe(true);
+  });
+
+  it('does not remember an org created with keepCurrentActiveOrganization', () => {
+    expect(r.keptActive).toBe(true);
   });
 
   it('refuses to delete an org', () => {
