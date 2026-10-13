@@ -410,10 +410,12 @@ if (ADMIN_URL && !S3_READY && process.env.CI) throw new Error('IRIS_TEST_S3_* is
 
   afterAll(async () => {
     await Promise.all([server, bare].map((s) => new Promise((r) => s?.close(() => r(null)))));
-    if (s3) await removeBucket(s3, bucket).finally(() => s3?.destroy());
     store.close();
     await db?.destroy();
     await admin(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
+    // Last (PR bot): a bucket that was never created (setup gave up) must not skip the
+    // database teardown above.
+    if (s3) await removeBucket(s3, bucket).finally(() => s3?.destroy());
   });
 
   const detail = async (b: string, id: string, key = 'key-a') =>

@@ -153,11 +153,13 @@ const page = (color: string, extra = 0) =>
 
   afterAll(async () => {
     await new Promise((r) => server?.close(() => r(null)));
-    if (s3) await removeBucket(s3, bucket).finally(() => s3?.destroy());
     site?.close();
     store.close();
     await db?.destroy();
     await admin(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
+    // Last (PR bot): a bucket that was never created (setup gave up) must not skip the
+    // database teardown above.
+    if (s3) await removeBucket(s3, bucket).finally(() => s3?.destroy());
   });
 
   const api = (method: string, path: string, key = 'key-a', body?: unknown) =>
