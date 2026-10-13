@@ -98,7 +98,10 @@ export function pruneRuns(root: string, keep: number, currentRunId: string): str
     .filter((e) => e.isDirectory() && e.name !== currentRunId && SAFE_NAME.test(e.name))
     .map((e) => ({ id: e.name, mtime: fs.statSync(path.join(runsDir, e.name)).mtimeMs }))
     .sort((a, b) => b.mtime - a.mtime);
-  const removed = others.slice(Math.max(0, keep - 1)).map((r) => r.id);
+  // The current run takes a slot only if it wrote something (codex review): one that failed
+  // before its first artifact must not cost an older run its place.
+  const reserved = fs.existsSync(path.join(runsDir, currentRunId)) ? 1 : 0;
+  const removed = others.slice(Math.max(0, keep - reserved)).map((r) => r.id);
   for (const id of removed) fs.rmSync(path.join(runsDir, id), { recursive: true, force: true });
   return removed;
 }

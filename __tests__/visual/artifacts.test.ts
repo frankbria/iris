@@ -152,6 +152,13 @@ describe('pruneRuns', () => {
     expect(runs()).toEqual(['not a run', 'notes.txt', 'r1']);
   });
 
+  it('gives no slot to a current run that wrote nothing', () => {
+    run('r1', 60);
+    run('r2', 120);
+    expect(pruneRuns(root, 1, 'failed-early')).toEqual(['r2']);
+    expect(runs()).toEqual(['r1']);
+  });
+
   it('does nothing when there is no runs directory', () => {
     expect(pruneRuns(root, 1, 'r1')).toEqual([]);
   });
