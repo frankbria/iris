@@ -189,10 +189,9 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       // ever makes the sleep longer. It does not protect against the other
       // mechanism in #142: the WSL2 clock stepping backward, which shrinks the
       // apparent gap no matter how generous the margin. Prefer a negative TTL,
-      // which needs no elapsed time at all; the constants below remain only for
-      // the throttle test, which genuinely needs one row older than another.
+      // which needs no elapsed time at all; the throttle test, which needs one row
+      // older than another, dates that row back in the file instead of sleeping (#581).
       const TTL = 10;
-      const EXPIRE_WAIT = 200;
 
       /**
        * Expire everything already written, without waiting.
@@ -215,20 +214,34 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         c.close();
       });
 
-      it('auto-prunes expired entries once the write throttle is reached', async () => {
+      it('auto-prunes expired entries once the write throttle is reached', () => {
+        // #581: a 10 ms TTL let the fresh entry expire too on a loaded host. The TTL is an
+        // hour, and the old row is dated two hours back in the file: no wall-clock gap
+        // between the writes matters.
+        const dbPath = path.join(
+          os.tmpdir(),
+          `iris-cache-throttle-${process.pid}-${Date.now()}.db`,
+        );
         // pruneIntervalWrites = 2 => prune fires on every 2nd set()
-        const c = createCache({ ttlMs: TTL, pruneIntervalWrites: 2 });
-        c.set(c.generateKey('old', 'old', 'p', 'm'), value, 'p', 'm');
+        const c = createCache({ ttlMs: 60 * 60 * 1000, pruneIntervalWrites: 2, dbPath });
+        try {
+          c.set(c.generateKey('old', 'old', 'p', 'm'), value, 'p', 'm');
+          const db = new Database(dbPath);
+          db.prepare('UPDATE ai_vision_cache SET timestamp = ?').run(
+            Date.now() - 2 * 60 * 60 * 1000,
+          );
+          db.close();
 
-        await sleep(EXPIRE_WAIT); // let the first entry expire
+          // 2nd write trips the throttle and prunes the expired 'old' entry
+          c.set(c.generateKey('fresh', 'fresh', 'p', 'm'), value, 'p', 'm');
 
-        // 2nd write trips the throttle and prunes the now-expired 'old' entry
-        c.set(c.generateKey('fresh', 'fresh', 'p', 'm'), value, 'p', 'm');
-
-        // Persistent SQLite row for the expired entry is reclaimed; only the
-        // fresh entry remains. (The in-memory LRU is separately bounded.)
-        expect(c.getStats().persistentSize).toBe(1);
-        c.close();
+          // Persistent SQLite row for the expired entry is reclaimed; only the
+          // fresh entry remains. (The in-memory LRU is separately bounded.)
+          expect(c.getStats().persistentSize).toBe(1);
+        } finally {
+          c.close();
+          fs.rmSync(dbPath, { force: true });
+        }
       });
 
       it('prunes expired entries on construction', () => {
