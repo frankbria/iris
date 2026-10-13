@@ -435,6 +435,31 @@ services:
     expect(r.files).toEqual([...fresh, ...seeded.slice(0, 4)].sort());
   }, 120_000);
 
+  // #570: found running, stopped before `docker exec`. A docker wrapper on PATH stops the
+  // container right before exec, so the race is made, not waited for.
+  it('a database that stops between discovery and exec gets the same refusal', () => {
+    const realDocker = execFileSync('sh', ['-c', 'command -v docker'], { encoding: 'utf8' }).trim();
+    const raceBin = path.join(dir, 'race-bin');
+    fs.mkdirSync(raceBin, { recursive: true });
+    fs.writeFileSync(
+      path.join(raceBin, 'docker'),
+      `#!/bin/sh
+if [ "$1" = exec ]; then "${realDocker}" stop -t 1 "$2" >/dev/null; fi
+exec "${realDocker}" "$@"
+`,
+      { mode: 0o755 },
+    );
+    const seeded = seedBackups('race', [30]);
+    const r = backup('race', {
+      PATH: [raceBin, PATH].join(':'),
+      BACKUP_KEEP_DAYS: '1',
+      BACKUP_KEEP_MIN: '1',
+    });
+    expect(r.out).toMatch(/no running postgres container/);
+    expect(r.status).not.toBe(0);
+    expect(r.files).toEqual(seeded.sort());
+  }, 120_000);
+
   it('a stopped database exits non-zero, leaves no file and deletes nothing', () => {
     const seeded = seedBackups('stopped', [30]);
     compose('stop', '-t', '1', 'postgres');
