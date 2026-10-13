@@ -1177,8 +1177,7 @@ selector no page has), and the watcher's default instruction is `click submit`.
 
 - **Selector targets** (click, fill, `element_absent`): `looksLikeSelector()` accepts an
   engine selector (`text=…`, `role=…`, `css=…`), an XPath, or CSS with at least one token
-  carrying selector syntax (`#`, `.x`, `[`, `:x`, `*`, a combinator) and only bare
-  identifiers beside it. So `form > button` is a selector, while a bare `button` or `submit`
+  carrying selector syntax (`#`, `.x`, `[`, `:x`, `*`, a combinator) and only element names beside it (a known HTML/SVG element or a custom element, #519: `the #name field`, `~50 items` are prose). So `form > button` is a selector, while a bare `button` or `submit`
   is prose (write `css=button`). Quoted, bracket and paren contents are blanked first, so
   `button:has-text("Sign in")` counts as one token.
 - **Navigation**: a whitespace-free absolute URL (`URL.canParse`) only, which is all

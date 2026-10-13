@@ -247,6 +247,11 @@ describe('prose is not a selector or a URL (issue #297)', () => {
     'click Submit.',
     'click Note: save',
     'click Yes, please',
+    // #519: one selector-looking token glued into prose is still prose.
+    'type x in the #name field',
+    'click the Sign-in button.please',
+    'click ~50 items',
+    'click +1 more',
   ])('%s -> no pattern actions', (instruction) => {
     expect(translateSync(instruction)).toEqual([]);
   });
@@ -272,6 +277,10 @@ describe('prose is not a selector or a URL (issue #297)', () => {
     ['click h2~p', 'h2~p'],
     ['click div >a', 'div >a'],
     ['click #nav +li', '#nav +li'],
+    // #519: element names beside selector syntax are a descendant selector, not prose.
+    ['click form .row button', 'form .row button'],
+    ['click ul li.active', 'ul li.active'],
+    ['click app-shell .menu', 'app-shell .menu'],
   ])('%s keeps the selector %s', (instruction, selector) => {
     expect(translateSync(instruction)).toEqual([{ type: 'click', selector }]);
   });
