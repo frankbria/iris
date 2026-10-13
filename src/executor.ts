@@ -1,4 +1,4 @@
-import { Browser, ElementHandle, Locator, Page, Request, errors } from 'playwright';
+import { Browser, ElementHandle, Frame, Locator, Page, Request, errors } from 'playwright';
 import { Action } from './translator';
 import {
   launchBrowser,
@@ -15,6 +15,7 @@ import { isHostedMode } from './hosted';
 import {
   CredentialReferenceError,
   envSecrets,
+  MIN_SECRET_LENGTH,
   looksLikeReference,
   noSecrets,
   resolveFillText,
@@ -183,6 +184,59 @@ function matchesSegments(url: URL, target: string): boolean {
 }
 
 /**
+ * What a field holds now (input value, else its text), read for at most a second; `null` when
+ * the element is gone (detached, its page closed), so its handle can be released.
+ */
+async function readField(field: ElementHandle): Promise<string | null> {
+  return withPageTimeout(
+    field.inputValue().catch(() =>
+      field.textContent().then(
+        (t) => t ?? '',
+        () => null,
+      ),
+    ),
+    '',
+    1_000,
+  );
+}
+
+/** At most this many filled fields are kept for `refreshFieldValues`; the oldest go first. */
+const MAX_SECRET_FIELDS = 50;
+
+/**
+ * The security origin of the document an element is in (#513): `self.origin`, not the
+ * frame's URL, since a sandboxed iframe without `allow-same-origin` has an opaque origin
+ * (`null`) whatever its URL (codex review). `undefined` when it cannot be read in time, which
+ * a bound reference refuses. A string expression, so coverage instrumentation never reaches
+ * the page. `self.origin` is writable by the document's own script, so a sandboxed document
+ * served by the bound origin can pass; only the bound site controls that script (see
+ * CLAUDE.md, Credential References).
+ */
+async function effectiveOrigin(handle: ElementHandle): Promise<string | undefined> {
+  const frame = await handle.ownerFrame();
+  if (!frame) return undefined;
+  // The URL's origin is the browser's and cannot be faked by the page; `self.origin` catches
+  // an opaque (sandboxed) document but is writable by page script. Both must equal the
+  // binding: a spoofed `self.origin` passes only when the URL's origin is the bound one too,
+  // i.e. the bound site's own script (the residual in the doc comment above).
+  const fromDocument = await documentOrigin(frame);
+  if (fromDocument === 'null') return 'null'; // opaque: named as such in the refusal
+  return fromDocument === urlOrigin(frame.url()) ? fromDocument : undefined;
+}
+
+/** `self.origin` of a frame's document, read for at most a second. */
+async function documentOrigin(frame: Frame): Promise<string | undefined> {
+  const origin = await withPageTimeout(
+    frame.evaluate('self.origin').catch(() => undefined),
+    undefined,
+    1_000,
+  );
+  return typeof origin === 'string' ? origin : undefined;
+}
+
+const urlOrigin = (url: string) => (URL.canParse(url) ? new URL(url).origin : undefined);
+
+/**
  * ActionExecutor handles the execution of translated actions with retry logic,
  * error handling, and browser lifecycle management.
  */
@@ -198,6 +252,22 @@ export class ActionExecutor {
   private launching: Promise<Browser> | null = null;
   /** Values this executor typed from credential references (#352), for `redactSecrets`. */
   private readonly resolvedSecrets = new Set<string>();
+  /**
+   * The fields it typed them into (#513), read again by `refreshFieldValues`: a field can
+   * hold a form of the value the scrub never saw (a `maxlength` prefix, a page rewrite).
+   */
+  private secretFieldHandles: ElementHandle[] = [];
+  /** The page each kept handle belongs to, so one close listener per page releases them. */
+  private readonly secretFieldPages = new WeakMap<ElementHandle, Page>();
+  private readonly watchedPages = new WeakSet<Page>();
+  /**
+   * Everything those fields were seen holding, cut by `redactSecrets` too.
+   * ponytail: kept for the executor's life like `resolvedSecrets`, so it grows with each
+   * distinct value seen; cap it if one session ever reads thousands.
+   */
+  private readonly fieldValues = new Set<string>();
+  /** Policy handles kept for those readers, not disposed after their action. */
+  private readonly retainedHandles = new WeakSet<ElementHandle>();
 
   constructor(options: ActionExecutorOptions = {}) {
     this.options = {
@@ -305,7 +375,9 @@ export class ActionExecutor {
     try {
       return await this.runAction(action, page, secrets, target);
     } finally {
-      await target?.dispose().catch(() => undefined);
+      // Kept when a reference fill keeps reading the field through it (#513).
+      if (target && !this.retainedHandles.has(target))
+        await target.dispose().catch(() => undefined);
     }
   }
 
@@ -388,7 +460,98 @@ export class ActionExecutor {
    * so anything read back from the page must pass through this before a model.
    */
   redactSecrets(text: string): string {
-    return scrubValues(text, this.resolvedSecrets);
+    return scrubValues(text, [...this.resolvedSecrets, ...this.fieldValues]);
+  }
+
+  /**
+   * A fill whose text is a credential reference (#513): the element it goes to is resolved
+   * first (the policy's handle, else the selector's), so a binding is checked against that
+   * element's own frame, iframes included, and the value is typed into that same element.
+   * The handle is kept for `refreshFieldValues`, which reads the element itself: replaying
+   * the selector misses a field whose id changed or that sits in a frame.
+   */
+  private async fillFromReference(
+    action: Extract<Action, { type: 'fill' }>,
+    page: Page,
+    secrets: SecretSource,
+    target?: ElementHandle,
+  ): Promise<void> {
+    // Strict, like page.fill (PR bot): two matches refuse rather than type into the first.
+    const handle =
+      target ??
+      (await page
+        .locator(action.selector)
+        .elementHandle({ timeout: this.options.timeout ?? EXECUTOR_DEFAULTS.timeout }));
+    if (!handle) throw new Error(`No element matches ${action.selector}`);
+    let value: string;
+    try {
+      ({ value } = resolveFillText(action.text, secrets, await effectiveOrigin(handle)));
+      this.resolvedSecrets.add(value);
+      await handle.fill(value);
+    } catch (error) {
+      // Our own handle goes now; a policy handle is disposed by executeAction.
+      if (!target) await handle.dispose().catch(() => undefined);
+      throw error;
+    }
+    this.keepSecretField(handle, page);
+    // Read what the field holds now (PR bot): a fill followed in the same turn by a submit
+    // or the field's removal never reaches a later refresh, and a maxlength prefix would
+    // reach the next URL or digest uncut.
+    const held = await readField(handle);
+    if (held !== null && held.trim().length >= MIN_SECRET_LENGTH) this.fieldValues.add(held);
+  }
+
+  /**
+   * Keeps a filled field's handle for `refreshFieldValues` (codex review: bounded, and
+   * released when gone). A handle already kept is not added twice.
+   */
+  private keepSecretField(handle: ElementHandle, page: Page): void {
+    if (this.secretFieldHandles.includes(handle)) return;
+    this.retainedHandles.add(handle);
+    this.secretFieldHandles.push(handle);
+    this.secretFieldPages.set(handle, page);
+    // A page that closes takes its fields with it: release their handles then, not at the
+    // next refresh. Handles kept into a closed page made browser.close() take tens of
+    // seconds, or hang (found by this PR's suite). One listener per page (codex review).
+    if (!this.watchedPages.has(page)) {
+      this.watchedPages.add(page);
+      page.once('close', () => {
+        for (const h of this.secretFieldHandles.filter(
+          (x) => this.secretFieldPages.get(x) === page,
+        )) {
+          this.releaseSecretField(h);
+        }
+      });
+    }
+    for (const old of this.secretFieldHandles.splice(
+      0,
+      Math.max(0, this.secretFieldHandles.length - MAX_SECRET_FIELDS),
+    )) {
+      void old.dispose().catch(() => undefined);
+    }
+  }
+
+  private releaseSecretField(handle: ElementHandle): void {
+    this.secretFieldHandles = this.secretFieldHandles.filter((h) => h !== handle);
+    void handle.dispose().catch(() => undefined);
+  }
+
+  /**
+   * Reads what the fields filled from credential references hold now (#513), so the next
+   * `redactSecrets` cuts that too: call it before reading the page for a model. Values
+   * shorter than `MIN_SECRET_LENGTH` are not cut (they would cut every match); a field that
+   * cannot be read (gone, detached) is skipped. Each read is bounded. Values read earlier
+   * stay (PR bot): a read that times out must not un-redact what the page may still show.
+   */
+  async refreshFieldValues(): Promise<void> {
+    const held = await Promise.all(this.secretFieldHandles.map((h) => readField(h)));
+    // A field that is gone has nothing to show: release its handle.
+    const gone = this.secretFieldHandles.filter((_, i) => held[i] === null);
+    this.secretFieldHandles = this.secretFieldHandles.filter((_, i) => held[i] !== null);
+    for (const handle of gone) void handle.dispose().catch(() => undefined);
+    for (const v of held) {
+      if (v !== null && v.trim().length >= MIN_SECRET_LENGTH) this.fieldValues.add(v);
+    }
   }
 
   /**
@@ -402,7 +565,9 @@ export class ActionExecutor {
    * must not take a screenshot it cannot mask.
    */
   async secretFields(page: Page): Promise<Locator[] | null> {
-    if (this.resolvedSecrets.size === 0) return [];
+    // What the fields were seen holding too (PR bot): a maxlength field shows a prefix.
+    const secrets = [...this.resolvedSecrets, ...this.fieldValues];
+    if (secrets.length === 0) return [];
     // Every frame (PR bot): a fill can target a field inside an iframe, and the screenshot
     // renders it.
     const lists = await withPageTimeout(
@@ -428,7 +593,7 @@ export class ActionExecutor {
     const held = await Promise.all(
       fields.map((field) =>
         read(field).then(
-          (value) => [...this.resolvedSecrets].some((secret) => value.includes(secret)),
+          (value) => secrets.some((secret) => value.includes(secret)),
           () => true,
         ),
       ),
@@ -490,6 +655,10 @@ export class ActionExecutor {
    * Clean up browser resources.
    */
   async cleanup(): Promise<void> {
+    // Filled fields' handles (#513) die with the browser; drop them first.
+    for (const handle of this.secretFieldHandles.splice(0)) {
+      await handle.dispose().catch(() => undefined);
+    }
     // A cleanup that lands mid-launch would otherwise find no browser yet and
     // leave the one about to arrive running with nothing to close it (#240).
     await this.launching?.catch(() => undefined);
@@ -525,9 +694,12 @@ export class ActionExecutor {
       case 'fill': {
         // Resolved here and nowhere else: the action (and so the result, history
         // and the model's view of prior actions) keeps the reference (#352).
-        const { value, fromReference } = resolveFillText(action.text, secrets);
-        if (fromReference) this.resolvedSecrets.add(value);
-        await (target ? target.fill(value) : typeText(page, action.selector, value));
+        if (!looksLikeReference(action.text)) {
+          const { value } = resolveFillText(action.text, secrets);
+          await (target ? target.fill(value) : typeText(page, action.selector, value));
+          break;
+        }
+        await this.fillFromReference(action, page, secrets, target);
         break;
       }
 

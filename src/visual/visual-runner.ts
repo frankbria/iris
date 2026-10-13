@@ -12,7 +12,15 @@ import { VisualCaptureEngine, FREEZE_ANIMATIONS_CSS } from './capture';
 import { VisualDiffEngine } from './diff';
 import { BaselineManager } from './baseline';
 import { AIVisualClassifier } from './ai-classifier';
-import { artifactName, legacyArtifactName, newRunId, runArtifactPath } from './artifacts';
+import { log } from '../log';
+import {
+  artifactName,
+  DEFAULT_KEEP_RUNS,
+  legacyArtifactName,
+  newRunId,
+  pruneRuns,
+  runArtifactPath,
+} from './artifacts';
 import { MODEL_UNAVAILABLE, VisualReporter } from './reporter';
 import { ModelUnavailableError } from '../ai-client/models';
 import type { ProviderCredentials } from '../config';
@@ -76,6 +84,11 @@ export interface VisualTestRunnerConfig {
   artifactsDir?: string;
   /** This run's id; a new one (time-sortable, unique) when unset. */
   runId?: string;
+  /**
+   * Run directories kept under `<artifactsDir>/runs`, this one included; older ones are
+   * removed at the end of the run (#425). Default {@link DEFAULT_KEEP_RUNS}; 0 keeps all.
+   */
+  keepRuns?: number;
 }
 
 export interface VisualTestResult {
@@ -298,6 +311,22 @@ export class VisualTestRunner {
       // Release the classifier's SQLite handles (cache + cost-tracker). No-op
       // when semantic analysis is disabled and the classifier was never created.
       this.aiClassifier?.close();
+      this.pruneOldRuns();
+    }
+  }
+
+  /** Older run directories go (#425). A failure is logged: the run itself is done. */
+  private pruneOldRuns(): void {
+    try {
+      pruneRuns(
+        this.config.artifactsDir ?? '.iris',
+        this.config.keepRuns ?? DEFAULT_KEEP_RUNS,
+        this.runId,
+      );
+    } catch (error) {
+      log('warn', 'could not prune old visual runs', {
+        err: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

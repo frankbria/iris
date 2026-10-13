@@ -194,7 +194,7 @@ plans/
 - **ImagePreprocessor**: Resizes images to API limits (2048x2048), optimizes quality (85% JPEG), calculates SHA-256 hashes
 - **AIVisionCache**: Two-tier caching (LRU memory + SQLite), tracks hit rates, automatic TTL expiration (both tiers: the memory tier used to skip the age check, so a long-running server served expired verdicts, #299). Its indexes are `idx_ai_cache_*` and the cost tracker's `idx_cost_*`: SQLite index names are global per file, and a shared `idx_timestamp` left the second table unindexed (#299). Key identity = provider + model + baseline hash + current hash + optional diff hash + optional context, so a diff-aware verdict is never served for a diff-less request (issue #124)
 - **CostTracker**: Real-time cost calculation, budget enforcement with circuit breaker (blocks paid operations only — cache hits and free providers like Ollama always proceed, issue #68), alert thresholds (80%/95%/100%)
-- **Text and agent turns are metered too (issue #242).** `createResolvedAIClient(config, { operation })` returns a `MeteredTextClient` (src/ai-client/factory.ts), the one place every text call is built (translator → `iris run`/RPC/watcher; agent loop with `agent_turn`). It reserves budget *before* the provider call and settles the reservation with the reply's `usage`, on the same ledger as vision, so one budget covers all AI spend. It opens a tracker per call and closes it afterwards, because the RPC server is long-lived; for that reason the unpriced-model "warn once" set is module-level, not per instance. Text clients return `usage` on every reply the provider sent, including ones IRIS then rejects. A reply with no usage (the request failed before the provider billed) writes no row. The deprecated sync `createAIClient()` is still unmetered
+- **Text and agent turns are metered too (issue #242).** `createResolvedAIClient(config, { operation })` returns a `MeteredTextClient` (src/ai-client/factory.ts), the one place every text call is built (translator → `iris run`/RPC/watcher; agent loop with `agent_turn`). It reserves budget *before* the provider call and settles the reservation with the reply's `usage`, on the same ledger as vision, so one budget covers all AI spend. It opens a tracker per call and closes it afterwards, because the RPC server is long-lived; for that reason the unpriced-model "warn once" set is module-level, not per instance. Text clients return `usage` on every reply the provider sent, including ones IRIS then rejects. A reply with no usage (the request failed before the provider billed) writes no row. The library's other text entry points, `AIClientFactory.create(config, 'text')` and the deprecated `createAIClient()`, return the same metered client without the model check (#386); the raw provider client is module-private
 - **Budget is reserved before a call and settled after it (issue #244).** `CostTracker.reserve()` checks the breaker and inserts a `pending = 1` row at the call's worst-case cost (8k in / 1k out tokens at the model's rate; text calls add one token per request character, since the instruction is uncapped short of the RPC payload limit) in one `BEGIN IMMEDIATE` transaction, so calls in flight count against the budget, across connections and processes. `settle(id, usage)` rewrites the row with the real cost; `release(id)` deletes it when no reply came back. Admission is "spend + reservations < limit", so N parallel calls end within the limit plus one call. `trackOperation()` never throws: a call that was answered is paid for, and dropping its row is how spend went missing. A pending row left by a crashed process keeps counting at its estimate (fails safe) until it is an hour old: a tracker opening the ledger then deletes it (#390). `getStats()` reports settled rows only; the budget sums still count reservations. A vision call refused for budget by every vendor rejects with `BudgetExceededError` itself, not "All providers failed", and a paid answer whose settle fails (the client closed mid-call) is returned and the failure logged
   - **Money is summed in integer micro-dollars (#318)**: every row also carries `cost_micros`
     (`toMicros()`: through nano-dollars, then rounded up, so a paid call is never $0 and
@@ -599,6 +599,15 @@ The org is the tenant (ADR 0001 §4). The organization plugin's options live in
   address, so an abandoned sign-up leaves no org, and a failed creation is retried at
   the next sign-in. BetterAuth sets no active org on sign-in by itself. `createAuth()`
   therefore takes no `databaseHooks` from its caller.
+- **A new session starts in the org the user last made active (#409)**: `user_active_orgs`
+  (migration 0019, one row per user) is written by a `hooks.after` on set-active,
+  accept-invitation and create, and read by `activeOrgFor` only while the user is still a
+  member. Sessions cannot hold it: sign-out deletes the row. Org purge deletes its rows.
+- **`/org` pages its members (#409)** with `listMembers` (100 a page, `?page=N`): `org.members`
+  from `requireOrg()` is `getFullOrganization`'s first 100 only. The sole-owner count is one
+  query over the whole org. `/login` redirects a signed-in visitor to `next` (or
+  `/dashboard`), and `/signup?next=` carries it into the verification `callbackURL`, so an
+  invitee who signs up from the invitation lands back on it after verifying and logging in.
 - **Portal pages get their org from `requireOrg()`** (`apps/portal/lib/org.ts`), which
   calls BetterAuth with the session headers and no org id. Never read an org id from
   the request. A form rendered for that org sends its id back (`InviteForm`), because
@@ -1210,6 +1219,35 @@ reference.
   from references) before the model sees it.
 - No org vault: hosted fills arrive over the RPC from a client that holds its credentials. A
   vault would be one more `SecretSource`. `IRIS_SECRET_*` is scrubbed by `jest.setup.ts`.
+- **Hardening (#513)**:
+  - **Origin binding**: a source may return `{ value, origin }`
+    (`IRIS_SECRET_ORIGIN_<NAME>` locally; an RPC `secrets` entry `{ value, origin }`, zod-checked
+    URL). A reference fill resolves its element first (`fillFromReference`: the policy's handle,
+    else the selector's own `elementHandle`, frame-entry selectors included) and
+    `resolveFillText(text, source, pageOrigin)` refuses a bound reference unless that element's
+    document has exactly that http(s) origin (`effectiveOrigin`): the frame URL's origin (the
+    browser's) and `self.origin` (catches a sandboxed iframe, opaque `null` whatever its URL;
+    writable by page script) must both equal it. An unknown or opaque origin is refused. Not
+    refused: a sandboxed document *served by the bound origin* whose own script redefines
+    `self.origin`. Only the bound site can do that (a parent cannot script into an opaque
+    frame; `srcdoc`/`data:`/another site's `blob:` fail the URL check), and its own script can
+    already read its fields; a browser-side origin (CDP isolated world) would cost a CDP
+    session per fill for no change in who reads the value (codex review, rejected 3x). The value is
+    typed into that same element. A malformed env binding (empty included) fails the fill,
+    never unbinds it. The selector's handle is strict like `page.fill`: two matches refuse.
+  - **Redaction by element**: the executor keeps the handle of each field it filled from a
+    reference (a policy handle is retained, not disposed after the action; at most 50, the
+    oldest released first; released when the page closes, when a read finds the field gone,
+    and at `cleanup()`: handles kept into closed pages made `browser.close()` take tens of
+    seconds or hang) and
+    `refreshFieldValues()` re-reads what they hold, so `redactSecrets` also cuts a
+    `maxlength` prefix or a page rewrite of the value. The agent loop and RPC `observe` call it
+    before reading the page. Values under 4 characters read back are not cut. Values read are
+    kept for the executor's life (a later read that times out must not un-redact one), and the
+    screenshot mask (`secretFields`) matches them too, so a truncated field is masked.
+  - **Short values**: under `MIN_SECRET_LENGTH` (4) a reference is refused at fill time,
+    naming the reference only: cutting a 1-3 character value would cut every match of it
+    from errors and digests. A short non-secret value is filled literally.
 
 ### Hung Pages and Provider Failures (issue #293)
 
@@ -2026,6 +2064,10 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   old-name baseline wins over main's new one. The next `--update-baseline` writes the
   new name. Pages that used to collide (`/a/b`, `/a_b`) share the legacy file until
   then: update their baselines after upgrading.
+- **Old runs are pruned at the end of a run (#425)**: `pruneRuns()` keeps the newest
+  `keepRuns` run directories (default `DEFAULT_KEEP_RUNS` = 20, `--keep-runs`, 0 keeps all),
+  this run counted and never removed; newest by mtime (a caller's run id need not sort).
+  Only directories named like a run id go. A prune failure is logged, never fails the run.
 - **The run id is on every surface**: the result, the JSON report (`runId`) and the
   `iris visual` summary line. A caller-supplied `runId` is trusted to be unique; reuse
   writes into the same run directory.

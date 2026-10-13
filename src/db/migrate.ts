@@ -18,6 +18,7 @@ import * as artifactObjects from './migrations/0015_artifact_objects';
 import * as userSuspensions from './migrations/0016_user_suspensions';
 import * as orgResweep from './migrations/0017_org_resweep';
 import * as managedAiReservations from './migrations/0018_managed_ai_reservations';
+import * as userActiveOrgs from './migrations/0019_user_active_orgs';
 import { createPostgresDb, resolveDatabaseUrl } from './postgres';
 
 /**
@@ -44,6 +45,7 @@ export const MIGRATIONS = {
   '0016_user_suspensions': userSuspensions,
   '0017_org_resweep': orgResweep,
   '0018_managed_ai_reservations': managedAiReservations,
+  '0019_user_active_orgs': userActiveOrgs,
 };
 
 /**

@@ -186,7 +186,10 @@ iris run "navigate to https://example.com"
 # Credentials by reference: the AI, results and history see {{secret:NAME}};
 # the value (from IRIS_SECRET_<NAME>) is typed at fill time only
 export IRIS_SECRET_LOGIN_PW='…'
+# Optional: bind it to its site; a fill on any other origin is refused
+export IRIS_SECRET_ORIGIN_LOGIN_PW=https://example.com
 iris run "fill #password with {{secret:LOGIN_PW}}" --url https://example.com
+# (values shorter than 4 characters are refused: they cannot be kept out of results)
 
 # Or set the starting page once for the session
 export IRIS_BASE_URL=http://localhost:3000
@@ -1030,8 +1033,9 @@ Visual and accessibility options are command-line flags (`iris visual-diff --hel
 never overwrites what an earlier report points at. The run id (UTC time plus a random
 suffix) is in the JSON result as `runId`. File names are a readable slug of the page and
 device plus a hash of the exact pair, so `/a/b` and `/a_b` no longer share a screenshot
-or a baseline. Baselines saved under the old names are still found. Prune old runs with
-`rm -rf .iris/runs/<run-id>`.
+or a baseline. Baselines saved under the old names are still found. Each run keeps the
+newest 20 run directories, itself included, and removes older ones when it ends (newest by
+modification time): `--keep-runs <n>` changes the count, `--keep-runs 0` keeps every run.
 
 **Reporting:**
 - Interactive HTML reports with diff viewer

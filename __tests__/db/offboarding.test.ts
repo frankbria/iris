@@ -66,6 +66,9 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     await sql`insert into org_plans (org_id, plan) values (${id}, 'pro')`.execute(db);
     await sql`insert into org_ai_settings (org_id, mode, updated_by)
       values (${id}, 'managed', 'bob')`.execute(db);
+    // #409: the owner last had this org active.
+    await sql`insert into user_active_orgs (user_id, org_id) values (${owner}, ${id})
+      on conflict (user_id) do update set org_id = excluded.org_id`.execute(db);
     await sql`insert into visual_baselines (org_id, project, name, page, device, object_key, approved_by)
       values (${id}, 'shop', 'home', '/', 'desktop', 'k', 'first-run')`.execute(db);
     // An old run with billed usage, and a recent one.
@@ -163,6 +166,7 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
       'org_ai_settings',
       'audit_log',
       'visual_baselines',
+      'user_active_orgs',
     ]) {
       expect(await count(table, "org_id = 'org-p'")).toBe(0);
     }

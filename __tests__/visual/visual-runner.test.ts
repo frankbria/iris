@@ -1159,6 +1159,35 @@ describe('VisualTestRunner', () => {
       report.mockRestore();
     });
 
+    // #425: older run directories are pruned at the end of a run; this run is kept.
+    it('keeps only the newest keepRuns run directories, this one included', async () => {
+      const fs = require('fs');
+      const { runArtifactPath } = require('../../src/visual/artifacts');
+      const root = fs.mkdtempSync(path.join(require('os').tmpdir(), 'iris-keep-'));
+      try {
+        for (const [id, ageS] of [
+          ['old-1', 60],
+          ['old-2', 120],
+          ['old-3', 180],
+        ] as const) {
+          runArtifactPath(root, id, 'current', 'p');
+          const when = new Date(Date.now() - ageS * 1000);
+          fs.utimesSync(path.join(root, 'runs', id), when, when);
+        }
+        const result = await new VisualTestRunner({
+          ...defaultConfig,
+          artifactsDir: root,
+          pages: ['/'],
+          keepRuns: 2,
+        }).run();
+        expect(fs.readdirSync(path.join(root, 'runs')).sort()).toEqual(
+          ['old-1', result.runId].sort(),
+        );
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
     it('takes a caller-given run id', async () => {
       const result = await new VisualTestRunner({
         ...defaultConfig,
