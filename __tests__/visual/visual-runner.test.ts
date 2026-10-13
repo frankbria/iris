@@ -11,6 +11,7 @@ import { VisualDiffEngine } from '../../src/visual/diff';
 import { BaselineManager } from '../../src/visual/baseline';
 import { StorageManager } from '../../src/visual/storage';
 import { AIVisualClassifier } from '../../src/visual/ai-classifier';
+import { ModelUnavailableError } from '../../src/ai-client/models';
 
 // Mock Playwright
 jest.mock('playwright');
@@ -691,6 +692,34 @@ describe('VisualTestRunner', () => {
       // Both configured pages ('/', '/about') changed and neither was analysed.
       expect(result.summary.severityCounts.breaking).toBe(2);
       expect(result.summary.aiUnavailable).toBe(2);
+    });
+
+    // #484: a model the provider does not serve fails closed, and now counts and names why.
+    it('counts a misconfigured model as AI unavailable, with the cause', async () => {
+      mockAIClassifier.analyzeChange.mockRejectedValue(
+        new ModelUnavailableError('openai', 'gpt-nope', ['gpt-4o']),
+      );
+      visualRunner = new VisualTestRunner({
+        ...defaultConfig,
+        diff: { ...defaultConfig.diff, semanticAnalysis: true, apiKey: 'sk-test' },
+      });
+      mockDiffEngine.compare.mockResolvedValue({
+        success: true,
+        passed: false,
+        similarity: 0.8,
+        pixelDifference: 100,
+        threshold: 0.95,
+        diffBuffer: Buffer.from('test-diff'),
+      });
+
+      const result = await visualRunner.run();
+
+      expect(result.results[0].severity).toBe('breaking'); // still fails closed
+      expect(result.results[0].aiAnalysis?.analysisFailed).toBe(true);
+      expect(result.summary.aiUnavailable).toBe(2);
+      expect(result.summary.aiUnavailableReason).toMatch(
+        /Model "gpt-nope" is not available from openai/,
+      );
     });
 
     it('defaults suggestions to an empty list when the classifier omits them', async () => {

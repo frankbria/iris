@@ -765,6 +765,52 @@ describe('VisualReporter renders the full AI analysis', () => {
     });
   });
 
+  // #484: a report reader learns the run's severities are not AI verdicts, and why.
+  describe('the run-level AI note', () => {
+    const renderRun = async (format: 'html' | 'markdown' | 'junit', summary: object) => {
+      const result = withAnalysis(base);
+      Object.assign(result.summary, summary);
+      const reporter = new VisualReporter({
+        format,
+        outputPath: path.join(tempDir, `run.${format}`),
+      });
+      const artifacts = await reporter.generateReport(result);
+      return fs.readFileSync(artifacts.reportPath, 'utf-8');
+    };
+    const reason = { aiUnavailable: 2, aiUnavailableReason: 'Model "gpt-<x>" is not available' };
+
+    it.each([
+      [
+        'html',
+        'AI: unavailable for 2 comparison(s): Model &quot;gpt-&lt;x&gt;&quot; is not available',
+      ],
+      [
+        'markdown',
+        '- **AI:** unavailable for 2 comparison(s): Model "gpt-\\<x\\>" is not available',
+      ],
+      [
+        'junit',
+        'name="iris.aiUnavailable" value="unavailable for 2 comparison(s): Model &quot;gpt-&lt;x&gt;&quot;',
+      ],
+    ] as const)('names the cause in %s', async (format, expected) => {
+      expect(await renderRun(format, reason)).toContain(expected);
+    });
+
+    it('says the severity is the pixel estimate when no cause is known', async () => {
+      expect(await renderRun('markdown', { aiUnavailable: 1 })).toContain(
+        'severity from pixel difference',
+      );
+    });
+
+    it.each(['html', 'markdown', 'junit'] as const)(
+      'is absent from %s when AI answered',
+      async (format) => {
+        const content = await renderRun(format, {});
+        expect(content).not.toContain('unavailable for');
+      },
+    );
+  });
+
   describe('a failed analysis', () => {
     // The classifier answers a provider outage with a fallback that carries a
     // severity, an isIntentional and a description that is really an error

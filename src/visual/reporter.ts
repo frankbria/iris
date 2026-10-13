@@ -11,6 +11,21 @@ import { pathToFileURL } from 'url';
 import { escapeHtml, escapeMarkdown, escapeXml } from '../report-encoding';
 import type { VisualTestResult } from './visual-runner';
 
+/** `aiAnalysis.classification` of a comparison whose configured model is not served (#484). */
+export const MODEL_UNAVAILABLE = 'model-unavailable';
+
+/**
+ * The run-level note (after "AI: ") saying AI analysis did not happen for some comparisons (#281, #484), or
+ * null when it did for all. Plain text: each report format encodes it, the CLI prints it.
+ */
+export function aiUnavailableNote(summary: VisualTestResult['summary']): string | null {
+  const n = summary.aiUnavailable;
+  if (!n) return null;
+  return summary.aiUnavailableReason
+    ? `unavailable for ${n} comparison(s): ${summary.aiUnavailableReason}`
+    : `unavailable for ${n} comparison(s); severity from pixel difference`;
+}
+
 /**
  * The share of pixels that differ, as a percentage. `pixelDifference` is pixelmatch's
  * count, not a fraction (#280); `similarity` is `(total - count) / total`.
@@ -177,6 +192,7 @@ export class VisualReporter {
 
     <!-- Severity Breakdown -->
     ${this.generateSeverityBreakdown(summary)}
+    ${aiUnavailableNote(summary) ? `<p class="ai-unavailable" role="note">AI: ${escapeHtml(aiUnavailableNote(summary)!)}</p>` : ''}
 
     <!-- Filters -->
     <section class="filters">
@@ -452,6 +468,7 @@ export class VisualReporter {
    */
   private generateJUnitReport(results: VisualTestResult): string {
     const { summary, results: testResults, duration } = results;
+    const note = aiUnavailableNote(summary);
 
     const testsuites = testResults.reduce(
       (acc: Record<string, VisualTestResult['results']>, result) => {
@@ -474,12 +491,12 @@ ${Object.entries(testsuites)
     const suiteTime = duration / summary.totalComparisons / 1000;
 
     return `  <testsuite name="${escapeXml(suiteName)}" tests="${suiteTests.length}" failures="${suiteFailed}" time="${suiteTime.toFixed(3)}">
-${suiteTests
-  .map((test, _index) => {
-    const testName = `${test.page} [${test.device}]`;
-    const testTime = (duration / summary.totalComparisons / 1000).toFixed(3);
+${note === null ? '' : `    <properties><property name="iris.aiUnavailable" value="${escapeXml(note)}"/></properties>\n`}${suiteTests
+      .map((test, _index) => {
+        const testName = `${test.page} [${test.device}]`;
+        const testTime = (duration / summary.totalComparisons / 1000).toFixed(3);
 
-    return `    <testcase name="${escapeXml(testName)}" classname="${escapeXml(suiteName)}" time="${testTime}">
+        return `    <testcase name="${escapeXml(testName)}" classname="${escapeXml(suiteName)}" time="${testTime}">
 ${
   !test.passed
     ? `      <failure message="${escapeXml(test.error ? `Comparison failed: ${test.error}` : 'Visual regression detected')}" type="VisualDiff">
@@ -514,8 +531,8 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
     : ''
 }
     </testcase>`;
-  })
-  .join('\n')}
+      })
+      .join('\n')}
   </testsuite>`;
   })
   .join('\n')}
@@ -543,6 +560,8 @@ AI Description: ${escapeXml(test.aiAnalysis.description)}`) +
     if (summary.newBaselines > 0) {
       markdown += `- **New Baselines:** ${summary.newBaselines}\n`;
     }
+    const note = aiUnavailableNote(summary);
+    if (note) markdown += `- **AI:** ${escapeMarkdown(note)}\n`;
     markdown += `\n`;
 
     // Severity Breakdown

@@ -638,6 +638,42 @@ describe('visual-diff CLI command', () => {
       expect(output).toContain('Moderate: 1');
     });
 
+    // #484: a misconfigured model is named in the summary, not only counted.
+    it.each([
+      [{ aiUnavailable: 2 }, 'AI: unavailable for 2 comparison(s); severity from pixel difference'],
+      [
+        { aiUnavailable: 2, aiUnavailableReason: 'Model "gpt-nope" is not available from openai.' },
+        'AI: unavailable for 2 comparison(s): Model "gpt-nope" is not available from openai.',
+      ],
+    ])('prints the AI line for %j', async (extra, line) => {
+      jest.doMock('../src/visual/visual-runner', () => ({
+        VisualTestRunner: jest.fn().mockImplementation(() => ({
+          run: jest.fn().mockResolvedValue({
+            summary: {
+              totalComparisons: 2,
+              passed: 0,
+              failed: 2,
+              newBaselines: 0,
+              overallStatus: 'failed',
+              severityCounts: { breaking: 2, moderate: 0, minor: 0 },
+              ...extra,
+            },
+            results: [],
+            duration: 10,
+          }),
+        })),
+      }));
+      jest.resetModules();
+      const { runCli: freshRunCli } = await import('../src/cli');
+      try {
+        await freshRunCli(['node', 'iris', 'visual-diff']);
+      } catch {
+        // exits non-zero
+      }
+      const output = consoleLogSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+      expect(output).toContain(line);
+    });
+
     it('should display report path when generated', async () => {
       const reportPath = '/tmp/visual-report.html';
 
