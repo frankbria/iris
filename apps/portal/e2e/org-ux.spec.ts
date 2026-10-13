@@ -93,6 +93,9 @@ test("a signed-in visit to /login goes on to next, or the dashboard", async ({
   await expect(page).toHaveURL(/\/dashboard$/)
   await page.goto("/login?next=%2Forg")
   await expect(page).toHaveURL(/\/org$/)
+  // Never back into the login gate itself.
+  await page.goto("/login?next=%2Flogin%3Fnext%3D%252Flogin")
+  await expect(page).toHaveURL(/\/dashboard$/)
   // An off-site next is still refused.
   await page.goto("/login?next=%2F%2Fevil.example")
   await expect(page).toHaveURL(/\/dashboard$/)
