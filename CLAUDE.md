@@ -810,7 +810,9 @@ runs or installs them. Object storage is #445.
   recipients, rclone config and the failure hook are in `/etc/iris`, backups in
   `/var/backups/iris`. The deploy user owns `/opt/iris-production`, so a root timer
   running `current/backup.sh` would be a root code path for the deploy key. The script
-  finds postgres by compose labels (`docker exec`), not via a release's compose file.
+  finds postgres by compose labels (`docker exec`), not via a release's compose file, and
+  checks `State.Running` before the dump and again if it fails, so a container stopping in
+  between gets the script's own "no running postgres container" (#570).
 - **`age` to public keys only**; the identity stays off the box. No recipients: it
   refuses, it never writes plaintext. The master key is backed up as its own file.
 - **Atomic and fail-closed**: `pg_dump | age` into `<name>.tmp` under pipefail, renamed on

@@ -58,6 +58,9 @@ container=$(docker ps -q --filter "label=com.docker.compose.project=$project" \
   --filter label=com.docker.compose.service=postgres)
 [ -n "$container" ] || fail "no running postgres container in compose project $project"
 [ "$(wc -l <<<"$container")" = 1 ] || fail "more than one postgres container in $project"
+# Listed while stopping (#570): judge it by its state, here and again if the dump fails.
+running() { [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" = true ]; }
+running || fail "no running postgres container in compose project $project"
 
 install -d -m 700 "$backup_dir"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
@@ -69,7 +72,11 @@ if [ -e "$dump" ] || [ -e "$key" ]; then fail "a backup named $stamp already exi
 trap 'rm -f -- "$tmp_dump" "$tmp_key"' EXIT
 
 # pipefail: the pipeline, and so the script, fails if pg_dump or age does.
-docker exec "$container" pg_dump -Fc -U iris iris | age -R "$recipients" -o "$tmp_dump"
+if ! docker exec "$container" pg_dump -Fc -U iris iris | age -R "$recipients" -o "$tmp_dump"; then
+  # A container that stopped between the check and the exec fails with Docker's own text.
+  running || fail "no running postgres container in compose project $project"
+  fail "pg_dump of $container failed"
+fi
 age -R "$recipients" -o "$tmp_key" "$master_key"
 mv -- "$tmp_dump" "$dump"
 mv -- "$tmp_key" "$key"
