@@ -1,9 +1,11 @@
 name: CI
-# `push` with no filter is every branch and every tag, exactly as `[push, pull_request]`
-# was. A `v*` tag push also runs deploy-production (#273), as does a manual dispatch
-# from a `v*` tag.
+# `push` is `main` (build + deploy-staging) and `v*` tags (deploy-production, #273), as is
+# a manual dispatch from a `v*` tag. Other branches build through `pull_request` only: an
+# unfiltered `push` built every same-repo PR twice. A branch pushed without a PR gets no CI.
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   # Production only: run it from a `v*` tag (Use workflow from: Tags). From a branch,
   # deploy-production does not run; build does, as on a push.
