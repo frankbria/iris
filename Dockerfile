@@ -17,7 +17,7 @@
 # toolchain never reaches the shipped image: better-sqlite3 has no prebuilt
 # binary for this platform and needs node-gyp, which the Playwright base image
 # has no `make` for.
-FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27 AS deps
+FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf AS deps
 
 WORKDIR /app
 RUN apt-get update \
@@ -42,7 +42,7 @@ RUN node scripts/third-party-notices.js . > THIRD_PARTY_NOTICES.txt
 
 # --- build ------------------------------------------------------------------
 # Full dependency tree (TypeScript et al.) purely to produce dist/.
-FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27 AS build
+FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -55,7 +55,7 @@ COPY src ./src
 RUN npm run build
 
 # --- runtime ----------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27 AS runtime
+FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app
