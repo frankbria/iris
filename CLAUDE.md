@@ -237,7 +237,10 @@ private. Things that are easy to break:
   vulnerable version after the portal moved (GHSA-vcvr-r3jv-pc5j). Bump the override
   together with `apps/portal`'s `next` and `eslint-config-next`: npm refuses
   (`EOVERRIDE`) when they disagree. Do not "fix" a stray copy with `npm dedupe`, which
-  rewrote 4,000 lockfile lines and pulled a 12-hour-old release.
+  rewrote 4,000 lockfile lines and pulled a 12-hour-old release. `overrides.react-dom` is
+  the same fix (better-auth's optional `react-dom` peer): a Dependabot group left the root copy
+  on 19.2.8 beside the portal's 19.3.1, and portal Jest refused to load ("Incompatible React
+  versions"). Bump it with the portal's `react-dom`.
 
 ### Hosted Postgres and Migrations (issue #248)
 
