@@ -69,7 +69,7 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
 - **`staged-<sha>` is a record, not a boundary**: deploy-staging tags both images
   (`imagetools create`, no rebuild) as its *last* step; anything with `packages: write`
   could move it. Staging runs token mode without worker/portal, so it proves the iris
-  image boots (plus the portal digest serving `/login` on the runner), not the hosted stack.
+  image boots (plus the portal digest serving `/terms` on the runner), not the hosted stack.
 - **One directory per release** (`releases/<tag>-<run>-<attempt>/`: compose, settings.env,
   per-release secrets); `shared/secrets/` holds pg_password, master_key, database_url
   (rewritten only if it differs: serving containers mount it). `current` is switched only
