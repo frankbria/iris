@@ -9,7 +9,7 @@
 # library and the bundled browsers are matched pairs, and a drift between them
 # fails in ways that look like application bugs.
 #
-# Verified to ship Node v24.18.1 / npm 11.16.0, satisfying
+# Verified to ship Node v24.22.1 / npm 11.19.1, satisfying
 # "engines": { "node": "^22.22.0 || >=24" }.
 
 # --- deps -------------------------------------------------------------------
@@ -17,7 +17,7 @@
 # toolchain never reaches the shipped image: better-sqlite3 has no prebuilt
 # binary for this platform and needs node-gyp, which the Playwright base image
 # has no `make` for.
-FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf AS deps
+FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea AS deps
 
 WORKDIR /app
 RUN apt-get update \
@@ -42,7 +42,7 @@ RUN node scripts/third-party-notices.js . > THIRD_PARTY_NOTICES.txt
 
 # --- build ------------------------------------------------------------------
 # Full dependency tree (TypeScript et al.) purely to produce dist/.
-FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf AS build
+FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -55,7 +55,7 @@ COPY src ./src
 RUN npm run build
 
 # --- runtime ----------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:7852dc5a7d72f5fe458a597d690f6c42fbc8e9e26ddfa95f8e6ef552558d9bbf AS runtime
+FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app
