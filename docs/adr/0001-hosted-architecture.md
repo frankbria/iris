@@ -133,7 +133,7 @@ The product owner made two decisions on 2026-09-25, and this record builds on th
 - Local mode keeps the existing `IRIS_CONNECT_TOKEN` shared token. In hosted mode
   that token is disabled.
 - *Known risk:* IRIS builds as CommonJS. Loading BetterAuth from it relies on
-  Node's `require(esm)`, which the `engines` floor (`^22.13 || >=24`) enables by
+  Node's `require(esm)`, which the `engines` floor (`^22.22 || >=24`) enables by
   default. #247 must prove this on its first commit. If it fails, the shared auth
   config moves into an ESM workspace package that both apps import.
 

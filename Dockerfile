@@ -10,7 +10,7 @@
 # fails in ways that look like application bugs.
 #
 # Verified to ship Node v24.18.1 / npm 11.16.0, satisfying
-# "engines": { "node": "^22.13.0 || >=24" }.
+# "engines": { "node": "^22.22.0 || >=24" }.
 
 # --- deps -------------------------------------------------------------------
 # Production dependencies only, compiled. Separate from `build` so the compiler

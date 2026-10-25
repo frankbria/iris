@@ -48,7 +48,7 @@
   "author": "FRANK BRIA <frank@frankbria.com>",
   "license": "MIT",
   "engines": {
-    "node": "^22.13.0 || >=24"
+    "node": "^22.22.0 || >=24"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
