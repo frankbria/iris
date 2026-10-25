@@ -577,8 +577,9 @@ jobs:
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
             'docker exec iris-staging node dist/cli.js --version'
 
-      # The pushed portal digest serves /login (it needs no database or SMTP for that
-      # page), on the runner: staging has no portal service yet.
+      # The pushed portal digest serves /terms, on the runner: staging has no portal
+      # service yet. A static page, because the container gets no config: /login calls
+      # getAuth() since #409 and answers 500 without SMTP and a database.
       - if: steps.preflight.outputs.configured == 'true'
         name: Boot the portal image
         env:
@@ -588,8 +589,8 @@ jobs:
           docker run -d --name portal-smoke -p 127.0.0.1:3000:3000 --read-only \
             --cap-drop ALL --security-opt no-new-privileges:true "$PORTAL_REF"
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/login || :)
-            [ "$code" = 200 ] && { echo "portal /login 200 after ${i}s"; exit 0; }
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/terms || :)
+            [ "$code" = 200 ] && { echo "portal /terms 200 after ${i}s"; exit 0; }
             sleep 1
           done
           docker logs portal-smoke 2>&1 | tail -30

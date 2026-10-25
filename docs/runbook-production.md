@@ -144,7 +144,7 @@ release keeps serving.
 
 **What staging proves.** Staging runs the iris image in token mode, without the worker
 or the portal. So `staged-<sha>` proves that the iris image deployed and booted, with a
-real Chromium launch, and that the portal image serves `/login`. It does not prove the
+real Chromium launch, and that the portal image serves `/terms`. It does not prove the
 hosted stack (hosted connect, worker, portal against Postgres and SMTP). A follow-up
 issue moves staging to the hosted stack. Until then, production's own gates and
 health checks are the first run of that combination.
