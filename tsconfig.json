@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    // ES2022, matching the Node floor in package.json (^22.13.0 || >=24).
+    // ES2022, matching the Node floor in package.json (^22.22.0 || >=24).
     // ES2020 understated the runtime the same way @types/node ^18 did: it
     // withheld built-ins Node has supported for years, so `Array#at` only
     // compiled because older @types/node happened to declare it. Newer

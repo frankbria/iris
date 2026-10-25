@@ -8,7 +8,7 @@
 # node_modules it traces, so the runtime stage carries no dev dependencies. No
 # secret is read at build time: getAuth() is lazy, so `next build` needs none.
 #
-# Node 24, the line .nvmrc and CI use; satisfies engines "^22.13.0 || >=24".
+# Node 24, the line .nvmrc and CI use; satisfies engines "^22.22.0 || >=24".
 
 # --- build ------------------------------------------------------------------
 FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS build
