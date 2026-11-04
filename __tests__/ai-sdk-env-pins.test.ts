@@ -32,5 +32,11 @@ it('an explicit null keeps the process values out', () => {
 
 it('(control) leaving them out would send the operator values', () => {
   expect(new OpenAI({ apiKey: 'sk-tenant' }).organization).toBe('org-OPERATOR');
-  expect(new Anthropic({ apiKey: 'sk-ant-tenant' }).authToken).toBe('tok-OPERATOR');
+  // With no credential in code, Anthropic still reads the operator's token.
+  expect(new Anthropic().authToken).toBe('tok-OPERATOR');
+});
+
+it('Anthropic reads no env credential once a key is passed in code (SDK 1.0)', () => {
+  // SDK 0.x read ANTHROPIC_AUTH_TOKEN beside a passed apiKey; the pin above covers that.
+  expect(new Anthropic({ apiKey: 'sk-ant-tenant' }).authToken).toBeNull();
 });
