@@ -328,7 +328,7 @@ jobs:
           echo "tailnet up: $state"
 
       - if: steps.preflight.outputs.configured == 'true'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -681,7 +681,7 @@ jobs:
           case "$PORTAL_URL$SMTP_FROM" in *"'"* | *$'\n'*) echo "::error::PORTAL_URL/SMTP_FROM may not hold ' or a newline"; exit 1 ;; esac
           if [ -n "$TS_AUTHKEY" ]; then echo "ts_auth=authkey" >> "$GITHUB_OUTPUT"; else echo "ts_auth=oauth" >> "$GITHUB_OUTPUT"; fi
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
