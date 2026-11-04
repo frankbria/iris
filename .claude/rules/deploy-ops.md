@@ -6,6 +6,10 @@ paths:
   - ".github/workflows/**"
   - "docs/runbook-production.md"
   - "__tests__/{ingress,deploy-script,backup-script,portal-image}.test.ts"
+  - "package.json"
+  - "scripts/check-pack.js"
+  - "scripts/third-party-notices.js"
+  - "__tests__/{container-config,iris-image,check-pack}.test.ts"
 ---
 
 ### TLS Ingress (issue #347)
@@ -168,3 +172,89 @@ runs or installs them. Object storage is #445.
   healthy early and the first connection is cut. `age` comes from PATH (CI installs the
   apt package) or the pinned, checksummed release tarball cached in the temp dir. Each
   restore is one container start (~30 s on a loaded WSL daemon).
+
+### npm Package (issue #320)
+
+- **Not published yet; install from source.** The npm name `iris-suite` is reserved by the
+  owner; its 0.0.1 is an empty placeholder. `version` stays 0.0.1 until the first real release.
+- **`npm run build` cleans `dist/` first**, and npm's `prepare` runs it before every pack and
+  publish (it ran even with `--ignore-scripts` in npm 10.9 here), so deleted code cannot ship
+  as stale output.
+- **CI runs `npm run check:pack`** (`scripts/check-pack.js`, rules unit-tested): the
+  `npm pack --dry-run` listing must hold every `bin`/`main` target, nothing outside `files`,
+  and no `dist/*.js|.d.ts|.js.map` without a `src/*.ts`.
+- `better-auth` (and the hosted server code) ships in the CLI package; a CLI-only install pays
+  for it. Accepted until the package is published; a split server package is the option then.
+
+### Container Deployment (issue #192)
+
+`Dockerfile`, `.dockerignore`, `docker-compose.staging.yml` and
+`docker/healthcheck.js` ship IRIS as a container. These constraints are easy to
+break and expensive to rediscover:
+
+- **Base image is `mcr.microsoft.com/playwright:v<version>-noble`**, tracking the
+  `playwright` version in package.json. It carries Chromium *and* its system
+  libraries, so no `playwright install --with-deps` at build time. Verified to
+  ship Node v24.18.1, satisfying the `engines` floor. Keep the tag in step with
+  the library — they are matched pairs.
+- **Three stages, deliberately.** `better-sqlite3` has no prebuilt binary here
+  and needs node-gyp, which the Playwright image has no `make` for; the compiler
+  goes in a `deps` stage and never reaches the shipped image. That stage runs
+  `npm ci --omit=dev --ignore-scripts` then `npm rebuild better-sqlite3`, because
+  the full lifecycle fails: `"prepare": "npm run build"` needs TypeScript, which
+  `--omit=dev` has just removed.
+- **The container binds `0.0.0.0`, the host publishes on `127.0.0.1`.** Docker
+  forwards a published port to the container's network interface, not its
+  loopback, so a loopback bind inside the container refuses every connection
+  while looking healthy. The security boundary is the host-side mapping.
+- **`shm_size: 1gb`.** Chromium exhausts Docker's 64 MB default and the crash
+  reads as an opaque browser disconnect.
+- **Sandboxed Chromium needs `docker/seccomp-chromium.json`.** Every launch goes
+  through `launchBrowser()` / `newHardenedContext()` in `src/browser.ts` (#331):
+  sandbox on, Playwright's signal handlers off, downloads and service workers
+  blocked. A guard test fails on any other `chromium.launch` / `browser.newContext`
+  in `src/`. Docker's default seccomp allows `unshare`/`setns`/`clone`-with-namespace
+  flags and `chroot` only to a container holding `CAP_SYS_ADMIN` / `CAP_SYS_CHROOT`,
+  and compose drops every capability (#332). The profile is Docker's default
+  (moby/profiles v0.2.3) plus one rule allowing those four. Do not swap in
+  Playwright's published profile: it predates `clone3`, which then gets EPERM, and
+  glibc falls back to `clone` only on ENOSYS. The deploy probe launches through the
+  factory, so it proves the sandbox on the real host.
+- **Runtime hardening lives in `docker-compose.staging.yml` (#332)**: `init`,
+  `cap_drop: ALL`, `no-new-privileges`, `read_only` with tmpfs for `/tmp` and
+  `/home/pwuser`, memory/CPU/pids limits, `stop_grace_period` above the server's
+  5s force-exit. `__tests__/container-config.test.ts` pins each one. Measured in
+  this image: ~20 pids for the idle server, ~60 more per browser session.
+- **The token is a compose secret file**, `IRIS_CONNECT_TOKEN_FILE`, not an env
+  var (`docker inspect` shows env). It is a bind mount, so the host file's owner
+  and mode apply: readable by uid 1001, inside a 0700 directory.
+
+- **The image is built and run on every push and PR (#306)**, not only by the staging
+  deploy. CI's `build` job builds `iris:ci` and `__tests__/iris-image.test.ts`
+  (`IRIS_TEST_IMAGE`, required under CI) runs it from `docker-compose.staging.yml`
+  **unchanged** (copied with the seccomp profile and throwaway secrets into a temp project
+  directory, image tagged `ghcr.io/frankbria/iris:ci-<pid>` via `IRIS_TAG`): `healthy`,
+  sandboxed `launchBrowser()` via `docker exec`, the negative control (Docker's default
+  seccomp must fail with "Chromium could not start its sandbox"), `touch /data/probe` as uid
+  1001, and no `next`/`react`/`@hugeicons` in the image. The compose file fixes
+  `container_name: iris-staging` and `127.0.0.1:4000`, so both must be free.
+  `container-config.test.ts` fails when a Dockerfile Playwright tag differs from the
+  lockfile's `playwright`, and Dependabot has a `docker` entry: a bump of either alone stays
+  red until the other is in the same PR. Locally, without the buildx plugin, build with
+  `DOCKER_BUILDKIT=0 docker build -t iris:local .` (BuildKit without buildx fails, and a
+  docker-container builder does not load the image).
+
+- **Supply chain (#360).** Every `FROM` in `Dockerfile` and `Dockerfile.portal` is pinned by
+  digest (`tag@sha256:…`; Dependabot's docker entry bumps both). CI writes a CycloneDX SBOM per
+  image with a digest-pinned Trivy (one image copy, `--timeout 15m`; the default timed out on
+  this host), scans the SBOM, fails on a fixable CRITICAL, lists fixable HIGH, and uploads the
+  SBOMs as the `image-sboms` artifact. The runtime image has no npm (`rm -rf
+  /usr/lib/node_modules/npm …`: nothing uses it at runtime, and the base image's global npm
+  carried all the Node.js findings). `/app/THIRD_PARTY_NOTICES.txt` is generated in the deps
+  stage by `scripts/third-party-notices.js` from what `npm ci --omit=dev` installed (the root
+  lockfile also lists the portal's packages, which are not installed, so it reads installed
+  `package.json`s, not lockfile entries).
+
+The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
+open — the socket listens long before the browser layer is usable. It lives in a
+file because compose interprets `${...}` in an inline script as its own syntax.

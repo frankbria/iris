@@ -104,7 +104,7 @@ Before moving to the next feature, ALL changes must be:
    - Remove outdated comments immediately
 
 2. **Implementation Documentation**:
-   - Update relevant sections in CLAUDE.md and this file
+   - Update the relevant `.claude/rules/*.md` file (or CLAUDE.md) and this file
    - Keep technical specifications current (`docs/tech_specs.md`)
    - Update development roadmap (`docs/dev_plan.md`)
    - Update configuration examples when defaults change
@@ -135,7 +135,7 @@ Before marking ANY feature as complete, verify:
 - [ ] All commits pushed to remote repository
 - [ ] Implementation documentation updated
 - [ ] Inline code comments updated or added
-- [ ] CLAUDE.md updated (if new patterns introduced)
+- [ ] `.claude/rules/*.md` / CLAUDE.md updated (if new patterns introduced)
 - [ ] This AGENT_INSTRUCTIONS.md updated (if guidelines change)
 - [ ] Breaking changes documented
 - [ ] CLI functionality manually tested

@@ -60,7 +60,7 @@ afterAll(async () => {
 
 /** Parse in Chromium; return the element skeleton, the parse error (XML) and texts. */
 async function parse(content: string, mime: 'text/html' | 'application/xml') {
-  // A string expression, not a function: see "Under jest --coverage" in CLAUDE.md.
+  // A string expression, not a function: see "Under jest --coverage" in .claude/rules/browser-safety.md.
   return (await page.evaluate(`(() => {
     const doc = new DOMParser().parseFromString(${JSON.stringify(content)}, ${JSON.stringify(mime)});
     const err = doc.getElementsByTagName('parsererror')[0];
