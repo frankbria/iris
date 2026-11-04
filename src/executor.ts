@@ -210,7 +210,7 @@ const MAX_SECRET_FIELDS = 50;
  * a bound reference refuses. A string expression, so coverage instrumentation never reaches
  * the page. `self.origin` is writable by the document's own script, so a sandboxed document
  * served by the bound origin can pass; only the bound site controls that script (see
- * CLAUDE.md, Credential References).
+ * .claude/rules/browser-safety.md, Credential References).
  */
 async function effectiveOrigin(handle: ElementHandle): Promise<string | undefined> {
   const frame = await handle.ownerFrame();
