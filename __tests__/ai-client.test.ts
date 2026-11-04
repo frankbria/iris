@@ -180,6 +180,8 @@ describe('AI Client', () => {
       expect(result.actions[0]).toEqual({ type: 'click', selector: '#submit' });
       expect(result.confidence).toBe(0.9);
       expect(result.reasoning).toBe('Clear click instruction');
+      // API version 2026-10-21 removed sampling parameters from the Messages API.
+      expect(mockMessagesCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
     });
 
     it('should handle API errors gracefully', async () => {

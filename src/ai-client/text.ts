@@ -239,7 +239,7 @@ export class AnthropicTextClient extends BaseAIClient {
         anthropic.messages.create({
           model: this.config.model,
           max_tokens: 1000,
-          temperature: 0.1,
+          // No temperature: API version 2026-10-21 (SDK 1.0) removed sampling parameters.
           // Claude takes the system prompt as a top-level field, not a system message.
           system: TRANSLATION_SYSTEM_PROMPT,
           messages: [{ role: 'user', content: translationUserPrompt(request) }],
