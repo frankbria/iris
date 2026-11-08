@@ -242,9 +242,7 @@ describe('migrate process against a server that never answers', () => {
     const log = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
       expect(await migrateToLatest(db, older as typeof MIGRATIONS)).toEqual([]);
-      expect(log).toHaveBeenCalledWith(
-        expect.stringMatching(/schema is ahead.*0020_org_billing/),
-      );
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/schema is ahead.*0020_org_billing/));
     } finally {
       log.mockRestore();
     }
