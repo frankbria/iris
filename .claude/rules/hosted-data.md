@@ -218,7 +218,9 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   concurrent or not, changes nothing), then the change is applied. An unknown customer or an
   unhandled type is a 200 that records nothing (`stripe_events.org_id` is required).
 - **Out of order**: `status_at` is the applied event's `created` (seconds). An older event is
-  recorded but not applied; same-second events apply in arrival order. A deletion or an
+  recorded but not applied; same-second events apply in arrival order, except that nothing
+  applies to a subscription once it is `canceled` (Stripe never reactivates one, so an
+  update sent before the deletion but delivered after it cannot revive the plan). A deletion or an
   invoice applies only to the org's current subscription id, so an old subscription cannot
   downgrade or mark a new one past due.
 - **Plan from the price**: `active`, `trialing` and `past_due` keep the price's plan (the

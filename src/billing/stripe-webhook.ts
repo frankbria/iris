@@ -82,11 +82,19 @@ function changeFor(event: Stripe.Event, config: StripeConfig): BillingChange | n
 interface BillingRow {
   org_id: string;
   stripe_subscription_id: string | null;
+  subscription_status: string | null;
   status_at: Date | null;
 }
 
+/** Stripe never reactivates a canceled subscription, so nothing later about it applies. */
+const isCanceled = (row: BillingRow, change: BillingChange): boolean =>
+  row.subscription_status === 'canceled' &&
+  row.stripe_subscription_id !== null &&
+  row.stripe_subscription_id === change.subscriptionId;
+
 function isStale(row: BillingRow, change: BillingChange, eventAt: Date): boolean {
   if (row.status_at && row.status_at > eventAt) return true;
+  if (isCanceled(row, change)) return true;
   return (
     Boolean(change.currentOnly && row.stripe_subscription_id) &&
     row.stripe_subscription_id !== change.subscriptionId
@@ -100,7 +108,7 @@ async function applyChange(
 ): Promise<WebhookOutcome> {
   // The row lock orders events for one org; a concurrent redelivery waits on the event key.
   const { rows } = await sql<BillingRow>`
-    select org_id, stripe_subscription_id, status_at from org_billing
+    select org_id, stripe_subscription_id, subscription_status, status_at from org_billing
     where stripe_customer_id = ${change.customerId} for update`.execute(tx);
   const row = rows[0];
   if (!row) return 'ignored';

@@ -250,6 +250,24 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
     expect(recorded.rows[0].n).toBe('2');
   });
 
+  it('never revives a canceled subscription, even from an update in the same second', async () => {
+    await newOrg('org-final', 'cus_final');
+    const live = subscription('cus_final', 'sub_final', 'active', 'price_pro');
+    expect(await deliver(event('customer.subscription.created', live, now))).toBe('applied');
+    const deleted = subscription('cus_final', 'sub_final', 'canceled', 'price_pro');
+    expect(await deliver(event('customer.subscription.deleted', deleted, now + 1))).toBe('applied');
+    // Sent before the deletion, delivered after it, stamped with the same second.
+    expect(await deliver(event('customer.subscription.updated', live, now + 1))).toBe('stale');
+    expect(await deliver(event('invoice.paid', invoice('cus_final', 'sub_final'), now + 1))).toBe(
+      'stale',
+    );
+    expect(await billing('org-final')).toEqual({
+      subscription: 'sub_final',
+      status: 'canceled',
+      plan: 'free',
+    });
+  });
+
   it("does not let an old subscription's deletion or invoice touch the current one", async () => {
     await newOrg('org-two', 'cus_two');
     await deliver(
