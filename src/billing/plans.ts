@@ -98,7 +98,10 @@ export function orgEntitlements(db: Kysely<unknown>) {
       return resolveEntitlements(rows[0]?.plan ?? DEFAULT_PLAN, rows[0]?.overrides ?? {});
     },
 
-    /** Sets the plan and replaces the overrides (none unless given), audited (#361). */
+    /**
+     * Sets the plan and replaces the overrides (none unless given), audited (#361). On a
+     * transaction it writes there, so a caller can commit it with its own change.
+     */
     async setPlan(
       orgId: string,
       plan: PlanId,
@@ -106,7 +109,7 @@ export function orgEntitlements(db: Kysely<unknown>) {
       actor: AuditActor = {},
     ): Promise<void> {
       if (!isPlan(plan)) throw new Error(`Unknown plan: ${JSON.stringify(plan)}`);
-      await db.transaction().execute(async (tx) => {
+      const write = async (tx: Kysely<unknown>) => {
         await sql`
           insert into org_plans (org_id, plan, overrides)
           values (${orgId}, ${plan}, ${JSON.stringify(overrides)}::jsonb)
@@ -115,7 +118,9 @@ export function orgEntitlements(db: Kysely<unknown>) {
           tx,
         );
         await recordAudit(tx, { orgId, actor, action: 'plan.set', metadata: { plan, overrides } });
-      });
+      };
+      // On a caller's transaction (the Stripe webhook's), join it: Kysely cannot nest one.
+      await (db.isTransaction ? write(db) : db.transaction().execute(write));
     },
   };
 }

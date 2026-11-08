@@ -112,6 +112,15 @@ for (const key of [
   'IRIS_MANAGED_AI_PROVIDER',
   'IRIS_MANAGED_AI_KEY',
   'IRIS_MANAGED_AI_KEY_FILE',
+  // Stripe billing (#261, #345): a developer's real account must not reach a test.
+  'IRIS_STRIPE_SECRET_KEY',
+  'IRIS_STRIPE_SECRET_KEY_FILE',
+  'IRIS_STRIPE_WEBHOOK_SECRET',
+  'IRIS_STRIPE_WEBHOOK_SECRET_FILE',
+  'IRIS_STRIPE_PRICE_PRO',
+  'IRIS_STRIPE_PRICE_PRO_FILE',
+  'IRIS_STRIPE_PRICE_TEAM',
+  'IRIS_STRIPE_PRICE_TEAM_FILE',
   // Added with #192, which taught `iris connect` to read these. Without them
   // here an exported IRIS_CONNECT_HOST=0.0.0.0 fails the connect-default test on
   // a developer's machine while CI stays green — #185 exactly, recurring the
