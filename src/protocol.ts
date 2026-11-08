@@ -554,16 +554,20 @@ function restOutcome(status: number | undefined, rateLimited: boolean): Outcome 
   return status >= 400 ? 'client_error' : 'ok';
 }
 
+/** Metric labels must stay bounded, so ids are folded into the route's shape. */
+const REST_ROUTES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^\/v1\/a11y\/jobs$/, '/v1/a11y/jobs'],
+  [/^\/v1\/visual\/jobs$/, '/v1/visual/jobs'],
+  [/^\/v1\/runs$/, '/v1/runs'],
+  [/^\/v1\/stripe\/webhook$/, '/v1/stripe/webhook'],
+  [/^\/v1\/jobs\/[^/]+$/, '/v1/jobs/:id'],
+  [/^\/v1\/runs\/[^/]+$/, '/v1/runs/:id'],
+  [/^\/v1\/runs\/[^/]+\/results\/[^/]+\/approve$/, '/v1/runs/:id/results/:position/approve'],
+];
+
 function restRoute(req: IncomingMessage): string {
   const path = (req.url ?? '').split('?')[0];
-  const route =
-    path === '/v1/a11y/jobs' || path === '/v1/runs' || path === '/v1/stripe/webhook'
-      ? path
-      : /^\/v1\/jobs\/[^/]+$/.test(path)
-        ? '/v1/jobs/:id'
-        : /^\/v1\/runs\/[^/]+$/.test(path)
-          ? '/v1/runs/:id'
-          : 'other';
+  const route = REST_ROUTES.find(([pattern]) => pattern.test(path))?.[1] ?? 'other';
   const method = ['GET', 'POST', 'HEAD', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(
     req.method ?? '',
   )
