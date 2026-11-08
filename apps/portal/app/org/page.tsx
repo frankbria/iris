@@ -3,6 +3,9 @@ import { headers } from "next/headers"
 import Link from "next/link"
 
 import { liveKeysByCreator } from "../../../../src/audit-log"
+import { hasLiveSubscription } from "../../../../src/billing/stripe"
+import { orgEntitlements } from "../../../../src/billing/plans"
+import { ManageBillingForm, UpgradeForm } from "@/components/billing-forms"
 import {
   InviteForm,
   LeaveOrgButton,
@@ -10,6 +13,7 @@ import {
 } from "@/components/org-forms"
 import { SuspendedBanner } from "@/components/contact-link"
 import { getAuth, getDb } from "@/lib/auth"
+import { getBilling } from "@/lib/billing"
 import { requireOrg } from "@/lib/org"
 
 /** BetterAuth keeps several roles as one comma string (`admin,owner`). */
@@ -31,6 +35,66 @@ async function ownerCount(orgId: string): Promise<number> {
     getDb()
   )
   return rows[0].n
+}
+
+const PLAN_NAMES = { free: "Free", pro: "Pro", team: "Team" } as const
+
+/**
+ * The org's plan and subscription (#261); hidden when Stripe is not configured. The state
+ * is what the verified webhook wrote (#345), never the Checkout redirect. Managers start
+ * Checkout when no subscription is live, and use the Customer Portal once a customer exists.
+ */
+async function BillingSection({
+  organizationId,
+  manages,
+}: {
+  organizationId: string
+  manages: boolean
+}) {
+  const billing = getBilling()
+  if (!billing) return null
+  const [account, { plan }] = await Promise.all([
+    billing.account(organizationId),
+    orgEntitlements(getDb()).get(organizationId),
+  ])
+  return (
+    <section aria-labelledby="billing" className="flex flex-col gap-2">
+      <h2 id="billing" className="font-medium">
+        Billing
+      </h2>
+      <p className="text-sm">
+        Plan: {PLAN_NAMES[plan]}
+        {account?.subscriptionStatus && (
+          <span className="text-muted-foreground">
+            {" "}
+            (subscription {account.subscriptionStatus.replace("_", " ")})
+          </span>
+        )}
+      </p>
+      {!manages && (
+        <p className="text-sm text-muted-foreground">
+          Only owners and admins can change billing.
+        </p>
+      )}
+      {manages && !hasLiveSubscription(account) && (
+        <div className="flex flex-wrap gap-2">
+          <UpgradeForm
+            organizationId={organizationId}
+            plan="pro"
+            label="Upgrade to Pro ($49/month)"
+          />
+          <UpgradeForm
+            organizationId={organizationId}
+            plan="team"
+            label="Upgrade to Team ($199/month)"
+          />
+        </div>
+      )}
+      {manages && account && (
+        <ManageBillingForm organizationId={organizationId} />
+      )}
+    </section>
+  )
 }
 
 export default async function OrgPage({
@@ -154,6 +218,7 @@ export default async function OrgPage({
           Only owners and admins can invite people.
         </p>
       )}
+      <BillingSection organizationId={org.id} manages={manages} />
       <section className="flex flex-col gap-2">
         <h2 className="font-medium">Leave</h2>
         {soleOwner(role) ? (

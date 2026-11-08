@@ -37,6 +37,12 @@ export default defineConfig({
       IRIS_S3_BUCKET: env.s3.bucket,
       IRIS_S3_ACCESS_KEY_ID: env.s3.accessKeyId,
       IRIS_S3_SECRET_ACCESS_KEY: env.s3.secretAccessKey,
+      // Stripe billing (#261): placeholders, so the billing section renders. No test
+      // reaches Stripe: every billing action under test is refused before the call.
+      IRIS_STRIPE_SECRET_KEY: "sk_test_e2e_placeholder",
+      IRIS_STRIPE_WEBHOOK_SECRET: "whsec_e2e_placeholder",
+      IRIS_STRIPE_PRICE_PRO: "price_e2e_pro",
+      IRIS_STRIPE_PRICE_TEAM: "price_e2e_team",
     },
   },
 })

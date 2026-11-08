@@ -141,11 +141,14 @@ const ac = createAccessControl({
   providerKey: ['create', 'read', 'delete'],
   // Making a visual result a project's new baseline (#463): owners and admins only.
   visualBaseline: ['approve'],
+  // Checkout and the Stripe Customer Portal (#261): owners and admins only.
+  billing: ['manage'],
 } as const);
 const keyManager = {
   apiKey: ['create', 'read', 'update', 'delete'] as const,
   providerKey: ['create', 'read', 'delete'] as const,
   visualBaseline: ['approve'] as const,
+  billing: ['manage'] as const,
 };
 const roles = {
   owner: ac.newRole({ ...ownerAc.statements, ...keyManager }),
