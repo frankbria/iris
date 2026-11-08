@@ -271,6 +271,42 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
     });
   });
 
+  it('grants the plan when the first invoice arrives before its subscription', async () => {
+    await newOrg('org-inv-first', 'cus_inv_first');
+    expect(
+      await deliver(event('invoice.paid', invoice('cus_inv_first', 'sub_inv_first'), now + 1)),
+    ).toBe('applied');
+    const created = subscription('cus_inv_first', 'sub_inv_first', 'active', 'price_pro');
+    expect(await deliver(event('customer.subscription.created', created, now))).toBe('applied');
+    expect((await billing('org-inv-first')).plan).toBe('pro');
+  });
+
+  it('resubscribes after a cancel even when Checkout arrives before the new subscription', async () => {
+    await newOrg('org-again', 'cus_again');
+    const old = subscription('cus_again', 'sub_old', 'canceled', 'price_pro');
+    expect(await deliver(event('customer.subscription.deleted', old, now))).toBe('applied');
+    const checkout = event(
+      'checkout.session.completed',
+      {
+        id: 'cs_again',
+        object: 'checkout.session',
+        customer: 'cus_again',
+        subscription: 'sub_new',
+      },
+      now + 20,
+    );
+    expect(await deliver(checkout)).toBe('applied');
+    const created = subscription('cus_again', 'sub_new', 'active', 'price_team');
+    expect(await deliver(event('customer.subscription.created', created, now + 10))).toBe(
+      'applied',
+    );
+    expect(await billing('org-again')).toEqual({
+      subscription: 'sub_new',
+      status: 'active',
+      plan: 'team',
+    });
+  });
+
   it('treats an expired incomplete subscription as final too', async () => {
     await newOrg('org-expired', 'cus_expired');
     const expired = subscription('cus_expired', 'sub_expired', 'incomplete_expired', 'price_pro');

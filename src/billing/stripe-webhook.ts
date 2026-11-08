@@ -102,6 +102,19 @@ function isStale(row: BillingRow, change: BillingChange, eventAt: Date): boolean
   );
 }
 
+function nextState(row: BillingRow, change: BillingChange, eventAt: Date) {
+  const subscriptionId = change.subscriptionId ?? row.stripe_subscription_id;
+  // A newly linked subscription must not inherit the old one's status (an ended one is final).
+  const keptStatus = subscriptionId === row.stripe_subscription_id ? row.subscription_status : null;
+  return {
+    subscriptionId,
+    status: change.status ?? keptStatus,
+    // Only subscription events carry the plan; Checkout and invoices arrive after the
+    // subscription event they follow, so they must not make it stale.
+    statusAt: change.plan === undefined ? row.status_at : eventAt,
+  };
+}
+
 async function applyChange(
   tx: Kysely<unknown>,
   event: Stripe.Event,
@@ -119,12 +132,10 @@ async function applyChange(
   if (!recorded.rows.length) return 'duplicate';
   const eventAt = new Date(event.created * 1000);
   if (isStale(row, change, eventAt)) return 'stale';
+  const next = nextState(row, change, eventAt);
   await sql`update org_billing set
-      stripe_subscription_id = coalesce(${change.subscriptionId}, stripe_subscription_id),
-      subscription_status = coalesce(${change.status ?? null}, subscription_status),
-      -- Checkout completes after the subscription it made, so it must not outdate it.
-      status_at = ${change.status === undefined ? sql`status_at` : sql`${eventAt}`},
-      updated_at = now()
+      stripe_subscription_id = ${next.subscriptionId}, subscription_status = ${next.status},
+      status_at = ${next.statusAt}, updated_at = now()
     where org_id = ${row.org_id}`.execute(tx);
   await applyPlan(tx, row.org_id, change.plan);
   await recordAudit(tx, {

@@ -217,12 +217,16 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   org's events), then the event id is inserted `on conflict do nothing` (a redelivery,
   concurrent or not, changes nothing), then the change is applied. An unknown customer or an
   unhandled type is a 200 that records nothing (`stripe_events.org_id` is required).
-- **Out of order**: `status_at` is the applied event's `created` (seconds). An older event is
-  recorded but not applied; same-second events apply in arrival order, except that nothing
-  applies to a subscription once it is `canceled` (Stripe never reactivates one, so an
-  update sent before the deletion but delivered after it cannot revive the plan). A deletion or an
-  invoice applies only to the org's current subscription id, so an old subscription cannot
-  downgrade or mark a new one past due.
+- **Out of order**: `status_at` is the `created` (seconds) of the last applied
+  **subscription** event, the only kind that carries the plan. An older event is recorded but
+  not applied; same-second events apply in arrival order. Checkout and invoice events never
+  move `status_at`: Stripe creates them after the subscription event they follow, and moving
+  it made that event stale, leaving a paying org on free (Kimi and Codex reviews of #636).
+  Linking a different subscription id resets the status instead of carrying the old one over.
+  Nothing applies to a subscription once it has ended (`canceled`, `incomplete_expired`):
+  Stripe never reactivates one, so an update sent before the deletion but delivered after it
+  cannot revive the plan. A deletion or an invoice applies only to the org's current
+  subscription id, so an old subscription cannot downgrade or mark a new one past due.
 - **Plan from the price**: `active`, `trialing` and `past_due` keep the price's plan (the
   grace period is #266); any other status, or a price IRIS does not sell, is free.
   `setPlan` is called only when the plan changes, because it replaces the overrides (a
