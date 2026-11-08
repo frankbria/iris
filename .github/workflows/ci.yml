@@ -280,21 +280,16 @@ jobs:
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          # BOTH tags. Tailscale requires the requested set to match the OAuth
-          # client's FULL tag set, not a subset — this client carries tag:ci and
-          # tag:staging-server, and asking for either alone returns
-          #   400 "requested tags [tag:ci] are invalid or not permitted"
+          # Tailscale requires the requested set to match the OAuth client's FULL
+          # tag set exactly, neither subset nor superset; a mismatch returns
+          #   400 "requested tags [...] are invalid or not permitted"
           # which reads as a permissions problem and is actually an exact-match
-          # rule. auto-author verified it against the API: [tag:ci] 400,
-          # [tag:staging-server] 400, [tag:ci,tag:staging-server] SUCCESS.
-          #
-          # This cost five deploy attempts. codeframe and narrative-modeling-app
-          # use `tags: tag:ci` only because their clients carry that single tag,
-          # so their request is already the full set — copying their line without
-          # checking this client's tags is what produced the 400s.
+          # rule. Since #535 this client carries only tag:ci, so the runner no
+          # longer joins as tag:staging-server. Requesting the old pair against
+          # the new client is what failed staging on 662c37c.
           #
           # If this client's tags change, this line changes with them.
-          tags: tag:ci,tag:staging-server
+          tags: tag:ci
 
       # tailscale/github-action reports outcome=success even when every attempt to
       # bring the tunnel up failed — observed on run 31447624977, where five
