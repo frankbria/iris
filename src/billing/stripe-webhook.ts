@@ -86,15 +86,16 @@ interface BillingRow {
   status_at: Date | null;
 }
 
-/** Stripe never reactivates a canceled subscription, so nothing later about it applies. */
-const isCanceled = (row: BillingRow, change: BillingChange): boolean =>
-  row.subscription_status === 'canceled' &&
+/** Stripe never reactivates an ended subscription, so nothing later about it applies. */
+const ENDED_STATUSES = ['canceled', 'incomplete_expired'];
+const hasEnded = (row: BillingRow, change: BillingChange): boolean =>
+  ENDED_STATUSES.includes(row.subscription_status ?? '') &&
   row.stripe_subscription_id !== null &&
   row.stripe_subscription_id === change.subscriptionId;
 
 function isStale(row: BillingRow, change: BillingChange, eventAt: Date): boolean {
   if (row.status_at && row.status_at > eventAt) return true;
-  if (isCanceled(row, change)) return true;
+  if (hasEnded(row, change)) return true;
   return (
     Boolean(change.currentOnly && row.stripe_subscription_id) &&
     row.stripe_subscription_id !== change.subscriptionId
@@ -121,7 +122,9 @@ async function applyChange(
   await sql`update org_billing set
       stripe_subscription_id = coalesce(${change.subscriptionId}, stripe_subscription_id),
       subscription_status = coalesce(${change.status ?? null}, subscription_status),
-      status_at = ${eventAt}, updated_at = now()
+      -- Checkout completes after the subscription it made, so it must not outdate it.
+      status_at = ${change.status === undefined ? sql`status_at` : sql`${eventAt}`},
+      updated_at = now()
     where org_id = ${row.org_id}`.execute(tx);
   await applyPlan(tx, row.org_id, change.plan);
   await recordAudit(tx, {

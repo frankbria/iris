@@ -250,6 +250,36 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
     expect(recorded.rows[0].n).toBe('2');
   });
 
+  it('applies the subscription when Checkout completes first but the subscription was created earlier', async () => {
+    await newOrg('org-race', 'cus_race');
+    // Stripe creates the subscription and its first invoice before the Checkout completes.
+    const checkout = event(
+      'checkout.session.completed',
+      { id: 'cs_race', object: 'checkout.session', customer: 'cus_race', subscription: 'sub_race' },
+      now + 2,
+    );
+    expect(await deliver(checkout)).toBe('applied');
+    const created = subscription('cus_race', 'sub_race', 'active', 'price_pro');
+    expect(await deliver(event('customer.subscription.created', created, now))).toBe('applied');
+    expect(await deliver(event('invoice.paid', invoice('cus_race', 'sub_race'), now + 1))).toBe(
+      'applied',
+    );
+    expect(await billing('org-race')).toEqual({
+      subscription: 'sub_race',
+      status: 'active',
+      plan: 'pro',
+    });
+  });
+
+  it('treats an expired incomplete subscription as final too', async () => {
+    await newOrg('org-expired', 'cus_expired');
+    const expired = subscription('cus_expired', 'sub_expired', 'incomplete_expired', 'price_pro');
+    expect(await deliver(event('customer.subscription.updated', expired, now + 1))).toBe('applied');
+    const earlier = subscription('cus_expired', 'sub_expired', 'active', 'price_pro');
+    expect(await deliver(event('customer.subscription.updated', earlier, now + 1))).toBe('stale');
+    expect((await billing('org-expired')).plan).toBe('free');
+  });
+
   it('never revives a canceled subscription, even from an update in the same second', async () => {
     await newOrg('org-final', 'cus_final');
     const live = subscription('cus_final', 'sub_final', 'active', 'price_pro');
