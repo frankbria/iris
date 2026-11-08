@@ -81,12 +81,12 @@ async function BillingSection({
           <UpgradeForm
             organizationId={organizationId}
             plan="pro"
-            label="Upgrade to Pro ($49/month)"
+            label="Upgrade to Pro"
           />
           <UpgradeForm
             organizationId={organizationId}
             plan="team"
-            label="Upgrade to Team ($199/month)"
+            label="Upgrade to Team"
           />
         </div>
       )}

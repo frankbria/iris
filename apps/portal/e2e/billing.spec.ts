@@ -53,10 +53,10 @@ test("managers see the plan and Upgrade; a member's forged Checkout is refused",
   const billing = page.getByRole("region", { name: "Billing" })
   await expect(billing.getByText("Plan: Free")).toBeVisible()
   await expect(
-    billing.getByRole("button", { name: "Upgrade to Pro ($49/month)" })
+    billing.getByRole("button", { name: "Upgrade to Pro", exact: true })
   ).toBeVisible()
   await expect(
-    billing.getByRole("button", { name: "Upgrade to Team ($199/month)" })
+    billing.getByRole("button", { name: "Upgrade to Team", exact: true })
   ).toBeVisible()
   await expect(
     billing.getByRole("button", { name: "Manage billing" })
