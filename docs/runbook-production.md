@@ -666,6 +666,40 @@ Unset, managed mode falls through to each org's own key. One without the other s
 subprocessor page says so). Managed spend is `usage_events` with `billing_mode = managed`;
 Stripe reporting is #264.
 
+## Stripe billing (issues #261, #345)
+
+Off until all four settings are set; then owners and admins see **Upgrade** (Checkout) and
+**Manage billing** (Customer Portal) on `/org`. Subscription state comes only from the
+signed webhook. Set up once per Stripe mode (test first, then live):
+
+1. **Products and prices**: a *Pro* product with a recurring monthly price of $49, and a
+   *Team* product at $199/month. Note each price id (`price_…`).
+2. **Customer Portal** (Settings → Billing → Customer portal): allow cancelling, updating
+   the payment method and switching between the Pro and Team prices; save it. Upgrades
+   and cancellations go through the Portal: Checkout is refused while a subscription is live.
+3. **Webhook endpoint** (Developers → Webhooks): `https://<public host>/v1/stripe/webhook`,
+   API version `2026-10-28.endive` (`STRIPE_API_VERSION` in `src/billing/stripe.ts`; the
+   payloads must match the version the code reads), events `checkout.session.completed`,
+   `customer.subscription.created`, `customer.subscription.updated`,
+   `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Copy its
+   signing secret (`whsec_…`).
+4. **The `production` GitHub environment** (the deploy passes them to `iris` and the portal):
+
+| Name | Kind | Value |
+| --- | --- | --- |
+| `IRIS_STRIPE_SECRET_KEY` | secret | a restricted or secret API key; written to `secrets/stripe_secret_key`, read through `IRIS_STRIPE_SECRET_KEY_FILE` |
+| `IRIS_STRIPE_WEBHOOK_SECRET` | secret | the endpoint's signing secret; written to `secrets/stripe_webhook_secret` |
+| `IRIS_STRIPE_PRICE_PRO` | variable | the Pro price id |
+| `IRIS_STRIPE_PRICE_TEAM` | variable | the Team price id |
+
+Some but not all of them stop `iris connect` (exit 3, so the deploy rolls back) and make
+the portal's `/org` fail. Check from the Stripe dashboard that a test event is answered
+200; a 400 means the signing secret does not match. Locally, `stripe listen --forward-to
+localhost:4000/v1/stripe/webhook` prints a secret to use as `IRIS_STRIPE_WEBHOOK_SECRET`.
+The grace period and suspension on failed payments are #266; until then `invoice.payment_failed`
+only shows `past due` and keeps the plan. Purging an org does not cancel its Stripe
+subscription: cancel it in the dashboard first.
+
 ## Retention and offboarding (issue #349)
 
 Periods (owner decisions, 2026-10-03; the 7 years await counsel's confirmation, #450):

@@ -107,8 +107,18 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `org_plans`: org, plan id (`free`/`pro`/`team`), per-org overrides of plan limits, last update. No personal data. An org with no row is on free. |
 | Purpose | Entitlements (#260): which limits apply to the org, enforced at the API (#346). |
 | Where | Postgres, `0009`; `src/billing/plans.ts`. |
-| Access | Operators; Stripe webhooks will set it (#261). |
+| Access | Operators; the verified Stripe webhook sets the plan from the subscription's price (#345), only when it changes, so a support grant survives other events. Shown on `/org` (#261). |
 | Retention | Deleted when the org is purged. |
+
+### Org billing (Stripe)
+
+| | |
+|---|---|
+| Data | `org_billing`: org, Stripe customer id, subscription id, subscription status, the time of the Stripe event that set it, last update. `stripe_events`: Stripe event id, org, event type, time processed. No card data (it stays at Stripe) and no personal data. |
+| Purpose | One Stripe customer per org, and the subscription state taken only from signature-verified webhooks (#261, #345); `stripe_events` makes each event apply once. |
+| Where | Postgres, `0020_org_billing.ts`; `src/billing/stripe.ts`, `src/billing/stripe-webhook.ts`. |
+| Access | Operators; the org's members see the plan and status on `/org`, owners and admins open Checkout and the Customer Portal. |
+| Retention | Kept on the purged org's tombstone as a billing record, and deleted with it after **7 years** (cascade). |
 
 ### Terms acceptances
 
@@ -137,7 +147,7 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `audit_log`: org, `actor_user_id`, `actor_api_key_id` (plain ids, no foreign keys, so an entry outlives its actor), action, target, `metadata jsonb`, time. |
 | Purpose | An org's audit trail (#361). |
 | Where | Postgres, `0001_initial.ts`. |
-| Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`); member removed, left or given a role (`member.remove|leave|role`, the member's user id, and the keys revoked with them); keys revoked by a user ban (`api_key.delete`, reason `user banned`, no actor); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463). No URL, page content or typed value is recorded. |
+| Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`); member removed, left or given a role (`member.remove|leave|role`, the member's user id, and the keys revoked with them); keys revoked by a user ban (`api_key.delete`, reason `user banned`, no actor); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463); Stripe customer created for the org, with the acting user (`billing_customer.create`, `customer:<id>`, #261); each applied Stripe event (`subscription.update`, `event:<id>`, its type, status and plan, no actor, #345). No URL, page content or typed value is recorded. |
 | Access | The org's owners and admins on the portal's `/audit` page (#541), newest first, with the acting user's name and email while they exist; members are refused. Operators by query. |
 | Retention | Deleted when the org is purged; a deleted user's id is removed from their entries (#349). Otherwise **undecided** (#541). |
 
@@ -272,8 +282,13 @@ org name. The provider is a subprocessor; its retention applies.
 
 ### Payments (Stripe)
 
-Not live: there is no Stripe code yet (#261). When billing launches, Stripe receives billing
-contact and payment details and metered usage (#264); update this section then.
+Live when the operator sets `IRIS_STRIPE_*` (#261, #345); off otherwise. IRIS sends Stripe
+the org id (customer metadata `org_id`, and `client_reference_id` on Checkout) and the
+price of the plan chosen (`src/billing/stripe.ts`). The customer enters billing contact
+and card details on Stripe's own Checkout and Customer Portal pages: IRIS never receives or
+stores them. Stripe sends IRIS signed webhook events (`POST /v1/stripe/webhook`); IRIS keeps
+the customer and subscription ids, the status and the event ids (Org billing, above).
+Metered usage is #264. Stripe is a subprocessor; its retention applies.
 
 ### Off-box backup storage
 

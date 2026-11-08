@@ -196,6 +196,53 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   is `over-quota` (API 402, portal message). The portal dashboard shows usage of quota.
 - **Objects stored before migration 0015 have no row** and are not counted.
 
+### Stripe Billing (issues #261, #345)
+
+`src/billing/stripe.ts` (config, customers, Checkout, Portal), `src/billing/stripe-webhook.ts`,
+migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
+`src/jobs-api.ts`, the Billing section of the portal's `/org`. Ops: runbook "Stripe billing".
+
+- **Config is all four `IRIS_STRIPE_*` (each with `_FILE`) or none** (`resolveStripeConfig`):
+  none is billing off (no section on `/org`, the route 404s); some throws (`iris connect`
+  exits 3). On the `jest.setup.ts` scrub list. `stripe` is pinned exactly (23.1.0) and the
+  client pins `STRIPE_API_VERSION`: the webhook endpoint must use the same version, since the
+  handler reads that version's payloads (an invoice's subscription is
+  `parent.subscription_details.subscription`).
+- **State only from the webhook**, never the Checkout redirect (ADR 0001 §6). The route
+  takes no API key and passes the **raw body text** to `constructEvent`: re-serialised JSON
+  would not match the signature. 400 on a bad or missing signature, 200 for anything
+  verified (applied, duplicate, stale, ignored), so Stripe stops retrying; a database error
+  is a 500 and Stripe retries. The body cap is the shared `MAX_BODY_BYTES` (413).
+- **One transaction per event**: the `org_billing` row is locked by customer id (orders one
+  org's events), then the event id is inserted `on conflict do nothing` (a redelivery,
+  concurrent or not, changes nothing), then the change is applied. An unknown customer or an
+  unhandled type is a 200 that records nothing (`stripe_events.org_id` is required).
+- **Out of order**: `status_at` is the applied event's `created` (seconds). An older event is
+  recorded but not applied; same-second events apply in arrival order. A deletion or an
+  invoice applies only to the org's current subscription id, so an old subscription cannot
+  downgrade or mark a new one past due.
+- **Plan from the price**: `active`, `trialing` and `past_due` keep the price's plan (the
+  grace period is #266); any other status, or a price IRIS does not sell, is free.
+  `setPlan` is called only when the plan changes, because it replaces the overrides (a
+  support grant). `setPlan` joins a caller's transaction (`db.isTransaction`): Kysely
+  cannot nest one.
+- **One customer per org**: created on first Checkout with idempotency key
+  `customer-<orgId>` and `metadata.org_id`, stored `on conflict do nothing` (audited
+  `billing_customer.create`). Checkout is refused (`BillingError`) while a subscription is
+  live (`hasLiveSubscription`: any status but none/`canceled`/`incomplete_expired`); plan
+  changes and cancelling go through the Customer Portal, which must allow switching prices.
+- **Portal**: `createAuth()` roles carry `billing: ['manage']` (owners, admins). Server
+  actions `startCheckout` / `openBillingPortal` (`app/org/actions.ts`) check that
+  permission for the form's org, then suspension, then redirect to Stripe. `lib/billing.ts`
+  is `server-only`. Portal E2E sets placeholder `IRIS_STRIPE_*` and never reaches Stripe;
+  its positive control is a forged Checkout refused for a live subscription (after the
+  permission check).
+- **Tests**: the webhook and route run real verification with payloads signed by
+  `generateTestHeaderString` against real Postgres. Calls to Stripe itself
+  (`db/stripe-billing.test.ts`) need `IRIS_TEST_STRIPE_SECRET_KEY` (a test-mode key) and
+  are skipped without it, **CI included**, until the owner's test account exists; the
+  Portal case also needs the account's Customer Portal configuration saved.
+
 ### Managed AI Credits (issue #479)
 
 `src/billing/managed-ai.ts`, migration 0013 (`org_ai_settings`), ADR 0001 §6.
