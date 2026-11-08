@@ -127,7 +127,8 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   `frankbria/glm-review/.../review.yml@main`, deliberately (check-workflow-calls.yml says
   why); `container-config.test.ts` fails on any other. Staging, like production, refuses to
   deploy without `SSH_KNOWN_HOSTS` (no ssh-keyscan trust-on-first-use), and both deploy jobs
-  have `timeout-minutes`. A CI-only tailnet tag needs the Tailscale console: #535.
+  have `timeout-minutes`. Staging's OAuth client carries only `tag:ci` (#535), and the
+  workflow's `tags:` must equal the client's full tag set exactly.
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
 
