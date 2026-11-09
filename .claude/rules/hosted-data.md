@@ -205,28 +205,30 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
 - **Config is all four `IRIS_STRIPE_*` (each with `_FILE`) or none** (`resolveStripeConfig`):
   none is billing off (no section on `/org`, the route 404s); some throws (`iris connect`
   exits 3). On the `jest.setup.ts` scrub list. `stripe` is pinned exactly (23.1.0) and the
-  client pins `STRIPE_API_VERSION`: the webhook endpoint must use the same version, since the
-  handler reads that version's payloads (an invoice's subscription is
-  `parent.subscription_details.subscription`).
+  client pins `STRIPE_API_VERSION`; keep the webhook endpoint on the same version.
 - **State only from the webhook**, never the Checkout redirect (ADR 0001 §6). The route
   takes no API key and passes the **raw body text** to `constructEvent`: re-serialised JSON
   would not match the signature. 400 on a bad or missing signature, 200 for anything
-  verified (applied, duplicate, stale, ignored), so Stripe stops retrying; a database error
-  is a 500 and Stripe retries. The body cap is the shared `MAX_BODY_BYTES` (413).
-- **One transaction per event**: the `org_billing` row is locked by customer id (orders one
-  org's events), then the event id is inserted `on conflict do nothing` (a redelivery,
-  concurrent or not, changes nothing), then the change is applied. An unknown customer or an
-  unhandled type is a 200 that records nothing (`stripe_events.org_id` is required).
-- **Out of order**: `status_at` is the `created` (seconds) of the last applied
-  **subscription** event, the only kind that carries the plan. An older event is recorded but
-  not applied; same-second events apply in arrival order. Checkout and invoice events never
-  move `status_at`: Stripe creates them after the subscription event they follow, and moving
-  it made that event stale, leaving a paying org on free (Kimi and Codex reviews of #636).
-  Linking a different subscription id resets the status instead of carrying the old one over.
-  Nothing applies to a subscription once it has ended (`canceled`, `incomplete_expired`):
-  Stripe never reactivates one, so an update sent before the deletion but delivered after it
-  cannot revive the plan. A deletion or an invoice applies only to the org's current
-  subscription id, so an old subscription cannot downgrade or mark a new one past due.
+  verified (applied, duplicate, ignored), so Stripe stops retrying; a database or Stripe API
+  error is a 500 and Stripe redelivers. The body cap is the shared `MAX_BODY_BYTES` (413).
+- **An event's payload is never applied** (owner decision 2026-11-08, after three review
+  rounds of #636 kept finding out-of-order bugs in a payload-plus-timestamp design). A
+  verified event of the six handled types only names the customer (`object.customer`); the
+  handler then lists that customer's subscriptions from Stripe (`status: 'all'`) and stores
+  the current one: the newest entitled (`active`, `trialing`, `past_due`) if any, else the
+  newest, else none (free, status and subscription id null). So delivery order does not
+  matter: after the last event the row is Stripe's state as read then. Stripe's own
+  recommended pattern.
+- **One transaction per event, Stripe read inside it**: the `org_billing` row is locked by
+  customer id, the event id is inserted `on conflict do nothing` (a redelivery, concurrent or
+  not, stops there and reads nothing), then Stripe is read and the state written. The lock
+  serialises one org's events, so the later commit always carries the later read. Because the
+  read holds the row lock, the reader's client has a 10 s timeout and **no automatic
+  retries** (`stripeClient(config, { timeout, maxNetworkRetries: 0 })`); a failed read throws,
+  the transaction rolls back (no event row), the route answers 500 and Stripe redelivers.
+  An unknown customer or an unhandled type is a 200 that records nothing and reads nothing.
+  The reader is injectable (`stripeWebhookHandler(db, config, { readSubscriptions })`); tests
+  pass one over in-test fixtures. It lists the first 100 subscriptions only.
 - **Plan from the price**: `active`, `trialing` and `past_due` keep the price's plan (the
   grace period is #266); any other status, or a price IRIS does not sell, is free.
   `setPlan` is called only when the plan changes, because it replaces the overrides (a
@@ -244,10 +246,13 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   its positive control is a forged Checkout refused for a live subscription (after the
   permission check).
 - **Tests**: the webhook and route run real verification with payloads signed by
-  `generateTestHeaderString` against real Postgres. Calls to Stripe itself
+  `generateTestHeaderString` against real Postgres, with the in-test reader playing Stripe's
+  current state (each former out-of-order case is now "any delivery order ends in that
+  state"). Calls to Stripe itself
   (`db/stripe-billing.test.ts`) need `IRIS_TEST_STRIPE_SECRET_KEY` (a test-mode key) and
   are skipped without it, **CI included**, until the owner's test account exists; the
-  Portal case also needs the account's Customer Portal configuration saved.
+  Portal case also needs the account's Customer Portal configuration saved. The default
+  reader is covered there too (an unpaid test-mode subscription stored as `incomplete`).
 
 ### Managed AI Credits (issue #479)
 

@@ -682,8 +682,7 @@ signed webhook. Set up once per Stripe mode (test first, then live):
    two Upgrade clicks within that window would otherwise create two live, billed
    subscriptions. Confirm the setting's current location in Stripe's docs when you apply it.
 3. **Webhook endpoint** (Developers → Webhooks): `https://<public host>/v1/stripe/webhook`,
-   API version `2026-10-28.endive` (`STRIPE_API_VERSION` in `src/billing/stripe.ts`; the
-   payloads must match the version the code reads), events `checkout.session.completed`,
+   API version `2026-10-28.endive` (`STRIPE_API_VERSION` in `src/billing/stripe.ts`), events `checkout.session.completed`,
    `customer.subscription.created`, `customer.subscription.updated`,
    `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Copy its
    signing secret (`whsec_…`).
@@ -700,7 +699,9 @@ Some but not all of them stop `iris connect` (exit 3, so the deploy rolls back) 
 the portal's `/org` fail. Check from the Stripe dashboard that a test event is answered
 200; a 400 means the signing secret does not match. Locally, `stripe listen --forward-to
 localhost:4000/v1/stripe/webhook` prints a secret to use as `IRIS_STRIPE_WEBHOOK_SECRET`.
-The grace period and suspension on failed payments are #266; until then `invoice.payment_failed`
+Each event makes `iris connect` read the customer's subscriptions from the Stripe API (10 s
+timeout, no retries); when Stripe is unreachable it answers 500 and Stripe redelivers, so
+the API key needs read access to subscriptions. The grace period and suspension on failed payments are #266; until then `invoice.payment_failed`
 only shows `past due` and keeps the plan. Purging an org does not cancel its Stripe
 subscription: cancel it in the dashboard first.
 
