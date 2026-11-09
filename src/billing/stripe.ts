@@ -52,8 +52,12 @@ export function planForPrice(config: StripeConfig, priceId: string): PaidPlan | 
   return null;
 }
 
-export function stripeClient(config: StripeConfig): Stripe {
-  return new Stripe(config.secretKey, { apiVersion: STRIPE_API_VERSION });
+/** `limits`: a caller that holds a lock while it waits bounds the request and skips retries. */
+export function stripeClient(
+  config: StripeConfig,
+  limits: Pick<Stripe.StripeConfig, 'timeout' | 'maxNetworkRetries'> = {},
+): Stripe {
+  return new Stripe(config.secretKey, { apiVersion: STRIPE_API_VERSION, ...limits });
 }
 
 /** Statuses after which a subscription is over and the org may check out again. */

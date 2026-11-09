@@ -16,7 +16,7 @@ import { createPostgresDb } from '../src/db/postgres';
 import { migrateToLatest } from '../src/db/migrate';
 import { startServer, type Authenticator } from '../src/protocol';
 import { MAX_BODY_BYTES } from '../src/jobs-api';
-import { stripeWebhookHandler } from '../src/billing/stripe-webhook';
+import { stripeWebhookHandler, type ReadSubscriptions } from '../src/billing/stripe-webhook';
 import type { StripeConfig } from '../src/billing/stripe';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
@@ -40,6 +40,13 @@ const authenticate: Authenticator = {
   async recheck() {
     return false;
   },
+};
+/** Stripe's current state for the route's customer: one active Team subscription. */
+const onTeam: ReadSubscriptions = async () => [
+  { id: 'sub_route', status: 'active', priceId: 'price_team', created: 1 },
+];
+const unreachable: ReadSubscriptions = async () => {
+  throw new Error('Stripe API unavailable');
 };
 const jobs = { forOrg: () => ({ enqueue: async () => null, get: async () => null }) };
 
@@ -97,17 +104,19 @@ const jobs = { forOrg: () => ({ enqueue: async () => null, get: async () => null
   });
 
   // Whitespace and key order as Stripe sends them: re-serialising would break the signature.
-  const body = `{
-  "id": "evt_route_1", "object": "event", "type": "customer.subscription.created",
+  const payload = (eventId: string) => `{
+  "id": "${eventId}", "object": "event", "type": "customer.subscription.created",
   "created": ${Math.floor(Date.now() / 1000)},
   "data": { "object": { "id": "sub_route", "object": "subscription", "customer": "cus_route",
     "status": "active", "items": { "data": [ { "price": { "id": "price_team" } } ] } } }
 }`;
-  const signature = () =>
-    signer.webhooks.generateTestHeaderString({ payload: body, secret: CONFIG.webhookSecret });
+  const body = payload('evt_route_1');
+  const signatureOf = (text: string) =>
+    signer.webhooks.generateTestHeaderString({ payload: text, secret: CONFIG.webhookSecret });
+  const signature = () => signatureOf(body);
 
   it('answers 400 to a bad or missing signature without an API key, and 200 once applied', async () => {
-    await serve(stripeWebhookHandler(db, CONFIG));
+    await serve(stripeWebhookHandler(db, CONFIG, { readSubscriptions: onTeam }));
     expect((await post(body)).status).toBe(400);
     expect((await post(body, 't=1,v1=deadbeef')).status).toBe(400);
 
@@ -123,11 +132,21 @@ const jobs = { forOrg: () => ({ enqueue: async () => null, get: async () => null
   });
 
   it('refuses another method and a body over the cap', async () => {
-    await serve(stripeWebhookHandler(db, CONFIG));
+    await serve(stripeWebhookHandler(db, CONFIG, { readSubscriptions: onTeam }));
     const get = await fetch(`${base}/v1/stripe/webhook`);
     expect(get.status).toBe(405);
     expect(get.headers.get('allow')).toBe('POST');
     expect((await post('x'.repeat(MAX_BODY_BYTES + 1), signature())).status).toBe(413);
+  });
+
+  it('answers 500 when Stripe cannot be read, so Stripe delivers the event again', async () => {
+    const retried = payload('evt_route_retry');
+    await serve(stripeWebhookHandler(db, CONFIG, { readSubscriptions: unreachable }));
+    expect((await post(retried, signatureOf(retried))).status).toBe(500);
+    await new Promise((resolve) => server.close(() => resolve(null)));
+
+    await serve(stripeWebhookHandler(db, CONFIG, { readSubscriptions: onTeam }));
+    expect((await post(retried, signatureOf(retried))).status).toBe(200);
   });
 
   it('is not served when billing is off', async () => {

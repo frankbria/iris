@@ -18,6 +18,7 @@ import {
   stripeClient,
   type StripeConfig,
 } from '../../src/billing/stripe';
+import { stripeWebhookHandler } from '../../src/billing/stripe-webhook';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 if (!ADMIN_URL) {
@@ -138,6 +139,35 @@ if (!STRIPE_KEY) console.warn('Skipping Stripe test-mode calls: set IRIS_TEST_ST
       expect(await billing.portalUrl('org-checkout', 'https://portal.test/org')).toMatch(
         /^https:\/\/billing\.stripe\.com\//,
       );
+    });
+
+    // The webhook's default reader: a signed event makes it read the customer's real
+    // subscriptions. Unpaid (no card in test mode), so `incomplete` and no paid plan.
+    it("stores the customer's current subscription as the API reports it", async () => {
+      const stripe = stripeClient(config);
+      const { customerId } = (await stripeBilling(db, stripe, config).account('org-checkout'))!;
+      const subscription = await stripe.subscriptions.create({
+        customer: customerId,
+        items: [{ price: config.prices.team }],
+        payment_behavior: 'default_incomplete',
+      });
+      const payload = JSON.stringify({
+        id: `evt_test_${randomBytes(4).toString('hex')}`,
+        object: 'event',
+        type: 'customer.subscription.created',
+        created: subscription.created,
+        data: { object: { id: subscription.id, customer: customerId } },
+      });
+      const handle = stripeWebhookHandler(db, config);
+      const signature = stripe.webhooks.generateTestHeaderString({
+        payload,
+        secret: config.webhookSecret,
+      });
+      expect(await handle(payload, signature)).toBe('applied');
+      const { rows } = await sql<{ id: string; status: string }>`
+        select stripe_subscription_id as id, subscription_status as status
+        from org_billing where org_id = 'org-checkout'`.execute(db);
+      expect(rows).toEqual([{ id: subscription.id, status: 'incomplete' }]);
     });
   });
 });

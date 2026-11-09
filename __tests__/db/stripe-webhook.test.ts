@@ -2,8 +2,10 @@
  * The Stripe webhook over real Postgres (#345).
  *
  * Test strategy: no Stripe account. Each payload is signed with the SDK's own
- * `generateTestHeaderString` and goes through the real `constructEvent` verification,
- * then the handler writes to a throwaway database migrated to latest.
+ * `generateTestHeaderString` and goes through the real `constructEvent` verification.
+ * An event only names the customer: the handler re-reads the customer's subscriptions,
+ * here from an in-test reader whose fixtures the tests change to play Stripe's current
+ * state. So the order events arrive in must not matter, only that state.
  */
 
 import { randomBytes } from 'crypto';
@@ -13,7 +15,7 @@ import Stripe from 'stripe';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
 import { orgEntitlements } from '../../src/billing/plans';
-import { stripeWebhookHandler } from '../../src/billing/stripe-webhook';
+import { stripeWebhookHandler, type SubscriptionSnapshot } from '../../src/billing/stripe-webhook';
 import type { StripeConfig } from '../../src/billing/stripe';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
@@ -30,36 +32,33 @@ const CONFIG: StripeConfig = {
 
 const signer = new Stripe(CONFIG.secretKey);
 
+/** Stripe's current subscriptions per customer, as the tests set them. */
+const stripeState = new Map<string, SubscriptionSnapshot[]>();
+const readsByCustomer: string[] = [];
+let stripeDown = false;
+
+async function readSubscriptions(customerId: string): Promise<SubscriptionSnapshot[]> {
+  readsByCustomer.push(customerId);
+  if (stripeDown) throw new Error('Stripe API unavailable');
+  return stripeState.get(customerId) ?? [];
+}
+
+const snapshot = (
+  id: string,
+  status: string,
+  priceId: string,
+  created: number,
+): SubscriptionSnapshot => ({ id, status, priceId, created });
+
 let eventCounter = 0;
-function event(type: string, object: Record<string, unknown>, created: number) {
+/** A handled event about `customer`; only the type and the customer are read. */
+function event(type: string, customer: string) {
   return {
     id: `evt_${++eventCounter}_${randomBytes(3).toString('hex')}`,
     object: 'event',
     type,
-    created,
-    data: { object },
-  };
-}
-
-function subscription(customer: string, id: string, status: string, price: string) {
-  return {
-    id,
-    object: 'subscription',
-    customer,
-    status,
-    items: { data: [{ price: { id: price } }] },
-  };
-}
-
-function invoice(customer: string, subscriptionId: string) {
-  return {
-    id: `in_${randomBytes(3).toString('hex')}`,
-    object: 'invoice',
-    customer,
-    parent: {
-      type: 'subscription_details',
-      subscription_details: { subscription: subscriptionId },
-    },
+    created: Math.floor(Date.now() / 1000),
+    data: { object: { id: `obj_${eventCounter}`, customer } },
   };
 }
 
@@ -72,7 +71,6 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
   const dbName = `iris_stripe_${process.pid}_${randomBytes(4).toString('hex')}`;
   let db: Kysely<unknown>;
   let handle: ReturnType<typeof stripeWebhookHandler>;
-  const now = Math.floor(Date.now() / 1000);
 
   async function admin(query: string): Promise<void> {
     const client = new Client({ connectionString: ADMIN_URL });
@@ -96,6 +94,18 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
     return { ...rows[0], plan: (await orgEntitlements(db).get(orgId)).plan };
   }
 
+  async function auditEntries(orgId: string, action: string | null = null) {
+    const { rows } = await sql<{ n: string }>`select count(*) as n from audit_log
+      where org_id = ${orgId} and (${action}::text is null or action = ${action})`.execute(db);
+    return Number(rows[0].n);
+  }
+
+  async function recordedEvents(orgId: string) {
+    const { rows } = await sql<{ n: string }>`select count(*) as n from stripe_events
+      where org_id = ${orgId}`.execute(db);
+    return Number(rows[0].n);
+  }
+
   async function newOrg(orgId: string, customerId: string) {
     await sql`insert into organization (id, name, slug, "createdAt")
       values (${orgId}, ${orgId}, ${orgId}, now())`.execute(db);
@@ -109,7 +119,12 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
     url.pathname = `/${dbName}`;
     db = createPostgresDb(url.toString());
     await migrateToLatest(db);
-    handle = stripeWebhookHandler(db, CONFIG);
+    handle = stripeWebhookHandler(db, CONFIG, { readSubscriptions });
+  });
+
+  beforeEach(() => {
+    readsByCustomer.length = 0;
+    stripeDown = false;
   });
 
   afterAll(async () => {
@@ -119,63 +134,44 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
 
   it('refuses a payload whose signature is wrong, missing or for another secret', async () => {
     await newOrg('org-sig', 'cus_sig');
-    const payload = event(
-      'customer.subscription.updated',
-      subscription('cus_sig', 'sub_sig', 'active', 'price_pro'),
-      now,
-    );
+    stripeState.set('cus_sig', [snapshot('sub_sig', 'active', 'price_pro', 1)]);
+    const payload = event('customer.subscription.updated', 'cus_sig');
     const { body, signature } = signed(payload);
-    expect(await handle(body.replace('price_pro', 'price_team'), signature)).toBe(
-      'invalid_signature',
-    );
+    expect(await handle(body.replace('cus_sig', 'cus_other'), signature)).toBe('invalid_signature');
     expect(await handle(body, undefined)).toBe('invalid_signature');
     expect(await handle(body, signed(payload, 'whsec_other').signature)).toBe('invalid_signature');
     expect(await billing('org-sig')).toEqual({ subscription: null, status: null, plan: 'free' });
+    expect(readsByCustomer).toEqual([]);
     // Positive control: the same body, correctly signed, is applied.
     expect(await handle(body, signature)).toBe('applied');
     expect((await billing('org-sig')).plan).toBe('pro');
   });
 
-  it('subscribe, upgrade, cancel: links the subscription and follows its plan and status', async () => {
+  it('subscribe, upgrade, cancel: follows Stripe through each event', async () => {
     await newOrg('org-life', 'cus_life');
-    const checkout = event(
-      'checkout.session.completed',
-      { id: 'cs_1', object: 'checkout.session', customer: 'cus_life', subscription: 'sub_life' },
-      now,
-    );
-    expect(await deliver(checkout)).toBe('applied');
-    expect(await billing('org-life')).toEqual({
-      subscription: 'sub_life',
-      status: null,
-      plan: 'free',
-    });
-
-    const created = subscription('cus_life', 'sub_life', 'active', 'price_pro');
-    expect(await deliver(event('customer.subscription.created', created, now + 1))).toBe('applied');
+    stripeState.set('cus_life', [snapshot('sub_life', 'active', 'price_pro', 10)]);
+    expect(await deliver(event('checkout.session.completed', 'cus_life'))).toBe('applied');
     expect(await billing('org-life')).toEqual({
       subscription: 'sub_life',
       status: 'active',
       plan: 'pro',
     });
 
-    const upgraded = subscription('cus_life', 'sub_life', 'active', 'price_team');
-    expect(await deliver(event('customer.subscription.updated', upgraded, now + 2))).toBe(
-      'applied',
-    );
+    stripeState.set('cus_life', [snapshot('sub_life', 'active', 'price_team', 10)]);
+    expect(await deliver(event('customer.subscription.updated', 'cus_life'))).toBe('applied');
     expect((await billing('org-life')).plan).toBe('team');
 
-    const deleted = subscription('cus_life', 'sub_life', 'canceled', 'price_team');
-    expect(await deliver(event('customer.subscription.deleted', deleted, now + 3))).toBe('applied');
+    stripeState.set('cus_life', [snapshot('sub_life', 'canceled', 'price_team', 10)]);
+    expect(await deliver(event('customer.subscription.deleted', 'cus_life'))).toBe('applied');
     expect(await billing('org-life')).toEqual({
       subscription: 'sub_life',
       status: 'canceled',
       plan: 'free',
     });
 
-    const { rows } = await sql<{ action: string }>`select action from audit_log
-      where org_id = 'org-life' order by id`.execute(db);
+    const { rows } = await sql<{ action: string; metadata: unknown }>`
+      select action, metadata from audit_log where org_id = 'org-life' order by id`.execute(db);
     expect(rows.map((r) => r.action)).toEqual([
-      'subscription.update',
       'plan.set',
       'subscription.update',
       'plan.set',
@@ -183,230 +179,146 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
       'plan.set',
       'subscription.update',
     ]);
+    expect(rows[1].metadata).toEqual({
+      type: 'checkout.session.completed',
+      subscription: 'sub_life',
+      status: 'active',
+      plan: 'pro',
+    });
   });
 
-  it('records invoice.paid and invoice.payment_failed as the status, plan unchanged', async () => {
-    await newOrg('org-inv', 'cus_inv');
-    await deliver(
-      event(
-        'customer.subscription.created',
-        subscription('cus_inv', 'sub_inv', 'active', 'price_pro'),
-        now,
-      ),
-    );
-    expect(
-      await deliver(event('invoice.payment_failed', invoice('cus_inv', 'sub_inv'), now + 1)),
-    ).toBe('applied');
-    expect(await billing('org-inv')).toEqual({
-      subscription: 'sub_inv',
+  // Codex review of #636: a deletion delivered before its creation, then the creation.
+  it('keeps a canceled subscription canceled when its creation arrives last', async () => {
+    await newOrg('org-late-create', 'cus_lc');
+    stripeState.set('cus_lc', [snapshot('sub_lc', 'canceled', 'price_pro', 20)]);
+    await deliver(event('customer.subscription.deleted', 'cus_lc'));
+    await deliver(event('customer.subscription.created', 'cus_lc'));
+    expect(await billing('org-late-create')).toEqual({
+      subscription: 'sub_lc',
+      status: 'canceled',
+      plan: 'free',
+    });
+  });
+
+  // Codex review of #636: a late payment_failed after the newer invoice.paid.
+  it('keeps a paid subscription active when an earlier payment failure arrives last', async () => {
+    await newOrg('org-late-fail', 'cus_lf');
+    stripeState.set('cus_lf', [snapshot('sub_lf', 'active', 'price_pro', 30)]);
+    await deliver(event('invoice.paid', 'cus_lf'));
+    await deliver(event('invoice.payment_failed', 'cus_lf'));
+    expect(await billing('org-late-fail')).toEqual({
+      subscription: 'sub_lf',
+      status: 'active',
+      plan: 'pro',
+    });
+  });
+
+  it('marks the subscription past due while the payment is still failing, plan kept', async () => {
+    await newOrg('org-past-due', 'cus_pd');
+    stripeState.set('cus_pd', [snapshot('sub_pd', 'past_due', 'price_team', 30)]);
+    await deliver(event('invoice.payment_failed', 'cus_pd'));
+    expect(await billing('org-past-due')).toEqual({
+      subscription: 'sub_pd',
       status: 'past_due',
-      plan: 'pro',
-    });
-    expect(await deliver(event('invoice.paid', invoice('cus_inv', 'sub_inv'), now + 2))).toBe(
-      'applied',
-    );
-    expect(await billing('org-inv')).toEqual({
-      subscription: 'sub_inv',
-      status: 'active',
-      plan: 'pro',
+      plan: 'team',
     });
   });
 
-  it('applies a replayed event once', async () => {
-    await newOrg('org-dup', 'cus_dup');
-    const paid = event(
-      'customer.subscription.created',
-      subscription('cus_dup', 'sub_dup', 'active', 'price_pro'),
-      now,
-    );
-    const results = await Promise.all([deliver(paid), deliver(paid)]);
-    expect(results.sort()).toEqual(['applied', 'duplicate']);
-    expect(await deliver(paid)).toBe('duplicate');
-    const { rows } = await sql<{ n: string }>`select count(*) as n from audit_log
-      where org_id = 'org-dup' and action = 'plan.set'`.execute(db);
-    expect(rows[0].n).toBe('1');
-    const events = await sql<{ n: string }>`select count(*) as n from stripe_events
-      where event_id = ${paid.id}`.execute(db);
-    expect(events.rows[0].n).toBe('1');
-  });
-
-  it('records an event older than the state but does not apply it', async () => {
-    await newOrg('org-late', 'cus_late');
-    const newer = event(
-      'customer.subscription.updated',
-      subscription('cus_late', 'sub_late', 'active', 'price_team'),
-      now + 10,
-    );
-    const older = event(
-      'customer.subscription.updated',
-      subscription('cus_late', 'sub_late', 'active', 'price_pro'),
-      now,
-    );
-    expect(await deliver(newer)).toBe('applied');
-    expect(await deliver(older)).toBe('stale');
-    expect((await billing('org-late')).plan).toBe('team');
-    const recorded = await sql<{ n: string }>`select count(*) as n from stripe_events
-      where org_id = 'org-late'`.execute(db);
-    expect(recorded.rows[0].n).toBe('2');
-  });
-
-  it('applies the subscription when Checkout completes first but the subscription was created earlier', async () => {
-    await newOrg('org-race', 'cus_race');
-    // Stripe creates the subscription and its first invoice before the Checkout completes.
-    const checkout = event(
-      'checkout.session.completed',
-      { id: 'cs_race', object: 'checkout.session', customer: 'cus_race', subscription: 'sub_race' },
-      now + 2,
-    );
-    expect(await deliver(checkout)).toBe('applied');
-    const created = subscription('cus_race', 'sub_race', 'active', 'price_pro');
-    expect(await deliver(event('customer.subscription.created', created, now))).toBe('applied');
-    expect(await deliver(event('invoice.paid', invoice('cus_race', 'sub_race'), now + 1))).toBe(
-      'applied',
-    );
-    expect(await billing('org-race')).toEqual({
-      subscription: 'sub_race',
-      status: 'active',
-      plan: 'pro',
-    });
-  });
-
-  it('grants the plan when the first invoice arrives before its subscription', async () => {
-    await newOrg('org-inv-first', 'cus_inv_first');
-    expect(
-      await deliver(event('invoice.paid', invoice('cus_inv_first', 'sub_inv_first'), now + 1)),
-    ).toBe('applied');
-    const created = subscription('cus_inv_first', 'sub_inv_first', 'active', 'price_pro');
-    expect(await deliver(event('customer.subscription.created', created, now))).toBe('applied');
-    expect((await billing('org-inv-first')).plan).toBe('pro');
-  });
-
-  it('resubscribes after a cancel even when Checkout arrives before the new subscription', async () => {
-    await newOrg('org-again', 'cus_again');
-    const old = subscription('cus_again', 'sub_old', 'canceled', 'price_pro');
-    expect(await deliver(event('customer.subscription.deleted', old, now))).toBe('applied');
-    const checkout = event(
-      'checkout.session.completed',
-      {
-        id: 'cs_again',
-        object: 'checkout.session',
-        customer: 'cus_again',
-        subscription: 'sub_new',
-      },
-      now + 20,
-    );
-    expect(await deliver(checkout)).toBe('applied');
-    const created = subscription('cus_again', 'sub_new', 'active', 'price_team');
-    expect(await deliver(event('customer.subscription.created', created, now + 10))).toBe(
-      'applied',
-    );
-    expect(await billing('org-again')).toEqual({
+  it('follows a resubscribe after a cancel, whatever order the events arrive in', async () => {
+    await newOrg('org-resub', 'cus_rs');
+    stripeState.set('cus_rs', [
+      snapshot('sub_new', 'active', 'price_team', 50),
+      snapshot('sub_old', 'canceled', 'price_pro', 40),
+    ]);
+    // The old subscription's deletion arrives after the new one's creation.
+    await deliver(event('customer.subscription.created', 'cus_rs'));
+    await deliver(event('customer.subscription.deleted', 'cus_rs'));
+    await deliver(event('checkout.session.completed', 'cus_rs'));
+    expect(await billing('org-resub')).toEqual({
       subscription: 'sub_new',
       status: 'active',
       plan: 'team',
     });
   });
 
-  it('treats an expired incomplete subscription as final too', async () => {
-    await newOrg('org-expired', 'cus_expired');
-    const expired = subscription('cus_expired', 'sub_expired', 'incomplete_expired', 'price_pro');
-    expect(await deliver(event('customer.subscription.updated', expired, now + 1))).toBe('applied');
-    const earlier = subscription('cus_expired', 'sub_expired', 'active', 'price_pro');
-    expect(await deliver(event('customer.subscription.updated', earlier, now + 1))).toBe('stale');
-    expect((await billing('org-expired')).plan).toBe('free');
-  });
-
-  it('never revives a canceled subscription, even from an update in the same second', async () => {
-    await newOrg('org-final', 'cus_final');
-    const live = subscription('cus_final', 'sub_final', 'active', 'price_pro');
-    expect(await deliver(event('customer.subscription.created', live, now))).toBe('applied');
-    const deleted = subscription('cus_final', 'sub_final', 'canceled', 'price_pro');
-    expect(await deliver(event('customer.subscription.deleted', deleted, now + 1))).toBe('applied');
-    // Sent before the deletion, delivered after it, stamped with the same second.
-    expect(await deliver(event('customer.subscription.updated', live, now + 1))).toBe('stale');
-    expect(await deliver(event('invoice.paid', invoice('cus_final', 'sub_final'), now + 1))).toBe(
-      'stale',
-    );
-    expect(await billing('org-final')).toEqual({
-      subscription: 'sub_final',
-      status: 'canceled',
-      plan: 'free',
-    });
-  });
-
-  it("does not let an old subscription's deletion or invoice touch the current one", async () => {
+  it('prefers the entitled subscription when the customer has two', async () => {
     await newOrg('org-two', 'cus_two');
-    await deliver(
-      event(
-        'customer.subscription.created',
-        subscription('cus_two', 'sub_new', 'active', 'price_pro'),
-        now,
-      ),
-    );
-    const oldDeleted = subscription('cus_two', 'sub_old', 'canceled', 'price_pro');
-    expect(await deliver(event('customer.subscription.deleted', oldDeleted, now + 1))).toBe(
-      'stale',
-    );
-    expect(
-      await deliver(event('invoice.payment_failed', invoice('cus_two', 'sub_old'), now + 1)),
-    ).toBe('stale');
+    // The newest one never got paid; the older live one is what the org is paying for.
+    stripeState.set('cus_two', [
+      snapshot('sub_unpaid', 'incomplete', 'price_team', 70),
+      snapshot('sub_live', 'active', 'price_pro', 60),
+    ]);
+    await deliver(event('customer.subscription.created', 'cus_two'));
     expect(await billing('org-two')).toEqual({
-      subscription: 'sub_new',
+      subscription: 'sub_live',
       status: 'active',
       plan: 'pro',
     });
   });
 
-  it('gives an unpaid or unknown-price subscription no paid plan', async () => {
+  it('gives an unpaid, unknown-price or missing subscription no paid plan', async () => {
     await newOrg('org-unpaid', 'cus_unpaid');
-    await deliver(
-      event(
-        'customer.subscription.created',
-        subscription('cus_unpaid', 'sub_u', 'incomplete', 'price_pro'),
-        now,
-      ),
-    );
+    stripeState.set('cus_unpaid', [snapshot('sub_u', 'incomplete', 'price_pro', 80)]);
+    await deliver(event('customer.subscription.created', 'cus_unpaid'));
     expect(await billing('org-unpaid')).toEqual({
       subscription: 'sub_u',
       status: 'incomplete',
       plan: 'free',
     });
-    await deliver(
-      event(
-        'customer.subscription.updated',
-        subscription('cus_unpaid', 'sub_u', 'active', 'price_other'),
-        now + 1,
-      ),
-    );
-    expect((await billing('org-unpaid')).plan).toBe('free');
+    stripeState.set('cus_unpaid', [snapshot('sub_u', 'active', 'price_other', 80)]);
+    await deliver(event('customer.subscription.updated', 'cus_unpaid'));
+    expect(await billing('org-unpaid')).toEqual({
+      subscription: 'sub_u',
+      status: 'active',
+      plan: 'free',
+    });
+    stripeState.set('cus_unpaid', []);
+    await deliver(event('customer.subscription.deleted', 'cus_unpaid'));
+    expect(await billing('org-unpaid')).toEqual({ subscription: null, status: null, plan: 'free' });
+  });
+
+  it('applies a replayed event once, and asks Stripe only for the first', async () => {
+    await newOrg('org-dup', 'cus_dup');
+    stripeState.set('cus_dup', [snapshot('sub_dup', 'active', 'price_pro', 90)]);
+    const created = event('customer.subscription.created', 'cus_dup');
+    const results = await Promise.all([deliver(created), deliver(created)]);
+    expect(results.sort()).toEqual(['applied', 'duplicate']);
+    expect(await deliver(created)).toBe('duplicate');
+    expect(readsByCustomer).toEqual(['cus_dup']);
+    expect(await auditEntries('org-dup', 'subscription.update')).toBe(1);
+    expect(await auditEntries('org-dup', 'plan.set')).toBe(1);
+    expect(await recordedEvents('org-dup')).toBe(1);
+  });
+
+  it('records nothing when Stripe cannot be read, so the redelivery applies', async () => {
+    await newOrg('org-down', 'cus_down');
+    stripeState.set('cus_down', [snapshot('sub_down', 'active', 'price_team', 95)]);
+    const created = event('customer.subscription.created', 'cus_down');
+    stripeDown = true;
+    await expect(deliver(created)).rejects.toThrow('Stripe API unavailable');
+    expect(await recordedEvents('org-down')).toBe(0);
+    expect(await auditEntries('org-down')).toBe(0);
+    expect((await billing('org-down')).plan).toBe('free');
+
+    stripeDown = false;
+    expect(await deliver(created)).toBe('applied');
+    expect((await billing('org-down')).plan).toBe('team');
   });
 
   it('keeps a support grant when an event does not change the plan', async () => {
     await newOrg('org-grant', 'cus_grant');
-    await deliver(
-      event(
-        'customer.subscription.created',
-        subscription('cus_grant', 'sub_g', 'active', 'price_pro'),
-        now,
-      ),
-    );
+    stripeState.set('cus_grant', [snapshot('sub_g', 'active', 'price_pro', 100)]);
+    await deliver(event('customer.subscription.created', 'cus_grant'));
     await orgEntitlements(db).setPlan('org-grant', 'pro', { runsPerMonth: 5000 });
-    await deliver(event('invoice.paid', invoice('cus_grant', 'sub_g'), now + 1));
+    await deliver(event('invoice.paid', 'cus_grant'));
     expect((await orgEntitlements(db).get('org-grant')).runsPerMonth).toBe(5000);
   });
 
-  it('ignores an unknown customer and an event type it does not act on', async () => {
-    const stranger = event(
-      'customer.subscription.created',
-      subscription('cus_nobody', 'sub_x', 'active', 'price_team'),
-      now,
-    );
+  it('ignores an unknown customer and an event type it does not act on, without asking Stripe', async () => {
+    const stranger = event('customer.subscription.created', 'cus_nobody');
     expect(await deliver(stranger)).toBe('ignored');
-    expect(
-      await deliver(
-        event('charge.succeeded', { id: 'ch_1', object: 'charge', customer: 'cus_life' }, now),
-      ),
-    ).toBe('ignored');
+    expect(await deliver(event('charge.succeeded', 'cus_life'))).toBe('ignored');
+    expect(readsByCustomer).toEqual([]);
     const recorded = await sql<{ n: string }>`select count(*) as n from stripe_events
       where event_id = ${stranger.id}`.execute(db);
     expect(recorded.rows[0].n).toBe('0');
