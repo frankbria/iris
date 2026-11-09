@@ -228,7 +228,7 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   the transaction rolls back (no event row), the route answers 500 and Stripe redelivers.
   An unknown customer or an unhandled type is a 200 that records nothing and reads nothing.
   The reader is injectable (`stripeWebhookHandler(db, config, { readSubscriptions })`); tests
-  pass one over in-test fixtures. It lists the first 100 subscriptions only.
+  pass one over in-test fixtures. It follows every page (`has_more`).
 - **Plan from the price**: `active`, `trialing` and `past_due` keep the price's plan (the
   grace period is #266); any other status, or a price IRIS does not sell, is free.
   `setPlan` is called only when the plan changes, because it replaces the overrides (a

@@ -120,18 +120,21 @@ async function applyEvent(
 function stripeSubscriptionReader(config: StripeConfig): ReadSubscriptions {
   const stripe = stripeClient(config, { timeout: 10_000, maxNetworkRetries: 0 });
   return async (customerId) => {
-    // shortcut: the first 100 subscriptions only; a customer has one or two, page past 100 if that ever changes.
-    const page = await stripe.subscriptions.list({
+    const snapshots: SubscriptionSnapshot[] = [];
+    // The iterator follows `has_more`: an older live subscription may be past the first page.
+    for await (const subscription of stripe.subscriptions.list({
       customer: customerId,
       status: 'all',
       limit: 100,
-    });
-    return page.data.map((subscription) => ({
-      id: subscription.id,
-      status: subscription.status,
-      priceId: subscription.items.data[0]?.price.id ?? null,
-      created: subscription.created,
-    }));
+    })) {
+      snapshots.push({
+        id: subscription.id,
+        status: subscription.status,
+        priceId: subscription.items.data[0]?.price.id ?? null,
+        created: subscription.created,
+      });
+    }
+    return snapshots;
   };
 }
 
