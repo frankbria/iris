@@ -208,6 +208,51 @@ const a11yRun = {
     ]);
   });
 
+  describe('where an a11y scan landed (#648)', () => {
+    /** The a11y run above, with its one page requested as `page` and scanned at `scanned`. */
+    const landedOf = async (page: string, scanned: string, error?: string) => {
+      const run = structuredClone(a11yRun);
+      Object.assign(run.result.results[0], { page, ...(error !== undefined && { error }) });
+      Object.assign(run.result.results[0].axeResult, { url: scanned });
+      const store = history().forOrg(A);
+      const stored = await store.get(await store.record(run));
+      return stored!.results[0];
+    };
+
+    it('records the landing page of a redirect: origin and path, long segments cut', async () => {
+      const token = 'a'.repeat(40);
+      const stored = await landedOf(
+        'https://shop.example/account?next=1',
+        `https://login.example/reset/${token}/confirm?token=s3cret#frag`,
+      );
+      // The request stays what the row is listed under; the landing page sits beside it.
+      expect(stored.url).toBe('https://shop.example/account?next=1');
+      expect(stored.result.landedUrl).toBe('https://login.example/reset/…/confirm');
+      expect(JSON.stringify(stored)).not.toContain('s3cret');
+      expect(JSON.stringify(stored)).not.toContain(token);
+    });
+
+    it('records nothing when the scan stayed on the requested page', async () => {
+      // The runner reports the response's URL, which has no fragment.
+      const stored = await landedOf('https://shop.example/#/cart', 'https://shop.example/');
+      expect(stored.result).not.toHaveProperty('landedUrl');
+    });
+
+    it('records nothing for a page that could not be scanned', async () => {
+      const stored = await landedOf(
+        'https://shop.example/a',
+        'https://other.example/b',
+        'net::ERR_FAILED',
+      );
+      expect(stored.result).not.toHaveProperty('landedUrl');
+    });
+
+    it('records nothing for a relative page pattern: its base URL is not known here', async () => {
+      const stored = await landedOf('/checkout', 'http://localhost:3000/login');
+      expect(stored.result).not.toHaveProperty('landedUrl');
+    });
+  });
+
   it('lists only the caller org runs, newest first, and cannot read across orgs', async () => {
     const aId = await history().forOrg(A).record(rpcRun);
     const listedA = await history().forOrg(A).list();

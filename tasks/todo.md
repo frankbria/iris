@@ -1,42 +1,50 @@
-# #658 [P1.43] Credential-stripping patterns take quadratic time on long input
+# #648 [P3.36] Hosted MCP: report where a redirect landed, and axe's help URL for each violated rule
 
 ## Plan (self-authored; no plan on the issue)
 
-`stripUserinfo` (src/report-encoding.ts) and `redactString` (src/log.ts) start their userinfo
-pattern with an unanchored scheme, so on a long run of scheme characters every start position
-scans to the end of the run. Measured again before coding (10,000 and 40,000 characters):
-letters 189 ms / 2,677 ms; `a…a://b…b` 156 ms / 2,692 ms. Measuring every pattern in
-`redactString` found one more: `QUERY_PARAM` on a run of `?` (256 ms / 3,192 ms), because `?`
-is allowed in a parameter name.
+The hosted MCP tool (`src/mcp/hosted.ts`) words its answer from the stored a11y page result
+(`resultsOf` in `src/history-store.ts`). The stored `url` is the page as requested, so a scan
+that was redirected reads as findings on the requested URL; and the stored rules have no
+documentation link.
 
-1. **Linear userinfo pattern, same match set.** Match the whole run of scheme characters and
-   make `://userinfo@` an optional tail: `([a-z0-9+.-]+)(:\/\/[^\s/?#]+@)?`. Every run is
-   consumed by one match, so no position inside it is tried again; the replacement applies
-   when the tail matched and the run holds a letter (the old pattern's leftmost match starts
-   at the run's first letter, and what precedes it stays). One helper in report-encoding,
-   used by both (`+` for `stripUserinfo`, `*` for `redactString`, as today).
-2. **Linear `QUERY_PARAM`**, same trick: `=value` becomes the optional tail.
-3. **Cut before the patterns** in `boundedError` and `erroredPage`: at most 16,384 UTF-16
-   units go to `stripAnsi` and the patterns. A cut can land inside a URL whose `@` is past
-   it, so a cut text also loses a trailing partial copy of the quoted URL, a trailing
-   authority with no terminator, and a lone high surrogate.
-4. **Selector bound (the issue asks for a decision): yes**, 4,096 characters on `selector`
-   (click, fill) and on an assertion's `target`, in the shared `ActionSchema`.
-5. Docs: `.claude/rules/rpc-server.md`, `ai-and-visual.md`, `docs/integration-surfaces.md`,
-   `plans/README.md` (P1.43 row), `tasks/lessons.md`.
+1. **Store where a redirect landed.** `resultsOf` adds `landedUrl` to an a11y page result
+   when `scannedPage(page.page, page.axeResult.url)` says the scan was redirected: origin and
+   path, long segments cut, at most 200 characters (the cut the stdio tool already uses).
+   Absent when the scan stayed where it was asked, and for a page that could not be scanned.
+   Tests: `__tests__/db/history-store.test.ts`.
+2. **Derive axe's help URL, store nothing.** `axeRuleHelpUrl(ruleId)` builds
+   `https://dequeuniversity.com/rules/axe/<major.minor>/<rule>?application=axeAPI` from the
+   installed axe-core's `package.json` (read without loading axe into the API process). A
+   test holds it equal to `helpUrl` of every rule `axe.getRules()` lists, so an axe upgrade
+   that changes the form goes red. Tests: `__tests__/mcp/axe-help-url.test.ts`.
+3. **The hosted tool reports both.** `url` becomes the page that was scanned, `redirected`
+   says whether that differs from the request, `redirectedFrom` carries the requested URL
+   when it does; each violation gains `helpUrl`; the text names both. Tests:
+   `__tests__/mcp/hosted-http.test.ts`, and a redirect case in the real-browser
+   `__tests__/hosted-mcp-job.test.ts` (CI only on this host).
+4. **Docs.** `docs/data-flows.md` (what is newly stored), `.claude/rules/rpc-server.md`,
+   `docs/integration-surfaces.md` / README where the hosted tool's output is described,
+   `plans/README.md` (P3.36 done; the P3.38 row for #660 that iteration 13 asked for).
 
 ## Acceptance criteria
 
-- [ ] Both helpers linear on adversarial input: 1 MB against 100 KB by ratio (letters,
-      `a1a1…`, `a.a.…`, plus `a…://b…` and `???…`), monotonic clock, never `Date.now()`
-- [ ] Match set unchanged: existing cases pass, plus `...http://u:p@h` and `1http://u:p@h`
-- [ ] Error text cut before the patterns in `boundedError` and `erroredPage`, by code point
-- [ ] Decision on an upper bound for RPC selectors
+- [ ] A hosted a11y result records the landing URL when it differs from the request, cut as
+      `scannedPage()` does, and the MCP tool reports it with `redirected`.
+- [ ] Each violated rule carries axe's help URL in the tool result (stored, or derived from
+      the installed axe version).
+- [ ] `docs/data-flows.md` says what is newly stored.
 
-## Assumptions and decisions
+## Decisions taken (no architectural fork)
 
-- A 1 MB ratio test cannot be shown red on the old pattern (it would run for about half an
-  hour per shape); red is shown at 10,000 / 40,000 characters instead.
-- 16,384 units is far above the 500 code points stored and any real Playwright call log.
-- 4,096 characters is far above any selector a person or a model writes; a longer one is
-  refused with zod's message at the RPC boundary and in the AI parse path.
+- **Help URL derived, not stored.** The issue allows either. axe runs inside the page under
+  test, so the `helpUrl` it returns is text a hostile page can choose; a derived URL is built
+  from the rule id alone, always points at Deque, and also covers runs stored since #647.
+  The version in it is the one installed when the result is read, not when it was scanned.
+- **`url` in the hosted result changes meaning on a redirect** (the scanned page, as the
+  stdio tool reports it); `redirectedFrom` keeps the requested URL readable for a caller
+  that only holds a job id.
+- **A relative page pattern records no landing URL.** `iris a11y` with a `baseURL` stores the
+  pattern (`/checkout`), and history does not know the base it was resolved against; hosted
+  jobs always carry absolute URLs, which is what the issue is about.
+- **axe's rule description is not added**: the context mentions it, the criteria do not, and
+  it would have to be stored (page-chosen text) or loaded from axe in the API process.

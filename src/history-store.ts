@@ -1,6 +1,7 @@
 import { recordAudit } from './audit-log';
 import { StorageQuotaExceededError, storageUsage } from './storage-quota';
 import { strippedError, stripUserinfo, urlWithoutUserinfo } from './report-encoding';
+import { scannedPage } from './mcp/scan-errors';
 import type Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
 import { describeAction } from './actions';
@@ -168,6 +169,19 @@ function violationRulesOf(page: AccessibilityTestResult['results'][number]) {
   return rules.length > 0 ? { violationRules: rules } : {};
 }
 
+/**
+ * Where a scan landed when it was redirected (#648), cut as the MCP tool cuts it: origin
+ * and path, long segments dropped, so no token a redirect carried is stored.
+ * shortcut: a relative page pattern (`iris a11y` with a `baseURL`) records nothing, because
+ * the base it was resolved against is not known here; upgrade by having the runner report
+ * the URL it navigated if local history should show redirects too.
+ */
+function landedUrlOf(page: AccessibilityTestResult['results'][number]) {
+  if (!URL.canParse(page.page)) return {};
+  const scanned = scannedPage(page.page, page.axeResult.url);
+  return scanned.redirected ? { landedUrl: scanned.url } : {};
+}
+
 function resultsOf(run: RunInput): StoredRunResult[] {
   switch (run.kind) {
     case 'visual':
@@ -203,6 +217,7 @@ function resultsOf(run: RunInput): StoredRunResult[] {
             ...(page.error !== undefined && { error: boundedError(page.error) }),
             violations: counts,
             ...(page.error === undefined && violationRulesOf(page)),
+            ...(page.error === undefined && landedUrlOf(page)),
             // Absent sub-tests mean "not run", which is not a failure to record.
             keyboardPassed: page.keyboardResult?.passed ?? true,
             screenReaderPassed: page.screenReaderResult?.passed ?? true,

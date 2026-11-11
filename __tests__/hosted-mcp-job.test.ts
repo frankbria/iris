@@ -25,6 +25,7 @@ import { hostedEgressProxy } from '../src/egress-proxy';
 import { postgresHistory, postgresJobs, type ClaimedJob } from '../src/history-store';
 import { startServer, type Authenticator, type Principal } from '../src/protocol';
 import { processNextA11yJob } from '../src/worker';
+import { axeRuleHelpUrl } from '../src/mcp/axe-help-url';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 
@@ -86,6 +87,10 @@ const PAGE =
 
     site = http.createServer((req, res) => {
       seen.push(`${req.headers.host} ${req.url}`);
+      if (req.url === '/moved') {
+        res.writeHead(302, { location: '/signin?token=s3cret' }).end();
+        return;
+      }
       res.setHeader('content-type', 'text/html');
       res.end(PAGE);
     });
@@ -198,6 +203,38 @@ const PAGE =
     });
     expect(again.structuredContent).toMatchObject({ status: 'finished', violationCount: 1 });
     expect(seen).toHaveLength(1);
+  });
+
+  it('reports the page a redirect landed on, with a help link per rule (#648)', async () => {
+    const client = await connect();
+    const url = `http://site.test:${sitePort}/moved`;
+    const [result, job] = await Promise.all([
+      client.callTool({ name: 'run_accessibility_test', arguments: { url } }),
+      workerRunsNext(),
+    ]);
+
+    expect(seen).toEqual([
+      `site.test:${sitePort} /moved`,
+      `site.test:${sitePort} /signin?token=s3cret`,
+    ]);
+    const landed = `http://site.test:${sitePort}/signin`;
+    expect(result.structuredContent).toMatchObject({
+      jobId: job.id,
+      status: 'finished',
+      url: landed,
+      redirected: true,
+      redirectedFrom: url,
+      violations: [{ id: 'image-alt', helpUrl: axeRuleHelpUrl('image-alt') }],
+    });
+    expect(textOf(result)).toContain(`on ${landed} (redirected from ${url})`);
+
+    // Stored beside the request, cut: what the results API serves to the whole org.
+    const read = await fetch(`${base}/v1/runs/${job.id}`, {
+      headers: { authorization: 'Bearer key-a' },
+    });
+    const body = await read.text();
+    expect(body).toContain(`"landedUrl":"${landed}"`);
+    expect(body).not.toContain('s3cret');
   });
 
   it('a page the egress proxy refuses is a tool error in fixed words, with no usage', async () => {

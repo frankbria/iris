@@ -24,6 +24,7 @@ import { authorize, readBody, send, type ApiJobs, type JobsApiDeps } from '../jo
 import { errMessage, log } from '../log';
 import { assertNavigationAllowed } from '../url-policy';
 import { JOB_TIMED_OUT, ORG_SUSPENDED } from '../worker';
+import { axeRuleHelpUrl } from './axe-help-url';
 import { scanFailureReason } from './scan-errors';
 import { packageVersion } from './version';
 
@@ -42,7 +43,24 @@ const outputSchema = {
   status: z
     .enum(['queued', 'running', 'finished'])
     .describe('Only a finished scan carries the fields below.'),
-  url: z.string().optional().describe('The page that was requested.'),
+  url: z
+    .string()
+    .optional()
+    .describe(
+      'The page that was scanned: the requested URL, or when the scan was redirected the ' +
+        "landing page's origin and path only (its query string and fragment are left out).",
+    ),
+  redirected: z
+    .boolean()
+    .optional()
+    .describe(
+      'True when the scan landed on another URL than the request. A scan stored before ' +
+        'redirects were recorded reads false.',
+    ),
+  redirectedFrom: z
+    .string()
+    .optional()
+    .describe('The URL that was requested. Only present when the scan was redirected.'),
   passed: z
     .boolean()
     .optional()
@@ -54,6 +72,7 @@ const outputSchema = {
         id: z.string().describe('axe rule id, e.g. "image-alt".'),
         impact: z.enum(['minor', 'moderate', 'serious', 'critical']).nullable(),
         nodes: z.number().describe('How many elements on the page violate this rule.'),
+        helpUrl: z.string().describe('Deque documentation for the rule.'),
       }),
     )
     .optional()
@@ -76,7 +95,17 @@ const StoredPage = z.object({
   result: z.object({
     error: z.string().optional(),
     violations: z.record(z.string(), z.number()).default({}),
-    violationRules: outputSchema.violations.unwrap().default([]),
+    violationRules: z
+      .array(
+        z.object({
+          id: z.string(),
+          impact: z.enum(['minor', 'moderate', 'serious', 'critical']).nullable(),
+          nodes: z.number(),
+        }),
+      )
+      .default([]),
+    /** Where a redirect landed, already cut by `resultsOf` (#648); absent without one. */
+    landedUrl: z.string().optional(),
     needsReviewRules: z.array(z.string()).default([]),
     keyboardPassed: z.boolean().default(true),
   }),
@@ -142,13 +171,23 @@ function describeJob(job: StoredJob) {
     );
   }
   const violationCount = Object.values(page.result.violations).reduce((sum, n) => sum + n, 0);
-  const violations = page.result.violationRules;
-  const url = page.url ?? 'the requested URL';
+  const violations = page.result.violationRules.map((rule) => ({
+    ...rule,
+    helpUrl: axeRuleHelpUrl(rule.id),
+  }));
+  const requested = page.url ?? 'the requested URL';
+  // The page that was measured: reporting the request would misattribute every finding
+  // on the page a redirect landed on.
+  const landed = page.result.landedUrl;
+  const url = landed ?? requested;
+  const where = landed === undefined ? url : `${url} (redirected from ${requested})`;
   const lines = [
     violationCount === 0
-      ? `No WCAG violations found on ${url}.`
-      : `${violationCount} WCAG violation(s) on ${url}:`,
-    ...violations.map((v) => `- [${v.impact ?? 'unrated'}] ${v.id} (${v.nodes} element(s))`),
+      ? `No WCAG violations found on ${where}.`
+      : `${violationCount} WCAG violation(s) on ${where}:`,
+    ...violations.map(
+      (v) => `- [${v.impact ?? 'unrated'}] ${v.id} (${v.nodes} element(s)): ${v.helpUrl}`,
+    ),
     ...(page.result.keyboardPassed ? [] : ['The keyboard checks failed.']),
     ...(page.result.needsReviewRules.length === 0
       ? []
@@ -158,6 +197,8 @@ function describeJob(job: StoredJob) {
     jobId: job.id,
     status: 'finished',
     url,
+    redirected: landed !== undefined,
+    ...(landed !== undefined && { redirectedFrom: requested }),
     // Not the stored verdict: a job submitted over REST may have had a narrower `failOn`.
     passed: violationCount === 0 && page.result.keyboardPassed,
     violationCount,

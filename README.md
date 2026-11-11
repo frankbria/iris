@@ -865,7 +865,7 @@ API key as the REST API:
 |---|---|
 | **Tools** | `run_accessibility_test { url, wcagLevel? }` and `get_accessibility_test_result { jobId }` |
 | **What a call does** | queues the same job as `POST /v1/a11y/jobs` with one URL: a worker scans the page, and the run appears in the org's history (`GET /v1/runs`, the portal) and counts as one run on the plan |
-| **Output** | `{ jobId, status }`, and once `status` is `finished`: `url, passed, violationCount, violations[] ({ id, impact, nodes }), needsReviewRules[], keyboardPassed`. `passed` is true when axe reported no violation and the keyboard checks passed |
+| **Output** | `{ jobId, status }`, and once `status` is `finished`: `url, redirected, passed, violationCount, violations[] ({ id, impact, nodes, helpUrl }), needsReviewRules[], keyboardPassed`. `url` is the page that was scanned: when the request was redirected it is the landing page's origin and path (no query string or fragment), `redirected` is true and `redirectedFrom` holds the URL you asked for. `helpUrl` is Deque's page for the rule. `passed` is true when axe reported no violation and the keyboard checks passed |
 | **Slow scans** | a call waits up to 45 s, then answers `status: "queued"` or `"running"` with the `jobId`; `get_accessibility_test_result` reads the result later and costs nothing |
 | **Limits** | the key's and org's request rate (HTTP 429), the org's 10 queued or running jobs and the plan's monthly runs (both a tool error; no scan starts) |
 | **URLs** | public `http(s)` pages only, without credentials: private, loopback and metadata addresses are refused before a run is spent |
