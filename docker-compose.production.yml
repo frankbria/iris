@@ -121,17 +121,13 @@ services:
       IRIS_S3_REGION: ${IRIS_S3_REGION:-}
       IRIS_S3_ACCESS_KEY_ID: ${IRIS_S3_ACCESS_KEY_ID:-}
       IRIS_S3_SECRET_ACCESS_KEY_FILE: ${IRIS_S3_SECRET_ACCESS_KEY_FILE:-}
-      # Stripe billing (#264): the worker reports managed usage to the Stripe meter.
-      # All four or none, as for iris; empty is none (no report).
+      # The Stripe key only (#264): the worker reports managed usage to the Stripe meter.
+      # Empty is unset (no report). It gets no webhook secret and no prices.
       IRIS_STRIPE_SECRET_KEY_FILE: ${IRIS_STRIPE_SECRET_KEY_FILE:-}
-      IRIS_STRIPE_WEBHOOK_SECRET_FILE: ${IRIS_STRIPE_WEBHOOK_SECRET_FILE:-}
-      IRIS_STRIPE_PRICE_PRO: ${IRIS_STRIPE_PRICE_PRO:-}
-      IRIS_STRIPE_PRICE_TEAM: ${IRIS_STRIPE_PRICE_TEAM:-}
     secrets:
       - database_url
       - s3_secret_access_key
       - stripe_secret_key
-      - stripe_webhook_secret
     volumes:
       - worker-data:/data
     restart: unless-stopped

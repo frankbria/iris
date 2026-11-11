@@ -693,8 +693,8 @@ signed webhook. Set up once per Stripe mode (test first, then live):
    not a price uses it. No price is needed today: managed usage stops at the plan's included
    credit. Charging for usage beyond it would be a metered price on this meter (for example
    $1 per 1,000,000 units), which is an owner decision.
-5. **The `production` GitHub environment** (the deploy passes them to `iris`, the worker and
-   the portal):
+5. **The `production` GitHub environment** (the deploy passes them to `iris` and the portal;
+   the worker gets the API key only, for the meter report):
 
 | Name | Kind | Value |
 | --- | --- | --- |
@@ -720,10 +720,13 @@ With Stripe configured, the worker sends every unreported `managed` usage row to
 every 5 minutes: one meter event per row, at the time the usage happened, with the row's id
 as identifier and idempotency key, so a resend is not a second charge (Stripe promises that
 for 24 hours). Only one worker reports at a time (a Postgres advisory lock). BYOK and
-platform usage are never sent. A partial `IRIS_STRIPE_*` stops the worker (exit 3).
+platform usage are never sent. The worker is given `IRIS_STRIPE_SECRET_KEY` alone; without
+it, it reports nothing.
 
 Not sent, and left unreported: rows of an org with no Stripe customer (a support grant on a
-free org), rows older than 34 days (Stripe refuses a timestamp past 35), and rows Stripe
+free org; if the org later subscribes, its rows of the last 34 days are sent then, dated
+before the subscription began), rows older than 34 days (Stripe refuses a timestamp past
+35), and rows Stripe
 rejects (logged as `stripe meter report` with `firstRejection`; counted in
 `iris_stripe_meter_events_total{outcome="rejected"}` on the worker's metrics port). Stripe
 checks the customer asynchronously: an event for a customer deleted in Stripe is accepted
@@ -742,10 +745,24 @@ It prints one JSON row per org with managed usage in the period, in micro-USD:
 `ledgerMicroUsd`, `estimatedMicroUsd` (the part priced at an estimated rate because the
 model had no price row, #243; it is reported to Stripe as it is, the same amount the org's
 credit was charged), `unreportedMicroUsd`, `stripeMicroUsd` (`null` without a customer) and
-`differenceMicroUsd` (ledger minus Stripe). Exit 0 when every difference is 0, else 3. The
+`differenceMicroUsd` (ledger minus Stripe). When Stripe could not be asked about one org,
+its row carries `stripeError` and the rest are still reported. Exit 0 when every difference
+is 0 and there is no error, else 3. The
 period must be on whole minutes. Stripe aggregates asynchronously, so run it some minutes
 after the worker's last pass. A positive difference with `unreportedMicroUsd` equal to it is
 usage waiting or unsendable; any other difference needs a look at the Stripe meter's events.
+
+**After restoring the database from a backup**, stop the worker before the restored stack
+starts and mark what the backup's rows had already sent, or it sends them again: Stripe
+only recognises a repeated identifier for about 24 hours.
+
+```sql
+update usage_events set stripe_reported_at = now()
+where billing_mode = 'managed' and stripe_reported_at is null
+  and created_at < '<the time of the last worker pass before the failure>';
+```
+
+Then run `billing-reconcile` for the period and start the worker.
 
 ## Retention and offboarding (issue #349)
 

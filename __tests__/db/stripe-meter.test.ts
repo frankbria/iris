@@ -265,12 +265,40 @@ function inTestMeter() {
 
       const first = reportManagedUsage(db, slow);
       await inFirstSend;
-      expect(await reportManagedUsage(db, meter)).toBeNull();
-      release();
+      // Released whatever the second pass did: a pass left blocked would hang the file.
+      const second = await reportManagedUsage(db, meter).finally(release);
+      expect(second).toBeNull();
 
       expect(await first).toEqual({ sent: 2, rejected: 0 });
       expect(calls).toHaveLength(2);
       expect(await unreportedKeys(orgId)).toEqual([]);
+    });
+
+    it('stops between two rows when told to, leaving the rest for the next pass', async () => {
+      const orgId = await newOrg();
+      await usageLedger(db).record(orgId, [
+        managedCall('s-1', 0.01),
+        managedCall('s-2', 0.01),
+        managedCall('s-3', 0.01),
+      ]);
+      const { meter, calls } = inTestMeter();
+      const stop = new AbortController();
+      const stopping: UsageMeters = {
+        ...meter,
+        async send(event) {
+          await meter.send(event);
+          stop.abort();
+        },
+      };
+
+      expect(await reportManagedUsage(db, stopping, { signal: stop.signal })).toEqual({
+        sent: 1,
+        rejected: 0,
+      });
+      expect(calls).toHaveLength(1);
+      // The row Stripe took is marked; the lock is free for the next pass.
+      expect(await unreportedKeys(orgId)).toHaveLength(2);
+      expect(await reportManagedUsage(db, meter)).toEqual({ sent: 2, rejected: 0 });
     });
 
     it('does not send what Stripe cannot take: no customer, or older than its window', async () => {
@@ -454,6 +482,36 @@ function inTestMeter() {
       });
     });
 
+    it('keeps the other orgs when Stripe cannot be asked about one', async () => {
+      const unknown = await newOrg();
+      const fine = await newOrg();
+      const august = { at: new Date('2026-08-15T12:00:00Z') };
+      await usageLedger(db).record(unknown, [managedCall('u-1', 0.1, august)]);
+      await usageLedger(db).record(fine, [managedCall('f-1', 0.2, august)]);
+      const { meter } = inTestMeter();
+      const partial: UsageMeters = {
+        ...meter,
+        async total(customerId, from, to) {
+          if (customerId === `cus_${unknown}`) throw new Error('No such customer');
+          return meter.total(customerId, from, to);
+        },
+      };
+
+      const rows = await meterReconciliation(db, partial, {
+        from: new Date('2026-08-01T00:00:00Z'),
+        to: new Date('2026-09-01T00:00:00Z'),
+      });
+
+      expect(rows.find((r) => r.orgId === unknown)).toMatchObject({
+        stripeMicroUsd: null,
+        differenceMicroUsd: 100_000,
+        stripeError: 'No such customer',
+      });
+      const other = rows.find((r) => r.orgId === fine)!;
+      expect(other).toMatchObject({ ledgerMicroUsd: 200_000, stripeMicroUsd: 0 });
+      expect(other).not.toHaveProperty('stripeError');
+    });
+
     it.each([
       ['an invalid date', new Date('nonsense'), JUNE.to],
       ['a start off the minute', new Date('2026-06-01T00:00:30Z'), JUNE.to],
@@ -468,11 +526,7 @@ function inTestMeter() {
 
   (STRIPE_KEY ? describe : describe.skip)('against Stripe test mode', () => {
     it('sends a managed row to the real meter and reads the meter back', async () => {
-      const stripe = stripeClient({
-        secretKey: STRIPE_KEY!,
-        webhookSecret: '',
-        prices: { pro: '', team: '' },
-      });
+      const stripe = stripeClient({ secretKey: STRIPE_KEY! });
       let exists = false;
       for await (const meter of stripe.billing.meters.list({ status: 'active' }))
         exists ||= meter.event_name === METER_EVENT_NAME;

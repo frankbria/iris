@@ -98,18 +98,21 @@ describe('stripeMeters', () => {
     });
   });
 
-  it('turns an invalid request into MeterEventRejected with Stripe’s message', async () => {
-    answer = () => ({
-      status: 400,
-      body: {
-        error: { type: 'invalid_request_error', message: 'Timestamp is too far in the past.' },
-      },
-    });
+  it.each([
+    ['an invalid request', 'invalid_request_error', 'Timestamp is too far in the past.'],
+    // The same key with other parameters: the org's customer changed after a lost mark.
+    [
+      'a reused idempotency key',
+      'idempotency_error',
+      'Keys for idempotent requests can only be used with the same parameters.',
+    ],
+  ])('turns %s into MeterEventRejected with Stripe’s message', async (_name, type, message) => {
+    answer = () => ({ status: 400, body: { error: { type, message } } });
 
     const sending = stripeMeters(stripe).send(event);
 
     await expect(sending).rejects.toThrow(MeterEventRejected);
-    await expect(sending).rejects.toThrow('Timestamp is too far in the past.');
+    await expect(sending).rejects.toThrow(message);
   });
 
   it.each([

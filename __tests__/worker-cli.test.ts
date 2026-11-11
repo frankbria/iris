@@ -30,16 +30,6 @@ describe('iris worker', () => {
     expect(stderr).toContain('DATABASE_URL');
   });
 
-  it('exits 3 on a partial Stripe configuration: it must not quietly stop reporting (#264)', () => {
-    const { status, stderr } = run({
-      IRIS_HOSTED: '1',
-      DATABASE_URL: 'postgres://x:y@[::1]:1/x',
-      IRIS_STRIPE_SECRET_KEY: 'sk_test_placeholder',
-    });
-    expect(status).toBe(3);
-    expect(stderr).toContain('Stripe billing also needs IRIS_STRIPE_WEBHOOK_SECRET');
-  });
-
   it('exits 3 in hosted mode when the database does not answer (#273)', async () => {
     // A closed port on [::1]: refused at once (a closed 127.0.0.1 port blackholes on WSL).
     const s = net.createServer();

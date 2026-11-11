@@ -1145,13 +1145,15 @@ program
     let artifacts: import('./artifact-store').ArtifactStore | null = null;
     let meters: import('./billing/stripe-meter').UsageMeters | null = null;
     try {
-      // The Stripe meter report (#264) runs here when billing is configured. Partial
-      // config: exit 3, or managed usage would quietly never reach Stripe.
-      const { resolveStripeConfig, stripeClient } = await import('./billing/stripe');
-      const stripe = resolveStripeConfig();
-      if (stripe) {
-        const { stripeMeters } = await import('./billing/stripe-meter');
-        meters = stripeMeters(stripeClient(stripe, { timeout: 10_000 }));
+      // The Stripe meter report (#264) runs here when the worker has the Stripe key. It is
+      // given that one setting only: it runs tenant pages, and needs no webhook secret.
+      const secretKey = (await import('./secret-env')).readSecretEnv('IRIS_STRIPE_SECRET_KEY');
+      if (secretKey) {
+        const [{ stripeClient }, { stripeMeters }] = await Promise.all([
+          import('./billing/stripe'),
+          import('./billing/stripe-meter'),
+        ]);
+        meters = stripeMeters(stripeClient({ secretKey }, { timeout: 10_000 }));
       }
       // Visual jobs (#268) need somewhere to put images; without IRIS_S3_* the worker
       // runs a11y jobs only (and the API refuses visual ones). Partial config: exit 3.
@@ -1199,9 +1201,11 @@ program
           return quotaArtifacts(store, db, orgId, artifactStorageBytes);
         },
       });
-      // Stopped by the same signal: its current pass ends before the database closes.
+      // Stopped by the same signal, between two rows, before the database closes.
       await reports;
     } finally {
+      // Had the worker loop thrown, the report loop would keep the process alive.
+      stop.abort();
       await db.destroy();
     }
   });
@@ -1448,7 +1452,9 @@ admin
       if (!config) throw new Error('Stripe billing is not configured (IRIS_STRIPE_*)');
       const report = await meterReconciliation(db, stripeMeters(stripeClient(config)), options);
       console.log(JSON.stringify(report));
-      const differing = report.filter((row) => row.differenceMicroUsd !== 0).length;
+      const differing = report.filter(
+        (row) => row.differenceMicroUsd !== 0 || row.stripeError,
+      ).length;
       if (differing) throw new Error(`the ledger and Stripe differ for ${differing} org(s)`);
     });
   });

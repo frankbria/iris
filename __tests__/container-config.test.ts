@@ -324,15 +324,14 @@ describe('docker-compose.production.yml (issue #273)', () => {
     expect(file).toMatch(/^  managed_ai_key:\n    file: \.\/secrets\/managed_ai_key$/m);
   });
 
-  // Stripe billing (#261, #345): the webhook runs in iris, Checkout and the Portal in the
-  // portal, and the meter report in the worker (#264, ADR 0001 §1).
+  // Stripe billing (#261, #345): the webhook runs in iris, Checkout and the Portal in the portal.
   const STRIPE = [
     'IRIS_STRIPE_SECRET_KEY_FILE',
     'IRIS_STRIPE_WEBHOOK_SECRET_FILE',
     'IRIS_STRIPE_PRICE_PRO',
     'IRIS_STRIPE_PRICE_TEAM',
   ];
-  it.each(['iris', 'worker', 'portal'])('passes Stripe billing to %s, empty when unset', (name) => {
+  it.each(['iris', 'portal'])('passes Stripe billing to %s, empty when unset', (name) => {
     const s = service(name);
     for (const v of STRIPE) expect(s).toMatch(new RegExp(`^\\s+${v}: \\$\\{${v}:-\\}$`, 'm'));
     expect(s).toMatch(/^\s+- stripe_secret_key$/m);
@@ -341,6 +340,16 @@ describe('docker-compose.production.yml (issue #273)', () => {
     expect(file).toMatch(
       /^  stripe_webhook_secret:\n    file: \.\/secrets\/stripe_webhook_secret$/m,
     );
+  });
+
+  // The meter report runs in the worker (#264, ADR 0001 §1). It runs tenant pages, so it
+  // gets the API key alone: no webhook secret to forge events with, and no prices.
+  it('passes the worker the Stripe key and nothing else of Stripe', () => {
+    const s = service('worker');
+    expect(s).toMatch(/^\s+IRIS_STRIPE_SECRET_KEY_FILE: \$\{IRIS_STRIPE_SECRET_KEY_FILE:-\}$/m);
+    expect(s).toMatch(/^\s+- stripe_secret_key$/m);
+    expect(s.match(/STRIPE_\w+/g)).toEqual(['STRIPE_SECRET_KEY_FILE', 'STRIPE_SECRET_KEY_FILE']);
+    expect(s).not.toMatch(/stripe_webhook_secret/);
   });
 
   it('has the deploy job write the Stripe secrets, and point at them only when set', () => {

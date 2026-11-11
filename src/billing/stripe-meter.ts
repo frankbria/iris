@@ -53,8 +53,12 @@ export function stripeMeters(stripe: Stripe): UsageMeters {
           { idempotencyKey: event.identifier },
         );
       } catch (err) {
-        // A refused key is an invalid request to Stripe too, but it fails every event.
-        if (err instanceof Stripe.errors.StripeInvalidRequestError && err.statusCode !== 401)
+        // An idempotency error is the key reused with other parameters (the org's customer
+        // changed after a lost mark): it too is about this one event, not about Stripe.
+        if (
+          err instanceof Stripe.errors.StripeInvalidRequestError ||
+          err instanceof Stripe.errors.StripeIdempotencyError
+        )
           throw new MeterEventRejected(err.message);
         throw err;
       }
@@ -91,28 +95,35 @@ export interface MeterPass {
 
 /**
  * One pass: sends every unreported managed row of an org with a Stripe customer and marks
- * each as Stripe accepts it. A session advisory lock lets one pass run at a time: `null`
- * when another holds it. A row Stripe rejects is left for the next pass; any other failure
- * ends this one. A crash between send and mark resends the row with the same identifier
- * and idempotency key, which Stripe counts once (it promises that for 24 hours).
+ * each as Stripe accepts it. One pass runs at a time: `null` when another holds the lock.
+ * A row Stripe rejects is left for the next pass; any other failure ends this one, as does
+ * `signal` between two rows. A crash between send and mark resends the row with the same
+ * identifier and idempotency key, which Stripe counts once (it promises that for 24 hours).
  * shortcut: one request per row, in sequence (Stripe allows one concurrent call per
  * customer), upgrade to meter event streams when a pass no longer fits its interval.
  */
 export async function reportManagedUsage(
   db: Kysely<unknown>,
   meters: UsageMeters,
-  { pageSize = 100 }: { pageSize?: number } = {},
+  { pageSize = 100, signal }: { pageSize?: number; signal?: AbortSignal } = {},
 ): Promise<MeterPass | null> {
-  return db.connection().execute(async (connection) => {
-    const lock = sql`hashtext('stripe-meter-report')`;
+  // The transaction only holds the lock, which therefore ends with it however the pass
+  // ends: a session lock left on a pooled connection would stop every later pass. Reads
+  // and marks go through `db`, so each mark commits on its own.
+  return db.transaction().execute(async (lockHolder) => {
     const { rows: locks } = await sql<{ locked: boolean }>`
-      select pg_try_advisory_lock(${lock}) as locked`.execute(connection);
-    if (!locks[0].locked) return null;
+      select pg_try_advisory_xact_lock(hashtext('stripe-meter-report')) as locked`.execute(
+      lockHolder,
+    );
+    if (!locks[0].locked) {
+      log('warn', 'stripe meter report skipped: another pass holds the lock');
+      return null;
+    }
     const pass: MeterPass = { sent: 0, rejected: 0 };
     let firstRejection: string | undefined;
     try {
       // Keyset by id, so rejected rows (still unreported) are not read again this pass.
-      for (let after = '00000000-0000-0000-0000-000000000000'; ;) {
+      for (let after = '00000000-0000-0000-0000-000000000000', more = true; more;) {
         const { rows } = await sql<{
           id: string;
           customer_id: string;
@@ -124,8 +135,10 @@ export async function reportManagedUsage(
           where u.billing_mode = 'managed' and u.stripe_reported_at is null
             and u.created_at > now() - make_interval(days => ${REPORTABLE_DAYS})
             and u.id > ${after}
-          order by u.id limit ${pageSize}`.execute(connection);
+          order by u.id limit ${pageSize}`.execute(db);
+        more = rows.length === pageSize;
         for (const row of rows) {
+          if (signal?.aborted) return pass;
           after = row.id;
           const microUsd = Number(row.micro_usd);
           // A row that cost nothing adds nothing to the meter: marked, not sent.
@@ -146,9 +159,8 @@ export async function reportManagedUsage(
             pass.sent++;
           }
           await sql`update usage_events set stripe_reported_at = now()
-            where id = ${row.id}`.execute(connection);
+            where id = ${row.id}`.execute(db);
         }
-        if (rows.length < pageSize) break;
       }
     } finally {
       meterEvents.inc({ outcome: 'sent' }, pass.sent);
@@ -158,7 +170,6 @@ export async function reportManagedUsage(
           ...pass,
           ...(firstRejection !== undefined && { firstRejection }),
         });
-      await sql`select pg_advisory_unlock(${lock})`.execute(connection);
     }
     return pass;
   });
@@ -177,7 +188,7 @@ export async function runMeterReports(options: {
   const { db, meters, signal, intervalMs = 5 * 60_000 } = options;
   while (!signal.aborted) {
     try {
-      await reportManagedUsage(db, meters);
+      await reportManagedUsage(db, meters, { signal });
     } catch (err) {
       log('error', 'stripe meter report failed', { err: errMessage(err) });
     }
@@ -198,6 +209,8 @@ export interface MeterReconciliationRow {
   stripeMicroUsd: number | null;
   /** Ledger minus Stripe: positive is usage Stripe does not have, negative is extra. */
   differenceMicroUsd: number;
+  /** Stripe could not be asked for this org's total: the row then has no Stripe side. */
+  stripeError?: string;
 }
 
 const MINUTE_MS = 60_000;
@@ -233,7 +246,15 @@ export async function meterReconciliation(
   const report: MeterReconciliationRow[] = [];
   for (const row of rows) {
     const ledgerMicroUsd = Number(row.ledger);
-    const stripeMicroUsd = row.customer_id ? await meters.total(row.customer_id, from, to) : null;
+    // One org's failure (a customer Stripe no longer knows) must not hide the others.
+    let stripeMicroUsd: number | null = null;
+    let stripeError: string | undefined;
+    if (row.customer_id)
+      try {
+        stripeMicroUsd = await meters.total(row.customer_id, from, to);
+      } catch (err) {
+        stripeError = errMessage(err);
+      }
     report.push({
       orgId: row.org_id,
       customerId: row.customer_id,
@@ -242,6 +263,7 @@ export async function meterReconciliation(
       unreportedMicroUsd: Number(row.unreported),
       stripeMicroUsd,
       differenceMicroUsd: ledgerMicroUsd - (stripeMicroUsd ?? 0),
+      ...(stripeError !== undefined && { stripeError }),
     });
   }
   return report;
