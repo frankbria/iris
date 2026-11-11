@@ -174,18 +174,23 @@ async function openContext(browser: Browser, slot: PageContextSlot): Promise<Bro
   return context;
 }
 
-function erroredPage(page: string, error: unknown): AccessibilityTestResult['results'][0] {
+function erroredPage(
+  page: string,
+  error: unknown,
+  navigatedUrl = page,
+): AccessibilityTestResult['results'][0] {
   const empty = { total: 0, violations: 0, passes: 0, incomplete: 0, inapplicable: 0 };
   return {
     page,
     // Stripped here, once: the CLI prints it and every report and store carries it. The
-    // guard's messages repeat the page as it was given, so its credentials are cut by
-    // parsing it: a password may hold a space, which the pattern cannot follow (#645).
+    // guard's messages repeat the URL it was asked for (the base URL included), so its
+    // credentials are cut by parsing it: a password may hold a space, which the pattern
+    // cannot follow (#645).
     // Never empty: an empty reason must not read as no error anywhere it is shown.
     error:
       stripUserinfo(
         stripAnsi(error instanceof Error ? error.message : String(error ?? '')),
-        page,
+        navigatedUrl,
       ) || 'Unknown error',
     passed: false,
     failureReasons: ['could not be scanned'],
@@ -273,7 +278,7 @@ export class AccessibilityRunner {
           this.testPage(pagePattern, slot),
           TIMED_OUT,
           pageTimeoutMs,
-        ).catch((error: unknown) => erroredPage(pagePattern, error));
+        ).catch((error: unknown) => erroredPage(pagePattern, error, this.pageUrl(pagePattern)));
         const result =
           outcome === TIMED_OUT ? await timedOutPage(pagePattern, slot, pageTimeoutMs) : outcome;
         results.push(result);
@@ -342,6 +347,17 @@ export class AccessibilityRunner {
   }
 
   /**
+   * The URL a page pattern is navigated to. Any scheme-prefixed value (http:, https:,
+   * about:, data:, file:) is a complete URL; only bare paths get the dev-server base.
+   */
+  private pageUrl(pagePattern: string): string {
+    if (/^[a-z]+:/i.test(pagePattern)) return pagePattern;
+    // Trim a trailing slash off the base so `https://host/` + `/about` doesn't double up.
+    const base = (this.config.baseURL ?? 'http://localhost:3000').replace(/\/$/, '');
+    return `${base}${pagePattern}`;
+  }
+
+  /**
    * Test a single page for accessibility issues
    */
   private async testPage(
@@ -362,12 +378,7 @@ export class AccessibilityRunner {
         this.config.urlPolicy ?? { allowFile: true, allowData: true },
       );
 
-      // Navigate to page. Treat any scheme-prefixed value (http:, https:, about:,
-      // data:, file:) as a complete URL; only bare paths get the dev-server base.
-      const isFullUrl = /^[a-z]+:/i.test(pagePattern);
-      // Trim a trailing slash off the base so `https://host/` + `/about` doesn't double up.
-      const base = (this.config.baseURL ?? 'http://localhost:3000').replace(/\/$/, '');
-      const url = isFullUrl ? pagePattern : `${base}${pagePattern}`;
+      const url = this.pageUrl(pagePattern);
       // guardedGoto walks any redirect chain one vetted hop at a time, as real
       // navigations, so the scanned document's URL and asset base stay correct.
       //
