@@ -599,3 +599,12 @@ Write/Edit, not as a pre-push afterthought.
 - **lizard also misreads an inline function-type annotation whose parameter type holds a method signature** (`(p: string, s?: { isDirectory(): boolean }) => boolean`): it took `isDirectory()` for a function and named the next method `if` (#609). A named type alias fixes it. Rows named `if@`, `for@` or `switch@` mean lizard lost a function boundary above them.
 
 - Tailscale `no peer found` with the runner `Running`: the runner joined a tailnet that does not contain HOST (an OAuth client in the wrong tailnet, or a stale HOST), not an ACL gap. Read the full policy, including a `*` → `*` grant, before blaming ACLs. (#535)
+
+## 2026-11-11 — #264 Stripe meter report (draft PR #637)
+
+- **A lock-holding test that waits on a gate must open the gate in a `finally`.** When the concurrency test's assertion failed (a mutation run), the first pass stayed blocked on its gate, held a pooled connection, and `db.destroy()` in `afterAll` hung the whole file instead of failing it. `await second.finally(release)`.
+- **The Stripe SDK prints a `<claude-code-hint …>` line to stderr under Claude Code.** A spawned-CLI test that asserted an empty stderr failed only for an agent. Assert the exit code and stdout.
+- **A session advisory lock on a pooled connection can outlive its pass** (the unlock query times out, Kysely returns the client to the pool). Use `pg_try_advisory_xact_lock` in a transaction that holds only the lock, and do the work on other connections.
+- **`pkill -f <pattern>` also matches the shell running it** when the pattern is on its own command line (exit 144, the tool call dies). Write the pattern as `[j]est …`.
+- **Jest's `--testPathIgnorePatterns` with hand-escaped paths silently ignored nothing.** To leave files out, pass the wanted ones: `jest --runTestsByPath $(git ls-files … | grep -vxFf excluded.txt)`.
+- On the loop host, `~/.claude/skills/delegating-to-opencode/review-chain.sh` does not exist (only `ask-opencode.sh`), so the pre-PR cross-family pass falls back to Claude internal; the PR's own CI review job (Codex) is then the only cross-family review.
