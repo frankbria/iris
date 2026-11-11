@@ -369,6 +369,37 @@ const a11yRun = {
     );
   });
 
+  // #645: a parser takes the last @ as the separator and accepts a space in a password.
+  it.each([
+    ['an @', ['tester', 'half@not-a-secret'].join(':')],
+    ['a space', ['tester', 'not a-secret'].join(':')],
+  ])('strips a password that holds %s from a navigation and its error', async (_what, userinfo) => {
+    const url = `https://${userinfo}@site.example/x?to=a@b.example`;
+    const id = await history()
+      .forOrg(A)
+      .record({
+        kind: 'rpc',
+        success: false,
+        startedAt: started,
+        finishedAt: finished,
+        results: [
+          {
+            success: false,
+            action: { type: 'navigate', url },
+            error: `Navigation to ${url} refused`,
+          },
+        ],
+      });
+    const run = await history().forOrg(A).get(id);
+    expect(run!.results[0]).toMatchObject({
+      url: 'https://site.example/x?to=a@b.example',
+      result: {
+        action: 'navigate https://site.example/x?to=a@b.example',
+        error: 'Navigation to https://site.example/x?to=a@b.example refused',
+      },
+    });
+  });
+
   // #420: Playwright colours its call log; stored text is read in the portal and the API.
   it('stores an error without terminal colour codes', async () => {
     const esc = String.fromCharCode(27);

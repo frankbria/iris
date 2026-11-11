@@ -83,6 +83,38 @@ export function safeHref(url: string): string | null {
  */
 export const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
 
-/** Every `scheme://user:password@` in free text, without the userinfo (#254, #287). */
-export const stripUserinfo = (text: string): string =>
-  text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');
+/**
+ * A URL without its `user:password@`, cut by parsing it (#645): a password may hold an `@`
+ * or a space, which a parser follows and a pattern over free text cannot. Unchanged when it
+ * carries no credentials, so the caller sees its own spelling; text that does not parse as
+ * a URL gets the pattern.
+ */
+export function urlWithoutUserinfo(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return stripUserinfo(url);
+  }
+  if (!parsed.username && !parsed.password) return url;
+  parsed.username = '';
+  parsed.password = '';
+  return parsed.href;
+}
+
+/**
+ * Every `scheme://user:password@` in free text, without the userinfo (#254, #287). The cut
+ * runs to the last `@` of the authority, as a URL parser reads it (#645): `/`, `?` and `#`
+ * end the authority, so an `@` in a path or query is left alone.
+ *
+ * Whitespace ends a URL in free text, so a password holding a raw space is not followed
+ * (`http://u:correct horse@host/` reads as a URL that ends at `correct`). A caller that
+ * knows which URL the text quotes passes it as `quotedUrl`: each occurrence is replaced by
+ * its parsed form first.
+ */
+export function stripUserinfo(text: string, quotedUrl?: string): string {
+  const withoutQuoted = quotedUrl
+    ? text.split(quotedUrl).join(urlWithoutUserinfo(quotedUrl))
+    : text;
+  return withoutQuoted.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]+@/gi, '$1');
+}

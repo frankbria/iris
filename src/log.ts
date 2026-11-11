@@ -35,7 +35,8 @@ function threshold(): LogLevel {
  */
 const SECRET_FIELD =
   /authorization|cookie|token|secret|passw(or)?d|api[-_]?key|^key$|credential|(database|smtp)[-_]?url|^(text|value|instruction|params|body)$/i;
-const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi;
+/** Up to the last `@` of the authority, as a URL parser reads it (#645); see `stripUserinfo`. */
+const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
 const AUTH_SCHEME = /\b(Bearer|Basic)\s+\S+/gi;
 /** Every query or fragment parameter: `$1` separator and name, `$2` the name, `$3` the value. */
 const QUERY_PARAM = /([?&;#]([^=&;#\s]*)=)([^&;#\s]*)/g;
