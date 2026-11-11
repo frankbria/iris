@@ -78,7 +78,12 @@ const a11yRun = {
     results: [
       {
         page: '/checkout',
-        axeResult: { violations: [{ impact: 'critical' }, { impact: 'minor' }] },
+        axeResult: {
+          violations: [
+            { id: 'image-alt', impact: 'critical', nodes: [{}] },
+            { id: 'region', impact: 'minor', nodes: [{}, {}, {}] },
+          ],
+        },
         keyboardResult: { passed: true },
         // The runner's verdict (#288): what the stores record.
         passed: false,
@@ -188,6 +193,11 @@ const a11yRun = {
         passed: false,
         result: {
           violations: { critical: 1, serious: 0, moderate: 0, minor: 1 },
+          // Which rules, in axe's vocabulary (#314): never a selector or page text.
+          violationRules: [
+            { id: 'image-alt', impact: 'critical', nodes: 1 },
+            { id: 'region', impact: 'minor', nodes: 3 },
+          ],
           keyboardPassed: true,
           needsReview: 0,
           screenReaderPassed: true,

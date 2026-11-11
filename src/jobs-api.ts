@@ -89,7 +89,7 @@ export type RunReader = {
 
 /** What the API needs of a tenant's jobs; approval only when visual jobs exist (#268). */
 export type ApiJobs = Pick<OrgJobs, 'enqueue' | 'get'> &
-  Partial<Pick<OrgJobs, 'approveVisualResult'>>;
+  Partial<Pick<OrgJobs, 'approveVisualResult' | 'cancel'>>;
 
 export interface JobsApiDeps {
   authenticate: Authenticator;
