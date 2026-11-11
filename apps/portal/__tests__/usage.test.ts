@@ -9,7 +9,13 @@ const row = (
   quantity: number,
   costUsd = 0,
   estimatedCostUsd = 0
-): UsageSummaryRow => ({ kind, billingMode, quantity, costUsd, estimatedCostUsd })
+): UsageSummaryRow => ({
+  kind,
+  billingMode,
+  quantity,
+  costUsd,
+  estimatedCostUsd,
+})
 
 const SUMMARY = [
   row("a11y_job", null, 3),
