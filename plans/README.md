@@ -133,7 +133,7 @@ production.
 | `P0.40` | [#268](https://github.com/frankbria/iris/issues/268) | Hosted visual-diff job API with project baselines and approval | P0.29 (#257), P0.39 (#267) | DONE (PR #473; per-comparison billing #478) |
 | `P0.41` | [#269](https://github.com/frankbria/iris/issues/269) | Results retrieval API: runs, run detail, artifact URLs | P0.26 (#254), P0.29 (#257) | DONE (PR #461; artifact URLs split to #460) |
 | `P0.42` | [#270](https://github.com/frankbria/iris/issues/270) | Portal: runs and results pages | P0.41 (#269) | DONE (PR #464; visual diffs + approval split to #463) |
-| `P0.43` | [#271](https://github.com/frankbria/iris/issues/271) | Portal: usage and billing page | P0.33 (#261), P0.35 (#263) | TODO |
+| `P0.43` | [#271](https://github.com/frankbria/iris/issues/271) | Portal: usage and billing page | P0.33 (#261), P0.35 (#263) | IN REVIEW (draft PR, stacked on #636; the Customer Portal redirect itself waits for the owner's Stripe test account) |
 
 **J. Ops**
 
@@ -157,7 +157,7 @@ production.
 | `P0.51` | [#349](https://github.com/frankbria/iris/issues/349) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | DONE (PR #470) |
 | `P0.52` | [#435](https://github.com/frankbria/iris/issues/435) | Reap jobs stuck in running after a worker crash | P0.39 (#267) | DONE (PR #443) |
 | `P0.53` | [#445](https://github.com/frankbria/iris/issues/445) | Object storage backups: bucket versioning/replication and a restore drill | P0.60 (#514) | BLOCKED (on #514; closes on a staging bucket) |
-| `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | BLOCKED (needs-owner) |
+| `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | BLOCKED (needs-owner: wording approved 2026-11-10; only the placeholder values remain) |
 | `P0.55` | [#460](https://github.com/frankbria/iris/issues/460) | Signed artifact URLs in run detail | P0.29 (#257) | DONE (PR #471) |
 | `P0.56` | [#463](https://github.com/frankbria/iris/issues/463) | Portal: visual diff images and baseline approval | P0.40 (#268), P0.55 (#460) | DONE (PR #474) |
 | `P0.57` | [#472](https://github.com/frankbria/iris/issues/472) | Purge visual artifacts from object storage | P0.40 (#268) | DONE (PR #477) |

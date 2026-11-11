@@ -669,7 +669,7 @@ Stripe reporting is #264.
 ## Stripe billing (issues #261, #345)
 
 Off until all four settings are set; then owners and admins see **Upgrade** (Checkout) and
-**Manage billing** (Customer Portal) on `/org`. Subscription state comes only from the
+**Manage billing** (Customer Portal) on `/org` and `/usage`. Subscription state comes only from the
 signed webhook. Set up once per Stripe mode (test first, then live):
 
 1. **Products and prices**: a *Pro* product with a recurring monthly price of $49, and a
