@@ -15,6 +15,7 @@ Retention periods are the owner's decisions of 2026-10-03 (#349), applied by the
 retention pass (`iris admin retention`, `src/offboarding.ts`, `deploy/retention.sh`):
 deleted orgs are soft-deleted for **30 days**, then purged to a tombstone; their billing
 records are kept **7 years**, detached and pseudonymised; finished runs are kept **90 days**;
+audit entries are kept **90 days** (decided 2026-11-08, #541);
 expired sessions and tokens are purged **daily**; terms-acceptance evidence is kept **7 years**
 after the user is deleted, pseudonymised. What is still marked **undecided** has no
 configured limit: the data stays until it is deleted by hand.
@@ -139,7 +140,7 @@ is processed in Chromium's memory for the duration of the job.
 | Where | Postgres, `0001_initial.ts`. |
 | Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`), and the withdrawal of a still-queued job whose MCP caller disconnected (`job.cancel`, #314: the `runs` row is deleted, the two audit entries remain); member removed, left or given a role (`member.remove|leave|role`, the member's user id, and the keys revoked with them); keys revoked by a user ban (`api_key.delete`, reason `user banned`, no actor); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463). No URL, page content or typed value is recorded. |
 | Access | The org's owners and admins on the portal's `/audit` page (#541), newest first, with the acting user's name and email while they exist; members are refused. Operators by query. |
-| Retention | Deleted when the org is purged; a deleted user's id is removed from their entries (#349). Otherwise **undecided** (#541). |
+| Retention | **90 days** (owner decision 2026-11-08, #541): the daily retention pass deletes older entries. One exception: the `api_key.create` entry of a key that still exists is kept until the key is revoked, because it is the only record of who made the key and a member's removal, leave or ban revokes their keys by it (#408, #457); it goes on the first pass after the key does, or after its creator's account is deleted (the entry then names nobody). Also deleted when the org is purged; a deleted user's id is removed from their entries (#349). The portal's `/audit` page states the period. |
 
 ### Artifact storage usage
 

@@ -52,6 +52,7 @@ test("an owner reads the org's audit log; a member cannot", async ({
   const table = page.getByRole("table", { name: "Audit entries, newest first" })
   const rows = table.locator("tbody tr")
   await expect(rows).toHaveCount(2)
+  await expect(page.getByText("Entries are kept for 90 days.")).toBeVisible()
   await expect(rows.nth(0)).toContainText("api_key.create")
   await expect(rows.nth(0)).toContainText("Ada")
   // Newest first: the second key's entry above the first's.

@@ -173,7 +173,17 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   it), best effort: a failed write is logged and the session goes on.
 - `rewrapAll()` writes one `provider_key.rewrap` per key, in that key's update transaction,
   with no actor (an operator ran it) and the sealing master key id.
-- There is no read surface yet (portal page or API): only the table.
+- **Read surface (#541)**: `auditPage()` (src/audit-reads.ts), the portal's `/audit` for
+  owners and admins, newest first, cursor-paged, strings through `redactStrings`.
+- **Kept 90 days (#541, owner decision 2026-11-08)**: `AUDIT_RETENTION_DAYS` lives in
+  `src/audit-log.ts` (Kysely only, so the portal page can state it); the retention pass's
+  `audit` step deletes older entries (`auditEntriesDeleted` in the report). **The log is
+  also data the product reads**: `api_key.create` is the only record of a key's creator,
+  and `revokeKeysCreatedBy` / `liveKeysByCreator` (#408, #457) depend on it, so that entry
+  is exempt while its key exists (same org, `substr(target, 5)`) and it still names its
+  creator, and goes on the first pass after the key is revoked or the creator's account
+  is deleted. Before making anything else read the audit log, decide
+  whether it must survive 90 days.
 
 ### Artifact Storage Quota (issue #315)
 
@@ -436,6 +446,8 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   per org: a failure is logged and retried by the next pass.
 - **Runs after 90 days**: usage rows are detached first, since `usage_events -> runs` has
   no delete rule and would block the delete.
+- **Audit entries after 90 days (#541)**, except a live key's creation entry: see "Tenant
+  Audit Log" above.
 - **Terms evidence is pseudonymised by the database**, not by code: whatever deletes a user
   (BetterAuth, `delete-user`, SQL) fires the trigger. `deleteUser` refuses while the user
   is the only owner (comma roles, as #260) of an org with no pending deletion.

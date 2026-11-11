@@ -14,7 +14,10 @@ in `lib/org.ts`, the one owner-or-admin check; members see "Only owners and admi
 `src/audit-reads.ts` (`auditPage`) is lean, like `run-reads`: one org's entries, newest first,
 paged by the identity id (`nextCursor`; a cursor it did not make is `InvalidAuditCursorError`,
 shown as a link back), the actor's name and email by a left join (gone users show their id),
-strings through `redactStrings`. Retention of the log is still the owner's decision (#541).
+strings through `redactStrings`. The page states the retention (`AUDIT_RETENTION_DAYS`, 90 days, and the exception for a
+live key's creation entry while its creator's account exists): keep that sentence in step
+with the retention pass's `audit` step (src/offboarding.ts; "Tenant Audit Log" in
+`hosted-data.md`).
 
 ### Privacy, subprocessors and DPA (issue #277)
 
