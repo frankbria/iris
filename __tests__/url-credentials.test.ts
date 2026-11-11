@@ -264,6 +264,63 @@ describe('strippedError (#658)', () => {
     expect(strippedError(error)).toBe('http');
   });
 
+  it.each([
+    ['ab', 'xxab', 'abc', 'xx'],
+    ['the longest one', 'x-aba', 'abab', 'x-'],
+    ['all of the text', 'abab', 'ababab', ''],
+    ['none', 'xxabc', 'abc', 'xxabc'],
+    ['none when nothing matches', 'xxxx', 'abc', 'xxxx'],
+    ['a repeat that falls back', 'aabaaab', 'aabaac', 'aaba'],
+  ])('finds a partial copy at the cut: %s', (_what, tail, quoted, kept) => {
+    // A space keeps the trailing-authority rule out of it; the lead makes the text long.
+    const lead = ' '.repeat(ERROR_TEXT_MAX - tail.length);
+    expect(strippedError(`${lead}${tail} and more`, quoted).trimStart()).toBe(kept);
+  });
+
+  it('agrees with comparing every suffix, on 20,000 generated pairs', () => {
+    let seed = 6580;
+    const next = (below: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return Math.floor((seed / 2147483648) * below);
+    };
+    const word = (length: number) => Array.from({ length }, () => 'ab '[next(3)]).join('');
+    const differing: string[][] = [];
+    for (let i = 0; i < 20_000; i++) {
+      const tail = word(next(12));
+      const quoted = word(next(8));
+      let kept = tail;
+      for (let start = Math.max(0, tail.length - quoted.length + 1); start < tail.length; start++) {
+        if (quoted.startsWith(tail.slice(start))) {
+          kept = tail.slice(0, start);
+          break;
+        }
+      }
+      const lead = 'x'.repeat(ERROR_TEXT_MAX - tail.length);
+      const out = strippedError(`${lead}${tail}!`, quoted);
+      // Complete copies are replaced by the parsed form, which is the text itself here.
+      if (out !== `${lead}${kept}`) differing.push([tail, quoted, out.slice(lead.length)]);
+    }
+    expect(differing).toEqual([]);
+  });
+
+  // codex review: each suffix was compared with the URL, a second for 16,384 letters.
+  it('finds it in one pass over repeated letters', () => {
+    const fastest = (run: () => unknown) =>
+      Math.min(
+        ...[1, 2, 3, 4, 5].map(() => {
+          const start = performance.now();
+          run();
+          return performance.now() - start;
+        }),
+      );
+    const text = `${'a'.repeat(ERROR_TEXT_MAX - 1)}bX`;
+    const quoted = `${'a'.repeat(ERROR_TEXT_MAX + 4000)}://host/`;
+    expect(strippedError(text, quoted)).toBe(text.slice(0, ERROR_TEXT_MAX));
+    // Against the same text with no URL to look for, which is one pass by construction.
+    const plain = fastest(() => strippedError(text));
+    expect(fastest(() => strippedError(text, quoted))).toBeLessThan(40 * Math.max(plain, 1));
+  });
+
   it('does not end on half a surrogate pair', () => {
     const out = strippedError(`${'x'.repeat(ERROR_TEXT_MAX - 1)}😀 tail`);
     expect(out).toBe('x'.repeat(ERROR_TEXT_MAX - 1));

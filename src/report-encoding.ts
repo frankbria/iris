@@ -144,12 +144,34 @@ export function stripUserinfo(text: string, quotedUrl?: string): string {
 /** The most error text the stripping patterns are given, in UTF-16 units (#658). */
 export const ERROR_TEXT_MAX = 16_384;
 
-/** `head` without a trailing start of `quotedUrl` that stops short of its end. */
-function withoutPartialCopy(head: string, quotedUrl: string): string {
-  for (let start = Math.max(0, head.length - quotedUrl.length + 1); start < head.length; start++) {
-    if (quotedUrl.startsWith(head.slice(start))) return head.slice(0, start);
+/** Knuth-Morris-Pratt: for each prefix of `pattern`, its longest proper prefix that ends it. */
+function borders(pattern: string): Int32Array {
+  const table = new Int32Array(pattern.length);
+  for (let i = 1, matched = 0; i < pattern.length; i++) {
+    while (matched > 0 && pattern[i] !== pattern[matched]) matched = table[matched - 1];
+    if (pattern[i] === pattern[matched]) matched++;
+    table[i] = matched;
   }
-  return head;
+  return table;
+}
+
+/**
+ * `head` without a trailing start of `quotedUrl` that stops short of its end. One pass
+ * (Knuth-Morris-Pratt): comparing each suffix with the URL took a second on 16,384 repeated
+ * letters (codex review).
+ */
+function withoutPartialCopy(head: string, quotedUrl: string): string {
+  const start = quotedUrl.slice(0, Math.min(quotedUrl.length - 1, head.length));
+  if (!start) return head;
+  const table = borders(start);
+  let matched = 0;
+  for (let i = head.length - start.length; i < head.length; i++) {
+    while (matched > 0 && (matched === start.length || head[i] !== start[matched])) {
+      matched = table[matched - 1];
+    }
+    if (head[i] === start[matched]) matched++;
+  }
+  return head.slice(0, head.length - matched);
 }
 
 /** The start of a colour code that the cut ended: `ESC`, `ESC [`, or one with no final byte. */
