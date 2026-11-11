@@ -27,7 +27,7 @@ date. Review and revise." So the plan is the review, and what it found to revise
 
 ## Steps
 1. `__tests__/container-config.test.ts`: pin the command, no `continue-on-error` in the
-   build job, both deploys `needs: build`, one lockfile (portal covered), Dependabot's
+   build job, both deploys `needs: build`, the portal recorded in the root lockfile, Dependabot's
    security-updates group for the npm lockfile.
 2. Docs: a comment on the step in `ci.yml`, `.claude/rules/deploy-ops.md`,
    `docs/runbook-production.md` ("When the dependency audit fails"), `plans/README.md`.

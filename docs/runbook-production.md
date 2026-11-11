@@ -737,9 +737,9 @@ advisory and the path to it.
    in the PR which package holds it back, so the override can be removed later.
 4. **No fixed release exists**: read the advisory against how IRIS uses the package, then
    replace or drop the dependency, or wait for the fix. Deploys stay held meanwhile; that
-   is the gate working. Do not lower `--audit-level`, add `|| true` or mark the step
-   `continue-on-error` (a test fails on each): an exception to the gate is the owner's
-   decision, made in a PR that says which advisory and until when.
+   is the gate working. Do not raise `--audit-level` to `critical`, add `|| true` or
+   mark the step `continue-on-error` (a test fails on each): an exception to the gate is
+   the owner's decision, made in a PR that says which advisory and until when.
 
 Advisories in development dependencies do not fail the build. They show under the
 repository's Dependabot alerts, and Dependabot's security updates fix them. For some,

@@ -572,7 +572,8 @@ describe('dependency audit gate (issue #363)', () => {
   const job = (name: string) => {
     const start = ci.indexOf(`\n  ${name}:\n`);
     expect(start).toBeGreaterThan(-1);
-    const next = ci.slice(start + 1).search(/\n {2}[\w-]+:\n/);
+    // Any line at a job key's indent ends the job, a quoted key too.
+    const next = ci.slice(start + 1).search(/\n {2}\S/);
     return next === -1 ? ci.slice(start) : ci.slice(start, start + 1 + next);
   };
 
@@ -581,7 +582,10 @@ describe('dependency audit gate (issue #363)', () => {
     expect(audits.map((line) => line.trim())).toEqual([
       '- run: npm audit --omit=dev --audit-level=high',
     ]);
-    expect(job('build')).toContain(audits[0]);
+    // The job ends with that line: the step is in `build`, and has no key after it
+    // (`if: false`, a `shell` that swallows the exit code, a `working-directory`).
+    expect(job('build').trimEnd().endsWith(`\n${audits[0]}`)).toBe(true);
+    expect(ci).not.toMatch(/^ *defaults:/m);
   });
 
   it('cannot be passed over: no step of the build job may fail quietly', () => {
@@ -590,18 +594,27 @@ describe('dependency audit gate (issue #363)', () => {
 
   it('gates both deploys, which run only after the build job', () => {
     for (const deploy of ['deploy-staging', 'deploy-production']) {
-      expect(job(deploy)).toMatch(/^\n {2}[\w-]+:\n {4}needs: build\n/);
+      const settings = job(deploy).split('\n    steps:\n')[0];
+      expect(settings).toMatch(/\n {4}needs: (build|\[build\])\n/);
+      // A status function in the job's `if` would run it after a failed build.
+      expect(settings).toMatch(/\n {4}if: /);
+      expect(settings).not.toMatch(/always\(\)|cancelled\(\)|failure\(\)/);
     }
   });
 
-  // `npm audit` reads the lockfile next to it. The portal is a workspace of the root
-  // package, so one audit covers both; a lockfile of its own would take it out.
-  it('covers the portal: it is a workspace with no lockfile of its own', () => {
+  // `npm audit` at the root reads the root lockfile, which holds a workspace's
+  // dependencies too. A portal that stopped being a workspace would drop out of it.
+  it('covers the portal: it is a workspace recorded in the root lockfile', () => {
     const root = JSON.parse(read('package.json')) as { workspaces: string[] };
     expect(root.workspaces).toContain('apps/*');
-    expect(fs.existsSync(path.join(ROOT, 'apps/portal/package.json'))).toBe(true);
-    expect(fs.existsSync(path.join(ROOT, 'apps/portal/package-lock.json'))).toBe(false);
-    expect(fs.existsSync(path.join(ROOT, 'apps/portal/npm-shrinkwrap.json'))).toBe(false);
+    const portal = JSON.parse(read('apps/portal/package.json')) as {
+      dependencies: Record<string, string>;
+    };
+    const lock = JSON.parse(read('package-lock.json')) as {
+      packages: Record<string, { dependencies?: Record<string, string> }>;
+    };
+    expect(Object.keys(portal.dependencies).length).toBeGreaterThan(5);
+    expect(lock.packages['apps/portal']?.dependencies).toEqual(portal.dependencies);
   });
 
   // Development dependencies are outside the gate; their advisories arrive as
