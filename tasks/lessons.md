@@ -599,3 +599,4 @@ Write/Edit, not as a pre-push afterthought.
 - **lizard also misreads an inline function-type annotation whose parameter type holds a method signature** (`(p: string, s?: { isDirectory(): boolean }) => boolean`): it took `isDirectory()` for a function and named the next method `if` (#609). A named type alias fixes it. Rows named `if@`, `for@` or `switch@` mean lizard lost a function boundary above them.
 
 - Tailscale `no peer found` with the runner `Running`: the runner joined a tailnet that does not contain HOST (an OAuth client in the wrong tailnet, or a stale HOST), not an ACL gap. Read the full policy, including a `*` → `*` grant, before blaming ACLs. (#535)
+- **Commit before a mutation check.** Reverting a mutation with `git checkout <file>` also discards every uncommitted edit in that file (#271: a review fix in `lib/usage.ts` went with it and had to be redone). Commit first, or revert the mutation with the inverse edit.

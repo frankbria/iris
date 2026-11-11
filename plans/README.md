@@ -133,7 +133,7 @@ production.
 | `P0.40` | [#268](https://github.com/frankbria/iris/issues/268) | Hosted visual-diff job API with project baselines and approval | P0.29 (#257), P0.39 (#267) | DONE (PR #473; per-comparison billing #478) |
 | `P0.41` | [#269](https://github.com/frankbria/iris/issues/269) | Results retrieval API: runs, run detail, artifact URLs | P0.26 (#254), P0.29 (#257) | DONE (PR #461; artifact URLs split to #460) |
 | `P0.42` | [#270](https://github.com/frankbria/iris/issues/270) | Portal: runs and results pages | P0.41 (#269) | DONE (PR #464; visual diffs + approval split to #463) |
-| `P0.43` | [#271](https://github.com/frankbria/iris/issues/271) | Portal: usage and billing page | P0.33 (#261), P0.35 (#263) | IN REVIEW (draft PR, stacked on #636; the Customer Portal redirect itself waits for the owner's Stripe test account) |
+| `P0.43` | [#271](https://github.com/frankbria/iris/issues/271) | Portal: usage and billing page | P0.33 (#261), P0.35 (#263) | IN REVIEW (draft #640, stacked on #636; the Customer Portal redirect itself waits for the owner's Stripe test account) |
 
 **J. Ops**
 
