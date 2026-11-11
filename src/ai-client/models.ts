@@ -114,10 +114,12 @@ const TAKES_REASONING_EFFORT = /^gpt-(?:5\.\d|6)/i;
 const NO_EFFORT_NONE = /^gpt-6(?:-astra|\.1-sol)(?:$|-)/i;
 
 /**
- * A fine-tuned id is `ft:<base model>:<org>:<suffix>:<id>`, and it takes the options its
- * base model takes (#652): the family patterns above anchor at the start of an id.
+ * The base model of a fine-tuned OpenAI id, `ft:<base model>:<org>:<suffix>:<id>`;
+ * undefined for any other id. A fine-tune takes the sampling options its base takes
+ * (#652: the family patterns above anchor at the start of an id) and is priced by its own
+ * row, `ft:<base model>` (#664).
  */
-const fineTuneBase = (model: string): string => /^ft:([^:]+)/i.exec(model)?.[1] ?? model;
+export const fineTunedBase = (model: string): string | undefined => /^ft:([^:]+)/.exec(model)?.[1];
 
 /**
  * The sampling options an OpenAI Chat Completions request may carry for `model`.
@@ -136,7 +138,7 @@ export function openAISampling(model: string): {
   temperature?: number;
   reasoning_effort?: 'none' | 'low';
 } {
-  const family = fineTuneBase(model);
+  const family = fineTunedBase(model) ?? model;
   if (isReasoningModel(family)) return {};
   if (TAKES_REASONING_EFFORT.test(family)) {
     return { reasoning_effort: NO_EFFORT_NONE.test(family) ? 'low' : 'none' };
@@ -144,7 +146,14 @@ export function openAISampling(model: string): {
   return { temperature: 0.1 };
 }
 
-/** Whether a model accepts images, by the table above (#298). */
+/**
+ * Whether a model accepts images, by the table above (#298).
+ *
+ * Never a fine-tuned OpenAI id (#664, checked 2026-11-11 against
+ * https://developers.openai.com/api/docs/pricing and the model pages): the only models
+ * OpenAI fine-tunes are `gpt-4o` and `gpt-4.1` snapshots, deprecated and no longer offered
+ * here, and every family in the table lists fine-tuning as not supported.
+ */
 export function isVisionModel(provider: ModelProvider, model: string): boolean {
   if (provider === 'anthropic') return true;
   // Ollama names may carry a namespace (`library/llava:13b`); the family is the last part.
@@ -253,9 +262,13 @@ export class ModelNotForImagesError extends Error {
     readonly provider: string,
     readonly model: string,
   ) {
+    const why =
+      provider === 'openai' && fineTunedBase(model) !== undefined
+        ? 'fine-tuned: OpenAI fine-tunes only models it has deprecated'
+        : 'text-only, deprecated or unknown';
     super(
       `${provider} model "${model}" is not one IRIS uses for images ` +
-        `(text-only, deprecated or unknown); choose another with --ai-model`,
+        `(${why}); choose another with --ai-model`,
     );
     this.name = 'ModelNotForImagesError';
   }
