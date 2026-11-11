@@ -152,19 +152,21 @@ function withoutPartialCopy(head: string, quotedUrl: string): string {
   return head;
 }
 
+/** The start of a colour code that the cut ended: `ESC`, `ESC [`, or one with no final byte. */
+const PARTIAL_ANSI_TAIL = /\x1b(?:\[[0-?]*[ -/]*)?$/;
+
 /**
- * The first `ERROR_TEXT_MAX` units of `text`, by code point. A cut can land inside a URL
- * whose `@` is past it, and what is left of the userinfo would no longer be recognised. So a
- * cut text also ends before a partial copy of `quotedUrl` and before an authority that
- * nothing terminates.
+ * The first `ERROR_TEXT_MAX` units of `text`, by code point, without colour codes. A cut can
+ * land inside a URL whose `@` is past it, and what is left of the userinfo would no longer be
+ * recognised. So a cut text also ends before a partial copy of `quotedUrl` and before an
+ * authority that nothing terminates. Colour codes go first: one inside a URL holds a `?` or a
+ * `;`, which would read as the authority's end (codex review).
  */
 function headOfErrorText(text: string, quotedUrl: string): string {
-  if (text.length <= ERROR_TEXT_MAX) return text;
+  if (text.length <= ERROR_TEXT_MAX) return stripAnsi(text);
   const lastIsHighSurrogate = (text.charCodeAt(ERROR_TEXT_MAX - 1) & 0xfc00) === 0xd800;
-  const head = withoutPartialCopy(
-    text.slice(0, ERROR_TEXT_MAX - (lastIsHighSurrogate ? 1 : 0)),
-    quotedUrl,
-  );
+  const cut = text.slice(0, ERROR_TEXT_MAX - (lastIsHighSurrogate ? 1 : 0));
+  const head = withoutPartialCopy(stripAnsi(cut).replace(PARTIAL_ANSI_TAIL, ''), quotedUrl);
   const scheme = head.lastIndexOf('://');
   return scheme !== -1 && !/[\s/?#]/.test(head.slice(scheme + 3)) ? head.slice(0, scheme) : head;
 }
@@ -175,5 +177,5 @@ function headOfErrorText(text: string, quotedUrl: string): string {
  * `ERROR_TEXT_MAX` before any pattern runs (#658): such text has no length of its own.
  */
 export function strippedError(error: string, quotedUrl = ''): string {
-  return stripUserinfo(stripAnsi(headOfErrorText(error, quotedUrl)), quotedUrl);
+  return stripUserinfo(headOfErrorText(error, quotedUrl), quotedUrl);
 }

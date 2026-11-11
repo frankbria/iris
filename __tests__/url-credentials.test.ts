@@ -250,6 +250,20 @@ describe('strippedError (#658)', () => {
     expect(out).toBe(`${lead}Navigation to http://host/next=http://other/x refused. `);
   });
 
+  // codex review: a colour code holds `?` or `;`, which read as the end of an authority,
+  // so the URL the cut landed in was kept, and removing the code then exposed its password.
+  it.each([
+    ['a whole colour code', '\x1b[?25l'],
+    ['a colour code the cut ends', '\x1b[?2'],
+  ])('drops a URL the cut lands in when its userinfo holds %s', (_what, code) => {
+    const whole = code.length === 6;
+    const start = `${'\x1b[2m'.repeat(4088)}http://u:${PART_ONE}${whole ? code : ''}`;
+    const fill = 's'.repeat(ERROR_TEXT_MAX - start.length - (whole ? 0 : code.length));
+    const error = `${start}${fill}${whole ? '' : code}5l@host/ rest`;
+    expect(stripUserinfo(error.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ''))).toBe('http://host/ rest');
+    expect(strippedError(error)).toBe('http');
+  });
+
   it('does not end on half a surrogate pair', () => {
     const out = strippedError(`${'x'.repeat(ERROR_TEXT_MAX - 1)}😀 tail`);
     expect(out).toBe('x'.repeat(ERROR_TEXT_MAX - 1));
