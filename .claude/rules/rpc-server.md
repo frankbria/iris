@@ -149,12 +149,52 @@ model, and the page under test chooses much of what an error or a redirect conta
   whole.
 - **`ScanLimiter(2, 8)`** (src/mcp/scan-limiter.ts), one per process: 2 scans run, 8 wait in
   arrival order, the next is a tool error at once. A finishing scan hands its slot to the
-  head of the queue. Constants until hosted MCP (#314) needs per-tenant limits. A cancelled
-  call that is already waiting still runs.
+  head of the queue. Stdio only: hosted MCP (#314) does not use it, its cap is the org's
+  `maxQueuedJobsPerOrg`. A cancelled call that is already waiting still runs.
 - Tests: `scan-errors.test.ts` and `scan-limiter.test.ts` need no browser;
   `mcp/tools.test.ts` shows each item through a real scan (the cap with a fixture that
   holds its responses and counts them; its wait loops are bounded by poll count, since an
   unbounded one outlives the test's timeout and hangs Jest).
+
+### Hosted MCP over HTTP (issue #314)
+
+`POST /v1/mcp` on the hosted `iris connect` listener (`src/mcp/hosted.ts`), routed in
+`startServer` beside the job API whenever `jobs` is set. README has the client view.
+
+- **A tool call is an a11y job.** `run_accessibility_test` enqueues `{ urls: [url], wcagLevel,
+  failOn: all four }` through the caller's `jobs.forOrg(scope)` and polls `get(id)`. The
+  worker does the scan, the history row and the `a11y_job` usage row (#267); this module
+  drives no browser and writes no usage. Do not add a second path to a browser here.
+- **Auth is `authorize()`** (src/jobs-api.ts), the step the job API uses: verify slot, key,
+  suspension 403, key and org buckets. One HTTP request is one rate token.
+- **Stateless**: a new `McpServer` and transport per request (`sessionIdGenerator:
+  undefined`, `enableJsonResponse: true`). Only POST; GET/DELETE are 405. An array body is
+  refused (`-32600`): a batch would start several scans for one token (#528).
+- **The wait is `ServerLimits.mcpScanWaitMs`** (45 s), below the ingress's 75 s
+  `proxy_read_timeout` for `/v1/`. Past it the call answers `{ jobId, status }` (not an
+  error) and `get_accessibility_test_result` reads the job later. Raise the ingress
+  timeout before raising the wait.
+- **A caller that goes away withdraws its queued job** (`res` `'close'` aborts the wait;
+  `OrgJobs.cancel(id)` deletes a row still `queued` and audits `job.cancel`). A job a
+  worker has claimed runs and is billed. A drain that closes the socket does the same.
+  The row is deleted, not set to `canceled`: a finished run with no start time would
+  appear in history, and one with no finish time would never be purged by retention.
+- **What a result may say**: a failed job's stored `error` is page-influenced text and
+  goes through `scanFailureReason` (the worker's own `ORG_SUSPENDED` and `JOB_TIMED_OUT`
+  are worded here); the raw text is logged (`mcp scan failed`). Findings come from the
+  stored page result: `violationRules` (rule id, impact, node count, at most 50, written
+  by `resultsOf` since #314; rows from before have counts only, so `violations` is empty
+  beside a non-zero `violationCount`), `needsReviewRules`, `keyboardPassed`.
+- **`passed` is the stored page verdict** with every impact in `failOn`: no violation and
+  the keyboard checks passed. #646 (what `passed` means for the stdio tool) is still open.
+- **The URL pre-flight** refuses non-http(s), credentials (params are stored and org-readable)
+  and what `assertNavigationAllowed` refuses, before `enqueue`, so it costs no run. A name
+  that resolves to a private address still fails in the worker, at the egress proxy.
+- `src/mcp/hosted.ts` must not import `./tools` or `./server`: they load the a11y runner
+  into the API process. `packageVersion()` lives in `./version` for that reason.
+- Tests: `mcp/hosted-http.test.ts` (SDK client over real sockets, in-memory job store, the
+  test plays the worker; sets `IRIS_HOSTED` at the top so the pre-flight is the hosted
+  policy) and `hosted-mcp-job.test.ts` (real Postgres, worker and Chromium).
 
 ### RPC Server Error Policy (issue #330)
 

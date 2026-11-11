@@ -1,50 +1,25 @@
-# #362 [P2.2] MCP tool: follow-up items
+# #314 [P2.3] Hosted MCP over HTTP with tenant auth and metering
 
-Plan self-authored from the checklist Frank posted on the issue (2026-11-08). The paste was
-cut at the terminal's right edge in two places; the four checklist items are readable.
+## Plan (self-authored; the issue had none)
 
-## Findings
+**Shape.** `POST /v1/mcp` on the hosted `iris connect` listener: MCP Streamable HTTP, stateless (one JSON response per request, no session id, no SSE stream; `GET`/`DELETE` answer 405). It sits under `/v1/`, so the ingress already routes and rate-limits it.
 
-- `readOnlyHint: true` is wrong: the tool loads any page in a real browser, which runs its
-  scripts and sends the requests a visit would.
-- Errors pass through the first line of whatever was thrown: a browser launch failure names
-  local paths, the pre-flight error echoes a malformed URL with its `user:password@`, and
-  the guard's redirect error carries the refused target URL verbatim.
-- A redirect's landing URL goes into `structuredContent.url` and the summary as is, query
-  string and fragment included. The page under test chooses that text.
-- Each call launches its own Chromium with no bound on how many run at once.
+**Auth and limits.** The job API's own path: `Authorization: Bearer iris_…`, suspension 403, the key and org request buckets (429), the pending-verification cap, the 64 KiB body cap, a request line in the log and the metrics (`POST /v1/mcp`).
 
-## Plan
+**A tool call is a hosted a11y job.** `run_accessibility_test { url, wcagLevel? }` queues a one-page a11y job through the same store as `POST /v1/a11y/jobs`, so the worker scans it (hardened Chromium, egress proxy, deadline) and writes the run to history and one `a11y_job` usage row, in the transaction that already does so. Nothing new meters or stores. The per-org cap is `maxQueuedJobsPerOrg` and the plan's `runsPerMonth`; both refusals are tool errors that say so (this answers the first note from #362: the cap is per tenant).
 
-1. `src/mcp/scan-errors.ts` (new, pure): `scanFailureReason(detail)` maps a failure to a
-   fixed vocabulary (policy block with its category, redirect to a blocked address, a
-   `net::ERR_*` code, timeout, otherwise "the scan could not be completed");
-   `landedUrl(requested, scanned)` gives origin and path of a redirect's landing page,
-   bounded. The request URL is shown through `redactString` (src/log.ts). The raw detail
-   goes to stderr through `log()`.
-2. `src/mcp/scan-limiter.ts` (new, pure): at most 2 scans at once, 8 more wait in arrival
-   order, further calls get a tool error at once.
-3. `src/mcp/tools.ts`: hints `readOnlyHint: false, destructiveHint: true,
-   idempotentHint: false, openWorldHint: true`; use 1 and 2; output gains `redirected`;
-   the stale header comment (keyboard checks "hardcode success") is corrected.
-4. Tests: unit files for 1 and 2 (no browser, run locally); `__tests__/mcp/tools.test.ts`
-   gets the hints, a redirect with a token in its query, a blocked redirect that names no
-   target, credentials in the request URL, and four parallel calls against a fixture that
-   holds its responses (never more than two in flight).
-5. Docs: README MCP section, `.claude/rules/rpc-server.md`, `plans/README.md` (P2.2 row, and
-   the P0.54 row per the owner's standing instruction).
+**Waiting.** The call waits for the job up to a bound below the ingress's 75 s read timeout, then answers `status: running` with the job id; a second tool, `get_accessibility_test_result { jobId }`, reads it later (third note from #362). A client that goes away while its job is still queued gets the job canceled, so nothing runs or is billed for it (second note): a new `cancel` on the org's job store, queued jobs only.
 
-## Decisions (no architectural fork)
+**What a result says.** The stored a11y result holds counts per impact only. For the tool to name what failed, the stored page result gains `violationRules`: axe's rule id, impact and node count, at most 50 (axe's own vocabulary, no page text; no migration, the column is JSON). The REST job and run reads show it too. Failures go through the fixed vocabulary from #362 (`scanFailureReason`); a job's stored error text never reaches the model.
 
-- `destructiveHint: true`: the tool cannot promise that a GET of a URL the model chose
-  changes nothing, so it does not claim it.
-- A full queue is a tool error rather than an unbounded wait.
-- The cap is a constant; hosted MCP (#314) will need a per-tenant one.
-- Not in the checklist, so not done: a `keyboard` input, `passed` versus `--fail-on`.
+**Not in this change.** Visual-diff tools; keyboard-check detail (#646 is with the owner; the hosted job runs the keyboard checks as every hosted a11y job does, and the tool reports only whether they passed); SSE and sessions.
+
+## Steps
+1. `history-store`: `violationRules` in the stored a11y page result; `OrgJobs.cancel(id)`. Tests: `db/history-store`, `db/jobs` (real Postgres).
+2. `src/mcp/hosted.ts`: the two tools over an org's job store, and the HTTP handler. `src/jobs-api.ts`: the auth-and-charge step shared with it. `src/protocol.ts`: route, label, wait bound in `ServerLimits`.
+3. Tests: `__tests__/mcp/hosted-http.test.ts` (real sockets, the SDK's own HTTP client, in-memory job store: auth, limits, refusals, wait, cancel, org isolation) and `__tests__/hosted-mcp-job.test.ts` (real Postgres + Chromium + worker: tool call -> history row + usage row; runs in CI).
+4. Docs: README, `.claude/rules/rpc-server.md`, `docs/data-flows.md`, `docs/integration-surfaces.md`, ADR 0001 §7, `plans/README.md`.
 
 ## Acceptance criteria
-- [ ] Accurate tool hints
-- [ ] Errors normalised (no internal host, port or path)
-- [ ] Redirect targets not echoed verbatim
-- [ ] Concurrency cap
-- [ ] Each item is covered by a regression test
+- [ ] Streamable HTTP transport behind the API-key auth
+- [ ] Scans recorded in history and usage

@@ -103,6 +103,7 @@ describe('defaults', () => {
       maxSessionsPerOrg: 2,
       maxConnectionsPerOrg: 8,
       maxQueuedJobsPerOrg: 10,
+      mcpScanWaitMs: 45_000, // below the ingress read timeout (75 s) for /v1/ (#314)
     });
   });
 });

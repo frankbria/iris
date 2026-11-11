@@ -89,7 +89,7 @@ export type RunReader = {
 
 /** What the API needs of a tenant's jobs; approval only when visual jobs exist (#268). */
 export type ApiJobs = Pick<OrgJobs, 'enqueue' | 'get'> &
-  Partial<Pick<OrgJobs, 'approveVisualResult'>>;
+  Partial<Pick<OrgJobs, 'approveVisualResult' | 'cancel'>>;
 
 export interface JobsApiDeps {
   authenticate: Authenticator;
@@ -115,7 +115,7 @@ export interface JobsApiDeps {
   maxQueuedJobsPerOrg: number;
 }
 
-function send(
+export function send(
   res: ServerResponse,
   status: number,
   body: unknown,
@@ -131,7 +131,7 @@ function send(
 }
 
 /** The body as text, or `null` once it passes `MAX_BODY_BYTES` (the rest is discarded). */
-function readBody(req: IncomingMessage): Promise<string | null> {
+export function readBody(req: IncomingMessage): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -147,6 +147,53 @@ function readBody(req: IncomingMessage): Promise<string | null> {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
+}
+
+/**
+ * Who is calling, once its key is verified and a request is charged to its budgets. `null`
+ * when the request was answered instead: 503 (busy, or the key store is down), 401, 403
+ * (suspended) or 429.
+ */
+export async function authorize(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: Pick<JobsApiDeps, 'authenticate' | 'admit' | 'charge'>,
+): Promise<Principal | null> {
+  // Verification hits the shared auth pool: unauthenticated floods must not queue on it.
+  const release = deps.admit();
+  if (!release) {
+    send(res, 503, { error: 'Server busy' }, { 'retry-after': '1' });
+    return null;
+  }
+  let principal: Principal | 'suspended' | null;
+  try {
+    principal = await deps.authenticate.verify(req.headers.authorization);
+  } catch {
+    send(res, 503, { error: 'Authentication unavailable' });
+    return null;
+  } finally {
+    release();
+  }
+  if (!principal) {
+    send(res, 401, { error: 'Unauthorized' });
+    return null;
+  }
+  // Reads and submits alike (#348); the operator's reason is never sent.
+  if (principal === 'suspended') {
+    send(res, 403, { error: 'Organization suspended' });
+    return null;
+  }
+  const wait = deps.charge(principal);
+  if (wait > 0) {
+    send(
+      res,
+      429,
+      { error: 'Rate limit exceeded' },
+      { 'retry-after': String(Math.ceil(wait / 1000)) },
+    );
+    return null;
+  }
+  return principal;
 }
 
 const JOB_PATH = /^\/v1\/jobs\/([^/]+)$/;
@@ -175,32 +222,8 @@ export async function handleJobsRequest(
       return send(res, 405, { error: 'Method not allowed' }, { allow: method });
     }
 
-    // Verification hits the shared auth pool: unauthenticated floods must not queue on it.
-    const release = deps.admit();
-    if (!release) {
-      return send(res, 503, { error: 'Server busy' }, { 'retry-after': '1' });
-    }
-    let principal: Principal | 'suspended' | null;
-    try {
-      principal = await deps.authenticate.verify(req.headers.authorization);
-    } catch {
-      return send(res, 503, { error: 'Authentication unavailable' });
-    } finally {
-      release();
-    }
-    if (!principal) return send(res, 401, { error: 'Unauthorized' });
-    // Reads and submits alike (#348); the operator's reason is never sent.
-    if (principal === 'suspended') return send(res, 403, { error: 'Organization suspended' });
-
-    const wait = deps.charge(principal);
-    if (wait > 0) {
-      return send(
-        res,
-        429,
-        { error: 'Rate limit exceeded' },
-        { 'retry-after': String(Math.ceil(wait / 1000)) },
-      );
-    }
+    const principal = await authorize(req, res, deps);
+    if (!principal) return;
     const scope = { orgId: principal.orgId, apiKeyId: principal.keyId };
 
     if (listRuns) {
