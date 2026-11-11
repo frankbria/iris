@@ -129,6 +129,12 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   deploy without `SSH_KNOWN_HOSTS` (no ssh-keyscan trust-on-first-use), and both deploy jobs
   have `timeout-minutes`. Staging's OAuth client carries only `tag:ci` (#535), and the
   workflow's `tags:` must equal the client's full tag set exactly.
+- **A green `review` check is not proof of a review (#565).** The shared workflow keeps the
+  check green when a reviewer's provider rejects the request (quota, credentials) and says
+  so on the PR instead: "⚠️ Third Party Review did not complete" with the provider's
+  message, and "Reviewer failover" naming each reviewer's outcome ("No reviewer produced a
+  review for this commit" when none did). A real review is a comment headed
+  "Third Party Review — <model>". Before merging, read the comments, not the check.
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
 
