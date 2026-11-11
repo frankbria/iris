@@ -137,7 +137,7 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
 `deploy/backup.sh` (daily, `deploy/systemd/iris-backup.timer`, as root) and
 `deploy/restore.sh`; setup, restore and the drill log are in `docs/runbook-production.md`.
 The deploy job ships both scripts and the units into each release directory; it never
-runs or installs them. Object storage is #445.
+runs or installs them. The artifact bucket is the next section.
 
 - **Root runs only root-owned files outside the deploy tree.** The unit runs
   `/usr/local/sbin/iris-backup`, a reviewed copy the operator installs; settings,
@@ -173,6 +173,40 @@ runs or installs them. Object storage is #445.
   healthy early and the first connection is cut. `age` comes from PATH (CI installs the
   apt package) or the pinned, checksummed release tarball cached in the temp dir. Each
   restore is one container start (~30 s on a loaded WSL daemon).
+
+### Artifact bucket backups (issue #445)
+
+Versions in the bucket plus an off-site copy; runbook "Artifact bucket backups".
+
+- **Everything runs from what the deploy already ships**: `iris admin artifact-versioning
+  [--enable]`, `artifact-versions <key>`, `artifact-restore <key> --version-id <id>`,
+  `artifact-undelete <key|prefix/>` in the image (they need `IRIS_S3_*` only, no
+  database), and the copy in `backup.sh`. A new script would need a deploy-job change.
+- **`--version` is taken**: commander gives the program's version for it on any
+  subcommand, with exit 0. Hence `--version-id`.
+- **Old versions are pruned in code, not by a lifecycle rule**: `pruneVersions()` in the
+  daily retention pass (`ARTIFACT_VERSION_DAYS` = 14, the backups' default window). A
+  rule's enforcement differs by vendor and cannot be tested; this is the same everywhere.
+  A version's age counts from when it **stopped being current** (the write time of the
+  version in front of it), not from its own write time: a 60-day-old baseline replaced
+  yesterday is one day into its 14.
+- **A key's versions can straddle `ListObjectVersions` pages**, and versions and delete
+  markers come as two lists. `keyVersions()` carries the page's last key
+  (`NextKeyMarker`) into the next page. SeaweedFS timestamps have one-second resolution.
+- **Undelete removes all of a key's delete markers** (no copy, history kept; all, because
+  entries written within one second cannot be ordered), and the prune deletes spent markers
+  only after the versions behind them went (a marker gone first would re-expose a purged
+  image if the version's delete failed); restoring an overwrite is a
+  `CopyObject` from the version. A purge on a versioned bucket only adds delete markers,
+  so "purged" means unreadable at once and gone after the prune.
+- **`removeBucket()` (tests) deletes versions first**: a versioned bucket is not empty
+  while versions or markers remain.
+- **The off-site copy is `rclone sync --backup-dir <remote>/replaced/<stamp>`**: a plain
+  sync would empty the copy when the bucket is emptied, a plain copy would keep purged
+  images for ever. `replaced/` directories are pruned by their name (a UTC stamp), not by
+  `--min-age`: moved files keep their original modification time. `rclone lsf` exits 3
+  when `replaced/` does not exist yet. The test's rclone is a stub; the sync has not run
+  against a real rclone or bucket. The destination must be unversioned (the runbook says so).
 
 ### npm Package (issue #320)
 

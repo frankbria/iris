@@ -13,6 +13,9 @@ import { Kysely, sql } from 'kysely';
 import { Client } from 'pg';
 import { createPostgresDb } from '../src/db/postgres';
 import { migrateToLatest } from '../src/db/migrate';
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { S3ArtifactStore } from '../src/artifact-store';
+import { removeBucket } from './utils/s3-bucket';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -262,4 +265,103 @@ describe('iris admin refusals', () => {
     expect(report.failures).toEqual([expect.stringMatching(/^artifact store: IRIS_S3_BUCKET set/)]);
     expect(report).toHaveProperty('sessionsDeleted');
   }, 120_000);
+});
+
+const S3 = {
+  endpoint: process.env.IRIS_TEST_S3_ENDPOINT,
+  accessKeyId: process.env.IRIS_TEST_S3_ACCESS_KEY_ID,
+  secretAccessKey: process.env.IRIS_TEST_S3_SECRET_ACCESS_KEY,
+};
+const s3Configured = Boolean(S3.endpoint && S3.accessKeyId && S3.secretAccessKey);
+if (!s3Configured) {
+  if (process.env.CI) throw new Error('IRIS_TEST_S3_* is required in CI');
+  console.warn('Skipping admin CLI bucket tests: set IRIS_TEST_S3_*');
+}
+
+// #445: the bucket's own backup, as the operator drives it. No database involved.
+describe('iris admin artifact commands', () => {
+  test('without an artifact store they exit 3, outside hosted mode 2', async () => {
+    const none = await iris(['admin', 'artifact-versioning']);
+    expect(none.code).toBe(3);
+    expect(none.stderr).toMatch(/IRIS_S3_ENDPOINT is not set/);
+    const partial = await iris(['admin', 'artifact-versioning'], { IRIS_S3_BUCKET: 'iris' });
+    expect(partial.code).toBe(3);
+    expect(partial.stderr).toMatch(/IRIS_S3_BUCKET set but IRIS_S3_ENDPOINT is not/);
+    const local = await iris(['admin', 'artifact-versioning'], { IRIS_HOSTED: '' });
+    expect(local.code).toBe(2);
+    expect(local.stderr).toMatch(/hosted mode only/);
+  }, 120_000);
+
+  (s3Configured ? test : test.skip)(
+    'enable versioning, then list, restore and undelete an object',
+    async () => {
+      const bucket = `iris-test-${randomBytes(4).toString('hex')}`;
+      const credentials = { accessKeyId: S3.accessKeyId!, secretAccessKey: S3.secretAccessKey! };
+      const config = { endpoint: S3.endpoint!, region: 'us-east-1', credentials };
+      const s3 = new S3Client({ ...config, forcePathStyle: true });
+      const store = new S3ArtifactStore({ ...config, bucket });
+      const env = {
+        IRIS_S3_ENDPOINT: S3.endpoint,
+        IRIS_S3_BUCKET: bucket,
+        IRIS_S3_ACCESS_KEY_ID: S3.accessKeyId,
+        IRIS_S3_SECRET_ACCESS_KEY: S3.secretAccessKey,
+      };
+      const key = 'org/orgA/project/p1/baselines/home.png';
+      const read = async () => (await store.get(key))?.toString();
+      try {
+        await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+        expect(await iris(['admin', 'artifact-versioning'], env)).toMatchObject({
+          code: 0,
+          stdout: `bucket ${bucket}: versioning off\n`,
+        });
+        expect(await iris(['admin', 'artifact-versioning', '--enable'], env)).toMatchObject({
+          code: 0,
+          stdout: `bucket ${bucket}: versioning enabled\n`,
+        });
+        expect(await store.versioningEnabled()).toBe(true);
+
+        await store.put(key, Buffer.from('approved'), 'image/png');
+        await store.put(key, Buffer.from('mistake'), 'image/png');
+        const listed = await iris(['admin', 'artifact-versions', key], env);
+        expect(listed.code).toBe(0);
+        const lines = listed.stdout.trim().split('\n');
+        expect(lines).toHaveLength(2);
+        expect(lines[0]).toMatch(/^\d{4}-\S+Z  \S+  7 bytes  current$/);
+        expect(lines[1]).toMatch(/^\d{4}-\S+Z  \S+  8 bytes$/);
+        const approved = lines[1].split('  ')[1];
+
+        expect(
+          await iris(['admin', 'artifact-restore', key, '--version-id', approved], env),
+        ).toMatchObject({ code: 0, stdout: `restored ${key} from version ${approved}\n` });
+        expect(await read()).toBe('approved');
+
+        await store.delete(key);
+        const deleted = await iris(['admin', 'artifact-versions', key], env);
+        expect(deleted.stdout.split('\n')[0]).toMatch(/  deleted  current$/);
+        expect(await iris(['admin', 'artifact-undelete', 'org/orgA/'], env)).toMatchObject({
+          code: 0,
+          stdout: 'undeleted 1 object(s) under org/orgA/\n',
+        });
+        expect(await read()).toBe('approved');
+
+        // Nothing to do, an unknown key or version, an unsafe key: all say so and fail.
+        const nothing = await iris(['admin', 'artifact-undelete', key], env);
+        expect(nothing).toMatchObject({ code: 1, stdout: '' });
+        expect(nothing.stderr).toMatch(/nothing deleted under/);
+        const unknown = await iris(['admin', 'artifact-versions', 'org/orgA/none.png'], env);
+        expect(unknown.code).toBe(1);
+        expect(unknown.stderr).toMatch(/no versions of org\/orgA\/none\.png/);
+        const badVersion = await iris(['admin', 'artifact-restore', key, '--version-id', 'x'], env);
+        expect(badVersion.code).toBe(3);
+        const unsafe = await iris(['admin', 'artifact-undelete', '../other/'], env);
+        expect(unsafe.code).toBe(3);
+        expect(unsafe.stderr).toMatch(/Invalid artifact prefix/);
+        expect(await read()).toBe('approved');
+      } finally {
+        await removeBucket(s3, bucket).finally(() => s3.destroy());
+        store.close();
+      }
+    },
+    300_000,
+  );
 });

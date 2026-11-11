@@ -340,3 +340,166 @@ if (!s3Configured) {
     }
   });
 });
+
+/**
+ * Bucket versioning (#445): what a delete or an overwrite leaves behind, how it comes
+ * back, and when it is gone for good. One bucket; the cases run in order.
+ */
+(s3Configured ? describe : describe.skip)('S3ArtifactStore versioning (SeaweedFS)', () => {
+  const bucket = `iris-test-${randomBytes(4).toString('hex')}`;
+  const credentials = { accessKeyId: accessKeyId!, secretAccessKey: secretAccessKey! };
+  const admin = new S3Client({ endpoint, region: 'us-east-1', forcePathStyle: true, credentials });
+  const store = new S3ArtifactStore({
+    endpoint: endpoint!,
+    region: 'us-east-1',
+    bucket,
+    credentials,
+  });
+  const baseline = baselineKey({ orgId: 'orgA', projectId: 'p1', name: 'home' });
+  const shot = (name: string) =>
+    runArtifactKey({ orgId: 'orgA', projectId: 'p1', runId: 'run1', kind: 'current', name });
+  const text = async (key: string) => (await store.get(key))?.toString();
+  const future = () => new Date(Date.now() + 60_000);
+
+  beforeAll(async () => {
+    await admin.send(new CreateBucketCommand({ Bucket: bucket }));
+  });
+
+  afterAll(async () => {
+    await removeBucket(admin, bucket);
+    admin.destroy();
+    store.close();
+  });
+
+  it('is off on a new bucket, where pruning does nothing, and turns on idempotently', async () => {
+    await store.put(shot('before'), Buffer.from('stored before versioning'), 'image/png');
+    expect(await store.versioningEnabled()).toBe(false);
+    expect(await store.pruneVersions(future())).toBe(0);
+    await store.enableVersioning();
+    await store.enableVersioning();
+    expect(await store.versioningEnabled()).toBe(true);
+    expect(await text(shot('before'))).toBe('stored before versioning');
+  });
+
+  it('lists the versions of one key, current first, and no other key', async () => {
+    await store.put(baseline, Buffer.from('approved look'), 'image/png');
+    await store.put(baseline, Buffer.from('wrong look'), 'image/png');
+    await store.put(`${baseline.slice(0, -4)}2.png`, Buffer.from('neighbour'), 'image/png');
+    const versions = await store.versions(baseline);
+    expect(versions.map((v) => [v.latest, v.deleteMarker, v.size])).toEqual([
+      [true, false, 10],
+      [false, false, 13],
+    ]);
+    expect(await store.versions(shot('never-stored'))).toEqual([]);
+  });
+
+  it('restores an overwritten object from a chosen version, content type included', async () => {
+    const [, approved] = await store.versions(baseline);
+    await store.restoreVersion(baseline, approved.versionId);
+    expect(await text(baseline)).toBe('approved look');
+    const res = await fetch(await store.signedUrl(baseline));
+    expect(res.headers.get('content-type')).toBe('image/png');
+    await res.arrayBuffer();
+    await expect(store.restoreVersion(baseline, 'no-such-version')).rejects.toThrow();
+    expect(await text(baseline)).toBe('approved look');
+  });
+
+  it('undeletes one key, and leaves a key that was not deleted alone', async () => {
+    await store.delete(baseline);
+    expect(await store.get(baseline)).toBeNull();
+    expect((await store.versions(baseline))[0]).toMatchObject({ latest: true, deleteMarker: true });
+    expect(await store.undelete(baseline)).toBe(1);
+    expect(await text(baseline)).toBe('approved look');
+    expect(await store.undelete(baseline)).toBe(0);
+    expect(await text(baseline)).toBe('approved look');
+  });
+
+  // Written within one second, a version and two delete markers cannot be ordered by time.
+  it('undeletes a key deleted twice in the same second as it was written', async () => {
+    const key = shot('twice');
+    await store.put(key, Buffer.from('still here'), 'image/png');
+    await store.delete(key);
+    await store.delete(key);
+    expect(await store.undelete(key)).toBe(1);
+    expect(await text(key)).toBe('still here');
+    expect(await store.versions(key)).toHaveLength(1);
+  });
+
+  it('undeletes a purged prefix across listing pages, and only that prefix', async () => {
+    const keys = Array.from({ length: 1005 }, (_, i) =>
+      runArtifactKey({
+        orgId: 'orgA',
+        projectId: 'p',
+        runId: 'many',
+        kind: 'current',
+        name: `n${i}`,
+      }),
+    );
+    for (let i = 0; i < keys.length; i += 50)
+      await Promise.all(
+        keys.slice(i, i + 50).map((k) => store.put(k, Buffer.from(k), 'image/png')),
+      );
+    const elsewhere = runArtifactKey({
+      orgId: 'orgB',
+      projectId: 'p',
+      runId: 'many',
+      kind: 'current',
+      name: 'n0',
+    });
+    await store.put(elsewhere, Buffer.from('org B'), 'image/png');
+    await store.delete(elsewhere);
+    // Deleted twice: two delete markers in front of the object.
+    await store.put(keys[0], Buffer.from('second'), 'image/png');
+    await store.deletePrefix('org/orgA/project/p/run/many/');
+    await store.deletePrefix('org/orgA/project/p/run/many/');
+    expect(await store.get(keys[1004])).toBeNull();
+
+    expect(await store.undelete('org/orgA/project/p/run/many/')).toBe(1005);
+    expect(await text(keys[1004])).toBe(keys[1004]);
+    expect(await text(keys[0])).toBe('second');
+    expect(await store.get(elsewhere)).toBeNull();
+    await expect(store.undelete('org/orgA/../orgB/')).rejects.toThrow(/Invalid artifact prefix/);
+    await expect(store.undelete('../x.png')).rejects.toThrow(/Invalid artifact key/);
+  }, 180_000);
+
+  it('prunes by when a version stopped being current, not by its own age', async () => {
+    const key = shot('aged');
+    await store.put(key, Buffer.from('old'), 'image/png');
+    // Timestamps have one-second resolution: the cutoff sits between the two writes.
+    await new Promise((r) => setTimeout(r, 1100));
+    const between = new Date();
+    await new Promise((r) => setTimeout(r, 1100));
+    await store.put(key, Buffer.from('new'), 'image/png');
+    const count = async () => (await store.versions(key)).length;
+
+    // "old" was written before the cutoff but replaced after it: still recoverable.
+    await store.pruneVersions(between);
+    expect(await count()).toBe(2);
+
+    await store.pruneVersions(future());
+    expect(await count()).toBe(1);
+    expect(await text(key)).toBe('new');
+  });
+
+  it('pruning removes old versions and spent delete markers, never a current object', async () => {
+    const gone = shot('gone');
+    await store.put(gone, Buffer.from('deleted for good'), 'image/png');
+    await store.delete(gone);
+    await store.delete(shot('before'));
+
+    expect(await store.pruneVersions(new Date(Date.now() - 3_600_000))).toBe(0);
+    expect(await store.versions(gone)).toHaveLength(2);
+
+    expect(await store.pruneVersions(future())).toBeGreaterThan(0);
+    expect(await store.versions(gone)).toEqual([]);
+    // The object stored before versioning was on went the same way.
+    expect(await store.versions(shot('before'))).toEqual([]);
+    expect(await store.undelete(gone)).toBe(0);
+    // Current objects, restored or never touched, are all still there.
+    expect(await text(baseline)).toBe('approved look');
+    expect(await store.versions(baseline)).toHaveLength(1);
+    const last = 'org/orgA/project/p/run/many/current/n1004.png';
+    expect(await text(last)).toBe(last);
+    expect(await store.pruneVersions(future())).toBe(0);
+  }, 120_000);
+});
