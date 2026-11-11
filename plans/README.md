@@ -123,7 +123,7 @@ production.
 | `P0.35` | [#263](https://github.com/frankbria/iris/issues/263) | Billable usage ledger: browser-minutes, text calls, vision calls, agent turns | P0.27 (#255) | DONE ([#432](https://github.com/frankbria/iris/pull/432)) |
 | `P0.36` | [#264](https://github.com/frankbria/iris/issues/264) | Report managed-credit usage to Stripe meters | P0.34 (#345), P0.35 (#263) | TODO |
 | `P0.37` | [#346](https://github.com/frankbria/iris/issues/346) | Entitlement enforcement at the API boundary | P0.25 (#342), P0.32 (#260), P0.35 (#263) | DONE (PR #480; managed credits split to #479) |
-| `P0.38` | [#266](https://github.com/frankbria/iris/issues/266) | Payment failure: grace period, suspension and restore | P0.34 (#345), P0.37 (#346) | TODO |
+| `P0.38` | [#266](https://github.com/frankbria/iris/issues/266) | Payment failure: grace period, suspension and restore | P0.34 (#345), P0.37 (#346) | IN REVIEW (draft PR stacked on #636; merges after it and after #264's migration 0021) |
 
 **I. Hosted features + portal**
 
@@ -157,7 +157,7 @@ production.
 | `P0.51` | [#349](https://github.com/frankbria/iris/issues/349) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | DONE (PR #470) |
 | `P0.52` | [#435](https://github.com/frankbria/iris/issues/435) | Reap jobs stuck in running after a worker crash | P0.39 (#267) | DONE (PR #443) |
 | `P0.53` | [#445](https://github.com/frankbria/iris/issues/445) | Object storage backups: bucket versioning/replication and a restore drill | P0.60 (#514) | BLOCKED (on #514; closes on a staging bucket) |
-| `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | BLOCKED (needs-owner) |
+| `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | BLOCKED (needs-owner: wording approved 2026-11-10; only the placeholder values remain) |
 | `P0.55` | [#460](https://github.com/frankbria/iris/issues/460) | Signed artifact URLs in run detail | P0.29 (#257) | DONE (PR #471) |
 | `P0.56` | [#463](https://github.com/frankbria/iris/issues/463) | Portal: visual diff images and baseline approval | P0.40 (#268), P0.55 (#460) | DONE (PR #474) |
 | `P0.57` | [#472](https://github.com/frankbria/iris/issues/472) | Purge visual artifacts from object storage | P0.40 (#268) | DONE (PR #477) |
