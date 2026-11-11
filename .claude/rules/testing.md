@@ -36,3 +36,9 @@ exercise provider resolution.
 
 Adding a new variable that IRIS reads from the environment? Add it to the scrub
 list too, or the suite silently becomes machine-dependent again.
+
+### No raw control bytes in test source (#644)
+
+Write an escape as `\x1b` (or `String.fromCharCode(0x1b)`), never the byte itself: a raw
+ESC anywhere in a PR's diff makes `gh pr diff` refuse to print it, which fails the CI
+Codex review. `repo-hygiene.test.ts` scans every tracked text file for the byte.

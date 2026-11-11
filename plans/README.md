@@ -275,7 +275,7 @@ production.
 | `P3.20` | [#518](https://github.com/frankbria/iris/issues/518) | CRAP tech debt: changed functions over the ceiling | — | DONE (#608, #610) |
 | `P3.31` | [#609](https://github.com/frankbria/iris/issues/609) | Lizard misreads src/watcher.ts, so changed lines there fail the CRAP gate | P3.20 (#518) | DONE (#611) |
 | `P3.32` | [#641](https://github.com/frankbria/iris/issues/641) | Portal: credit left ignores held managed-AI reservations, so it can show credit the resolver refuses | P0.43 (#271) | BLOCKED (#271, draft PR #640) |
-| `P3.33` | [#644](https://github.com/frankbria/iris/issues/644) | CI review job fails at "Fetch the PR diff" when the diff holds a raw ESC byte | — | TODO |
+| `P3.33` | [#644](https://github.com/frankbria/iris/issues/644) | CI review job fails at "Fetch the PR diff" when the diff holds a raw ESC byte. Repo side done (the byte is `\x1b`, `repo-hygiene.test.ts` refuses a raw one); the `--allow-escape-sequences` flag is a tested patch on the issue for `frankbria/glm-review` | — | BLOCKED (needs-owner) |
 | `P3.34` | [#645](https://github.com/frankbria/iris/issues/645) | stripUserinfo and redactString leave part of a password that contains an @ or a space | — | TODO |
 | `P3.35` | [#646](https://github.com/frankbria/iris/issues/646) | MCP tool: offer the keyboard checks, and decide what `passed` means against `--fail-on` | P2.2 (#362) | BLOCKED (needs-owner) |
 | `P3.36` | [#648](https://github.com/frankbria/iris/issues/648) | Hosted MCP: report where a redirect landed, and axe's help URL for each violated rule | P2.3 (#314) | TODO |
