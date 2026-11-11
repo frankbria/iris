@@ -96,15 +96,17 @@ const NOT_VISION = /^gpt-5\.4-nano|-(?:audio|realtime|transcribe|tts|search|pro|
 
 /**
  * OpenAI's o-series (`o1`, `o3`, `o4`, their `-mini` and dated snapshots) refuses any
- * `temperature` but the default with a 400 (#520): requests to it omit it.
+ * `temperature` but the default with a 400 (#520): requests to it omit it. So do requests
+ * to the first `gpt-5` (`gpt-5`, `-mini`, `-nano`; #523): a reasoning model with no `none`
+ * effort, and leaving the field out is accepted by every model.
  */
 export function isReasoningModel(model: string): boolean {
-  return /^o\d(?:$|-)/i.test(model);
+  return /^(?:o\d|gpt-5)(?:$|-)/i.test(model);
 }
 
 /**
- * `gpt-5.x` and `gpt-6`: reasoning models that take `reasoning_effort` (#523). The first
- * `gpt-5` (no minor version) is not one of them: it has no `none` effort, and is deprecated.
+ * `gpt-5.x` and `gpt-6`: reasoning models that take `reasoning_effort: 'none'` (#523). The
+ * first `gpt-5` (no minor version) has no `none`; {@link isReasoningModel} covers it.
  */
 const TAKES_REASONING_EFFORT = /^gpt-(?:5\.\d|6)/i;
 
@@ -117,7 +119,8 @@ const NO_EFFORT_NONE = /^gpt-6(?:-astra|\.1-sol)(?:$|-)/i;
  * `gpt-5.x` and `gpt-6` (#523) reason before they answer unless told not to, and the
  * reasoning is billed as output inside the 1000-token reply cap, so IRIS asks for none.
  * They refuse `temperature` whenever effort is not `none`; it is left out for all of them,
- * which every one accepts. The o-series takes neither (#520). Anything else keeps 0.1.
+ * which every one accepts. The o-series and the first `gpt-5` take neither (#520).
+ * Anything else keeps 0.1.
  *
  * shortcut: `gpt-6-astra` and `gpt-6.1-sol` reason at `low` inside the same 1000-token
  * cap, so a long deliberation can leave no room for the answer (a billed, rejected

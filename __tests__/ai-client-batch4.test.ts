@@ -1962,12 +1962,27 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
     it('names the configured provider when it is unavailable', async () => {
       jest.spyOn(AIClientFactory, 'create').mockReturnValue({
         isAvailable: async () => false,
+        supportsVision: () => true,
         analyzeVisualDiff: jest.fn(),
       } as never);
       const smart = createSmartClient(configFor(), smartOpts);
 
       // One vendor was tried, so "All providers failed" would misdescribe it.
       await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/^openai is not available$/);
+    });
+
+    // #523: gpt-4o is still served but no longer offered; that must not read as an outage.
+    it('says so when the configured model is not one IRIS uses for images', async () => {
+      jest.spyOn(AIClientFactory, 'create').mockReturnValue({
+        isAvailable: async () => false,
+        supportsVision: () => false,
+        analyzeVisualDiff: jest.fn(),
+      } as never);
+      const smart = createSmartClient(configFor(), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(
+        /^openai model "openai-model" is not one IRIS uses for images .*--ai-model$/,
+      );
     });
 
     it("keeps the configured provider's real error when later vendors are merely unavailable", async () => {

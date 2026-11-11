@@ -116,8 +116,8 @@ describe('AI Client', () => {
       expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
     });
 
-    // The first gpt-5 has no `none` effort and gpt-4o none at all: both keep 0.1.
-    it.each(['gpt-5', 'gpt-5-mini', 'gpt-4o-mini', 'gpt-4.1'])(
+    // gpt-4o and gpt-4.1 do not reason: they keep 0.1.
+    it.each(['gpt-4o-mini', 'gpt-4.1'])(
       'sends %s a temperature and no reasoning_effort',
       async (model) => {
         mockCreate.mockResolvedValue({
@@ -131,17 +131,23 @@ describe('AI Client', () => {
     );
 
     // #520: the o-series refuses any temperature but the default.
-    it.each(['o1', 'o3-mini', 'o4-mini-2025-04-16'])(
-      'sends no temperature to %s',
-      async (model) => {
-        mockCreate.mockResolvedValue({
-          choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
-        });
-        const client = createAIClient({ ...config, ai: { ...config.ai, model } });
-        await client.translateInstruction({ instruction: 'click the submit button' });
-        expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
-      },
-    );
+    // #523: nor does the first gpt-5, which also has no `none` effort to ask for.
+    it.each([
+      'o1',
+      'o3-mini',
+      'o4-mini-2025-04-16',
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-5-nano-2025-08-07',
+    ])('sends no temperature to %s', async (model) => {
+      mockCreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
+      });
+      const client = createAIClient({ ...config, ai: { ...config.ai, model } });
+      await client.translateInstruction({ instruction: 'click the submit button' });
+      expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+      expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('reasoning_effort');
+    });
 
     it('should handle API errors gracefully', async () => {
       mockCreate.mockRejectedValue(new Error('API Error'));

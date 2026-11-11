@@ -161,8 +161,9 @@ paths:
   models, so they get `reasoning_effort: 'none'` (`'low'` for `gpt-6-astra` and `gpt-6.1-sol`,
   which refuse `none`) and no `temperature`, which they refuse unless effort is `none` (#523);
   reasoning is billed as output inside the 1000-token cap, hence `none`. The o-series
-  (`isReasoningModel()`) gets neither (#520); anything else keeps `temperature: 0.1`, including
-  the first `gpt-5`, which has no `none`. Anthropic requests send no `temperature`: API version
+  and the first `gpt-5` (`gpt-5`, `-mini`, `-nano`: no `none` effort) get neither
+  (`isReasoningModel()`, #520); anything else keeps `temperature: 0.1`. A vision model outside
+  the table fails with "is not one IRIS uses for images", not "is not available". Anthropic requests send no `temperature`: API version
   2026-10-21 (SDK 1.0) removed sampling parameters. The #523 request shape was written from
   OpenAI's model pages and migration guide and is pinned by request-shape tests; no live call
   was made (no key on the build host or in CI)

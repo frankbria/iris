@@ -224,6 +224,8 @@ export const DEFAULT_PRICING: readonly ProviderPricing[] = [
   openAITiered('gpt-5.6-luna', [0.2, 1.2], [0.4, 1.8]),
   openAITiered('gpt-5.5', [5, 30], [10, 45]),
   openAITiered('gpt-5.4', [2.5, 15], [5, 22.5]),
+  // One rate each on the pricing page: gpt-5.4-mini takes at most 272,000 input tokens, and
+  // gpt-5.2 (400K window) is listed without long-context columns.
   tokenPriced('openai', 'gpt-5.4-mini', 0.75, 4.5),
   tokenPriced('openai', 'gpt-5.2', 1.75, 14),
   // The -pro variants ($21 to $30 in, $168 to $180 out) have no row on purpose: they are
