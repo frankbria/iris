@@ -3,6 +3,7 @@ import { ensureDatabaseDir } from '../db';
 import { DEFAULT_BUDGET_LIMITS, resolveBudget } from '../config';
 import { hostedLog } from '../log';
 import { dropLegacyIndexes } from './cache';
+import { fineTunedBase } from './models';
 
 /**
  * AI provider pricing configuration
@@ -241,6 +242,13 @@ export const DEFAULT_PRICING: readonly ProviderPricing[] = [
   tokenPriced('openai', 'gpt-4o-mini', 0.15, 0.6, { costPerImage: 0.0002 }),
   tokenPriced('openai', 'gpt-4.1', 2, 8),
   tokenPriced('openai', 'gpt-4.1-mini', 0.4, 1.6),
+  // Fine-tunes of those four, `ft:<base>:<org>:<suffix>:<id>`, priced by the page's
+  // "Fine-tuning" table (#664). They are served until their base is shut down, on the same
+  // date. A fine-tune of any other base has no rate there and stays an estimate.
+  tokenPriced('openai', 'ft:gpt-4o-2024-08-06', 3.75, 15),
+  tokenPriced('openai', 'ft:gpt-4o-mini-2024-07-18', 0.3, 1.2),
+  tokenPriced('openai', 'ft:gpt-4.1-2025-04-14', 3, 12),
+  tokenPriced('openai', 'ft:gpt-4.1-mini-2025-04-14', 0.8, 3.2),
   // Shutdown 2026-12-11:
   tokenPriced('openai', 'gpt-5', 1.25, 10),
   tokenPriced('openai', 'gpt-5-mini', 0.25, 2),
@@ -650,10 +658,15 @@ export class CostTracker {
    * extends by one snapshot suffix (issue #243, SNAPSHOT_SUFFIX). That is how
    * dated and rescued IDs are named — `resolveModel` swaps a retired
    * `claude-sonnet-5` pin for `claude-sonnet-5-20260514` — while `gpt-4oz` and
-   * `gpt-4o-realtime-preview` are not gpt-4o. Undefined when nothing matches.
+   * `gpt-4o-realtime-preview` are not gpt-4o. A fine-tuned OpenAI id is looked up as
+   * `ft:<base model>` (#664). Undefined when nothing matches.
    */
   private resolveKey(provider: string, model: string): string | undefined {
-    const exact = `${provider}:${model}`;
+    const whole = `${provider}:${model}`;
+    if (this.pricing.has(whole)) return whole;
+    // A fine-tune is billed by its base's fine-tuning rate, whoever trained it (#664).
+    const base = provider === 'openai' ? fineTunedBase(model) : undefined;
+    const exact = base === undefined ? whole : `${provider}:ft:${base}`;
     if (this.pricing.has(exact)) return exact;
     // At most one key can match: the remainder must be a single snapshot token,
     // so a shorter key would leave two. No "longest" comparison is needed.
