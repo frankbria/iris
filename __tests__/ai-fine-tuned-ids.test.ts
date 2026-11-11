@@ -82,7 +82,7 @@ describe('fine-tuned OpenAI ids (#664)', () => {
       expect(tracker.trackOperation('openai', model, false)).toBe(0.5);
     });
 
-    it('reads an ft: prefix as a fine-tune for OpenAI only', () => {
+    it('has no fine-tuned row for another provider', () => {
       expect(tracker.priceIsEstimated('anthropic', 'ft:gpt-4o-2024-08-06:acme::AbC123')).toBe(true);
     });
 

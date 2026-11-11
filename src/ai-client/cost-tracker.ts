@@ -665,7 +665,7 @@ export class CostTracker {
     const whole = `${provider}:${model}`;
     if (this.pricing.has(whole)) return whole;
     // A fine-tune is billed by its base's fine-tuning rate, whoever trained it (#664).
-    const base = provider === 'openai' ? fineTunedBase(model) : undefined;
+    const base = fineTunedBase(model);
     const exact = base === undefined ? whole : `${provider}:ft:${base}`;
     if (this.pricing.has(exact)) return exact;
     // At most one key can match: the remainder must be a single snapshot token,
