@@ -18,7 +18,7 @@ import {
   type TestRun,
 } from './db';
 import type { ExecutionResult } from './executor';
-import { insertUsage, type UsageEvent } from './billing/usage';
+import { insertUsage, runsUsedThisMonth, type UsageEvent } from './billing/usage';
 import type { VisualTestResult as VisualRunResult } from './visual/visual-runner';
 import type { ArtifactStore } from './artifact-store';
 import {
@@ -484,18 +484,7 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
             // submits cannot all pass: what was billed, plus what is queued or running.
             if (monthlyRunLimit !== undefined) {
               const requested = jobQuantity({ kind, params } as JobSpec);
-              const { rows } = await sql<{ used: string }>`
-                select
-                  (select coalesce(sum(quantity), 0) from usage_events
-                     where org_id = ${orgId} and kind in ('a11y_job', 'visual_job')
-                       and created_at >= date_trunc('month', now() at time zone 'UTC') at time zone 'UTC')
-                  + (select coalesce(sum(case when kind = 'visual'
-                       then greatest(jsonb_array_length(params->'urls') * jsonb_array_length(params->'devices'), 1)
-                       else 1 end), 0)
-                     from runs where org_id = ${orgId} and status in ('queued', 'running')) as used`.execute(
-                tx,
-              );
-              const used = Number(rows[0].used);
+              const used = await runsUsedThisMonth(tx, orgId);
               if (used + requested > monthlyRunLimit)
                 throw new RunQuotaExceededError(monthlyRunLimit, used);
             }
