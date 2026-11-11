@@ -416,8 +416,13 @@ describe('URL policy guard', () => {
       // Tightened after the navigation, as the agent loop's pin is.
       await installUrlPolicyGuard(p, { blockPrivateHosts: true });
 
+      // Named as itself, as guardedGoto names a URL refused outright.
       expect(() => guardedDocumentUrl(p, `${origin}/final`)).toThrow(
-        /final redirects to http:\/\/localhost:\d+\/final, which is blocked by navigation policy: .*private\/loopback/,
+        /\/final blocked by navigation policy: .*private\/loopback/,
+      );
+      // Reached from elsewhere, it is where that page went.
+      expect(() => guardedDocumentUrl(p, `${origin}/account`)).toThrow(
+        /\/account redirects to http:\/\/localhost:\d+\/final, which is blocked by navigation policy: .*private\/loopback/,
       );
     }, 60_000);
   });

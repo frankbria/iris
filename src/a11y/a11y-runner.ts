@@ -18,13 +18,7 @@ import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
 import { installUrlPolicyGuard, guardedGoto, guardedDocumentUrl } from '../url-policy-guard';
-import {
-  escapeHtml,
-  escapeXml,
-  safeHref,
-  strippedError,
-  urlWithoutUserinfo,
-} from '../report-encoding';
+import { escapeHtml, escapeXml, safeHref, strippedError } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 import { withPageTimeout } from '../page-timeout';
 
@@ -178,6 +172,20 @@ async function openContext(browser: Browser, slot: PageContextSlot): Promise<Bro
     throw new Error('The page was abandoned');
   }
   return context;
+}
+
+/**
+ * A document's URL as a report names it: an http(s) URL without its fragment or credentials,
+ * which the response's URL never had either (#662). A fragment is where an implicit-flow
+ * token travels, and reports are files. Other schemes (`data:`, `file:`) are left as they are.
+ */
+function reportedUrl(documentUrl: string): string {
+  if (!/^https?:/i.test(documentUrl) || !URL.canParse(documentUrl)) return documentUrl;
+  const url = new URL(documentUrl);
+  url.hash = '';
+  url.username = '';
+  url.password = '';
+  return url.href;
 }
 
 function erroredPage(
@@ -403,9 +411,7 @@ export class AccessibilityRunner {
       }
       // The document as it is now, not the response the navigation ended on: a page can
       // move on by script, meta refresh or its router before the network went idle (#662).
-      // Chromium keeps a URL's credentials off the document; cut them all the same, since
-      // this goes into reports and history.
-      const scannedUrl = urlWithoutUserinfo(guardedDocumentUrl(page, url));
+      const scannedUrl = reportedUrl(guardedDocumentUrl(page, url));
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
 

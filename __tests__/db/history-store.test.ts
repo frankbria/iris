@@ -233,13 +233,13 @@ const a11yRun = {
     });
 
     it('records nothing when the scan stayed on the requested page', async () => {
-      const stored = await landedOf('https://shop.example/#/cart', 'https://shop.example/#/cart');
+      // The runner reports the document's URL without its fragment.
+      const stored = await landedOf('https://shop.example/#/cart', 'https://shop.example/');
       expect(stored.result).not.toHaveProperty('landedUrl');
     });
 
     it('records nothing for a move within the page: a fragment is never reported (#662)', async () => {
-      // The runner reports the document's URL, fragment included; a hash router's route is
-      // where tokens travel too, so it is neither compared nor stored.
+      // A fragment is where tokens travel too, so it is neither compared nor stored.
       const stored = await landedOf('https://shop.example/', 'https://shop.example/#/login');
       expect(stored.result).not.toHaveProperty('landedUrl');
     });

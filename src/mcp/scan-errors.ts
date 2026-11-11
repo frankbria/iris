@@ -104,15 +104,16 @@ export function loggedDetail(detail: string, requested: string): string {
 }
 
 /**
- * A URL as far as a redirect is judged by it: no fragment, no credentials. The runner
- * reports the document's URL (#662), which never has the request's credentials, and a
- * fragment is a place within a page: a hash router moving `/` to `/#/login` is not reported
- * as a redirect, since the landing URL is shown without its fragment anyway.
+ * A URL as far as a redirect is judged by it: origin and path. The runner reports the
+ * document's URL (#662), which never has the request's credentials or fragment, and pages
+ * rewrite their own query string (a tracking parameter dropped, a tab added). A landing URL
+ * is shown without either, so such a move would read as a redirect to the same page.
  */
 function asRequested(url: string): string | undefined {
   const target = parsed(url);
   if (!target) return undefined;
   target.hash = '';
+  target.search = '';
   target.username = '';
   target.password = '';
   return target.href;

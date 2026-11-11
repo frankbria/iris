@@ -628,6 +628,10 @@ export function guardedDocumentUrl(page: Page, requested: string): string {
   }
   // Same-document moves (`history.replaceState`) make no request for the guard to vet.
   const blocked = state ? blockReason(url, state.policy) : null;
-  if (blocked) throw refusedRedirect(url, blocked);
+  if (blocked) {
+    throw url === requested
+      ? new Error(`${requested} blocked by navigation policy: ${blocked}`)
+      : refusedRedirect(url, blocked);
+  }
   return url;
 }

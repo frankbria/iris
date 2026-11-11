@@ -142,10 +142,11 @@ model, and the page under test chooses much of what an error or a redirect conta
 - **`scannedPage(requested, scanned)`**: same URL reports the request without userinfo; a
   redirect reports `redirected: true` and origin plus path, at most 200 characters, path
   segments of 32+ characters cut to `…` (tokens; shorter ones show). "Same" is compared as
-  parsed `href`s without fragment and userinfo, so `/#/route` does not read as a redirect
-  (internal review). Since #662 the runner's URL is the document's at the time axe runs, so
-  a page that moved on by script, meta refresh or `history.replaceState` is a redirect too;
-  a hash router's move (fragment only) still is not.
+  parsed `href`s without fragment, userinfo and (since #662) query string, so `/#/route`
+  does not read as a redirect (internal review). Since #662 the runner's URL is the
+  document's at the time axe runs, so a page that moved on by script, meta refresh or
+  `history.replaceState` is a redirect too; a move that changes only the fragment or the
+  query string (a hash router, a dropped tracking parameter) is not, by HTTP either.
 - `stripUserinfo` (src/report-encoding.ts) and `redactString` (src/log.ts) are patterns over
   free text. Since #645 both cut to the **last** `@` of the authority (`[^\s/?#]*@`: `/`, `?`
   and `#` end it, so an `@` in a path or query stays), as a URL parser does. **Whitespace

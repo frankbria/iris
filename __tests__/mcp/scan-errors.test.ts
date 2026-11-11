@@ -170,7 +170,22 @@ describe('scannedPage', () => {
     });
   });
 
-  // The runner reports the response's URL, which has neither.
+  // #662: the runner reports the document's URL, and pages rewrite their own query string
+  // (a tracking parameter dropped, a tab added). The landing URL is shown without one.
+  it('does not call a change of the query string alone a redirect', () => {
+    expect(
+      scannedPage('http://localhost:3000/shop?utm_source=x', 'http://localhost:3000/shop'),
+    ).toEqual({ url: 'http://localhost:3000/shop?utm_source=x', redirected: false });
+    expect(scannedPage('http://localhost:3000/', 'http://localhost:3000/?tab=2')).toEqual({
+      url: 'http://localhost:3000/',
+      redirected: false,
+    });
+    expect(scannedPage('http://localhost:3000/a?x=1', 'http://localhost:3000/b?x=1')).toEqual({
+      url: 'http://localhost:3000/b',
+      redirected: true,
+    });
+  });
+
   it('does not call a fragment or credentials in the request a redirect', () => {
     expect(scannedPage('http://localhost:3000/#/checkout', 'http://localhost:3000/')).toEqual({
       url: 'http://localhost:3000/#/checkout',

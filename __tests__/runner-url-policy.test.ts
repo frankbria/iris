@@ -143,7 +143,7 @@ describe('runner URL policy', () => {
       res.setHeader('Content-Type', 'text/html');
       // Pages that move on by script once their own response has arrived (#662).
       const moves: Record<string, string> = {
-        '/script-moves': '/landed?token=s3cret',
+        '/script-moves': '/landed?token=s3cret#access_token=s3cret2',
         '/script-to-metadata': METADATA_URL,
       };
       const target = moves[req.url ?? ''];
@@ -191,6 +191,7 @@ describe('runner URL policy', () => {
     it('a11y reports the page a script moved on to as the one it scanned', async () => {
       const result = await new a11y.AccessibilityRunner(a11yConfig(`${origin}/script-moves`)).run();
       expect(result.results[0].error).toBeUndefined();
+      // The query string as the response's URL always had it; never the fragment.
       expect(result.results[0].axeResult.url).toBe(`${origin}/landed?token=s3cret`);
       expect(hits).toEqual(['/script-moves', '/landed?token=s3cret']);
     });

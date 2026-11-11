@@ -45,7 +45,7 @@ export function describeResult(
         ? `${n} need${n === 1 ? "s" : ""} review` +
           (rules.length ? ` (${rules.join(", ")})` : "")
         : null
-    // Where a redirected scan landed (#648): the page the verdict is about.
+    // Where a redirected scan landed (stored since #648): the page the verdict is about.
     const landed =
       typeof r.landedUrl === "string" ? ` (landed on ${r.landedUrl})` : ""
     return {

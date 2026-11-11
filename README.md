@@ -897,7 +897,7 @@ and the page under test chooses much of what an error or a redirect contains. So
 - A redirected scan reports `redirected: true` and the landing page's origin and
   path, at most 200 characters. A page that moves on by itself (a script, a meta
   refresh, its router) before the scan counts as redirected; a move that only
-  changes the fragment does not. Its query string and fragment, where sign-in
+  changes the query string or the fragment does not. Its query string and fragment, where sign-in
   codes and tokens travel, are left out, and a path segment of 32 characters or
   more (a reset link's token) is shown as `…`. A shorter token in the path is
   not recognised as one.

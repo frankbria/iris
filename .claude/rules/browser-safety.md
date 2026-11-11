@@ -53,8 +53,10 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   (`chrome-error:`, what a refused or failed move leaves behind) or a URL the page's policy
   refuses, in the words of a refused HTTP redirect ("redirects to …, which is blocked by
   navigation policy"), so the MCP tools' fixed reasons apply. Under `IRIS_HOSTED` a move to
-  a name the egress proxy refuses is the proxy's 403 document, which `failOnHttpError`
-  fails first. Read once: a page that navigates while axe runs fails the scan as before,
+  a name the egress proxy refuses is the proxy's 403 document over http, which
+  `failOnHttpError` fails first, and a refused CONNECT (the error page) over https. The
+  runner drops the fragment and any credentials before reporting (`reportedUrl`), as the
+  response's URL had none. Read once: a page that navigates while axe runs fails the scan as before,
   and nothing compares the URL afterwards (a single-page app may rewrite it at any time).
   `guardedGoto` itself is unchanged for the executor, watcher and visual runner.
 - Hostnames that *resolve* to private addresses are the egress proxy's job, below.
