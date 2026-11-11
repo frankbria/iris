@@ -14,6 +14,7 @@ import { migrateToLatest } from '../../src/db/migrate';
 import { listCollectableBaselines, offboarding, OffboardingError } from '../../src/offboarding';
 import { orgSuspensions } from '../../src/org-suspension';
 import { revokeKeysCreatedBy } from '../../src/member-keys';
+import { liveKeysByCreator } from '../../src/audit-log';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -372,9 +373,14 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
       await audit('org-k1', 'api_key.create', 'key:k-org-k2', old, 'kai');
       await audit('org-k1', 'api_key.update', 'key:k-org-k1', old, 'kai');
       await audit('org-k1', 'api_key.create', null, old, 'kai');
+      // Its creator's account was deleted (the actor is cleared): it finds nobody's keys.
+      await audit('org-k2', 'api_key.create', 'key:k-org-k2', old, null);
 
       await offboarding(db).runRetention({ now });
       expect(await targets('org-k1')).toEqual(['key:k-org-k1']);
+      expect(await targets('org-k2')).toEqual([]);
+      // What /org shows as "removing this member revokes N keys".
+      expect(await liveKeysByCreator(db, 'org-k1')).toEqual(new Map([['kai', 1]]));
 
       expect(await revokeKeysCreatedBy(db, 'org-k1', 'kai', {}, 'member removed')).toEqual([
         'k-org-k1',

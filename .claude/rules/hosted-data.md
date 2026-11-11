@@ -180,8 +180,9 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   `audit` step deletes older entries (`auditEntriesDeleted` in the report). **The log is
   also data the product reads**: `api_key.create` is the only record of a key's creator,
   and `revokeKeysCreatedBy` / `liveKeysByCreator` (#408, #457) depend on it, so that entry
-  is exempt while its key exists (same org, `substr(target, 5)`), and goes on the first
-  pass after the key is revoked. Before making anything else read the audit log, decide
+  is exempt while its key exists (same org, `substr(target, 5)`) and it still names its
+  creator, and goes on the first pass after the key is revoked or the creator's account
+  is deleted. Before making anything else read the audit log, decide
   whether it must survive 90 days.
 
 ### Artifact Storage Quota (issue #315)
