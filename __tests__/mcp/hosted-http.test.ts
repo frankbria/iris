@@ -18,6 +18,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { drainServer, startServer, type Authenticator, type Principal } from '../../src/protocol';
 import { RunQuotaExceededError, type StoredJob, type TenantScope } from '../../src/history-store';
 import type { ApiJobs } from '../../src/jobs-api';
+import { axeRuleHelpUrl } from '../../src/mcp/axe-help-url';
 
 const keys = new Map<string, Principal>([
   ['key-a', { orgId: 'org-a', keyId: 'id-a' }],
@@ -82,6 +83,8 @@ const jobs = {
     };
   },
 };
+
+const IMAGE_ALT_HELP = axeRuleHelpUrl('image-alt');
 
 /** What the worker stores for a page with one critical violation. */
 const PAGE_RESULT = {
@@ -275,14 +278,66 @@ describe('run_accessibility_test over HTTP', () => {
       jobId: job.id,
       status: 'finished',
       url: 'https://example.com/checkout',
+      redirected: false,
       passed: false,
       violationCount: 1,
-      violations: [{ id: 'image-alt', impact: 'critical', nodes: 2 }],
+      violations: [{ id: 'image-alt', impact: 'critical', nodes: 2, helpUrl: IMAGE_ALT_HELP }],
       needsReviewRules: ['color-contrast'],
       keyboardPassed: true,
     });
-    expect(textOf(result)).toContain('- [critical] image-alt (2 element(s))');
+    expect(textOf(result)).toContain(`- [critical] image-alt (2 element(s)): ${IMAGE_ALT_HELP}`);
     expect(textOf(result)).toContain('color-contrast');
+    expect(textOf(result)).not.toContain('redirected');
+  });
+
+  it('reports the page a redirect landed on, and which URL was asked for (#648)', async () => {
+    const client = await connect();
+    const landed = {
+      ...PAGE_RESULT,
+      result: { ...PAGE_RESULT.result, landedUrl: 'https://login.example.com/signin' },
+    };
+    const [result, job] = await Promise.all([scan(client), workerFinishes({ results: [landed] })]);
+    expect(result.structuredContent).toMatchObject({
+      url: 'https://login.example.com/signin',
+      redirected: true,
+      redirectedFrom: 'https://example.com/checkout',
+      violationCount: 1,
+    });
+    expect(textOf(result)).toContain(
+      '1 WCAG violation(s) on https://login.example.com/signin ' +
+        '(redirected from https://example.com/checkout):',
+    );
+
+    // Read later by id, when the caller may no longer hold the URL it asked for.
+    const read = await client.callTool({
+      name: 'get_accessibility_test_result',
+      arguments: { jobId: job.id },
+    });
+    expect(read.structuredContent).toMatchObject({
+      url: 'https://login.example.com/signin',
+      redirected: true,
+      redirectedFrom: 'https://example.com/checkout',
+    });
+  });
+
+  it("links each rule to axe's documentation, whatever the stored rule id holds (#648)", async () => {
+    const client = await connect();
+    // A rule id is axe's output from inside the page under test: it is only ever a path
+    // segment of the link, never the link.
+    const odd = {
+      ...PAGE_RESULT,
+      result: {
+        ...PAGE_RESULT.result,
+        violationRules: [{ id: '../../evil?x=1#y', impact: null, nodes: 1 }],
+      },
+    };
+    const [result] = await Promise.all([scan(client), workerFinishes({ results: [odd] })]);
+    const { violations } = result.structuredContent as { violations: Array<{ helpUrl: string }> };
+    const link = new URL(violations[0].helpUrl);
+    expect(link.origin).toBe('https://dequeuniversity.com');
+    expect(link.pathname).toMatch(/^\/rules\/axe\/\d+\.\d+\/[^/]+$/);
+    expect(link.search).toBe('?application=axeAPI');
+    expect(link.hash).toBe('');
   });
 
   it('reports a clean page as passed, and a failed keyboard check in words', async () => {

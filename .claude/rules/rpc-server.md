@@ -236,6 +236,18 @@ model, and the page under test chooses much of what an error or a redirect conta
   stored page result: `violationRules` (rule id, impact, node count, at most 50, written
   by `resultsOf` since #314; rows from before have counts only, so `violations` is empty
   beside a non-zero `violationCount`), `needsReviewRules`, `keyboardPassed`.
+- **A redirect is reported as the stdio tool reports it** (#648): `resultsOf` stores
+  `landedUrl` (`scannedPage()`'s cut) beside the requested `url` when they differ, and the
+  tool answers `url` = the landing page, `redirected: true`, `redirectedFrom` = the request
+  (a caller reading by job id may no longer hold it). Only for absolute page URLs: a
+  relative pattern (`iris a11y` with `baseURL`) records nothing, since history does not
+  know the base. Rows from before #648 read as not redirected.
+- **A rule's `helpUrl` is derived, never stored** (`axeRuleHelpUrl`, src/mcp/axe-help-url.ts):
+  axe runs inside the page under test, so the `helpUrl` in its result is page-chosen text.
+  The link is built from the rule id (one encoded path segment) and the installed axe-core's
+  `major.minor`, read from its `package.json` so the API process never loads axe.
+  `axe-help-url.test.ts` holds it equal to `axe.getRules()`'s links, so an axe upgrade that
+  changes the form goes red there.
 - **`passed` is the stored page verdict** with every impact in `failOn`: no violation and
   the keyboard checks passed. #646 (what `passed` means for the stdio tool) is still open.
 - **The URL pre-flight** refuses non-http(s), credentials (params are stored and org-readable)
