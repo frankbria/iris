@@ -9,7 +9,8 @@ const REDIRECT_BLOCKED = /redirects to .* blocked by navigation policy/;
 const BLOCKED = 'blocked by navigation policy';
 /** Only where Playwright puts the code, and bounded: the rest of the line names a URL. */
 const NETWORK_ERROR = /^(?:[\w.]+: )?(net::ERR_[A-Z0-9_]{1,60})(?![A-Z0-9_])/;
-const TIMED_OUT = /Timeout \d+ ?ms exceeded|did not finish within/;
+/** Playwright's navigation, the runner's page deadline (#293), axe's own timer. */
+const TIMED_OUT = /Timeout \d+ ?ms exceeded|did not finish within|timed out after \d+ ?ms/;
 /** Playwright's launch call, or IRIS's own message about it (src/browser.ts). */
 const LAUNCH_FAILED = /browserType\.launch|Chromium could not start/;
 

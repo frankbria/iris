@@ -79,12 +79,13 @@ describe('scanFailureReason', () => {
     ).toBe('it redirects to a URL the navigation policy blocks');
   });
 
-  it.each(['page.goto: Timeout 30000ms exceeded.', 'The page did not finish within 120 s'])(
-    'reports "%s" as a timeout',
-    (detail) => {
-      expect(scanFailureReason(detail)).toBe('the page did not finish loading in time');
-    },
-  );
+  it.each([
+    'page.goto: Timeout 30000ms exceeded.',
+    'The page did not finish within 120 s',
+    'Axe-core execution failed: Axe analysis timed out after 30000ms',
+  ])('reports "%s" as a timeout', (detail) => {
+    expect(scanFailureReason(detail)).toBe('the page did not finish loading in time');
+  });
 
   it.each([
     "browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium-1200/chrome",
