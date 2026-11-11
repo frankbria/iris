@@ -126,3 +126,12 @@ describe('repo hygiene: no operator infrastructure in tracked files (#329)', () 
     });
   });
 });
+
+// `gh pr diff` refuses to print a diff that holds a terminal escape sequence,
+// which failed the CI review job on every PR that touched a line near one (#644).
+describe('repo hygiene: no byte a tool refuses to print (#644)', () => {
+  // Built from its code so this file stays clear of the byte.
+  it('contains no raw ESC byte in a tracked text file: write \\x1b instead', () => {
+    expect(gitGrep(String.fromCharCode(0x1b)).map(location)).toEqual([]);
+  });
+});

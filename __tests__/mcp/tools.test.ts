@@ -526,7 +526,7 @@ describe('run_accessibility_test tool', () => {
       // One line, no ANSI. Playwright appends a coloured multi-line call log to
       // its errors; forwarding that to an assistant is tokens spent on noise.
       expect(text).not.toContain('\n');
-      expect(text).not.toMatch(/\[/);
+      expect(text).not.toMatch(/\x1b\[/);
     }, 120_000);
   });
 });

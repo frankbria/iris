@@ -1,48 +1,38 @@
-# #541 [P2.31] Audit log: a read surface for org admins, and a retention period
+# #644 [P3.33] CI review job fails at "Fetch the PR diff" when the diff holds a raw ESC byte
 
 ## Plan (self-authored)
 
-Where the issue stands (main at 568dc6b):
+The issue has two halves in two repositories.
 
-- Criterion 1 (owners and admins read their org's entries, newest first, paged; members
-  refused) and criterion 2 (`redactStrings()` over what is read) shipped in PR #577
-  (`src/audit-reads.ts`, portal `/audit`, `apps/portal/e2e/audit.spec.ts`).
-- Criterion 3 was waiting on the owner. Decision on the issue, 2026-11-08: **90 days**.
-  Nothing enforces it yet, and `docs/data-flows.md` still says "undecided".
-
-So this PR is criterion 3.
+- **This repo:** the raw ESC byte in `__tests__/mcp/tools.test.ts` (the only one in a
+  tracked text file) and a test that keeps the next one out.
+- **`frankbria/glm-review`:** the "Fetch the PR diff" step of `review.yml`, which this repo
+  calls at `@main`. It needs `--allow-escape-sequences`.
 
 ## Decisions
 
-- **An API key's creation entry is kept while the key exists.** `api_key.create` is the
-  only record of who made a key (#340 stores no creator), and #408 and #457 read it to
-  revoke a member's keys when they are removed, leave or are banned. Deleting it at 90 days
-  would leave every key older than that live after its creator is gone. The entry goes on
-  the first pass after the key is revoked (once it is past 90 days). Everything else goes
-  at 90 days.
-- The period is a constant (`AUDIT_RETENTION_DAYS`), like `RUN_RETENTION_DAYS`: an owner
-  decision, not operator configuration.
-- No migration: one delete a day by `created_at`, a sequential scan of a table that now
-  holds at most about 90 days.
-- The privacy policy (`apps/portal/content/legal/privacy.md`) is not edited: it does not
-  mention the audit log today, and its wording is the owner's.
+- The hygiene test goes in `__tests__/repo-hygiene.test.ts` and reuses its `git grep` over
+  tracked, non-binary files. It covers every tracked text file, not only `src` and
+  `__tests__`: any of them can be in a diff.
+- Only ESC (0x1b) is refused. It is the byte `gh` was seen to refuse; other control bytes
+  are not known to break anything.
+- The workflow change was made and tested in a scratch clone of `frankbria/glm-review`
+  (its 67 tests pass; the new test fails without the flag). The push to that repository
+  was refused by the session's permission layer, so the patch is posted on #644 for the
+  owner to apply, and the issue stays open with `needs-owner`.
 
 ## Steps
 
-1. `__tests__/db/offboarding.test.ts`: entries older than 90 days go, newer stay, another
-   org's too; a live key's creation entry stays and still revokes the key when its creator
-   leaves, then goes; the report counts them; a failing step does not stop the others.
-2. `src/audit-log.ts`: `AUDIT_RETENTION_DAYS = 90`. `src/offboarding.ts`: an `audit` step in
-   `runRetention`, `auditEntriesDeleted` in the report. `src/cli.ts`: the command's
-   description.
-3. `__tests__/admin-cli.test.ts`: `iris admin retention` prints `auditEntriesDeleted`.
-4. Portal `/audit`: say that entries are kept 90 days.
-5. Docs: `docs/data-flows.md`, `.claude/rules/hosted-data.md`, the runbook's retention
-   section, `plans/README.md` (P2.31 done; rows for #651 and #652), `tasks/lessons.md`.
+1. `__tests__/repo-hygiene.test.ts`: fail on a raw ESC byte in any tracked text file (red
+   first: it names `__tests__/mcp/tools.test.ts:529`).
+2. `__tests__/mcp/tools.test.ts`: the same regex with `\x1b`.
+3. Docs: `.claude/rules/deploy-ops.md`, `.claude/rules/testing.md`, `plans/README.md`
+   (P3.33), `tasks/lessons.md`.
+4. Post the `frankbria/glm-review` patch on #644; label `needs-owner`.
 
 ## Acceptance criteria
 
-- [x] Owners and admins see their org's entries, newest first, paged; members refused (#577).
-- [x] Redaction pass as for runs (#577).
-- [ ] Retention period decided by the owner (90 days) and enforced by `iris admin
-      retention`; `docs/data-flows.md` updated.
+- [ ] The fetch step passes `--allow-escape-sequences` (patch ready, not applied: owner).
+- [x] The raw ESC in `__tests__/mcp/tools.test.ts` is written `\x1b` (same regex), and a
+      hygiene test refuses a raw ESC byte in tracked source.
+- [ ] A PR whose diff contains the byte gets its primary review (follows from the first).

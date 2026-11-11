@@ -137,6 +137,12 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   message, and when no reviewer reviewed, "Reviewer failover" says "No reviewer produced a
   review for this commit". A real review is a comment headed "Third Party Review —
   <model>". Before merging, read the comments, not the check.
+- **No raw ESC byte in a tracked file (#644).** `gh pr diff` refuses to print a diff that
+  holds a terminal escape sequence, and the shared workflow's "Fetch the PR diff" step
+  (Codex's input) has no `--allow-escape-sequences` yet, so one such byte within three
+  lines of a change fails `review / review` in seconds and leaves only the fallback
+  reviewers. Write `\x1b` in source; `repo-hygiene.test.ts` fails on the byte itself.
+  The workflow-side flag is a patch on #644 for `frankbria/glm-review`.
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
 
