@@ -324,7 +324,13 @@ export class SmartAIVisionClient {
         const available = await client.isAvailable();
         if (!available) {
           otherFailure = true;
-          lastError ??= new Error(`${providerName} is not available`);
+          // A model outside the vision table is the user's to change, not an outage (#523).
+          lastError ??= new Error(
+            client.supportsVision()
+              ? `${providerName} is not available`
+              : `${providerName} model "${model}" is not one IRIS uses for images ` +
+                  `(text-only, deprecated or unknown); choose another with --ai-model`,
+          );
           continue;
         }
 

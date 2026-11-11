@@ -96,18 +96,58 @@ describe('AI Client', () => {
       expect(mockCreate.mock.calls[0][0].temperature).toBe(0.1);
     });
 
-    // #520: the o-series refuses any temperature but the default; the rest keep 0.1.
-    it.each(['o1', 'o3-mini', 'o4-mini-2025-04-16'])(
-      'sends no temperature to %s',
+    // #523: gpt-5.x and gpt-6 are told not to reason (`low` where `none` is refused) and
+    // are sent no temperature, which they refuse unless effort is `none`.
+    it.each([
+      ['gpt-6-luna', 'none'],
+      ['gpt-6-sol', 'none'],
+      ['gpt-6.1-terra', 'none'],
+      ['gpt-5.6-sol', 'none'],
+      ['gpt-5.4-mini-2026-03-17', 'none'],
+      ['gpt-6-astra', 'low'],
+      ['gpt-6.1-sol', 'low'],
+    ])('sends %s reasoning_effort %s and no temperature', async (model, effort) => {
+      mockCreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
+      });
+      const client = createAIClient({ ...config, ai: { ...config.ai, model } });
+      await client.translateInstruction({ instruction: 'click the submit button' });
+      expect(mockCreate.mock.calls[0][0].reasoning_effort).toBe(effort);
+      expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+    });
+
+    // gpt-4o and gpt-4.1 do not reason: they keep 0.1.
+    it.each(['gpt-4o-mini', 'gpt-4.1'])(
+      'sends %s a temperature and no reasoning_effort',
       async (model) => {
         mockCreate.mockResolvedValue({
           choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
         });
         const client = createAIClient({ ...config, ai: { ...config.ai, model } });
         await client.translateInstruction({ instruction: 'click the submit button' });
-        expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+        expect(mockCreate.mock.calls[0][0].temperature).toBe(0.1);
+        expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('reasoning_effort');
       },
     );
+
+    // #520: the o-series refuses any temperature but the default.
+    // #523: nor does the first gpt-5, which also has no `none` effort to ask for.
+    it.each([
+      'o1',
+      'o3-mini',
+      'o4-mini-2025-04-16',
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-5-nano-2025-08-07',
+    ])('sends no temperature to %s', async (model) => {
+      mockCreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
+      });
+      const client = createAIClient({ ...config, ai: { ...config.ai, model } });
+      await client.translateInstruction({ instruction: 'click the submit button' });
+      expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+      expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('reasoning_effort');
+    });
 
     it('should handle API errors gracefully', async () => {
       mockCreate.mockRejectedValue(new Error('API Error'));

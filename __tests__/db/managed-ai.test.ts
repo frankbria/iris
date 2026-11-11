@@ -204,19 +204,26 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
   });
 
   it("prices the worst case at the provider's dearest rates plus the request size (#482)", () => {
-    // claude-opus-5: 8000 input tokens at $5/M plus 1000 output at $25/M.
-    expect(managedCallEstimateUsd('anthropic')).toBeCloseTo(0.065, 6);
-    expect(managedCallEstimateUsd('anthropic', 2000)).toBeCloseTo(0.075, 6);
-    // gpt-4o-2024-05-13: 8000 at $5/M plus 1000 at $15/M.
-    expect(managedCallEstimateUsd('openai')).toBeCloseTo(0.055, 6);
+    // claude-fable-5-1: 8000 input tokens at $10/M plus 1000 output at $50/M.
+    expect(managedCallEstimateUsd('anthropic')).toBeCloseTo(0.13, 6);
+    expect(managedCallEstimateUsd('anthropic', 2000)).toBeCloseTo(0.15, 6);
+    // gpt-6-astra: the same rates.
+    expect(managedCallEstimateUsd('openai')).toBeCloseTo(0.13, 6);
+  });
+
+  it('prices a request past a long-context threshold at that tier (#523)', () => {
+    // gpt-6-astra over 272K input tokens: every token at $20/M in, $75/M out.
+    expect(managedCallEstimateUsd('openai', 292_000)).toBeCloseTo(300_000 * 20e-6 + 0.075, 6);
+    // One token short of crossing it: still $10/M and $50/M.
+    expect(managedCallEstimateUsd('openai', 264_000)).toBeCloseTo(272_000 * 10e-6 + 0.05, 6);
   });
 
   it('reserves more for a larger request (#482)', async () => {
     await orgEntitlements(db).setPlan('org-big', 'pro'); // $10
     await orgAiSettings(db).set('org-big', 'managed', 'user:u4');
-    await spend('org-big', 9.9, 'managed'); // $0.10 left
+    await spend('org-big', 9.8, 'managed'); // $0.20 left
     const resolve = resolver(MANAGED, (chars) => managedCallEstimateUsd('anthropic', chars));
-    // A short instruction fits; one of 100k characters (~$0.50 of input) does not.
+    // A short instruction fits; one of 100k characters (~$1 of input) does not.
     const small = await resolve({ orgId: 'org-big' }, { inputChars: 100 });
     expect(small?.billingMode).toBe('managed');
     await small?.release?.();

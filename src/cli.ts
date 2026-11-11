@@ -221,7 +221,7 @@ program
   )
   .option(
     '--ai-model <id>',
-    "Vision model for --feedback (e.g. gpt-4.1, claude-opus-5, llama3.2-vision). Default: the provider's vision default",
+    "Vision model for --feedback (e.g. gpt-6.1-sol, claude-opus-5-5, llama3.2-vision). Default: the provider's vision default",
   )
   .option(
     '--max-ai-calls <n>',
@@ -1753,7 +1753,7 @@ program
   )
   .option(
     '--ai-model <id>',
-    "Vision model for --semantic (e.g. gpt-4.1, claude-opus-5, llama3.2-vision). Default: the provider's vision default",
+    "Vision model for --semantic (e.g. gpt-6.1-sol, claude-opus-5-5, llama3.2-vision). Default: the provider's vision default",
   )
   .option(
     '--threshold <value>',

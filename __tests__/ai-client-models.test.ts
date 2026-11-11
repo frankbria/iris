@@ -288,7 +288,7 @@ describe('resolveModel', () => {
   });
 
   it('resolves text and vision pins independently for the same provider', async () => {
-    mockFetch.mockResolvedValue(openaiList(['gpt-4o', 2], ['gpt-4o-mini', 1]));
+    mockFetch.mockResolvedValue(openaiList(['gpt-6.1-terra', 2], ['gpt-6-luna', 1]));
 
     expect(
       await resolveModel({
@@ -297,7 +297,7 @@ describe('resolveModel', () => {
         model: DEFAULT_MODELS.text.openai,
         creds: { apiKey: 'sk-oai' },
       }),
-    ).toBe('gpt-4o-mini');
+    ).toBe('gpt-6-luna');
 
     expect(
       await resolveModel({
@@ -306,7 +306,7 @@ describe('resolveModel', () => {
         model: DEFAULT_MODELS.vision.openai,
         creds: { apiKey: 'sk-oai' },
       }),
-    ).toBe('gpt-4o');
+    ).toBe('gpt-6.1-terra');
   });
 });
 

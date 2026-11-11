@@ -44,7 +44,7 @@ describe('Config System', () => {
       const config = loadConfig();
 
       expect(config.ai.provider).toBe('openai');
-      expect(config.ai.model).toBe('gpt-4o-mini');
+      expect(config.ai.model).toBe('gpt-6-luna');
       expect(config.watch.debounceMs).toBe(1000);
     });
 
@@ -244,7 +244,7 @@ describe('Config System', () => {
 
       it('applies the built-in default for the RESOLVED provider, not for openai', () => {
         // The old env branch hardcoded the model inline; a file that names only
-        // the provider must still get that provider's pin, never gpt-4o-mini.
+        // the provider must still get that provider's pin, never OpenAI's.
         withConfigFile({ ai: { provider: 'anthropic' } });
 
         expect(loadConfig().ai.model).toBe(DEFAULT_MODELS.text.anthropic);
@@ -369,7 +369,7 @@ describe('Config System', () => {
       const second = loadConfig();
 
       expect(second.ai.provider).toBe('openai');
-      expect(second.ai.model).toBe('gpt-4o-mini');
+      expect(second.ai.model).toBe('gpt-6-luna');
       expect(second.ai.apiKey).toBeUndefined();
       expect(second.ai).not.toBe(first.ai);
     });
