@@ -14,7 +14,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer, Server } from 'http';
 import { AddressInfo } from 'net';
-import { registerTools, RUN_ACCESSIBILITY_TEST } from '../../src/mcp/tools';
+import { MAX_CONCURRENT_SCANS, registerTools, RUN_ACCESSIBILITY_TEST } from '../../src/mcp/tools';
 
 /** No lang, no title, img with no alt — three unambiguous wcag2a violations. */
 const FAILING_HTML = `<!DOCTYPE html>
@@ -94,6 +94,7 @@ const NEEDS_REVIEW_HTML = `<!DOCTYPE html>
 
 interface A11yStructuredContent {
   url: string;
+  redirected: boolean;
   passed: boolean;
   violationCount: number;
   violations: Array<{
@@ -122,6 +123,9 @@ describe('run_accessibility_test tool', () => {
   let redirectOkURL: string;
   let wcag21URL: string;
   let needsReviewURL: string;
+  let origin: string;
+  /** `/held` requests the fixture has not answered yet, and the most there were at once. */
+  const held = { waiting: [] as Array<() => void>, peak: 0 };
   let client: Client;
   let server: McpServer;
 
@@ -135,6 +139,19 @@ describe('run_accessibility_test tool', () => {
       if (req.url === '/redirect-ok') {
         res.writeHead(302, { Location: '/clean' });
         res.end();
+        return;
+      }
+      if (req.url === '/redirect-with-token') {
+        res.writeHead(302, { Location: '/clean?code=s3cret-oauth-code#access_token=s3cret' });
+        res.end();
+        return;
+      }
+      if (req.url?.startsWith('/held')) {
+        held.waiting.push(() => {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(CLEAN_HTML);
+        });
+        held.peak = Math.max(held.peak, held.waiting.length);
         return;
       }
       if (req.url === '/img-redirect') {
@@ -160,10 +177,10 @@ describe('run_accessibility_test tool', () => {
         '/wcag21': WCAG21_ONLY_HTML,
         '/needs-review': NEEDS_REVIEW_HTML,
       };
-      res.end(pages[req.url ?? ''] ?? FAILING_HTML);
+      res.end(pages[(req.url ?? '').split('?')[0]] ?? FAILING_HTML);
     });
     await new Promise<void>((resolve) => fixtureServer.listen(0, resolve));
-    const origin = `http://localhost:${(fixtureServer.address() as AddressInfo).port}`;
+    origin = `http://localhost:${(fixtureServer.address() as AddressInfo).port}`;
     fixtureURL = `${origin}/`;
     cleanURL = `${origin}/clean`;
     subresourceURL = `${origin}/subresource`;
@@ -217,7 +234,21 @@ describe('run_accessibility_test tool', () => {
           violations: expect.anything(),
         },
       });
-      expect(tool!.annotations).toMatchObject({ readOnlyHint: true });
+    });
+
+    // #362: the tool was advertised as read-only, which lets a client run it unasked. It
+    // drives a real browser to a URL the model chose, and the visit does what a visit does.
+    it('does not advertise itself as read-only or as safe to repeat', async () => {
+      const { tools } = await client.listTools();
+      const tool = tools.find((t) => t.name === RUN_ACCESSIBILITY_TEST);
+
+      expect(tool!.annotations).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      });
+      expect(tool!.description).toMatch(/not read-only/i);
     });
 
     it('reports a validation error, not a crash, when url is missing', async () => {
@@ -271,7 +302,15 @@ describe('run_accessibility_test tool', () => {
       expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });
     }, 120_000);
 
-    it('names the blocked host when an allowed URL redirects to one', async () => {
+    it('cuts credentials from a malformed URL it quotes back', async () => {
+      const result = await callTool({ url: 'http://admin:hunter2@bad host/' });
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toMatch(/malformed URL/i);
+      expect(result.content?.[0]?.text).not.toContain('hunter2');
+    });
+
+    it('says why an allowed URL that redirects to a blocked host failed, without the target', async () => {
       // The pre-flight check passes — the origin is plain localhost — and
       // Chromium never re-routes a 30x target, so only the guard can catch this.
       const result = await callTool({ url: redirectBlockedURL });
@@ -280,9 +319,24 @@ describe('run_accessibility_test tool', () => {
       // Asserting the *reason* is the whole point. The metadata address is
       // unreachable from CI anyway, so a test that merely asserted "the scan
       // failed" would pass with the guard removed — verified, it does.
-      expect(result.content?.[0]?.text).toMatch(
-        /redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
+      const text = result.content?.[0]?.text ?? '';
+      expect(text).toBe(
+        `Accessibility scan failed for ${redirectBlockedURL}: it redirects to a link-local or ` +
+          'metadata address, which the navigation policy blocks.',
       );
+      // #362: the refused target is text the page under test chose.
+      expect(text).not.toContain('169.254');
+      expect(text).not.toContain('meta-data');
+    }, 120_000);
+
+    // #362: a redirect's query string and fragment are where codes and tokens travel, and
+    // the landing URL went into the result as it was.
+    it('reports where a redirect landed without its query string or fragment', async () => {
+      const result = await callTool({ url: `${origin}/redirect-with-token` });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ url: cleanURL, redirected: true });
+      expect(JSON.stringify(result)).not.toContain('s3cret');
     }, 120_000);
 
     it('reports the URL it landed on, not the one it was pointed at', async () => {
@@ -292,6 +346,7 @@ describe('run_accessibility_test tool', () => {
 
       expect(result.structuredContent!.url).toBe(cleanURL);
       expect(result.structuredContent!.url).not.toBe(redirectOkURL);
+      expect(result.structuredContent!.redirected).toBe(true);
       expect(result.content?.[0]?.text).toContain(`redirected from ${redirectOkURL}`);
     }, 120_000);
 
@@ -364,6 +419,7 @@ describe('run_accessibility_test tool', () => {
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent).toMatchObject({
         url: cleanURL,
+        redirected: false,
         passed: true,
         violationCount: 0,
         violations: [],
@@ -414,5 +470,52 @@ describe('run_accessibility_test tool', () => {
       expect(text).not.toContain('\n');
       expect(text).not.toMatch(/\[/);
     }, 120_000);
+
+    // #362: the failure is a reason from a fixed vocabulary, not whatever the error said.
+    it('gives the network error code as the reason, and no credentials from the URL', async () => {
+      const result = await callTool({ url: 'http://admin:hunter2@localhost:1/' });
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toBe(
+        'Accessibility scan failed for http://localhost:1/: the page could not be loaded ' +
+          '(net::ERR_CONNECTION_REFUSED).',
+      );
+    }, 120_000);
+  });
+
+  // #362: every call launched its own Chromium, with no bound on how many ran at once.
+  describe('concurrency cap', () => {
+    /** Polls for up to a minute, then fails: an unbounded wait would outlive the test. */
+    const until = async (condition: () => boolean, what: string) => {
+      for (let polls = 0; !condition(); polls += 1) {
+        if (polls === 1200) throw new Error(`Gave up waiting for ${what}`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+
+    it('runs no more scans at once than the cap, and the rest when a slot frees', async () => {
+      const total = MAX_CONCURRENT_SCANS + 2;
+      const calls = Array.from({ length: total }, (_, n) =>
+        callTool({ url: `${origin}/held?n=${n}` }),
+      );
+
+      // The fixture answers nothing yet, so the scans that started are all still loading.
+      await until(() => held.waiting.length === MAX_CONCURRENT_SCANS, 'the first scans to load');
+      // Time for a scan beyond the cap to reach the fixture, were one running. Waiting
+      // longer can only let a missing cap show; it cannot fail a working one.
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      expect(held.peak).toBe(MAX_CONCURRENT_SCANS);
+
+      let answered = 0;
+      while (answered < total) {
+        await until(() => held.waiting.length > 0, 'the next scan to load');
+        held.waiting.shift()!();
+        answered += 1;
+      }
+
+      const results = await Promise.all(calls);
+      expect(results.map((r) => r.isError ?? false)).toEqual(Array(total).fill(false));
+      expect(held.peak).toBe(MAX_CONCURRENT_SCANS);
+    }, 300_000);
   });
 });

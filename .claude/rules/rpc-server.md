@@ -118,6 +118,34 @@ database item was delivered by #341: hosted startup exits 3 without `DATABASE_UR
   `iris-mcp`). A test that runs `iris connect`'s SIGINT handler with a mocked server must let
   the drain's promise settle before asserting.
 
+### MCP Tool Output and Limits (issue #362)
+
+Private backlog item P2.2; the checklist is in #362's comments. A tool result is read by a
+model, and the page under test chooses much of what an error or a redirect contains.
+
+- **Hints**: `readOnlyHint: false, destructiveHint: true, idempotentHint: false,
+  openWorldHint: true`. The tool drives a real browser to a model-chosen URL and cannot
+  promise the visit changes nothing. Do not set `readOnlyHint` back to make a client stop
+  asking.
+- **Failures carry a reason from a fixed vocabulary** (`scanFailureReason`,
+  src/mcp/scan-errors.ts): policy block by address kind, redirect to a blocked address (the
+  target is never named), a `net::ERR_*` code, timeout, else "could not be completed". It
+  matches on the guard's and Playwright's message text, so a reworded `guardedGoto` error
+  degrades to the generic reason; `scan-errors.test.ts` pins the shapes. The raw first line
+  goes to stderr (`log('warn', 'mcp scan failed')`). A new failure mode worth telling the
+  caller about is a new branch there, never a pass-through.
+- **`scannedPage(requested, scanned)`**: same URL (compared as parsed `href`s, so
+  `http://localhost:3000` and its `/` form are one) reports the request without userinfo;
+  a redirect reports `redirected: true` and origin plus path, at most 200 characters.
+- **`ScanLimiter(2, 8)`** (src/mcp/scan-limiter.ts), one per process: 2 scans run, 8 wait in
+  arrival order, the next is a tool error at once. A finishing scan hands its slot to the
+  head of the queue. Constants until hosted MCP (#314) needs per-tenant limits. A cancelled
+  call that is already waiting still runs.
+- Tests: `scan-errors.test.ts` and `scan-limiter.test.ts` need no browser;
+  `mcp/tools.test.ts` shows each item through a real scan (the cap with a fixture that
+  holds its responses and counts them; its wait loops are bounded by poll count, since an
+  unbounded one outlives the test's timeout and hangs Jest).
+
 ### RPC Server Error Policy (issue #330)
 
 `iris connect` installs `installProcessErrorPolicy()` (src/protocol.ts), and the
