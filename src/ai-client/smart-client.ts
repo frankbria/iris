@@ -387,8 +387,9 @@ export class SmartAIVisionClient {
     }
 
     // With fallback off only one vendor was tried; say what happened to it. A model IRIS
-    // does not use for images is still the last error only when no other vendor failed
-    // for a reason of its own, so it stays the typed cause (#652).
+    // does not use for images is still the last error only when every other vendor was
+    // merely unavailable (one that was called and failed replaces it), so it stays the
+    // typed cause (#652).
     if (
       lastError &&
       (providers.length === 1 || !otherFailure || lastError instanceof ModelNotForImagesError)
