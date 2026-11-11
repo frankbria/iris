@@ -178,11 +178,15 @@ function erroredPage(page: string, error: unknown): AccessibilityTestResult['res
   const empty = { total: 0, violations: 0, passes: 0, incomplete: 0, inapplicable: 0 };
   return {
     page,
-    // Stripped here, once: the CLI prints it and every report and store carries it.
+    // Stripped here, once: the CLI prints it and every report and store carries it. The
+    // guard's messages repeat the page as it was given, so its credentials are cut by
+    // parsing it: a password may hold a space, which the pattern cannot follow (#645).
     // Never empty: an empty reason must not read as no error anywhere it is shown.
     error:
-      stripUserinfo(stripAnsi(error instanceof Error ? error.message : String(error ?? ''))) ||
-      'Unknown error',
+      stripUserinfo(
+        stripAnsi(error instanceof Error ? error.message : String(error ?? '')),
+        page,
+      ) || 'Unknown error',
     passed: false,
     failureReasons: ['could not be scanned'],
     axeResult: {

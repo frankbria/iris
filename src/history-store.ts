@@ -1,6 +1,6 @@
 import { recordAudit } from './audit-log';
 import { StorageQuotaExceededError, storageUsage } from './storage-quota';
-import { stripAnsi, stripUserinfo } from './report-encoding';
+import { stripAnsi, stripUserinfo, urlWithoutUserinfo } from './report-encoding';
 import type Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
 import { describeAction } from './actions';
@@ -130,10 +130,11 @@ function violationCounts(page: AccessibilityTestResult['results'][number]) {
 /**
  * An error as stored: terminal colour codes (#420) and URL userinfo stripped, at most `max`
  * characters, cut by code point (a cut inside a surrogate pair leaves a lone half, which
- * Postgres's json input rejects, losing the whole run).
+ * Postgres's json input rejects, losing the whole run). `quotedUrl` is the URL the error is
+ * known to repeat (a navigation's target), whose credentials are cut by parsing it (#645).
  */
-const boundedError = (error: string, max = 500): string =>
-  [...stripUserinfo(stripAnsi(error))].slice(0, max).join('');
+const boundedError = (error: string, max = 500, quotedUrl?: string): string =>
+  [...stripUserinfo(stripAnsi(error), quotedUrl)].slice(0, max).join('');
 
 /**
  * One result per page, comparison or action. An RPC action is stored as
@@ -215,9 +216,11 @@ function resultsOf(run: RunInput): StoredRunResult[] {
       });
     case 'rpc':
       return run.results.map((r) => {
+        // History is readable by everyone in the org, so a navigation loses its credentials.
+        // ponytail: query-string tokens are kept; they are often what the page under test is.
         const action =
           r.action.type === 'navigate'
-            ? { ...r.action, url: withoutCredentials(r.action.url) }
+            ? { ...r.action, url: urlWithoutUserinfo(r.action.url) }
             : r.action;
         return {
           url: action.type === 'navigate' ? action.url : null,
@@ -228,7 +231,13 @@ function resultsOf(run: RunInput): StoredRunResult[] {
             // also quotes URLs (guardedGoto, Playwright's goto), credentials and all.
             // Cut by code point: a cut inside a surrogate pair leaves a lone half,
             // which Postgres's json input rejects, losing the whole run.
-            ...(r.error && { error: boundedError(r.error) }),
+            ...(r.error && {
+              error: boundedError(
+                r.error,
+                undefined,
+                r.action.type === 'navigate' ? r.action.url : undefined,
+              ),
+            }),
           },
         };
       });
@@ -250,22 +259,6 @@ const toJsonb = (value: unknown) =>
  */
 const wellFormed = (text: string) => text.replace(UNSTORABLE, '\uFFFD');
 const UNSTORABLE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]|\u0000/g;
-
-/**
- * A URL without its `user:password@`: history is readable by everyone in the org.
- * ponytail: query-string tokens are kept; they are often what the page under test is.
- */
-function withoutCredentials(url: string): string {
-  try {
-    const parsed = new URL(url);
-    if (!parsed.username && !parsed.password) return url;
-    parsed.username = '';
-    parsed.password = '';
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
 
 /**
  * The hosted history (#254). The only way to a store is `forOrg(scope)`, and every

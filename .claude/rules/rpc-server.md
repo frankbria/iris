@@ -145,8 +145,17 @@ model, and the page under test chooses much of what an error or a redirect conta
   parsed `href`s without fragment and userinfo: the runner's URL is the response's, which
   has neither, so `/#/route` read as a redirect (internal review).
 - `stripUserinfo` (src/report-encoding.ts) and `redactString` (src/log.ts) are patterns over
-  free text and stop at the first `@` and at whitespace; do not use them on a URL you hold
-  whole.
+  free text. Since #645 both cut to the **last** `@` of the authority (`[^\s/?#]*@`: `/`, `?`
+  and `#` end it, so an `@` in a path or query stays), as a URL parser does. **Whitespace
+  still ends the match**: in prose a space ends a URL, so a password holding a raw space
+  (`http://u:correct horse@host/`) is not followed, and that is decided, not an oversight
+  (reading on to a later `@` would eat `see http://host and mail a@b`). So: a URL you hold
+  whole goes through `urlWithoutUserinfo()` (parsed; text that does not parse gets the
+  pattern), and text known to quote one goes through `stripUserinfo(text, quotedUrl)`,
+  which replaces each occurrence by its parsed form before the pattern runs (a11y page
+  errors with the page, stored RPC errors with the navigation target; `loggedDetail` does
+  the same for the MCP log). A space written `%20` has no such problem. Tests:
+  `url-credentials.test.ts` (no browser).
 - **`ScanLimiter(2, 8)`** (src/mcp/scan-limiter.ts), one per process: 2 scans run, 8 wait in
   arrival order, the next is a tool error at once. A finishing scan hands its slot to the
   head of the queue. Stdio only: hosted MCP (#314) does not use it, its cap is the org's

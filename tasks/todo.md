@@ -1,48 +1,39 @@
-# #541 [P2.31] Audit log: a read surface for org admins, and a retention period
+# #645 [P3.34] stripUserinfo and redactString leave part of a password that contains an @ or a space
 
-## Plan (self-authored)
+## Plan (self-authored; no plan on the issue)
 
-Where the issue stands (main at 568dc6b):
-
-- Criterion 1 (owners and admins read their org's entries, newest first, paged; members
-  refused) and criterion 2 (`redactStrings()` over what is read) shipped in PR #577
-  (`src/audit-reads.ts`, portal `/audit`, `apps/portal/e2e/audit.spec.ts`).
-- Criterion 3 was waiting on the owner. Decision on the issue, 2026-11-08: **90 days**.
-  Nothing enforces it yet, and `docs/data-flows.md` still says "undecided".
-
-So this PR is criterion 3.
+Both helpers cut `scheme://userinfo@` from free text with a pattern that stopped at the
+first `@`. A URL parser takes the last `@` of the authority.
 
 ## Decisions
 
-- **An API key's creation entry is kept while the key exists.** `api_key.create` is the
-  only record of who made a key (#340 stores no creator), and #408 and #457 read it to
-  revoke a member's keys when they are removed, leave or are banned. Deleting it at 90 days
-  would leave every key older than that live after its creator is gone. The entry goes on
-  the first pass after the key is revoked (once it is past 90 days). Everything else goes
-  at 90 days.
-- The period is a constant (`AUDIT_RETENTION_DAYS`), like `RUN_RETENTION_DAYS`: an owner
-  decision, not operator configuration.
-- No migration: one delete a day by `created_at`, a sequential scan of a table that now
-  holds at most about 90 days.
-- The privacy policy (`apps/portal/content/legal/privacy.md`) is not edited: it does not
-  mention the audit log today, and its wording is the owner's.
+- **Both patterns become `[^\s/?#]*@`** (the issue's wording): greedy to the last `@`
+  before `/`, `?`, `#` or whitespace, which is where a parser ends the authority.
+- **A raw space in a password stays out of the pattern's reach, on purpose.** In prose a
+  space ends a URL; reading on to a later `@` would eat ordinary text
+  (`see http://host and mail a@b`). Instead, whoever knows the URL says so:
+  `urlWithoutUserinfo(url)` parses a URL held whole, and `stripUserinfo(text, quotedUrl)`
+  replaces each occurrence of a URL the text is known to quote by its parsed form, then
+  runs the pattern.
+- **Call sites that hold the URL**: a11y page errors (`erroredPage`, the page), stored RPC
+  errors (the navigation target). The history store's private `withoutCredentials` is
+  replaced by the shared helper. The MCP module keeps its own (`withoutCredentials`,
+  `loggedDetail`): it answers "the requested URL" for unparseable text, a different contract.
+- **Not changed**: the hosted job API already refuses a URL with credentials (400), so
+  stored a11y and visual page URLs carry none; `redactString` gets the pattern fix only.
 
 ## Steps
 
-1. `__tests__/db/offboarding.test.ts`: entries older than 90 days go, newer stay, another
-   org's too; a live key's creation entry stays and still revokes the key when its creator
-   leaves, then goes; the report counts them; a failing step does not stop the others.
-2. `src/audit-log.ts`: `AUDIT_RETENTION_DAYS = 90`. `src/offboarding.ts`: an `audit` step in
-   `runRetention`, `auditEntriesDeleted` in the report. `src/cli.ts`: the command's
-   description.
-3. `__tests__/admin-cli.test.ts`: `iris admin retention` prints `auditEntriesDeleted`.
-4. Portal `/audit`: say that entries are kept 90 days.
-5. Docs: `docs/data-flows.md`, `.claude/rules/hosted-data.md`, the runbook's retention
-   section, `plans/README.md` (P2.31 done; rows for #651 and #652), `tasks/lessons.md`.
+1. [x] Tests first: `__tests__/url-credentials.test.ts` (pure), history-store cases (Postgres),
+   one a11y runner case (browser, CI only on this host).
+2. [x] `src/report-encoding.ts`: pattern, `urlWithoutUserinfo`, `stripUserinfo(text, quotedUrl?)`.
+3. [x] `src/log.ts`: `USERINFO` pattern.
+4. [x] Call sites: `src/a11y/a11y-runner.ts`, `src/history-store.ts`.
+5. [x] Docs: `.claude/rules/{rpc-server,ai-and-visual,hosted-data}.md`, `plans/README.md`.
 
 ## Acceptance criteria
 
-- [x] Owners and admins see their org's entries, newest first, paged; members refused (#577).
-- [x] Redaction pass as for runs (#577).
-- [ ] Retention period decided by the owner (90 days) and enforced by `iris admin
-      retention`; `docs/data-flows.md` updated.
+- [ ] Both patterns cut up to the last `@` of the authority, with tests for `user:a@b@host`
+  and for a URL whose query holds an `@` (left alone)
+- [ ] Where the text is known to be one URL, credentials are cut by parsing it; what free
+  text with a space in a password gets is decided and documented

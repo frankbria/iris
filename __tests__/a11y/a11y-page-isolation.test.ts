@@ -147,6 +147,21 @@ describe('a11y runner page isolation (#287)', () => {
     expect(result.results[0].error).not.toContain('hunter2');
   }, 120_000);
 
+  // #645: a parser reads the last @ as the separator and accepts a space in a password.
+  it.each([
+    ['an @', 'ops:half@hunter2'],
+    ['a space', 'ops:hunter2 again'],
+  ])(
+    'strips a password that holds %s from the recorded error',
+    async (_what, userinfo) => {
+      const withCreds = broken.replace('http://', `http://${userinfo}@`);
+      const result = await new AccessibilityRunner(config([withCreds])).run();
+      expect(result.results[0].error).toBeTruthy();
+      expect(result.results[0].error).not.toMatch(/hunter2|half|again/);
+    },
+    120_000,
+  );
+
   it('errors a page that hangs during the keyboard checks instead of waiting forever (#293)', async () => {
     // axe has its own timeout; the keyboard and screen-reader checks' page.evaluate calls
     // do not. This page is fine until a key is pressed, then its main thread spins, so the
