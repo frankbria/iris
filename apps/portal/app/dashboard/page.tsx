@@ -2,7 +2,7 @@ import Link from "next/link"
 
 import { LogOutButton } from "@/components/auth-forms"
 import { OrgSwitcher } from "@/components/org-forms"
-import { SuspendedBanner } from "@/components/contact-link"
+import { OrgBanner } from "@/components/contact-link"
 import { getDb } from "@/lib/auth"
 import { isManager, requireOrg } from "@/lib/org"
 import { formatBytes } from "@/lib/run-format"
@@ -10,7 +10,7 @@ import { orgEntitlements } from "../../../../src/billing/plans"
 import { storageUsage } from "../../../../src/storage-quota"
 
 export default async function DashboardPage() {
-  const { session, org, orgs, role, suspended } = await requireOrg()
+  const { session, org, orgs, role, suspended, payment } = await requireOrg()
   // Artifact storage against the plan (#315): what visual jobs and approvals stored.
   const [used, { artifactStorageBytes }] = await Promise.all([
     storageUsage(getDb(), org.id),
@@ -18,7 +18,7 @@ export default async function DashboardPage() {
   ])
   return (
     <main className="flex min-h-svh flex-col gap-4 p-6">
-      {suspended && <SuspendedBanner />}
+      <OrgBanner suspended={suspended} payment={payment} />
       <h1 className="font-heading text-lg font-medium">IRIS portal</h1>
       <p className="text-sm text-muted-foreground">
         Signed in as{" "}

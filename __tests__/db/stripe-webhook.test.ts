@@ -371,6 +371,7 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
     async function sweep(now: Date): Promise<string[]> {
       return (await suspendOverdueOrgs(db, now)).filter((org) => !seen.has(org));
     }
+    afterAll(() => jest.restoreAllMocks());
     afterEach(async () => {
       const { rows } = await sql<{ org_id: string }>`select org_id from org_billing`.execute(db);
       for (const { org_id } of rows) seen.add(org_id);
@@ -579,7 +580,8 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
         due.signature,
       );
       const errors: string[] = [];
-      const write = jest.spyOn(console, 'error').mockImplementation((line) => {
+      // Not restored here: a failing pass still in flight logs after its timer is cleared.
+      jest.spyOn(console, 'error').mockImplementation((line) => {
         errors.push(String(line));
       });
       // A database that does not exist: every pass fails, and the timer keeps going.
@@ -595,7 +597,6 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
         clearInterval(timer);
         clearInterval(broken);
         await gone.destroy();
-        write.mockRestore();
       }
       expect(errors.join('')).toContain('payment grace sweep failed');
     });

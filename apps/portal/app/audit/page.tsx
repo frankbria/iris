@@ -5,7 +5,7 @@ import {
   InvalidAuditCursorError,
   type AuditRecord,
 } from "../../../../src/audit-reads"
-import { SuspendedBanner } from "@/components/contact-link"
+import { OrgBanner } from "@/components/contact-link"
 import { getDb } from "@/lib/auth"
 import { isManager, requireOrg } from "@/lib/org"
 import { formatTime } from "@/lib/run-format"
@@ -20,7 +20,7 @@ export default async function AuditPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const { org, role, suspended } = await requireOrg()
+  const { org, role, suspended, payment } = await requireOrg()
   if (!isManager(role)) {
     return (
       <main className="flex min-h-svh flex-col gap-4 p-6">
@@ -47,7 +47,7 @@ export default async function AuditPage({
 
   return (
     <main className="flex min-h-svh flex-col gap-4 p-6">
-      {suspended && <SuspendedBanner />}
+      <OrgBanner suspended={suspended} payment={payment} />
       <div className="flex items-baseline justify-between gap-4">
         <h1 className="font-heading text-lg font-medium">Audit log</h1>
         <Link href="/dashboard" className="text-sm underline">

@@ -4,7 +4,8 @@ import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 
 import { BillingError, type PaidPlan } from "../../../../src/billing/stripe"
-import { getAuth } from "@/lib/auth"
+import { paymentState } from "../../../../src/billing/payment-grace"
+import { getAuth, getDb } from "@/lib/auth"
 import { billingReturnUrl, getBilling } from "@/lib/billing"
 import { orgIsSuspended } from "@/lib/org"
 
@@ -20,7 +21,8 @@ type Billing = NonNullable<ReturnType<typeof getBilling>>
  * the page rendered, as other portal actions do.
  */
 async function authorise(
-  organizationId: string
+  organizationId: string,
+  { toPay = false } = {}
 ): Promise<{ billing: Billing } | { error: string }> {
   // BetterAuth reads an empty id as "the active org".
   if (!organizationId) return { error: "You cannot change billing here." }
@@ -33,7 +35,12 @@ async function authorise(
   if (!permitted?.success)
     return { error: "Only owners and admins can change billing." }
   // After the permission check, so a non-member learns nothing about the org (#348).
-  if (await orgIsSuspended(organizationId))
+  // A suspension for a failed payment (#266) still reaches the Customer Portal (`toPay`):
+  // paying there is the only way out of it.
+  if (
+    (await orgIsSuspended(organizationId)) &&
+    !(toPay && (await paymentState(getDb(), organizationId))?.suspended)
+  )
     return { error: "This organization is suspended." }
   const billing = getBilling()
   return billing ? { billing } : { error: "Billing is not available." }
@@ -72,7 +79,7 @@ export async function openBillingPortal(
   form: FormData
 ): Promise<BillingState> {
   const organizationId = String(form.get("organizationId") ?? "")
-  const allowed = await authorise(organizationId)
+  const allowed = await authorise(organizationId, { toPay: true })
   if ("error" in allowed) return allowed
   let url: string
   try {
