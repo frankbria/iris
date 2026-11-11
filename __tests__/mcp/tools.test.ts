@@ -452,43 +452,6 @@ describe('run_accessibility_test tool', () => {
     }, 120_000);
   });
 
-  describe('failure handling', () => {
-    it('returns a tool error, not a throw, when the page is unreachable', async () => {
-      // Port 1 is reserved and never listening.
-      const result = await callTool({ url: 'http://localhost:1/' });
-      const text = result.content?.[0]?.text ?? '';
-
-      expect(result.isError).toBe(true);
-      expect(text).toContain('Accessibility scan failed');
-      // The guard's reason must win the race against page.goto's own timeout,
-      // otherwise the caller is told only "Timeout exceeded" with no URL.
-      expect(text).toContain('http://localhost:1/');
-
-      // One line, no ANSI. Playwright appends a coloured multi-line call log to
-      // its errors; forwarding that to an assistant is tokens spent on noise.
-      expect(text).not.toContain('\n');
-      expect(text).not.toMatch(/\[/);
-    }, 120_000);
-
-    // #362: the failure is a reason from a fixed vocabulary, not whatever the error said.
-    it('gives the network error code as the reason, and no credentials from the URL', async () => {
-      // A port that was just listening and is closed: refused, and not one of the ports
-      // Chromium will not dial at all (port 1 is, and fails as ERR_UNSAFE_PORT).
-      const closed = createServer();
-      await new Promise<void>((resolve) => closed.listen(0, resolve));
-      const { port } = closed.address() as AddressInfo;
-      await new Promise((resolve) => closed.close(resolve));
-
-      const result = await callTool({ url: `http://admin:hunter2@localhost:${port}/` });
-
-      expect(result.isError).toBe(true);
-      expect(result.content?.[0]?.text).toBe(
-        `Accessibility scan failed for http://localhost:${port}/: the page could not be ` +
-          'loaded (net::ERR_CONNECTION_REFUSED).',
-      );
-    }, 120_000);
-  });
-
   // #362: every call launched its own Chromium, with no bound on how many ran at once.
   describe('concurrency cap', () => {
     /** Polls for up to a minute, then fails: an unbounded wait would outlive the test. */
@@ -528,5 +491,42 @@ describe('run_accessibility_test tool', () => {
       const results = await Promise.all(calls);
       expect(results.map((r) => r.isError ?? false)).toEqual(Array(total).fill(false));
     }, 300_000);
+  });
+
+  describe('failure handling', () => {
+    // #362: the failure is a reason from a fixed vocabulary, not whatever the error said.
+    it('gives the network error code as the reason, and no credentials from the URL', async () => {
+      // A port that was just listening and is closed: refused, and not one of the ports
+      // Chromium will not dial at all (port 1 is, and fails as ERR_UNSAFE_PORT).
+      const closed = createServer();
+      await new Promise<void>((resolve) => closed.listen(0, resolve));
+      const { port } = closed.address() as AddressInfo;
+      await new Promise((resolve) => closed.close(resolve));
+
+      const result = await callTool({ url: `http://admin:hunter2@localhost:${port}/` });
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toBe(
+        `Accessibility scan failed for http://localhost:${port}/: the page could not be ` +
+          'loaded (net::ERR_CONNECTION_REFUSED).',
+      );
+    }, 120_000);
+
+    it('returns a tool error, not a throw, when the page is unreachable', async () => {
+      // Port 1 is reserved and never listening.
+      const result = await callTool({ url: 'http://localhost:1/' });
+      const text = result.content?.[0]?.text ?? '';
+
+      expect(result.isError).toBe(true);
+      expect(text).toContain('Accessibility scan failed');
+      // The guard's reason must win the race against page.goto's own timeout,
+      // otherwise the caller is told only "Timeout exceeded" with no URL.
+      expect(text).toContain('http://localhost:1/');
+
+      // One line, no ANSI. Playwright appends a coloured multi-line call log to
+      // its errors; forwarding that to an assistant is tokens spent on noise.
+      expect(text).not.toContain('\n');
+      expect(text).not.toMatch(/\[/);
+    }, 120_000);
   });
 });
