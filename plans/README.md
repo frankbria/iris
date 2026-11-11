@@ -235,6 +235,8 @@ production.
 | `P2.28` | [#522](https://github.com/frankbria/iris/issues/522) | fetchWithTimeout covers the response body | — | DONE (#574) |
 | `P2.29` | [#523](https://github.com/frankbria/iris/issues/523) | Cost tracker: price the current models, discontinue the deprecated ones | P1 (#298) | DONE (#650) |
 | `P2.30` | [#528](https://github.com/frankbria/iris/issues/528) | RPC server: JSON-RPC batch requests (decided: not supported) | — | DONE (#575) |
+| `P2.31` | [#541](https://github.com/frankbria/iris/issues/541) | Audit log: a read surface for org admins, and a retention period (90 days) | P1 (#361) | DONE (#577, this PR) |
+| `P2.33` | [#651](https://github.com/frankbria/iris/issues/651) | Live-check the gpt-6 request shape with a real OpenAI key, and confirm the model decisions of #650 | P2.29 (#523) | BLOCKED (needs-owner) |
 | `P2.26` | [#513](https://github.com/frankbria/iris/issues/513) | Credential references hardening: origin binding and transformed values | P1.16 (#352) | DONE (#571) |
 
 ### P3 — Polish / test trust / hygiene
@@ -273,6 +275,7 @@ production.
 | `P3.34` | [#645](https://github.com/frankbria/iris/issues/645) | stripUserinfo and redactString leave part of a password that contains an @ or a space | — | TODO |
 | `P3.35` | [#646](https://github.com/frankbria/iris/issues/646) | MCP tool: offer the keyboard checks, and decide what `passed` means against `--fail-on` | P2.2 (#362) | BLOCKED (needs-owner) |
 | `P3.36` | [#648](https://github.com/frankbria/iris/issues/648) | Hosted MCP: report where a redirect landed, and axe's help URL for each violated rule | P2.3 (#314) | TODO |
+| `P3.37` | [#652](https://github.com/frankbria/iris/issues/652) | Price table: delete deprecated rows after their shutdown dates; sampling options for fine-tuned ids | P2.29 (#523) | TODO |
 
 ---
 

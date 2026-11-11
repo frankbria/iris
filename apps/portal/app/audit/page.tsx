@@ -5,6 +5,7 @@ import {
   InvalidAuditCursorError,
   type AuditRecord,
 } from "../../../../src/audit-reads"
+import { AUDIT_RETENTION_DAYS } from "../../../../src/audit-log"
 import { SuspendedBanner } from "@/components/contact-link"
 import { getDb } from "@/lib/auth"
 import { isManager, requireOrg } from "@/lib/org"
@@ -54,6 +55,10 @@ export default async function AuditPage({
           Dashboard
         </Link>
       </div>
+      <p className="text-sm text-muted-foreground">
+        Entries are kept for {AUDIT_RETENTION_DAYS} days. The entry for an API
+        key&apos;s creation is kept for as long as the key exists.
+      </p>
       {page === null ? (
         <p role="status" className="text-sm">
           That page link is no longer valid.{" "}

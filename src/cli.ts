@@ -1383,7 +1383,7 @@ admin
 admin
   .command('retention')
   .description(
-    'Daily pass: purge orgs past their grace period, old runs, expired sessions and tokens, ' +
+    'Daily pass: purge orgs past their grace period, old runs and audit entries, expired sessions and tokens, ' +
       "expired records, and this container's AI ledger/cache rows of purged orgs",
   )
   .action(async () => {

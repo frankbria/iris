@@ -13,6 +13,7 @@ import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
 import { listCollectableBaselines, offboarding, OffboardingError } from '../../src/offboarding';
 import { orgSuspensions } from '../../src/org-suspension';
+import { revokeKeysCreatedBy } from '../../src/member-keys';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -319,6 +320,104 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     expect(await count('terms_acceptances', 'user_hash is not null')).toBe(1);
     await offboarding(db).runRetention({ now: at(now, 7 * 366) });
     expect(await count('terms_acceptances', 'user_hash is not null')).toBe(0);
+  });
+
+  describe('audit entries after 90 days (#541)', () => {
+    const audit = (
+      orgId: string,
+      action: string,
+      target: string | null,
+      createdAt: Date,
+      actor: string | null = null,
+    ) =>
+      sql`insert into audit_log (org_id, actor_user_id, action, target, created_at)
+        values (${orgId}, ${actor}, ${action}, ${target}, ${createdAt})`.execute(db);
+    const targets = async (orgId: string) =>
+      (
+        await sql<{ target: string | null }>`
+          select target from audit_log where org_id = ${orgId} order by id`.execute(db)
+      ).rows.map((r) => r.target);
+
+    it('drops entries older than 90 days and keeps the rest', async () => {
+      const now = new Date();
+      await user('ava');
+      await org('org-au', 'ava', now);
+      await audit('org-au', 'plan.set', 'day-91', at(now, -91));
+      await audit('org-au', 'session.start', null, at(now, -400));
+      await audit('org-au', 'plan.set', 'day-89', at(now, -89));
+      await audit('org-au', 'job.submit', 'today', now);
+
+      const report = await offboarding(db).runRetention({ now });
+      expect(report.failures).toEqual([]);
+      expect(report.auditEntriesDeleted).toBeGreaterThanOrEqual(2);
+      expect(await targets('org-au')).toEqual(['day-89', 'today']);
+      // The clock is the pass's: a day later the 89-day entry is still inside, two days
+      // later it is not.
+      await offboarding(db).runRetention({ now: at(now, 0.9) });
+      expect(await targets('org-au')).toEqual(['day-89', 'today']);
+      expect((await offboarding(db).runRetention({ now: at(now, 2) })).auditEntriesDeleted).toBe(1);
+      expect(await targets('org-au')).toEqual(['today']);
+    });
+
+    it("keeps a live key's creation entry, so its creator's departure still revokes it (#408)", async () => {
+      const now = new Date();
+      await user('kai');
+      await org('org-k1', 'kai', now);
+      await org('org-k2', 'kai', now);
+      const old = at(now, -200);
+      await audit('org-k1', 'api_key.create', 'key:k-org-k1', old, 'kai');
+      // Not a creation record of a live key of this org: a revoked key, another org's
+      // key, another action on the live key, and an entry with no target.
+      await audit('org-k1', 'api_key.create', 'key:revoked', old, 'kai');
+      await audit('org-k1', 'api_key.create', 'key:k-org-k2', old, 'kai');
+      await audit('org-k1', 'api_key.update', 'key:k-org-k1', old, 'kai');
+      await audit('org-k1', 'api_key.create', null, old, 'kai');
+
+      await offboarding(db).runRetention({ now });
+      expect(await targets('org-k1')).toEqual(['key:k-org-k1']);
+
+      expect(await revokeKeysCreatedBy(db, 'org-k1', 'kai', {}, 'member removed')).toEqual([
+        'k-org-k1',
+      ]);
+      // The key is gone, so its old creation entry goes on the next pass; the revocation
+      // just recorded stays.
+      await offboarding(db).runRetention({ now });
+      const { rows } = await sql<{ action: string; target: string }>`
+        select action, target from audit_log where org_id = 'org-k1'`.execute(db);
+      expect(rows).toEqual([{ action: 'api_key.delete', target: 'key:k-org-k1' }]);
+    });
+
+    it('a failure in it is reported and the later steps still run', async () => {
+      const now = new Date();
+      await user('uma');
+      await sql`insert into organization (id, name, slug, "createdAt")
+        values ('org-af', 'AF', 'af', now())`.execute(db);
+      await audit('org-af', 'plan.set', 'old', at(now, -91));
+      await sql`insert into session (id, "expiresAt", token, "createdAt", "updatedAt", "userId")
+        values ('s-audit', ${at(now, -1)}, 't-audit', now(), now(), 'uma')`.execute(db);
+      await sql
+        .raw(
+          `create function iris_test_refuse_audit() returns trigger language plpgsql as
+        $$ begin raise exception 'refused by test'; end $$`,
+        )
+        .execute(db);
+      await sql
+        .raw(
+          `create trigger refuse_audit_delete before delete on audit_log
+        for each row execute function iris_test_refuse_audit()`,
+        )
+        .execute(db);
+      try {
+        const report = await offboarding(db).runRetention({ now });
+        expect(report.failures).toEqual(['audit']);
+        expect(report.auditEntriesDeleted).toBe(0);
+        expect(await count('session', "id = 's-audit'")).toBe(0);
+      } finally {
+        await sql.raw('drop trigger refuse_audit_delete on audit_log').execute(db);
+        await sql.raw('drop function iris_test_refuse_audit()').execute(db);
+      }
+      expect((await offboarding(db).runRetention({ now })).auditEntriesDeleted).toBe(1);
+    });
   });
 
   it("refuses to delete a user who is a live org's only owner", async () => {

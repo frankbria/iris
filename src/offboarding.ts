@@ -5,6 +5,7 @@ import { sql, type Kysely, type RawBuilder } from 'kysely';
 import { log } from './log';
 import { orgArtifacts, type ArtifactStore } from './artifact-store';
 import { forgetArtifacts } from './storage-quota';
+import { AUDIT_RETENTION_DAYS } from './audit-log';
 
 /**
  * Org offboarding, account deletion and the daily retention pass (#349; owner decisions
@@ -32,6 +33,8 @@ export interface RetentionReport {
   orgsPurged: string[];
   tombstonesDropped: number;
   runsDeleted: number;
+  /** Audit entries past `AUDIT_RETENTION_DAYS` deleted this pass (#541). */
+  auditEntriesDeleted: number;
   sessionsDeleted: number;
   verificationsDeleted: number;
   termsDropped: number;
@@ -416,6 +419,19 @@ export function offboarding(db: Kysely<unknown>) {
           );
         }),
       );
+      // An API key's creation entry stays while the key exists: it is the only record of
+      // who made the key, and a member's removal, leave or ban revokes their keys by it
+      // (#408, src/member-keys.ts). It goes on the first pass after the key does.
+      // shortcut: scans audit_log by created_at once a day, index it if the pass gets slow.
+      const auditEntriesDeleted = await step('audit', 0, async () =>
+        affected(
+          await sql`delete from audit_log a
+            where a.created_at < ${now}::timestamptz - make_interval(days => ${AUDIT_RETENTION_DAYS})
+              and not (a.action = 'api_key.create' and exists (
+                select 1 from apikey k
+                where k.id = substr(a.target, 5) and k."referenceId" = a.org_id))`.execute(db),
+        ),
+      );
       const sessionsDeleted = await step('sessions', 0, async () =>
         affected(await sql`delete from session where "expiresAt" < ${now}`.execute(db)),
       );
@@ -488,6 +504,7 @@ export function offboarding(db: Kysely<unknown>) {
         orgsPurged,
         tombstonesDropped,
         runsDeleted,
+        auditEntriesDeleted,
         sessionsDeleted,
         verificationsDeleted,
         termsDropped,

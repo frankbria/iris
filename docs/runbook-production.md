@@ -670,7 +670,8 @@ Stripe reporting is #264.
 
 Periods (owner decisions, 2026-10-03; the 7 years await counsel's confirmation, #450):
 deleted orgs are kept 30 days before purge; their billing records 7 years; finished runs
-90 days; expired sessions and tokens are purged daily; terms evidence is kept 7 years
+90 days; audit entries 90 days (decided 2026-11-08, #541; the entry for an API key's
+creation stays while the key exists, since it is how a departing member's keys are found); expired sessions and tokens are purged daily; terms evidence is kept 7 years
 after the user is deleted. `docs/data-flows.md` has the per-store detail.
 
 ### Delete or restore an org, delete a user
@@ -711,7 +712,8 @@ systemctl start iris-retention.service && journalctl -t iris-retention -n 5
 ```
 
 It runs at 04:30 UTC, after the backup, so a purge never precedes that day's backup.
-Each container's report is a journal line (`orgsPurged`, `runsDeleted`, …). A missing
+Each container's report is a journal line (`orgsPurged`, `runsDeleted`,
+`auditEntriesDeleted`, …). A missing
 container or a failed run alerts through `/etc/iris/alert-hook retention-<service> …`
 and fails the unit; the next day's run picks up whatever was left. Settings
 (`RETENTION_COMPOSE_PROJECT`, `RETENTION_SERVICES`) go in `/etc/iris/retention.env`.
