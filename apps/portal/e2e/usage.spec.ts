@@ -45,6 +45,12 @@ test("a new org: the free plan, nothing used, no credits, reached from the dashb
   const email = unique()
   await signUpVerified(context.request, email, "Uma")
   await logIn(page, email, PASSWORD)
+  await expect(page).toHaveURL(/\/dashboard$/)
+  // IRIS credits chosen on a plan that has none: calls still run on the org's own keys.
+  await sql(
+    "insert into org_ai_settings (org_id, mode, updated_by) values ($1, 'managed', 'user:e2e')",
+    [await orgOf(email)]
+  )
   await page.getByRole("link", { name: "Usage and billing" }).click()
   await expect(page).toHaveURL(/\/usage$/)
 
@@ -100,7 +106,7 @@ test("a paid org: usage against the plan, credit left, the split, and billing fo
     [orgId, `cus_usage_${orgId}`]
   )
   await sql(
-    `insert into org_plans (org_id, plan, overrides) values ($1, 'pro', '{"visionCallsPerMonth": 1}')`,
+    `insert into org_plans (org_id, plan, overrides) values ($1, 'pro', '{"runsPerMonth": 8}')`,
     [orgId]
   )
   await sql(
@@ -153,9 +159,9 @@ test("a paid org: usage against the plan, credit left, the split, and billing fo
 
   const usage = page.getByRole("table", { name: /^Usage from / })
   for (const name of [
-    "Runs 8 1,000",
+    "Runs 8 8 (limit reached)",
     "Agent turns 5 2,000",
-    "Vision calls 1 1 (limit reached)",
+    "Vision calls 1 1,000",
     "Artifact storage 5.0 GiB 20.0 GiB",
     "Text AI calls 5 No monthly limit",
     "Page observations 7 No monthly limit",
@@ -227,7 +233,7 @@ test("a paid org: usage against the plan, credit left, the split, and billing fo
   await expect(
     them
       .getByRole("table", { name: /^Usage from / })
-      .getByRole("row", { name: "Runs 8 1,000", exact: true })
+      .getByRole("row", { name: "Runs 8 8 (limit reached)", exact: true })
   ).toBeVisible()
   await theirs.close()
 })

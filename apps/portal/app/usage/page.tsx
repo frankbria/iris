@@ -134,7 +134,7 @@ export default async function UsagePage() {
             : "Your plan includes no IRIS credits."}
         </p>
         <p className="text-sm text-muted-foreground">
-          {mode === "managed"
+          {mode === "managed" && credit > 0
             ? "AI calls use IRIS credits first, then your own keys."
             : "AI calls use your organization's own provider keys."}{" "}
           <Link href="/provider-keys" className="underline">

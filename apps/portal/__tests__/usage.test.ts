@@ -63,7 +63,8 @@ describe("planUsage", () => {
     expect(planUsage(plan, SUMMARY, 8, 5 * 1024 ** 3)).toEqual([
       { label: "Runs", used: "8", limit: "1,000", reached: false },
       { label: "Agent turns", used: "5", limit: "2,000", reached: false },
-      { label: "Vision calls", used: "1,000", limit: "1,000", reached: true },
+      // At its limit, but that limit is not enforced yet: not "reached".
+      { label: "Vision calls", used: "1,000", limit: "1,000", reached: false },
       {
         label: "Artifact storage",
         used: "5.0 GiB",
@@ -93,6 +94,10 @@ describe("planUsage", () => {
       limit: "0",
       reached: true,
     })
+  })
+
+  it("storage at its quota is reached", () => {
+    expect(planUsage(plan, [], 0, 20 * 1024 ** 3)[3].reached).toBe(true)
   })
 
   it("runs come from the enforced count, not the ledger rows", () => {

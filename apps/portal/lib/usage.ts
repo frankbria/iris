@@ -58,23 +58,33 @@ export function planUsage(
     label: string,
     value: number,
     limit: number | null,
-    format = count
+    { format = count, enforced = true } = {}
   ): UsageLine => ({
     label,
     used: format(value),
     limit: limit === null ? null : format(limit),
-    reached: limit !== null && value >= limit,
+    reached: enforced && limit !== null && value >= limit,
   })
+  // Agent turns and vision calls have a plan limit that nothing enforces yet (#346):
+  // "limit reached" there would be untrue while calls keep succeeding.
+  const notEnforced = { enforced: false }
   return [
     line("Runs", runsUsed, plan.runsPerMonth),
-    line("Agent turns", used("agent_turn"), plan.agentTurnsPerMonth),
-    line("Vision calls", used("vision_call"), plan.visionCallsPerMonth),
     line(
-      "Artifact storage",
-      storageBytes,
-      plan.artifactStorageBytes,
-      formatBytes
+      "Agent turns",
+      used("agent_turn"),
+      plan.agentTurnsPerMonth,
+      notEnforced
     ),
+    line(
+      "Vision calls",
+      used("vision_call"),
+      plan.visionCallsPerMonth,
+      notEnforced
+    ),
+    line("Artifact storage", storageBytes, plan.artifactStorageBytes, {
+      format: formatBytes,
+    }),
     line("Text AI calls", used("text_call"), null),
     line("Page observations", used("observation"), null),
     line("Browser minutes", used("browser_minutes"), null),

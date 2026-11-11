@@ -19,6 +19,9 @@ it; the billing controls are for owners and admins.
 - **"Runs" is `runsUsedThisMonth()`** (src/billing/usage.ts), the query the job submit
   check runs: billed jobs plus queued and running ones. The other lines come from
   `usageLedger().summary()`. Storage is `storageUsage()`, a level, not a monthly total.
+  "(limit reached)" shows on runs and storage only: the agent-turn and vision-call limits
+  are not enforced yet (hosted-data.md, #346), so `planUsage` never marks them reached.
+  Drop `notEnforced` there when enforcement lands.
 - **Credit left is plan credit minus `managedSpendThisMonth()`**, as on `/provider-keys`.
   A `held` reservation (#482) is not subtracted on either page, so the resolver can refuse
   a call slightly before the page reaches zero.
