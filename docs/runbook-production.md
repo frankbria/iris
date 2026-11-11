@@ -470,8 +470,8 @@ rclone config`). The images are stored as they are, so wrap the destination in a
 `crypt` remote unless its provider is one you would trust with the bucket itself, and
 keep the crypt passwords off the box as well. **Leave versioning off on the destination
 bucket**: the sync moves and deletes files there, a versioned destination would keep a
-hidden version of each one, and nothing here removes those (or give it a lifecycle rule
-that expires noncurrent versions after `BACKUP_KEEP_DAYS`). Each run:
+hidden version of each one, nothing here removes those, and a lifecycle rule there
+would only add its own delay on top of `BACKUP_KEEP_DAYS`. Each run:
 
 1. `rclone sync <source> <remote>/current --backup-dir <remote>/replaced/<UTC time>`:
    what the sync would delete or overwrite in the copy is moved aside, not deleted. An
