@@ -163,7 +163,7 @@ export function registerTools(server: McpServer): void {
         'rules axe could not decide (needsReview) — it does not test keyboard navigation or ' +
         'screen-reader behaviour. Not read-only: loading the page runs its scripts and sends ' +
         `the requests a browser visit would. At most ${MAX_CONCURRENT_SCANS} scans run at once; ` +
-        'further calls wait their turn.',
+        `up to ${MAX_WAITING_SCANS} more calls wait their turn and further ones are refused.`,
       inputSchema,
       outputSchema,
       // Not read-only (#362): the tool navigates a real browser to a URL the model chose,

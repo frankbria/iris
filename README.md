@@ -863,7 +863,9 @@ and the page under test chooses much of what an error or a redirect contains. So
   server's stderr.
 - A redirected scan reports `redirected: true` and the landing page's origin and
   path, at most 200 characters. Its query string and fragment, where sign-in
-  codes and tokens travel, are left out.
+  codes and tokens travel, are left out, and a path segment of 32 characters or
+  more (a reset link's token) is shown as `…`. A shorter token in the path is
+  not recognised as one.
 - `user:password@` in the URL you pass is never repeated.
 
 **The tool is not advertised as read-only.** Loading a page runs its scripts and

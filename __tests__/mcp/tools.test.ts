@@ -473,12 +473,19 @@ describe('run_accessibility_test tool', () => {
 
     // #362: the failure is a reason from a fixed vocabulary, not whatever the error said.
     it('gives the network error code as the reason, and no credentials from the URL', async () => {
-      const result = await callTool({ url: 'http://admin:hunter2@localhost:1/' });
+      // A port that was just listening and is closed: refused, and not one of the ports
+      // Chromium will not dial at all (port 1 is, and fails as ERR_UNSAFE_PORT).
+      const closed = createServer();
+      await new Promise<void>((resolve) => closed.listen(0, resolve));
+      const { port } = closed.address() as AddressInfo;
+      await new Promise((resolve) => closed.close(resolve));
+
+      const result = await callTool({ url: `http://admin:hunter2@localhost:${port}/` });
 
       expect(result.isError).toBe(true);
       expect(result.content?.[0]?.text).toBe(
-        'Accessibility scan failed for http://localhost:1/: the page could not be loaded ' +
-          '(net::ERR_CONNECTION_REFUSED).',
+        `Accessibility scan failed for http://localhost:${port}/: the page could not be ` +
+          'loaded (net::ERR_CONNECTION_REFUSED).',
       );
     }, 120_000);
   });
@@ -499,23 +506,28 @@ describe('run_accessibility_test tool', () => {
         callTool({ url: `${origin}/held?n=${n}` }),
       );
 
-      // The fixture answers nothing yet, so the scans that started are all still loading.
-      await until(() => held.waiting.length === MAX_CONCURRENT_SCANS, 'the first scans to load');
-      // Time for a scan beyond the cap to reach the fixture, were one running. Waiting
-      // longer can only let a missing cap show; it cannot fail a working one.
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      expect(held.peak).toBe(MAX_CONCURRENT_SCANS);
-
-      let answered = 0;
-      while (answered < total) {
-        await until(() => held.waiting.length > 0, 'the next scan to load');
-        held.waiting.shift()!();
-        answered += 1;
+      let peakWhileHeld = 0;
+      try {
+        // The fixture answers nothing yet, so the scans that started are all still loading.
+        await until(() => held.waiting.length >= MAX_CONCURRENT_SCANS, 'the first scans to load');
+        // Time for a scan beyond the cap to reach the fixture, were one running. Waiting
+        // longer can only let a missing cap show; it cannot fail a working one.
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        peakWhileHeld = held.peak;
+      } finally {
+        // Answer everything, whatever happened above: a held request keeps its browser,
+        // and the fixture server's close, waiting long past a failure.
+        const answering = setInterval(
+          () => held.waiting.splice(0).forEach((answer) => answer()),
+          50,
+        );
+        await Promise.allSettled(calls);
+        clearInterval(answering);
       }
 
+      expect(peakWhileHeld).toBe(MAX_CONCURRENT_SCANS);
       const results = await Promise.all(calls);
       expect(results.map((r) => r.isError ?? false)).toEqual(Array(total).fill(false));
-      expect(held.peak).toBe(MAX_CONCURRENT_SCANS);
     }, 300_000);
   });
 });

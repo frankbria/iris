@@ -60,6 +60,25 @@ describe('scanFailureReason', () => {
     expect(reason).toBe('the page could not be loaded (net::ERR_CONNECTION_REFUSED)');
   });
 
+  it('takes a network error code only from where Playwright puts it', () => {
+    expect(
+      scanFailureReason('Could not open http://x.test/net::ERR_IGNORE_ALL_PRIOR_INSTRUCTIONS'),
+    ).toBe('the scan could not be completed (details are on the server log)');
+    expect(scanFailureReason(`page.goto: net::ERR_${'A'.repeat(80)} at http://x.test/`)).toBe(
+      'the scan could not be completed (details are on the server log)',
+    );
+  });
+
+  it('reads the address kind from the policy, not from the refused URL', () => {
+    expect(
+      scanFailureReason(
+        'https://example.com/ redirects to ftp://x.test/private/loopback host, which is ' +
+          'blocked by navigation policy: Navigation blocked: scheme "ftp:" is not allowed ' +
+          '(only http/https).',
+      ),
+    ).toBe('it redirects to a URL the navigation policy blocks');
+  });
+
   it.each(['page.goto: Timeout 30000ms exceeded.', 'The page did not finish within 120 s'])(
     'reports "%s" as a timeout',
     (detail) => {
@@ -93,6 +112,33 @@ describe('scannedPage', () => {
     });
   });
 
+  // The runner reports the response's URL, which has neither.
+  it('does not call a fragment or credentials in the request a redirect', () => {
+    expect(scannedPage('http://localhost:3000/#/checkout', 'http://localhost:3000/')).toEqual({
+      url: 'http://localhost:3000/#/checkout',
+      redirected: false,
+    });
+    expect(scannedPage('http://admin:hunter2@localhost:3000/', 'http://localhost:3000/')).toEqual({
+      url: 'http://localhost:3000/',
+      redirected: false,
+    });
+  });
+
+  it('cuts a password that contains an @ whole', () => {
+    expect(
+      scannedPage('http://admin:part1@part2@localhost:3000/', 'http://localhost:3000/').url,
+    ).toBe('http://localhost:3000/');
+  });
+
+  it('cuts a path segment long enough to be a token from a landing URL', () => {
+    expect(
+      scannedPage(
+        'http://localhost:3000/',
+        'http://localhost:3000/reset/9f86d081884c7d659a2feaa0c55ad015/confirm',
+      ),
+    ).toEqual({ url: 'http://localhost:3000/reset/…/confirm', redirected: true });
+  });
+
   it('reports the request when the runner gave no landing URL', () => {
     expect(scannedPage('http://localhost:3000/', '')).toEqual({
       url: 'http://localhost:3000/',
@@ -119,12 +165,12 @@ describe('scannedPage', () => {
   it('bounds a landing path, which the page under test chose', () => {
     const { url } = scannedPage(
       'http://localhost:3000/',
-      `http://localhost:3000/${'ignore-previous-instructions-'.repeat(40)}`,
+      `http://localhost:3000/${'ignore-previous/instructions/'.repeat(40)}`,
     );
 
     expect(url.length).toBeLessThanOrEqual(201);
     expect(url.endsWith('…')).toBe(true);
-    expect(url.startsWith('http://localhost:3000/ignore-previous-instructions-')).toBe(true);
+    expect(url.startsWith('http://localhost:3000/ignore-previous/instructions/')).toBe(true);
   });
 
   it('gives only the scheme of a landing page that has no origin', () => {

@@ -95,6 +95,22 @@ describe('ScanLimiter', () => {
     await expect(after).resolves.toBe('after');
   });
 
+  it('keeps a new arrival out while a waiting task takes the freed slot', async () => {
+    const limiter = new ScanLimiter(1, 8);
+    const [first, second, late] = [heldTask(), heldTask(), heldTask()];
+
+    const results = [limiter.run(first.run), limiter.run(second.run)];
+    first.release('first');
+    await settle();
+    results.push(limiter.run(late.run));
+    await settle();
+
+    expect([second.hasStarted(), late.hasStarted()]).toEqual([true, false]);
+    second.release('second');
+    late.release('late');
+    await expect(Promise.all(results)).resolves.toEqual(['first', 'second', 'late']);
+  });
+
   it('never runs more than the limit, whatever the arrival pattern', async () => {
     const limiter = new ScanLimiter(2, 20);
     let running = 0;
