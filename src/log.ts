@@ -38,11 +38,13 @@ const SECRET_FIELD =
   /authorization|cookie|token|secret|passw(or)?d|api[-_]?key|^key$|credential|(database|smtp)[-_]?url|^(text|value|instruction|params|body)$/i;
 const AUTH_SCHEME = /\b(Bearer|Basic)\s+\S+/gi;
 /**
- * Every query or fragment parameter: `$1` separator and name, `$2` the name, `$3` `=value`.
- * The value is optional so that a name with none is still taken in one match (#658): a name
- * may hold `?`, and a run of them was scanned again from each one.
+ * A query or fragment parameter with a value: `$1` separator and name, `$2` the name, `$3`
+ * `=value`. A name may hold `?`, so a `?` begins a match only where it is the first since
+ * the last character a name cannot hold (the lookbehind, which reads back no further than
+ * the `?` before it): a run of them was scanned to its end from each one (#658). A separator
+ * no value follows fails here at once and costs no callback (#660).
  */
-const QUERY_PARAM = /([?&;#]([^=&;#\s]*))(=[^&;#\s]*)?/g;
+const QUERY_PARAM = /((?:[&;#]|\?(?<=(?:^|[=&;#\s])[^?=&;#\s]*\?))([^=&;#\s]*))(=[^&;#\s]*)/g;
 /** A parameter name that looks secret: its value is cut. */
 const SECRET_NAME = /token|key|passw(?:or)?d|secret|sig|auth|session|credential/i;
 
@@ -63,8 +65,8 @@ export function redactString(text: string): string {
   // Up to the last `@` of the authority, as a URL parser reads it (#645); see `stripUserinfo`.
   return replaceUserinfo(text, () => '[redacted]@')
     .replace(AUTH_SCHEME, '$1 [redacted]')
-    .replace(QUERY_PARAM, (all: string, head: string, name: string, value?: string) =>
-      value !== undefined && SECRET_NAME.test(decodedName(name)) ? `${head}=[redacted]` : all,
+    .replace(QUERY_PARAM, (all: string, head: string, name: string) =>
+      SECRET_NAME.test(decodedName(name)) ? `${head}=[redacted]` : all,
     )
     .replace(API_KEY, 'iris_[redacted]');
 }

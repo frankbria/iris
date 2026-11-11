@@ -163,7 +163,8 @@ model, and the page under test chooses much of what an error or a redirect conta
   began at the scheme (`[a-z][a-z0-9+.-]*:\/\/`), so a long run of scheme characters was
   scanned again from each of its positions: 40,000 letters took 3 s, synchronously, and a
   megabyte would have held the event loop for about half an hour. `QUERY_PARAM` had the
-  same shape (a parameter name may hold `?`). The fix keeps the match set:
+  same shape (a parameter name may hold `?`); see the next entry for its form now. The fix
+  keeps the match set:
   `replaceUserinfo()` (src/report-encoding.ts, used by both helpers) matches the **whole
   run** of scheme characters and makes `://userinfo@` an optional tail, so a run is consumed
   by one match and no position inside it is retried; the callback cuts only when the tail
@@ -173,6 +174,21 @@ model, and the page under test chooses much of what an error or a redirect conta
   its first class repeats; `url-credentials.test.ts` times every pattern at 1 kB, 10 kB,
   100 kB and 1 MB and fails on a step over forty-fold (fastest of five, monotonic clock, a
   1 ms floor), and compares both helpers with the old patterns on 60,000 generated strings.
+- **Linear is not enough for a pattern every log line passes: count the callbacks (#660).**
+  #658 first made `QUERY_PARAM` linear by making `=value` an optional tail, which turned
+  every `?`, `&`, `;` and `#` into a match and a callback: a megabyte of `&` took about
+  300 ms, where the pattern before #658 took 7. It now needs the `=value` again, and a `?`
+  begins a match only where it is the first since the last character a name cannot hold
+  (`\?(?<=(?:^|[=&;#\s])[^?=&;#\s]*\?)`). That is the same match set, because a later `?`
+  of the same name reaches the same end; and it is linear, because the lookbehind stands
+  **after** the `\?` (so it runs only at a `?`) and reads back no further than the `?`
+  before it. Written before the `\?` it measured the same on V8, but only
+  because the engine skips positions where no `?` follows; after it, nothing depends on that.
+  A megabyte of any separator is now about 9 ms. Tests in
+  `url-credentials.test.ts`: the megabyte cases compare against the pre-#658 pattern timed
+  in the same test (a ratio, never an absolute time: #142, #190), and the 60,000-string
+  comparison has `;`, `%` and an encoded `k` in its alphabet, with the name decoded in its
+  reference.
 - **Page- or client-controlled error text goes through `strippedError(text, quotedUrl)`**
   (#658): colour codes and userinfo cut from the first `ERROR_TEXT_MAX` (16,384) UTF-16
   units, cut before any pattern runs. A cut can land inside a URL whose `@` is past it, so

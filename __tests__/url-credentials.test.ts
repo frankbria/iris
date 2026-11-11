@@ -100,6 +100,9 @@ describe('redactString', () => {
   );
 });
 
+/** `QUERY_PARAM` as it was on main before #658: quadratic on a run of `?`, linear on `&`. */
+const OLD_QUERY_PARAM = /([?&;#]([^=&;#\s]*)=)([^&;#\s]*)/g;
+
 // #658: the patterns used to begin with an unanchored scheme, so a long run of scheme
 // characters was scanned again from each of its positions.
 describe('match set of the linear patterns (#658)', () => {
@@ -126,20 +129,30 @@ describe('match set of the linear patterns (#658)', () => {
     expect(redactString(text)).toBe(redacted);
   });
 
-  // The patterns as they were on main before #658, kept as the reference.
+  // The patterns as they were on main before #658, kept as the reference. The name is read
+  // as a URL parser reads it (#409), which the reference left out until #660.
+  const decoded = (name: string) => {
+    try {
+      return decodeURIComponent(name);
+    } catch {
+      return name;
+    }
+  };
   const oldStrip = (text: string) => text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]+@/gi, '$1');
   const oldRedact = (text: string) =>
     text
       .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi, '$1[redacted]@')
-      .replace(/([?&;#]([^=&;#\s]*)=)([^&;#\s]*)/g, (all, head: string, name: string) =>
-        /token|key|passw(?:or)?d|secret|sig|auth|session|credential/i.test(name)
+      .replace(OLD_QUERY_PARAM, (all, head: string, name: string) =>
+        /token|key|passw(?:or)?d|secret|sig|auth|session|credential/i.test(decoded(name))
           ? `${head}[redacted]`
           : all,
       );
 
   it('agrees with the old patterns on 60,000 generated strings', () => {
     // A small alphabet makes schemes, authorities and parameters collide often.
-    const alphabet = ['a', 'Z', '1', '.', '-', ':', '/', '/', '@', ' ', '?', '#', '=', '&', 'key'];
+    // `%6B` is `k`, so `%6Bey` is a secret name only once decoded; a lone `%` does not decode.
+    const alphabet = ['a', 'Z', '1', '.', '-', ':', '/', '/', '@', ' ', '?', '#', '=', '&', ';'];
+    alphabet.push('?', '=', 'key', 'ey', '%6B', '%');
     let seed = 658;
     const next = (below: number) => {
       seed = (seed * 1103515245 + 12345) % 2147483648;
@@ -157,18 +170,19 @@ describe('match set of the linear patterns (#658)', () => {
   });
 });
 
+// Fastest of five runs on a monotonic clock, compared as a ratio: a clock that steps back
+// (#190) or a busy machine (#142) cannot make a linear scan look quadratic that way.
+const fastest = (run: () => unknown) => {
+  let best = Infinity;
+  for (let i = 0; i < 5; i++) {
+    const start = performance.now();
+    run();
+    best = Math.min(best, performance.now() - start);
+  }
+  return best;
+};
+
 describe('time on adversarial input (#658)', () => {
-  // Fastest of five runs on a monotonic clock, compared as a ratio: a clock that steps back
-  // (#190) or a busy machine (#142) cannot make a linear scan look quadratic that way.
-  const fastest = (run: () => unknown) => {
-    let best = Infinity;
-    for (let i = 0; i < 5; i++) {
-      const start = performance.now();
-      run();
-      best = Math.min(best, performance.now() - start);
-    }
-    return best;
-  };
   const shapes: Array<[string, (length: number) => string]> = [
     ['letters', (n) => 'a'.repeat(n)],
     ['a1a1…', (n) => 'a1'.repeat(n / 2)],
@@ -180,6 +194,11 @@ describe('time on adversarial input (#658)', () => {
     ['a://a://…', (n) => 'a://'.repeat(n / 4)],
     ['question marks', (n) => '?'.repeat(n)],
     ['ampersands', (n) => '&'.repeat(n)],
+    ['semicolons', (n) => ';'.repeat(n)],
+    ['hashes', (n) => '#'.repeat(n)],
+    ['? ? …', (n) => '? '.repeat(n / 2)],
+    ['&?a?a…', (n) => `&${'?a'.repeat(n / 2)}`],
+    ['a?a?…', (n) => 'a?'.repeat(n / 2)],
     ['?a?a…', (n) => '?a'.repeat(n / 2)],
     ['a key that never ends', (n) => `iris_${'a'.repeat(n)}_`],
     ['Bearer and spaces', (n) => `Bearer${' '.repeat(n)}`],
@@ -202,6 +221,35 @@ describe('time on adversarial input (#658)', () => {
         }
       }
     }
+  });
+});
+
+// #660: #658 made the value optional, so every separator was a match and cost a callback:
+// linear, but about thirty times the pattern before it on a megabyte of `&`.
+describe('a megabyte of separators that no value follows (#660)', () => {
+  const MEGABYTE = 1_000_000;
+  // The same machine at the same moment is the yardstick: the pattern of before #658 on a
+  // megabyte of `&`, which it scans once and never matches.
+  const yardstick = () => {
+    const ampersands = '&'.repeat(MEGABYTE);
+    return fastest(() => ampersands.replace(OLD_QUERY_PARAM, (all: string) => all));
+  };
+
+  it.each([
+    ['&', '&'.repeat(MEGABYTE)],
+    [';', ';'.repeat(MEGABYTE)],
+    ['#', '#'.repeat(MEGABYTE)],
+    ['?', '?'.repeat(MEGABYTE)],
+    ['all four in turn', '&;#?'.repeat(MEGABYTE / 4)],
+    ['? and a space', '? '.repeat(MEGABYTE / 2)],
+    ['names without a value', '&a'.repeat(MEGABYTE / 2)],
+  ])('%s takes no more than a few scans of the text', (_name, text) => {
+    const allowed = 8 * Math.max(yardstick(), 1);
+    // A quadratic pattern fails here in seconds; on the whole megabyte it would run for
+    // half an hour before it could fail.
+    expect(fastest(() => redactString(text.slice(0, 30_000)))).toBeLessThan(allowed);
+    expect(fastest(() => redactString(text))).toBeLessThan(allowed);
+    expect(redactString(text)).toBe(text);
   });
 });
 
