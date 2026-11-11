@@ -46,6 +46,17 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   browser with `cov_* is not defined`. Pass a string expression, as
   `src/visual/capture.ts` does (also for `waitForFunction`), or exclude the module from coverage as the a11y
   modules are.
+- **The a11y runner reports the document's URL, read just before axe runs** (#662):
+  `guardedDocumentUrl(page, requested)`, not `guardedGoto`'s return value, which is the last
+  HTTP response of the navigation asked for and stays the first page when a script, a meta
+  refresh or a router moves on. It throws when the page holds Chromium's error page
+  (`chrome-error:`, what a refused or failed move leaves behind) or a URL the page's policy
+  refuses, in the words of a refused HTTP redirect ("redirects to …, which is blocked by
+  navigation policy"), so the MCP tools' fixed reasons apply. Under `IRIS_HOSTED` a move to
+  a name the egress proxy refuses is the proxy's 403 document, which `failOnHttpError`
+  fails first. Read once: a page that navigates while axe runs fails the scan as before,
+  and nothing compares the URL afterwards (a single-page app may rewrite it at any time).
+  `guardedGoto` itself is unchanged for the executor, watcher and visual runner.
 - Hostnames that *resolve* to private addresses are the egress proxy's job, below.
 
 ### URL Guard: Popups, Pins, Opaque Starts (issue #337)

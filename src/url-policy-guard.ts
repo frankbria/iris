@@ -592,3 +592,42 @@ export async function guardedGoto(
     throw error;
   }
 }
+
+/** What Chromium commits in place of a document it could not load. */
+const ERROR_DOCUMENT = 'chrome-error:';
+
+/**
+ * The URL of the document the page holds now, for a caller that reports what it measured
+ * (#662). Not {@link guardedGoto}'s return value: that is the last HTTP response of the
+ * navigation asked for, and a page can move on by itself afterwards (`location`, a meta
+ * refresh, `history.replaceState`).
+ *
+ * The guard has already vetted every request such a move made, so a refused one leaves
+ * Chromium's error page behind. Measuring that would report an empty page as a clean one.
+ * shortcut: the reason quoted is the page's last refused document, which may be a frame's
+ * when the main document failed for another reason; upgrade by recording the frame id if a
+ * caller comes to depend on the reason.
+ *
+ * @param requested the URL the caller navigated to, named in the error.
+ * @throws in the words of a refused redirect when the document is the error page of a
+ * refused navigation or has a URL the page's policy refuses.
+ */
+export function guardedDocumentUrl(page: Page, requested: string): string {
+  const url = page.url();
+  const state = guards.get(page);
+  const refusedRedirect = (target: string, detail: string): Error =>
+    new Error(
+      `${requested} redirects to ${target}, which is blocked by navigation policy: ${detail}`,
+    );
+
+  if (url.startsWith(ERROR_DOCUMENT)) {
+    const { url: refusedUrl, detail } = state?.refusal ?? {};
+    throw refusedUrl && detail
+      ? refusedRedirect(refusedUrl, detail)
+      : new Error(`${requested} moved on to a page that could not be loaded`);
+  }
+  // Same-document moves (`history.replaceState`) make no request for the guard to vet.
+  const blocked = state ? blockReason(url, state.policy) : null;
+  if (blocked) throw refusedRedirect(url, blocked);
+  return url;
+}

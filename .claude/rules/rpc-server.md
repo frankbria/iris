@@ -142,8 +142,10 @@ model, and the page under test chooses much of what an error or a redirect conta
 - **`scannedPage(requested, scanned)`**: same URL reports the request without userinfo; a
   redirect reports `redirected: true` and origin plus path, at most 200 characters, path
   segments of 32+ characters cut to `…` (tokens; shorter ones show). "Same" is compared as
-  parsed `href`s without fragment and userinfo: the runner's URL is the response's, which
-  has neither, so `/#/route` read as a redirect (internal review).
+  parsed `href`s without fragment and userinfo, so `/#/route` does not read as a redirect
+  (internal review). Since #662 the runner's URL is the document's at the time axe runs, so
+  a page that moved on by script, meta refresh or `history.replaceState` is a redirect too;
+  a hash router's move (fragment only) still is not.
 - `stripUserinfo` (src/report-encoding.ts) and `redactString` (src/log.ts) are patterns over
   free text. Since #645 both cut to the **last** `@` of the authority (`[^\s/?#]*@`: `/`, `?`
   and `#` end it, so an `@` in a path or query stays), as a URL parser does. **Whitespace
@@ -257,7 +259,8 @@ model, and the page under test chooses much of what an error or a redirect conta
   tool answers `url` = the landing page, `redirected: true`, `redirectedFrom` = the request
   (a caller reading by job id may no longer hold it). Only for absolute page URLs: a
   relative pattern (`iris a11y` with `baseURL`) records nothing, since history does not
-  know the base. Rows from before #648 read as not redirected.
+  know the base. Rows from before #648 read as not redirected. The portal's run detail
+  shows it beside the request (`describeResult`: `<url> (landed on <landedUrl>)`, #662).
 - **A rule's `helpUrl` is derived, never stored** (`axeRuleHelpUrl`, src/mcp/axe-help-url.ts):
   axe runs inside the page under test, so the `helpUrl` in its result is page-chosen text.
   The link is built from the rule id (one encoded path segment) and the installed axe-core's

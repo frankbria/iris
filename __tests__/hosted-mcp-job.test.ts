@@ -92,7 +92,17 @@ const PAGE =
         return;
       }
       res.setHeader('content-type', 'text/html');
-      res.end(PAGE);
+      // Pages that move on by script once their own response has arrived (#662).
+      const moves: Record<string, string> = {
+        '/moved-by-script': '/signin?token=s3cret',
+        '/script-to-internal': `http://internal.test:${sitePort}/secret-path`,
+      };
+      const target = moves[req.url ?? ''];
+      res.end(
+        target
+          ? PAGE.replace('<main>', `<script>location.replace('${target}')</script><main>`)
+          : PAGE,
+      );
     });
     site.listen(0, '127.0.0.1');
     await once(site, 'listening');
@@ -235,6 +245,55 @@ const PAGE =
     const body = await read.text();
     expect(body).toContain(`"landedUrl":"${landed}"`);
     expect(body).not.toContain('s3cret');
+  });
+
+  it('reports the page a script moved on to, and stores it as landedUrl (#662)', async () => {
+    const client = await connect();
+    const url = `http://site.test:${sitePort}/moved-by-script`;
+    const [result, job] = await Promise.all([
+      client.callTool({ name: 'run_accessibility_test', arguments: { url } }),
+      workerRunsNext(),
+    ]);
+
+    expect(seen).toEqual([
+      `site.test:${sitePort} /moved-by-script`,
+      `site.test:${sitePort} /signin?token=s3cret`,
+    ]);
+    const landed = `http://site.test:${sitePort}/signin`;
+    expect(result.structuredContent).toMatchObject({
+      jobId: job.id,
+      status: 'finished',
+      url: landed,
+      redirected: true,
+      redirectedFrom: url,
+    });
+    expect(textOf(result)).toContain(`on ${landed} (redirected from ${url})`);
+
+    const read = await fetch(`${base}/v1/runs/${job.id}`, {
+      headers: { authorization: 'Bearer key-a' },
+    });
+    const body = await read.text();
+    expect(body).toContain(`"landedUrl":"${landed}"`);
+    expect(body).not.toContain('s3cret');
+  });
+
+  it('a script that moves on to a name the egress proxy refuses fails the scan (#662)', async () => {
+    const client = await connect();
+    const url = `http://site.test:${sitePort}/script-to-internal`;
+    const [result, job] = await Promise.all([
+      client.callTool({ name: 'run_accessibility_test', arguments: { url } }),
+      workerRunsNext(),
+    ]);
+
+    // The first page was fetched; the internal one never was.
+    expect(seen).toEqual([`site.test:${sitePort} /script-to-internal`]);
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(
+      `Accessibility scan ${job.id} failed: the scan could not be completed (details are on the server log).`,
+    );
+    expect(JSON.stringify(result)).not.toContain('internal.test');
+    const usage = await sql`select 1 from usage_events where run_id = ${job.id}`.execute(db);
+    expect(usage.rows).toEqual([]);
   });
 
   it('a page the egress proxy refuses is a tool error in fixed words, with no usage', async () => {

@@ -17,8 +17,14 @@ import { AxeRunner } from './axe-integration';
 import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
-import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
-import { escapeHtml, escapeXml, safeHref, strippedError } from '../report-encoding';
+import { installUrlPolicyGuard, guardedGoto, guardedDocumentUrl } from '../url-policy-guard';
+import {
+  escapeHtml,
+  escapeXml,
+  safeHref,
+  strippedError,
+  urlWithoutUserinfo,
+} from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 import { withPageTimeout } from '../page-timeout';
 
@@ -391,10 +397,15 @@ export class AccessibilityRunner {
           }
         });
       }
-      const scannedUrl = await guardedGoto(page, url, { waitUntil: 'networkidle' });
+      await guardedGoto(page, url, { waitUntil: 'networkidle' });
       if (this.config.failOnHttpError && status >= 400) {
         throw new Error(`${pagePattern} answered HTTP ${status}`);
       }
+      // The document as it is now, not the response the navigation ended on: a page can
+      // move on by script, meta refresh or its router before the network went idle (#662).
+      // Chromium keeps a URL's credentials off the document; cut them all the same, since
+      // this goes into reports and history.
+      const scannedUrl = urlWithoutUserinfo(guardedDocumentUrl(page, url));
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
 

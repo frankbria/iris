@@ -104,8 +104,10 @@ export function loggedDetail(detail: string, requested: string): string {
 }
 
 /**
- * A URL as the network sees it. The runner reports the response's URL, which never has
- * the request's fragment or credentials: without this, `/#/checkout` read as a redirect.
+ * A URL as far as a redirect is judged by it: no fragment, no credentials. The runner
+ * reports the document's URL (#662), which never has the request's credentials, and a
+ * fragment is a place within a page: a hash router moving `/` to `/#/login` is not reported
+ * as a redirect, since the landing URL is shown without its fragment anyway.
  */
 function asRequested(url: string): string | undefined {
   const target = parsed(url);

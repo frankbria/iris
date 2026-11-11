@@ -1,22 +1,36 @@
-# #660 [P3.38] redactString: a run of bare separators costs a callback each
+# #662 [P3.39] a11y: a client-side navigation is not reported as a redirect; portal run detail does not show landedUrl
 
 ## Plan (self-authored; no plan on the issue)
 
-1. Tests first (`__tests__/url-credentials.test.ts`): a megabyte of `&`, `;`, `#`, `?` and
-   mixes through `redactString`, timed against the pre-#658 pattern in the same test (a
-   ratio, never an absolute time); `;`, `%` and an encoded `k` in the 60,000-string
-   comparison, with the name decoded in its reference; more shapes on the ladder.
-2. `QUERY_PARAM` (`src/log.ts`) needs `=value` again, so a bare separator is no match and
-   no callback; a `?` begins a match only as the first of its name (a lookbehind placed
-   after the `\?`), which keeps #658's linear time and the match set.
-3. Docs: `.claude/rules/rpc-server.md`, `plans/README.md` (P3.38 done; rows for #662, #664).
+1. Tests first, real Chromium (CI only on this host): `url-policy-guard.test.ts` for the new
+   `guardedDocumentUrl()` (script, meta refresh, `history.replaceState`; a script that moves
+   on to the metadata host; a script that moves on to a dead host), `mcp/tools.test.ts`
+   (stdio tool: `redirected: true` and the second page), `hosted-mcp-job.test.ts` (hosted
+   tool and the stored `landedUrl`; a script that moves on to a name the egress proxy
+   refuses), `runner-url-policy.test.ts` (the runner's own error text).
+2. `guardedDocumentUrl(page, requested)` in `src/url-policy-guard.ts`: the URL of the
+   document the page holds now, refused when that is Chromium's error page or a URL the
+   page's policy refuses. `testPage` in `src/a11y/a11y-runner.ts` hands that to axe in
+   place of the last HTTP response's URL.
+3. Portal: `describeResult` (`apps/portal/lib/run-format.ts`) names the landing page beside
+   the requested one; unit test and the run-detail E2E.
+4. Docs: `.claude/rules/browser-safety.md`, `.claude/rules/rpc-server.md`,
+   `docs/data-flows.md`, README, `plans/README.md` (P3.39 done, P3.41 row for #666).
 
 ## Decisions
-- Of the issue's two options, neither as written: "skip when the text holds no `=`" leaves
-  `&&&…=` slow, and "consume runs without a callback" still costs one match per run. The
-  pattern simply does not match where no value follows.
+- The URL is read once, just before axe runs, as the issue proposes. A page that navigates
+  while axe runs fails the scan as before (the execution context is gone); nothing compares
+  the URL again afterwards, because a single-page app may rewrite its URL at any time.
+- A move that only changes the fragment (a hash router) is still not a redirect:
+  `scannedPage()` compares without the fragment, and a landing URL is reported without one.
+- A refused client-side navigation uses the words of a refused HTTP redirect ("redirects
+  to …, which is blocked by navigation policy"), so the MCP tools' fixed vocabulary applies.
+- `guardedGoto` keeps returning the response's URL: the executor, watcher and visual runner
+  ignore it, and changing what it throws for them is outside this issue.
 
 ## Acceptance criteria
-- [ ] 1 MB of `&`, `;`, `#`, `?` in a few milliseconds, still linear (ladder passes)
-- [ ] Match set unchanged (60,000-string comparison with `%` and `decodedName`)
-- [ ] Options weighed
+- [ ] The runner reports the document's URL at the time axe runs; a page that navigates
+      client-side shows `redirected: true` and the second page's URL in the stdio tool, the
+      hosted tool and the stored `landedUrl`.
+- [ ] The URL policy still holds for the page that is scanned.
+- [ ] The portal's run detail shows where a redirected page landed.

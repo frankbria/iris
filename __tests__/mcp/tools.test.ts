@@ -146,6 +146,21 @@ describe('run_accessibility_test tool', () => {
         res.end();
         return;
       }
+      // Pages that move on by script once their own response has arrived (#662).
+      const moves: Record<string, string> = {
+        '/script-redirect': '/clean?code=s3cret-oauth-code',
+        '/script-to-metadata': 'http://169.254.169.254/latest/meta-data/',
+      };
+      if (req.url && moves[req.url]) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(
+          FAILING_HTML.replace(
+            '<body>',
+            `<body><script>location.replace('${moves[req.url]}')</script>`,
+          ),
+        );
+        return;
+      }
       if (req.url?.startsWith('/held')) {
         held.waiting.push(() => {
           res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -347,6 +362,37 @@ describe('run_accessibility_test tool', () => {
       expect(result.structuredContent!.url).not.toBe(redirectOkURL);
       expect(result.structuredContent!.redirected).toBe(true);
       expect(result.content?.[0]?.text).toContain(`redirected from ${redirectOkURL}`);
+    }, 120_000);
+
+    // #662: the runner named the last HTTP response, which for these is the first page.
+    it('reports the page a script moved on to as the one it scanned', async () => {
+      const url = `${origin}/script-redirect`;
+      const result = await callTool({ url });
+
+      expect(result.isError).toBeFalsy();
+      // The clean page's verdict under the clean page's URL: the first page fails axe.
+      expect(result.structuredContent).toMatchObject({
+        url: cleanURL,
+        redirected: true,
+        passed: true,
+        violationCount: 0,
+      });
+      expect(result.content?.[0]?.text).toContain(`redirected from ${url}`);
+      expect(JSON.stringify(result)).not.toContain('s3cret');
+    }, 120_000);
+
+    it('fails the scan of a page whose script moves on to a blocked host, without the target', async () => {
+      const url = `${origin}/script-to-metadata`;
+      const result = await callTool({ url });
+
+      expect(result.isError).toBe(true);
+      const text = result.content?.[0]?.text ?? '';
+      expect(text).toBe(
+        `Accessibility scan failed for ${url}: it redirects to a link-local or ` +
+          'metadata address, which the navigation policy blocks.',
+      );
+      expect(text).not.toContain('169.254');
+      expect(result.structuredContent).toBeUndefined();
     }, 120_000);
 
     it('follows an in-policy redirect and scans what it lands on', async () => {
