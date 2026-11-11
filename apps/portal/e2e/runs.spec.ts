@@ -154,6 +154,7 @@ test("shows each kind's detail, redacts recorded secrets, and 404s another org's
         result: {
           score: 20,
           violations: { critical: 2, serious: 3, moderate: 0, minor: 0 },
+          landedUrl: "https://shop.example/login",
         },
       },
     ],
@@ -187,7 +188,9 @@ test("shows each kind's detail, redacts recorded secrets, and 404s another org's
     page.getByRole("heading", { name: "Accessibility run" })
   ).toBeVisible()
   const a11yRow = page.getByRole("table").getByRole("row").nth(1)
-  await expect(a11yRow).toContainText("https://shop.example/")
+  await expect(a11yRow).toContainText(
+    "https://shop.example/ (landed on https://shop.example/login)"
+  )
   await expect(a11yRow).toContainText("Failed")
   await expect(a11yRow).toContainText("score 20 · 2 critical, 3 serious")
 

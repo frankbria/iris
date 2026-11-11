@@ -22,6 +22,7 @@ import * as path from 'path';
 import {
   installUrlPolicyGuard,
   guardedGoto,
+  guardedDocumentUrl,
   observeGuardDecisions,
   MAX_POPUPS_PER_CONTEXT,
 } from '../src/url-policy-guard';
@@ -158,6 +159,24 @@ describe('URL policy guard', () => {
       if (url === '/frame-host') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(page('Outer', '<iframe src="/to-final"></iframe>'));
+      }
+      // Pages that move on by themselves after their own response arrived (#662).
+      const moves: Record<string, string> = {
+        '/script-moves': `<script>location.replace('/final?moved=1')</script>`,
+        '/router-moves': `<script>history.replaceState(null, '', '/routed')</script>`,
+        '/script-to-metadata': `<script>location.replace('${METADATA}')</script>`,
+        // Port 1 is one Chromium refuses to dial itself, so this fails the same everywhere.
+        '/script-to-nowhere': `<script>location.replace('http://localhost:1/')</script>`,
+      };
+      if (moves[url]) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(page('Moves', moves[url]));
+      }
+      if (url === '/meta-moves') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(
+          '<!DOCTYPE html><html lang="en"><head><meta http-equiv="refresh" content="0;url=/final?moved=1"><title>Moves</title></head><body></body></html>',
+        );
       }
       if (url === '/subresource-blocked') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -330,6 +349,81 @@ describe('URL policy guard', () => {
 
       expect(landed).toBe(`${origin}/final`);
       expect(landed).not.toBe(`${origin}/to-final`);
+    }, 60_000);
+  });
+
+  describe('the document a page holds once it moved on by itself (#662)', () => {
+    it.each([
+      ['a script', '/script-moves'],
+      ['a meta refresh', '/meta-moves'],
+    ])(
+      '%s: the second document, where the response was the first',
+      async (_how, first) => {
+        await installUrlPolicyGuard(p, {});
+
+        const responded = await guardedGoto(p, `${origin}${first}`, { waitUntil: 'networkidle' });
+
+        // The control: what the a11y runner used to report as the page it scanned.
+        expect(responded).toBe(`${origin}${first}`);
+        expect(guardedDocumentUrl(p, `${origin}${first}`)).toBe(`${origin}/final?moved=1`);
+        await expect(p.title()).resolves.toBe('Final');
+      },
+      60_000,
+    );
+
+    it('a router rewriting the URL: the URL the document has now', async () => {
+      await installUrlPolicyGuard(p, {});
+
+      await guardedGoto(p, `${origin}/router-moves`, { waitUntil: 'networkidle' });
+
+      expect(guardedDocumentUrl(p, `${origin}/router-moves`)).toBe(`${origin}/routed`);
+    }, 60_000);
+
+    it('a page that stayed: its own URL, on an unguarded page too', async () => {
+      await guardedGoto(p, `${origin}/final`);
+      expect(guardedDocumentUrl(p, `${origin}/final`)).toBe(`${origin}/final`);
+
+      await installUrlPolicyGuard(p, {});
+      await guardedGoto(p, `${origin}/final#part`);
+      expect(guardedDocumentUrl(p, `${origin}/final#part`)).toBe(`${origin}/final#part`);
+    }, 60_000);
+
+    it('refuses the error page a refused move leaves behind, and says why', async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/script-to-metadata`;
+
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+
+      expect(() => guardedDocumentUrl(p, first)).toThrow(
+        /script-to-metadata redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy: .*link-local\/metadata/,
+      );
+    }, 60_000);
+
+    it('refuses the error page of a move that failed for another reason', async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/script-to-nowhere`;
+
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+
+      expect(() => guardedDocumentUrl(p, first)).toThrow(
+        `${first} moved on to a page that could not be loaded`,
+      );
+    }, 60_000);
+
+    it('refuses a document the policy no longer admits', async () => {
+      await installUrlPolicyGuard(p, {});
+      await guardedGoto(p, `${origin}/final`);
+      // Tightened after the navigation, as the agent loop's pin is.
+      await installUrlPolicyGuard(p, { blockPrivateHosts: true });
+
+      // Named as itself, as guardedGoto names a URL refused outright.
+      expect(() => guardedDocumentUrl(p, `${origin}/final`)).toThrow(
+        /\/final blocked by navigation policy: .*private\/loopback/,
+      );
+      // Reached from elsewhere, it is where that page went.
+      expect(() => guardedDocumentUrl(p, `${origin}/account`)).toThrow(
+        /\/account redirects to http:\/\/localhost:\d+\/final, which is blocked by navigation policy: .*private\/loopback/,
+      );
     }, 60_000);
   });
 

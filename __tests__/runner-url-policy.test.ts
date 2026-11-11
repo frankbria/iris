@@ -141,7 +141,16 @@ describe('runner URL policy', () => {
         return;
       }
       res.setHeader('Content-Type', 'text/html');
-      res.end('<html lang="en"><head><title>ok</title></head><body><h1>ok</h1></body></html>');
+      // Pages that move on by script once their own response has arrived (#662).
+      const moves: Record<string, string> = {
+        '/script-moves': '/landed?token=s3cret#access_token=s3cret2',
+        '/script-to-metadata': METADATA_URL,
+      };
+      const target = moves[req.url ?? ''];
+      const script = target ? `<script>location.replace('${target}')</script>` : '';
+      res.end(
+        `<html lang="en"><head><title>ok</title></head><body>${script}<h1>ok</h1></body></html>`,
+      );
     });
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
@@ -175,6 +184,21 @@ describe('runner URL policy', () => {
     it('a11y refuses a redirect to the metadata host', async () => {
       expect(await a11yError(a11y, a11yConfig(`${origin}/to-metadata`))).toMatch(
         /redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
+      );
+    });
+
+    // #662: the response the navigation ended on is the first page; the scan is of the second.
+    it('a11y reports the page a script moved on to as the one it scanned', async () => {
+      const result = await new a11y.AccessibilityRunner(a11yConfig(`${origin}/script-moves`)).run();
+      expect(result.results[0].error).toBeUndefined();
+      // The query string as the response's URL always had it; never the fragment.
+      expect(result.results[0].axeResult.url).toBe(`${origin}/landed?token=s3cret`);
+      expect(hits).toEqual(['/script-moves', '/landed?token=s3cret']);
+    });
+
+    it('a11y fails the scan of a page whose script moves on to the metadata host', async () => {
+      expect(await a11yError(a11y, a11yConfig(`${origin}/script-to-metadata`))).toMatch(
+        /script-to-metadata redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
       );
     });
 
