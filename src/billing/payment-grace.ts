@@ -61,12 +61,13 @@ export async function trackPayment(
   }
   await sql`update org_billing set payment_grace_ends_at = null, payment_suspended_at = null
     where org_id = ${orgId}`.execute(tx);
-  const suspensions = orgSuspensions(tx);
-  const { suspended, last } = await suspensions.status(orgId);
-  // An operator's suspension (abuse, deletion) is not billing's to lift.
-  const suspensionLifted = suspended && last?.actor === BILLING_ACTOR;
-  if (suspensionLifted)
-    await suspensions.unsuspend(orgId, { reason: 'payment settled', actor: BILLING_ACTOR });
+  // An operator's suspension (abuse, deletion) is not billing's to lift. Whose it is gets
+  // read under the suspension lock, so one recorded over billing's at this moment stays.
+  const { changed: suspensionLifted } = await orgSuspensions(tx).unsuspend(orgId, {
+    reason: 'payment settled',
+    actor: BILLING_ACTOR,
+    onlyIfBy: BILLING_ACTOR,
+  });
   await recordAudit(tx, { orgId, action: 'billing.restore', metadata: { suspensionLifted } });
 }
 

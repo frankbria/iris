@@ -235,6 +235,7 @@ production.
 | `P2.28` | [#522](https://github.com/frankbria/iris/issues/522) | fetchWithTimeout covers the response body | — | DONE (#574) |
 | `P2.30` | [#528](https://github.com/frankbria/iris/issues/528) | RPC server: JSON-RPC batch requests (decided: not supported) | — | DONE (#575) |
 | `P2.26` | [#513](https://github.com/frankbria/iris/issues/513) | Credential references hardening: origin binding and transformed values | P1.16 (#352) | DONE (#571) |
+| `P2.32` | [#639](https://github.com/frankbria/iris/issues/639) | Deploy job: pass `IRIS_BILLING_GRACE_DAYS` to `settings.env` | P0.38 (#266) | BLOCKED (needs-owner: the deploy job is the owner's to edit) |
 
 ### P3 — Polish / test trust / hygiene
 

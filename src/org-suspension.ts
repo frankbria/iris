@@ -137,7 +137,7 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
   const act = async (
     action: SuspensionAction,
     ref: string,
-    { reason, actor }: { reason: string; actor: string },
+    { reason, actor, onlyIfBy }: { reason: string; actor: string; onlyIfBy?: string },
   ): Promise<SuspensionStatus & { changed: boolean }> => {
     if (!reason.trim()) throw new Error('A reason is required');
     if (!actor.trim()) throw new Error('An actor is required');
@@ -149,8 +149,11 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
       // paid invoice would lift it, and an abuse suspension would end with a payment.
       const overBilling =
         action === 'suspend' && last?.actor === BILLING_ACTOR && actor.trim() !== BILLING_ACTOR;
-      if ((last?.action ?? 'unsuspend') === action && !overBilling) {
-        return { id, suspended: action === 'suspend', last, changed: false };
+      // `onlyIfBy` is decided here, under the lock: a suspension someone else recorded
+      // a moment ago is seen, not undone.
+      const notTheirs = onlyIfBy !== undefined && last?.actor !== onlyIfBy;
+      if (((last?.action ?? 'unsuspend') === action && !overBilling) || notTheirs) {
+        return { id, suspended: last?.action === 'suspend', last, changed: false };
       }
       // Dated strictly after the subject's latest row, under the lock: `now()` is when the
       // transaction began, and a transaction that began first can take the lock second,
@@ -180,7 +183,9 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
 
   return {
     suspend: (ref: string, by: { reason: string; actor: string }) => act('suspend', ref, by),
-    unsuspend: (ref: string, by: { reason: string; actor: string }) => act('unsuspend', ref, by),
+    /** `onlyIfBy`: lift the suspension only when its latest row is that actor's (#266). */
+    unsuspend: (ref: string, by: { reason: string; actor: string; onlyIfBy?: string }) =>
+      act('unsuspend', ref, by),
     /** The hot-path check (auth, worker, portal): one indexed query, no existence check. */
     async isSuspended(id: string): Promise<boolean> {
       const { rows } = await sql<{ s: boolean }>`select ${latestSql(subject, id)} as s`.execute(db);

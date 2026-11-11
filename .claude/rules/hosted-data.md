@@ -281,7 +281,7 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   extension that lasts until the payment settles (a failure after that is a new one). An org an operator
   already suspended is skipped while suspended, and suspended for billing if that is lifted.
 - **Restore lifts only billing's own suspension** (the latest row is `suspend` by
-  `billing`). An operator's survives a paid invoice, and `suspend` by anyone else is
+  `billing`, checked under the suspension lock: `unsuspend(…, { onlyIfBy })`, codex review). An operator's survives a paid invoice, and `suspend` by anyone else is
   recorded **over** a billing suspension (`act()` in org-suspension.ts, the one case where
   an already-suspended org gets a row). `requestOrgDeletion` stamps over it too (a card
   retry during the 30 days must not reopen an org waiting to be purged) and clears
