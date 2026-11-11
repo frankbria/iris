@@ -126,6 +126,7 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
   /**
    * Records `action` unless the subject is already in that state (then nothing is
    * written). Serialized per subject, so two operators acting at once record one change.
+   * On a transaction it writes there, and is logged before that transaction commits.
    */
   const act = async (
     action: SuspensionAction,
@@ -134,7 +135,7 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
   ): Promise<SuspensionStatus & { changed: boolean }> => {
     if (!reason.trim()) throw new Error('A reason is required');
     if (!actor.trim()) throw new Error('An actor is required');
-    const result = await db.transaction().execute(async (tx) => {
+    const write = async (tx: Kysely<unknown>) => {
       const id = await subject.resolve(tx, ref);
       await sql`select pg_advisory_xact_lock(hashtext(${subject.table + ':' + id}))`.execute(tx);
       const last = await latest(tx, id);
@@ -153,7 +154,9 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
         returning action, reason, actor, created_at`.execute(tx);
       if (action === 'suspend') await subject.onSuspend?.(tx, id);
       return { id, suspended: action === 'suspend', last: toEvent(rows[0]), changed: true };
-    });
+    };
+    // On a caller's transaction (billing's, #266), join it: Kysely cannot nest one.
+    const result = await (db.isTransaction ? write(db) : db.transaction().execute(write));
     const { id, ...status } = result;
     if (status.changed) {
       log('info', `${subject.label} ${action === 'suspend' ? 'suspended' : 'unsuspended'}`, {

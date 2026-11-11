@@ -164,6 +164,8 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   // Stripe billing (#345): none set is off, a partial configuration refuses to start.
   const { resolveStripeConfig } = await import('./billing/stripe');
   const stripeConfig = resolveStripeConfig(env);
+  const { resolveGraceDays, startGraceSweep } = await import('./billing/payment-grace');
+  const graceDays = resolveGraceDays(env);
   // Loaded here, not at the top: BetterAuth is ESM-only (require(esm)), and this
   // module is itself only loaded in hosted mode.
   const { createPostgresDb, probeDatabase, resolveDatabaseUrl } = await import('./db/postgres');
@@ -194,6 +196,8 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
   const { recordAudit } = await import('./audit-log');
   const { orgEntitlements } = await import('./billing/plans');
   const entitlements = (orgId: string) => orgEntitlements(db as Kysely<unknown>).get(orgId);
+  // Orgs past a failed payment's grace period are suspended from here (#266).
+  if (stripeConfig) startGraceSweep(db as Kysely<unknown>);
   return {
     authenticate: apiKeyAuthenticator(
       auth,
@@ -228,6 +232,7 @@ export async function hostedServices(env: NodeJS.ProcessEnv = process.env): Prom
       stripeWebhook: (await import('./billing/stripe-webhook')).stripeWebhookHandler(
         db as Kysely<unknown>,
         stripeConfig,
+        { graceDays },
       ),
     }),
   };

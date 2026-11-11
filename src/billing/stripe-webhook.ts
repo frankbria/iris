@@ -2,6 +2,7 @@ import type Stripe from 'stripe';
 import { sql, type Kysely } from 'kysely';
 import { recordAudit } from '../audit-log';
 import { orgEntitlements, type PlanId } from './plans';
+import { trackPayment } from './payment-grace';
 import { planForPrice, stripeClient, type StripeConfig } from './stripe';
 
 /**
@@ -33,8 +34,11 @@ export interface SubscriptionSnapshot {
 /** The customer's subscriptions as Stripe has them now, any status. */
 export type ReadSubscriptions = (customerId: string) => Promise<SubscriptionSnapshot[]>;
 
-/** Statuses that keep the paid plan; past_due too, until #266's grace period decides. */
+/** Statuses that keep the paid plan; past_due too: the grace period (#266) suspends, it does not downgrade. */
 const ENTITLED_STATUSES = ['active', 'trialing', 'past_due'];
+
+/** Statuses of a subscription whose latest invoice went unpaid (#266). */
+const PAYMENT_FAILED_STATUSES = ['past_due', 'unpaid'];
 
 type Reference = string | { id: string } | null | undefined;
 const idOf = (reference: Reference): string | null =>
@@ -83,7 +87,7 @@ async function applyEvent(
   tx: Kysely<unknown>,
   event: Stripe.Event,
   customerId: string,
-  dependencies: { config: StripeConfig; readSubscriptions: ReadSubscriptions },
+  dependencies: { config: StripeConfig; readSubscriptions: ReadSubscriptions; graceDays?: number },
 ): Promise<WebhookOutcome> {
   const { rows } = await sql<{ org_id: string }>`
     select org_id from org_billing where stripe_customer_id = ${customerId} for update`.execute(tx);
@@ -99,6 +103,10 @@ async function applyEvent(
       subscription_status = ${current?.status ?? null}, updated_at = now()
     where org_id = ${orgId}`.execute(tx);
   await applyPlan(tx, orgId, plan);
+  await trackPayment(tx, orgId, {
+    failing: PAYMENT_FAILED_STATUSES.includes(current?.status ?? ''),
+    graceDays: dependencies.graceDays,
+  });
   await recordAudit(tx, {
     orgId,
     action: 'subscription.update',
@@ -148,7 +156,12 @@ export function stripeWebhookHandler(
   config: StripeConfig,
   {
     readSubscriptions = stripeSubscriptionReader(config),
-  }: { readSubscriptions?: ReadSubscriptions } = {},
+    graceDays,
+  }: {
+    readSubscriptions?: ReadSubscriptions;
+    /** Days from a failed payment to suspension (#266); `resolveGraceDays()` in production. */
+    graceDays?: number;
+  } = {},
 ) {
   const stripe = stripeClient(config);
   const verify = (rawBody: string, signature: string): Stripe.Event | null => {
@@ -165,6 +178,6 @@ export function stripeWebhookHandler(
     if (!customerId) return 'ignored';
     return db
       .transaction()
-      .execute((tx) => applyEvent(tx, event, customerId, { config, readSubscriptions }));
+      .execute((tx) => applyEvent(tx, event, customerId, { config, readSubscriptions, graceDays }));
   };
 }

@@ -3,6 +3,7 @@ import * as path from 'path';
 import Database from 'better-sqlite3';
 import { sql, type Kysely, type RawBuilder } from 'kysely';
 import { log } from './log';
+import { BILLING_ACTOR } from './billing/payment-grace';
 import { orgArtifacts, type ArtifactStore } from './artifact-store';
 import { forgetArtifacts } from './storage-quota';
 
@@ -150,8 +151,8 @@ export function offboarding(db: Kysely<unknown>) {
 
   const latestSuspension = async (q: Kysely<unknown>, orgId: string) =>
     (
-      await sql<{ action: string; reason: string }>`
-        select action, reason from org_suspensions where org_id = ${orgId}
+      await sql<{ action: string; reason: string; actor: string }>`
+        select action, reason, actor from org_suspensions where org_id = ${orgId}
         order by created_at desc, id desc limit 1`.execute(q)
     ).rows[0];
 
@@ -257,7 +258,10 @@ export function offboarding(db: Kysely<unknown>) {
         if (!inserted.rows.length)
           throw new OffboardingError(`Deletion of ${orgId} was already requested`);
         await lockSuspensions(tx, orgId);
-        if ((await latestSuspension(tx, orgId))?.action !== 'suspend')
+        // Over a billing suspension too (#266): a late payment lifts only billing's own
+        // row, and must not reopen an org that is waiting to be purged.
+        const last = await latestSuspension(tx, orgId);
+        if (last?.action !== 'suspend' || last.actor === BILLING_ACTOR)
           await stampSuspension(tx, orgId, 'suspend', DELETION_REASON, actor);
         log('info', 'org deletion requested', { orgId, actor });
         return (inserted.rows[0] as { purge_after: Date }).purge_after;

@@ -202,6 +202,7 @@ describe('migrate process against a server that never answers', () => {
       ['0018_managed_ai_reservations', 'Success'],
       ['0019_user_active_orgs', 'Success'],
       ['0020_org_billing', 'Success'],
+      ['0022_billing_grace', 'Success'],
     ]);
 
     const tables = await sql<{ table_name: string }>`
@@ -232,17 +233,17 @@ describe('migrate process against a server that never answers', () => {
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('20');
+    expect(applied.rows[0].n).toBe('21');
   });
 
   // A rollback deploys an older image (#273): its catalog lacks what a newer release applied.
   it('an older release on a newer schema applies nothing and succeeds', async () => {
     const older: Record<string, unknown> = { ...MIGRATIONS };
-    delete older['0020_org_billing'];
+    delete older['0022_billing_grace'];
     const log = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
       expect(await migrateToLatest(db, older as typeof MIGRATIONS)).toEqual([]);
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/schema is ahead.*0020_org_billing/));
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/schema is ahead.*0022_billing_grace/));
     } finally {
       log.mockRestore();
     }
@@ -250,17 +251,17 @@ describe('migrate process against a server that never answers', () => {
 
   it('refuses a release with pending migrations on a schema with newer ones', async () => {
     const branched: Record<string, unknown> = { ...MIGRATIONS };
-    delete branched['0020_org_billing'];
+    delete branched['0022_billing_grace'];
     const up = jest.fn();
     branched['0003b_branch'] = { up };
     await expect(migrateToLatest(db, branched as typeof MIGRATIONS)).rejects.toThrow(
-      /does not know \(0020_org_billing\).*unapplied ones \(0003b_branch\).*branched off/,
+      /does not know \(0022_billing_grace\).*unapplied ones \(0003b_branch\).*branched off/,
     );
     expect(up).not.toHaveBeenCalled();
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('20');
+    expect(applied.rows[0].n).toBe('21');
   });
 
   it('gives every IRIS table org_id NOT NULL and an index that leads with it', async () => {
