@@ -963,10 +963,11 @@ leak into an Anthropic session.
 
 These choose the **text** model (`iris run`). Visual analysis (`visual-diff --semantic`,
 `watch --feedback`) needs a model that accepts images and takes it from `--ai-model <id>`;
-without it, each provider's vision default is used (`gpt-4o`, `claude-sonnet-5`, `llava`).
-IRIS knows which OpenAI families see (`gpt-4o`, `gpt-4.1`, `gpt-5`, `o1`/`o3`/`o4`, not
-`gpt-3.5` or `o1-mini`); for Ollama it asks the daemon (`/api/show` capabilities, so
-`llama3.2-vision`, `gemma3` or `qwen2.5vl` work) and checks that the model is pulled. That
+without it, each provider's vision default is used (`gpt-6.1-terra`, `claude-sonnet-5`, `llava`).
+IRIS knows which OpenAI families it can send images to (`gpt-6`, `gpt-5.6`, `gpt-5.5`,
+`gpt-5.4`, `gpt-5.2`; not the Responses-only `-pro` models, and not the families OpenAI has
+deprecated: `gpt-4o`, `gpt-4.1`, the first `gpt-5`, `o1`/`o3`/`o4`); for Ollama it asks the
+daemon (`/api/show` capabilities, so `llama3.2-vision`, `gemma3` or `qwen2.5vl` work) and checks that the model is pulled. That
 check gives up after 2 seconds and is reused for a minute.
 
 #### Model availability is checked, not assumed
@@ -1036,7 +1037,7 @@ sections; anything else in it is ignored:
 {
   "ai": {
     "provider": "openai",
-    "model": "gpt-4o-mini"
+    "model": "gpt-6-luna"
   },
   "watch": {
     "patterns": ["**/*.{ts,tsx,js,jsx}"],

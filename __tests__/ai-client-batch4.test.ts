@@ -507,10 +507,10 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       });
 
       it('prices a dated Anthropic ID at its family rate', () => {
-        // Sonnet 5: 1000 * $3/1M + 1000 * $15/1M
+        // Sonnet 5: 1000 * $2/1M + 1000 * $10/1M (the standard price since #523)
         expect(
           tracker.trackOperation('anthropic', 'claude-sonnet-5-20260514', false, usage),
-        ).toBeCloseTo(0.018, 10);
+        ).toBeCloseTo(0.012, 10);
         expect(tracker.trackOperation('anthropic', 'claude-sonnet-5-20260514', false)).toBe(0.0015);
       });
 
@@ -643,8 +643,10 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         expect(tracker.trackOperation('anthropic', 'claude-opus-5-latest', false)).toBe(0.004);
       });
 
-      it('prices the gpt-4o launch snapshot at its own, higher rate', () => {
-        // gpt-4o-2024-05-13 is $5/$15 per 1M, not gpt-4o's $2.50/$10.
+      // The one default row of this kind, gpt-4o-2024-05-13, went when OpenAI shut the
+      // snapshot down (#523); the rule it showed still holds for any row registered.
+      it('prices a snapshot with its own row at that rate, not its family rate', () => {
+        tracker.setPricing('openai', 'gpt-4o-2024-05-13', 0.004, 5e-6, 1.5e-5);
         expect(tracker.trackOperation('openai', 'gpt-4o-2024-05-13', false, usage)).toBeCloseTo(
           1000 * 5e-6 + 1000 * 1.5e-5,
           12,
@@ -748,7 +750,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
     describe('reserve-then-settle (issue #244)', () => {
       // A three-image Sonnet 5 analysis near the top of what one call can use.
       const bigVision = { inputTokens: 6000, outputTokens: 1000 };
-      const bigVisionCost = 6000 * 3e-6 + 1000 * 1.5e-5;
+      const bigVisionCost = 6000 * 2e-6 + 1000 * 1e-5;
 
       // #390: reports show settled spend; the budget still counts what is in flight.
       it('leaves a pending reservation out of getStats, not out of the budget', () => {
@@ -797,15 +799,12 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
       it('settles a reservation to the actual cost and token counts', () => {
         const id = tracker.reserve('anthropic', 'claude-sonnet-5');
-        expect(tracker.settle(id, { inputTokens: 1000, outputTokens: 100 })).toBeCloseTo(
-          0.0045,
-          10,
-        );
+        expect(tracker.settle(id, { inputTokens: 1000, outputTokens: 100 })).toBeCloseTo(0.003, 10);
 
-        expect(tracker.getDailyCost()).toBeCloseTo(0.0045, 10);
+        expect(tracker.getDailyCost()).toBeCloseTo(0.003, 10);
         const stats = tracker.getStats();
         expect(stats.operationCount).toBe(1);
-        expect(stats.costByModel['claude-sonnet-5']).toBeCloseTo(0.0045, 10);
+        expect(stats.costByModel['claude-sonnet-5']).toBeCloseTo(0.003, 10);
       });
 
       it('settles a reply without usage at the flat per-call price', () => {
@@ -1048,7 +1047,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
           inputTokens: 1000,
           outputTokens: 200,
         });
-        expect(cost).toBeCloseTo(1000 * 3e-6 + 200 * 1.5e-5, 10);
+        expect(cost).toBeCloseTo(1000 * 2e-6 + 200 * 1e-5, 10);
       });
 
       it('should fall back to per-image price when usage is not provided', () => {
@@ -1378,9 +1377,9 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         reasoning: 'r',
         categories: ['color'],
       };
-      // Three images and a full reply on Sonnet 5: $0.033.
+      // Three images and a full reply on Sonnet 5: $0.022.
       const usage = { inputTokens: 6000, outputTokens: 1000 };
-      const callCost = 6000 * 3e-6 + 1000 * 1.5e-5;
+      const callCost = 6000 * 2e-6 + 1000 * 1e-5;
 
       const client = (dailyLimit: number, opts: SmartClientConfig = {}) =>
         createSmartClient(sonnet, {

@@ -15,18 +15,19 @@ import { OllamaTextClient } from '../src/ai-client/text';
 
 describe('isVisionModel (#298)', () => {
   it.each([
-    'gpt-4o',
-    'gpt-4o-mini',
-    'gpt-4o-2024-08-06',
-    'chatgpt-4o-latest',
-    'gpt-4.1',
-    'gpt-4.1-mini',
-    'gpt-4-turbo',
-    'gpt-5',
-    'gpt-5-mini',
-    'o1',
-    'o3',
-    'o4-mini',
+    'gpt-6-astra',
+    'gpt-6.1-sol',
+    'gpt-6.1-terra',
+    'gpt-6-sol',
+    'gpt-6-luna',
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
+    'gpt-5.5',
+    'gpt-5.5-2026-04-23',
+    'gpt-5.4',
+    'gpt-5.4-mini',
+    'gpt-5.2',
   ])('openai %s sees images', (model) => {
     expect(isVisionModel('openai', model)).toBe(true);
   });
@@ -40,7 +41,33 @@ describe('isVisionModel (#298)', () => {
     'gpt-4o-audio-preview',
     'gpt-4o-realtime-preview',
     'gpt-4o-mini-tts',
+    'gpt-realtime-2.1',
+    // Served by the Responses API only, which IRIS does not call (#523).
+    'gpt-5.5-pro',
+    'gpt-5.4-pro-2026-03-05',
+    'gpt-5.3-codex',
   ])('openai %s does not', (model) => {
+    expect(isVisionModel('openai', model)).toBe(false);
+  });
+
+  // #523: shut down, or deprecated with a shutdown date, so no longer offered for vision.
+  it.each([
+    'gpt-4o',
+    'gpt-4o-mini',
+    'gpt-4o-2024-08-06',
+    'chatgpt-4o-latest',
+    'gpt-4.1',
+    'gpt-4.1-mini',
+    'gpt-4-turbo',
+    'gpt-4.5-preview',
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-5.1',
+    'gpt-5.4-nano',
+    'o1',
+    'o3',
+    'o4-mini',
+  ])('openai %s is discontinued', (model) => {
     expect(isVisionModel('openai', model)).toBe(false);
   });
 
@@ -66,7 +93,7 @@ describe('isVisionModel (#298)', () => {
   it('the OpenAI vision client follows it', () => {
     const client = (model: string) =>
       new OpenAIVisionClient({ provider: 'openai', apiKey: 'k', model });
-    expect(client('gpt-4.1-mini').supportsVision()).toBe(true);
+    expect(client('gpt-5.4-mini').supportsVision()).toBe(true);
     expect(client('gpt-4').supportsVision()).toBe(false);
   });
 

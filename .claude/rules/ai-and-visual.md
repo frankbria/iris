@@ -137,14 +137,18 @@ paths:
   (a model the provider does not serve) still fails the comparison closed as `breaking`, and now
   counts in `aiUnavailable` with `summary.aiUnavailableReason` naming it
 - **Vision capability is a table, Ollama's is its own answer (#298).** `isVisionModel(provider,
-  model)` (src/ai-client/models.ts) is the one capability check: id prefixes per family
-  (`gpt-4o`, `gpt-4.1`, `gpt-5`, `o1`/`o3`/`o4`; `llava`, `llama3.2-vision`, `gemma3`, `qwen2.5vl`
-  …) minus `o1-mini`/`o3-mini` and audio/realtime/tts variants. It replaced name guesses
-  (`includes('gpt-4')`, `llava|bakllava`) that skipped every newer vision model and kept the
-  text-only `gpt-4`. OpenAI's model list has no capability field, so the table is the source
-  there; add a family when OpenAI ships one. Ollama's vision `isAvailable()` asks `/api/show` for
-  the **configured** model (it used to accept any pulled llava): `capabilities` decides, the table
-  only when an old Ollama reports none, and a 404 (not pulled) is unavailable
+  model)` (src/ai-client/models.ts) is the one capability check: id prefixes per family. It
+  replaced name guesses (`includes('gpt-4')`, `llava|bakllava`) that skipped every newer vision
+  model and kept the text-only `gpt-4`. OpenAI's model list has no capability field, so the table
+  is the source there. Since #523 OpenAI's entry is what it serves and has not deprecated
+  (`gpt-6`, `gpt-5.6`, `gpt-5.5`, `gpt-5.4`, `gpt-5.2`), minus audio/realtime/tts variants,
+  `-pro` and `-codex` (Responses API only; IRIS calls Chat Completions) and the deprecated
+  `gpt-5.4-nano`. `gpt-4o`, `gpt-4.1`, the first `gpt-5` and `o1`/`o3`/`o4` are shut down or
+  have a shutdown date and are no longer offered; add a family when OpenAI ships one, one prefix
+  per minor version (`gpt-5.` would admit the deprecated `gpt-5.1`). Ollama's vision
+  `isAvailable()` asks `/api/show` for the **configured** model (it used to accept any pulled
+  llava): `capabilities` decides, the table only when an old Ollama reports none, and a 404
+  (not pulled) is unavailable
 - **Ollama probes are bounded and cached (#298).** `probeOllama` (models.ts): 2 s timeout
   (`AbortSignal.timeout`, which also covers the body; `fetchWithTimeout` uses it too since #522, so every Ollama call and the model probe give up on a stalled body), answer
   (promise) cached 60 s per URL and model, `performance.now()` (#190). Text `isAvailable()` is
@@ -152,10 +156,16 @@ paths:
   caller, `cli-run-exit.test.ts`). `resetModelProbeCache()` clears it too; a test that mocks
   `fetch` for the same endpoint twice must call it between cases
 - **OpenAI requests send `max_completion_tokens`**, not the deprecated `max_tokens` (#298);
-  Anthropic keeps `max_tokens` (its own API). The o-series refuses any `temperature` but the
-  default, so `isReasoningModel()` (`o1`/`o3`/`o4`, `-mini`, snapshots) drops it from both
-  OpenAI clients' requests (#520); other models keep 0.1. Anthropic requests send no
-  `temperature`: API version 2026-10-21 (SDK 1.0) removed sampling parameters
+  Anthropic keeps `max_tokens` (its own API). `openAISampling(model)` (models.ts) is the one
+  place both OpenAI clients get their sampling options: `gpt-5.x` and `gpt-6` are reasoning
+  models, so they get `reasoning_effort: 'none'` (`'low'` for `gpt-6-astra` and `gpt-6.1-sol`,
+  which refuse `none`) and no `temperature`, which they refuse unless effort is `none` (#523);
+  reasoning is billed as output inside the 1000-token cap, hence `none`. The o-series
+  (`isReasoningModel()`) gets neither (#520); anything else keeps `temperature: 0.1`, including
+  the first `gpt-5`, which has no `none`. Anthropic requests send no `temperature`: API version
+  2026-10-21 (SDK 1.0) removed sampling parameters. The #523 request shape was written from
+  OpenAI's model pages and migration guide and is pinned by request-shape tests; no live call
+  was made (no key on the build host or in CI)
 - **`--ai-model <id>`** on `visual-diff` and `watch` is the vision model (`diff.aiModel`,
   `ai.model` -> `AIVisualClassifier`). `<PROVIDER>_MODEL` stays the text model
 - **Vision prompts frame page content (#355).** `visionContextBlock()` (src/ai-client/vision.ts)
@@ -169,19 +179,19 @@ paths:
   - The diff mask is preprocessed as **lossless PNG**, not the JPEG used for screenshots: pixelmatch marks unchanged pixels transparent, and JPEG has no alpha channel and blurs the region edges that make the mask worth sending. An empty diff buffer is treated as no diff
 
 **Pricing (default, configurable):**
-- Cost is computed from provider-returned token usage when available; the flat per-image rate below is the fallback (cache hits, Ollama, missing usage)
-- GPT-4o: $2.50/1M input + $10/1M output tokens (fallback $0.002/image)
-- GPT-4o launch snapshot `gpt-4o-2024-05-13`: $5/1M input + $15/1M output tokens (fallback $0.004/image) — it kept its launch price, so it must not inherit gpt-4o's rate (#243)
-- Claude Sonnet 5: $3/1M input + $15/1M output tokens (fallback $0.0015/image) — the vision default
-- Claude Haiku 4.5: $1/1M input + $5/1M output tokens (fallback $0.0005/image) — what the `ANTHROPIC_API_KEY` env path selects, so it is the model an out-of-the-box Anthropic user actually requests
-- Claude Opus 5: $5/1M input + $25/1M output tokens (fallback $0.004/image)
+- Cost is computed from provider-returned token usage when available; a flat per-call rate is the fallback (cache hits, Ollama, missing usage): 800 input tokens' worth unless the row gives one
+- `DEFAULT_PRICING` (src/ai-client/cost-tracker.ts) is the table; it was last checked against the vendors' pages on **2026-11-11** (#523): <https://developers.openai.com/api/docs/pricing>, <https://developers.openai.com/api/docs/deprecations>, <https://platform.claude.com/docs/en/about-claude/pricing>, <https://platform.claude.com/docs/en/about-claude/model-deprecations>. Re-check all four when a vendor ships or retires a model, read the prices off the page (never from memory), and keep the date in the table's comment current
+- Rows are the **standard** rate: not batch, flex or fast, cached input charged as plain input, and never a promotion (GPT-5.6 Sol is $5/$30, not its $4/$20 to 2026-11-30). The table gates a budget circuit breaker: over-reporting trips it early, under-reporting lets real spend outrun the tracked total. Claude Sonnet 5 is $2/$10: that began as an introductory price, which is why the row said $3/$15 until Anthropic made it the standard one
+- **Long-context tier (#523)**: a row may carry `longContext { aboveInputTokens, costPerInputToken, costPerOutputToken }`; a call with more input tokens than the threshold pays those rates for *all* its tokens (OpenAI: 272K, 2x input and 1.5x output; Claude Haiku 5.5: 100,000 prompt tokens, 5x). Recording, reservations (a text call reserves one token per request character) and `managedCallEstimateUsd` all go through `tokenCost()`, so they agree. `setPricing()` takes the tier as an optional last argument. An unpriced model's estimate has no tier
+- **Deprecated is not the same as shut down (#523)**: a model the vendor has deprecated but still serves keeps its row, marked with the shutdown date, because spend on it is still billed and an unpriced model is charged the dearest rate in the table (over 60 times too much for `gpt-4o-mini`). Delete the row after the date. IRIS no longer *offers* such a model: not a default, not in the vision table, not in the docs
+- The `-pro` OpenAI models have no row on purpose: Responses API only, so IRIS cannot call them, and a row that dear would become every unpriced model's estimate (#388). Claude Mythos has none either (limited availability; priced at or below Fable, the dearest rate, so the estimate never under-reports)
+- `managedCallEstimateUsd` is the dearest registered row *for that call's size*. Adding a dear row raises what every managed call reserves (Fable and GPT-6 Astra took it from $0.065 to $0.13)
 - Ollama (local): $0.00
-- Anthropic rows use the standard rate, not Sonnet 5's introductory $2/$10 (expires 2026-08-31): this table gates a budget circuit breaker, and over-reporting trips it early while under-reporting lets real spend outrun the tracked total
 - **Model IDs rot, so they are no longer trusted blind (#184).** The whole `claude-3` family was retired while still pinned in five places, and the vision path was dead until #183. A guard test fails on any re-added quoted `claude-3-*` ID in `src/`. Since #184 every pin lives in `src/ai-client/models.ts` (`DEFAULT_MODELS.text` / `DEFAULT_MODELS.vision`) and is checked against the provider's live model list before use:
   - `listModels(provider, creds)` hits `/v1/models` (OpenAI, Anthropic) or `/api/tags` (Ollama), memoized per provider per process. It returns `null` for "could not check" — never an empty list — so a 401 cannot be mistaken for "no models exist". `IRIS_MODEL_PROBE=0` disables it; `jest.setup.ts` sets that so the suite stays hermetic
   - `resolveModel({provider, kind, model, creds})` returns a listed model as-is, rescues a **retired built-in pin** via longest-prefix match within the same family root, and throws `ModelUnavailableError` for a **user-named** model the provider does not serve. It needs no "was this explicit?" flag: a missing model that equals the pin is our rot, one that differs is the user's typo
   - `SmartAIVisionClient` rethrows `ModelUnavailableError` instead of stepping to the next vendor — that swallow is what made a retired model read as "all providers failed". Text clients resolve via `createResolvedAIClient()`; `loadConfig()` stays synchronous
-  - `CostTracker` prices a model with no exact row by its family (#243), but only when the rest of the ID is one snapshot suffix (`-20260514`, `-2024-08-06`, `-latest`): a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) or dated snapshot gets its family's rate, while a variant (`gpt-4o-realtime-preview`, `gpt-4oz`) does not, because variants are priced differently. A snapshot that kept a different price needs its own row (`gpt-4o-2024-05-13`). Anything unmatched is charged the dearest registered rate per field (including `setPricing` rows), recorded with `estimated = 1` on its ledger row, and warned about once per pair. It used to record $0, which a budget breaker never trips on. A model dearer than every registered row still under-reports until it gets one. That ceiling stays by decision (#388): a floor above the table (o1-pro class) would make every unpriced model's reservation ~$1.80 and trip a $10 day in a handful of calls; the estimate is flagged and warned, and `setPricing` is the remedy. Every paid default row carries token rates (a test fails on a flat-only one, whose snapshots would ignore usage); `getPricing` resolves a family like the ledger; a token-priced call recorded without usage is charged its flat rate and warns once per pair Free providers (Ollama) stay $0 for every model
+  - `CostTracker` prices a model with no exact row by its family (#243), but only when the rest of the ID is one snapshot suffix (`-20260514`, `-2024-08-06`, `-latest`): a rescued successor (`claude-sonnet-5` → `claude-sonnet-5-20260514`) or dated snapshot gets its family's rate, while a variant (`gpt-4o-realtime-preview`, `gpt-4oz`) does not, because variants are priced differently. A snapshot that kept a different price needs its own row (as `gpt-4o-2024-05-13` had until OpenAI shut it down). Anything unmatched is charged the dearest registered rate per field (including `setPricing` rows), recorded with `estimated = 1` on its ledger row, and warned about once per pair. It used to record $0, which a budget breaker never trips on. A model dearer than every registered row still under-reports until it gets one. That ceiling stays by decision (#388): a floor above the table (o1-pro class) would make every unpriced model's reservation ~$1.80 and trip a $10 day in a handful of calls; the estimate is flagged and warned, and `setPricing` is the remedy. Every paid default row carries token rates (a test fails on a flat-only one, whose snapshots would ignore usage); `getPricing` resolves a family like the ledger; a token-priced call recorded without usage is charged its flat rate and warns once per pair Free providers (Ollama) stay $0 for every model
 
 ### Per-Request AI Credentials (issue #258)
 
