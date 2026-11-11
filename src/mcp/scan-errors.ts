@@ -44,11 +44,12 @@ export function scanFailureReason(detail: string): string {
   }
   const networkError = NETWORK_ERROR.exec(detail);
   if (networkError) return `the page could not be loaded (${networkError[1]})`;
-  if (TIMED_OUT.test(detail)) return 'the page did not finish loading in time';
   // The machine's fault, not the page's: the caller should stop retrying other URLs.
+  // Before the timeout: a launch that timed out is still a launch that failed.
   if (LAUNCH_FAILED.test(detail)) {
     return 'the browser could not be started on the server (details are on the server log)';
   }
+  if (TIMED_OUT.test(detail)) return 'the page did not finish loading in time';
   return 'the scan could not be completed (details are on the server log)';
 }
 
