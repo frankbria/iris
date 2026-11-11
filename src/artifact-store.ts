@@ -354,8 +354,8 @@ export class S3ArtifactStore implements ArtifactStore {
 
   /**
    * Brings back deleted objects, one key or everything under a prefix ending in `/`, by
-   * removing the delete markers in front of their newest version. A key with no version
-   * left is skipped. Returns how many keys came back.
+   * removing their delete markers, which makes the newest version current. A key with no
+   * version left is skipped. Returns how many keys came back.
    */
   async undelete(target: string): Promise<number> {
     const one = !target.endsWith('/');
@@ -365,11 +365,11 @@ export class S3ArtifactStore implements ArtifactStore {
       one ? assertKey(target) : assertPrefix(target),
     )) {
       if (one && key !== target) continue;
-      const survivor = versions.findIndex((v) => !v.deleteMarker);
-      if (survivor < 1) continue;
-      doomed.push(
-        ...versions.slice(0, survivor).map((v) => ({ Key: key, VersionId: v.versionId })),
-      );
+      if (!versions[0].deleteMarker || versions.every((v) => v.deleteMarker)) continue;
+      // Every marker, not only those listed in front: two written within one second of the
+      // object cannot be ordered by time, and a marker behind a version hides nothing.
+      const markers = versions.filter((v) => v.deleteMarker);
+      doomed.push(...markers.map((v) => ({ Key: key, VersionId: v.versionId })));
       restored++;
     }
     await this.deleteVersions(doomed);
@@ -379,16 +379,21 @@ export class S3ArtifactStore implements ArtifactStore {
   async pruneVersions(olderThan: Date): Promise<number> {
     if (!(await this.versioningEnabled())) return 0;
     const doomed: VersionRef[] = [];
+    const spentMarkers: VersionRef[] = [];
     for await (const [key, versions] of this.keyVersions()) {
       // A version stopped being current when the one in front of it was written.
       const expired = versions.filter((_, i) => i > 0 && versions[i - 1].lastModified < olderThan);
+      doomed.push(...expired.map((v) => ({ Key: key, VersionId: v.versionId })));
       // A delete marker with nothing left behind it hides nothing.
       const [head] = versions;
-      if (head.deleteMarker && expired.length === versions.length - 1) expired.push(head);
-      doomed.push(...expired.map((v) => ({ Key: key, VersionId: v.versionId })));
+      if (head.deleteMarker && expired.length === versions.length - 1)
+        spentMarkers.push({ Key: key, VersionId: head.versionId });
     }
+    // Markers last, and only once what they hide is gone: a marker deleted while its
+    // version survived a failed delete would make a purged image readable again.
     await this.deleteVersions(doomed);
-    return doomed.length;
+    await this.deleteVersions(spentMarkers);
+    return doomed.length + spentMarkers.length;
   }
 
   private async deleteVersions(refs: VersionRef[]): Promise<void> {
