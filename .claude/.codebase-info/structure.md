@@ -37,7 +37,9 @@ src/
 ├── byok/                  # crypto.ts envelope encryption, store.ts, rewrap.ts (#344)
 ├── mcp/                   # MCP stdio server (experimental, spike scope)
 │   ├── server.ts          # `iris-mcp` bin — McpServer over StdioServerTransport
-│   └── tools.ts           # run_accessibility_test (axe violations + needsReview)
+│   ├── tools.ts           # run_accessibility_test (axe violations + needsReview)
+│   ├── scan-errors.ts     # what a result may say: failure reasons, landing URL (#362)
+│   └── scan-limiter.ts    # at most 2 scans at once, 8 waiting (#362)
 ├── auth/config.ts         # createAuth(): the BetterAuth config portal + API share (ADR 0001 §4, #247)
 ├── legal/                 # versions.ts: current ToS/AUP versions + ACCEPTED_TERMS; acceptance.ts: record/check (#276)
 ├── api-key-auth.ts        # Hosted `iris connect`: Bearer org API key -> { orgId, keyId } (#341)

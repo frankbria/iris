@@ -118,6 +118,44 @@ database item was delivered by #341: hosted startup exits 3 without `DATABASE_UR
   `iris-mcp`). A test that runs `iris connect`'s SIGINT handler with a mocked server must let
   the drain's promise settle before asserting.
 
+### MCP Tool Output and Limits (issue #362)
+
+Private backlog item P2.2; the checklist is in #362's comments. A tool result is read by a
+model, and the page under test chooses much of what an error or a redirect contains.
+
+- **Hints**: `readOnlyHint: false, destructiveHint: true, idempotentHint: false,
+  openWorldHint: true`. The tool drives a real browser to a model-chosen URL and cannot
+  promise the visit changes nothing. Do not set `readOnlyHint` back to make a client stop
+  asking.
+- **Failures carry a reason from a fixed vocabulary** (`scanFailureReason`,
+  src/mcp/scan-errors.ts): policy block by address kind, redirect to a blocked address (the
+  target is never named), a `net::ERR_*` code (only at the start of Playwright's message, at most 60 characters),
+  timeout, a browser that could not launch, else "could not be completed". The address kind is read after the last
+  "blocked by navigation policy", never from the refused URL before it. It
+  matches on the guard's and Playwright's message text, so a reworded `guardedGoto` error
+  degrades to the generic reason; `scan-errors.test.ts` pins the shapes. The raw first line
+  goes to stderr (`log('warn', 'mcp scan failed')`). A new failure mode worth telling the
+  caller about is a new branch there, never a pass-through.
+- **The request URL is repeated through `withoutCredentials()`**, which parses it: a
+  password may hold a space or an `@`, which no pattern over free text can follow (codex
+  review, twice). A URL that does not parse is never quoted back ("malformed URL.").
+- **`scannedPage(requested, scanned)`**: same URL reports the request without userinfo; a
+  redirect reports `redirected: true` and origin plus path, at most 200 characters, path
+  segments of 32+ characters cut to `…` (tokens; shorter ones show). "Same" is compared as
+  parsed `href`s without fragment and userinfo: the runner's URL is the response's, which
+  has neither, so `/#/route` read as a redirect (internal review).
+- `stripUserinfo` (src/report-encoding.ts) and `redactString` (src/log.ts) are patterns over
+  free text and stop at the first `@` and at whitespace; do not use them on a URL you hold
+  whole.
+- **`ScanLimiter(2, 8)`** (src/mcp/scan-limiter.ts), one per process: 2 scans run, 8 wait in
+  arrival order, the next is a tool error at once. A finishing scan hands its slot to the
+  head of the queue. Constants until hosted MCP (#314) needs per-tenant limits. A cancelled
+  call that is already waiting still runs.
+- Tests: `scan-errors.test.ts` and `scan-limiter.test.ts` need no browser;
+  `mcp/tools.test.ts` shows each item through a real scan (the cap with a fixture that
+  holds its responses and counts them; its wait loops are bounded by poll count, since an
+  unbounded one outlives the test's timeout and hangs Jest).
+
 ### RPC Server Error Policy (issue #330)
 
 `iris connect` installs `installProcessErrorPolicy()` (src/protocol.ts), and the

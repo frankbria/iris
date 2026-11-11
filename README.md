@@ -817,9 +817,11 @@ instead of shelling out. It is a **spike**: exactly one tool today.
 |---|---|
 | **Tool** | `run_accessibility_test` — scans a page with axe-core |
 | **Input** | `url` (required, http/https), `wcagLevel` (`AA` default, or `AAA`; WCAG 2.2, 2.0 and 2.1 criteria included) |
-| **Output** | `{ url, passed, violationCount, violations[], needsReview[] }`, each violation `{ id, impact, description, helpUrl, nodes }`; `needsReview` lists rules axe could not decide (`{ id, description, nodes }`), which never fail the scan |
+| **Output** | `{ url, redirected, passed, violationCount, violations[], needsReview[] }`, each violation `{ id, impact, description, helpUrl, nodes }`; `needsReview` lists rules axe could not decide (`{ id, description, nodes }`), which never fail the scan |
 | **Keys** | none — axe-core runs locally |
-| **Redirects** | followed, with every hop checked against the navigation policy |
+| **Redirects** | followed, with every hop checked against the navigation policy; `url` is then the landing page's origin and path |
+| **Hints** | not read-only (`readOnlyHint: false`, `destructiveHint: true`, `openWorldHint: true`): the scan loads the page in a real browser, so expect your client to ask before each call |
+| **Concurrency** | 2 scans at once; 8 more calls wait their turn, further ones get a tool error |
 
 Configure it by copying the example into your project (it is gitignored, so your
 copy stays local):
@@ -849,13 +851,35 @@ to request it, and each is then re-issued as a real navigation — so the scanne
 document's URL and its asset base stay correct. That matters more than it sounds:
 a page whose stylesheet 404s because it resolved against the wrong base reports
 contrast violations that do not exist. A hop pointing somewhere the policy blocks
-fails the call with the offending URL named.
+fails the call.
 
-**Deliberate limits.** The tool reports axe-core violations *only*. IRIS's
-keyboard-navigation and screen-reader sub-checks currently hardcode success
-([#73](https://github.com/frankbria/iris/issues/73),
-[#72](https://github.com/frankbria/iris/issues/72)), so surfacing them here would
-report passes that were never tested. Visual-diff and action tools come after the
+**A result says only what the tool decided to say (#362).** An assistant reads it,
+and the page under test chooses much of what an error or a redirect contains. So:
+
+- A failure is `Accessibility scan failed for <your URL>: <reason>`, with the reason
+  from a fixed list: the kind of address the navigation policy blocked (never the
+  redirect target itself), a `net::ERR_*` code, a timeout, "the browser could not
+  be started on the server", or "the scan could not be completed". The error's own text (local paths, addresses) goes to the
+  server's stderr.
+- A redirected scan reports `redirected: true` and the landing page's origin and
+  path, at most 200 characters. Its query string and fragment, where sign-in
+  codes and tokens travel, are left out, and a path segment of 32 characters or
+  more (a reset link's token) is shown as `…`. A shorter token in the path is
+  not recognised as one.
+- `user:password@` in the URL you pass is never repeated.
+
+**The tool is not advertised as read-only.** Loading a page runs its scripts and
+sends the requests a visit would, and the URL comes from the model. The hints say
+so, which lets a client ask before each call rather than run it unprompted.
+
+**Two scans run at once.** Each scan is its own Chromium and assistants issue tool
+calls in parallel. Up to 8 more calls wait in arrival order (a client with a short
+request timeout may give up on a long wait); beyond that a call is refused at once
+with a tool error saying to call again.
+
+**Deliberate limits.** The tool reports axe-core results *only*: the keyboard and
+screen-reader checks `iris a11y` runs are not offered through it yet. Visual-diff
+and action tools come after the
 spike verdict — the CLI JSON contract above remains the supported integration
 surface in the meantime.
 

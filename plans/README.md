@@ -157,7 +157,7 @@ production.
 | `P0.51` | [#349](https://github.com/frankbria/iris/issues/349) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | DONE (PR #470) |
 | `P0.52` | [#435](https://github.com/frankbria/iris/issues/435) | Reap jobs stuck in running after a worker crash | P0.39 (#267) | DONE (PR #443) |
 | `P0.53` | [#445](https://github.com/frankbria/iris/issues/445) | Object storage backups: bucket versioning/replication and a restore drill | P0.60 (#514) | BLOCKED (on #514; closes on a staging bucket) |
-| `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | BLOCKED (needs-owner) |
+| `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | BLOCKED (needs-owner): wording approved 2026-11-10, only the placeholder values remain |
 | `P0.55` | [#460](https://github.com/frankbria/iris/issues/460) | Signed artifact URLs in run detail | P0.29 (#257) | DONE (PR #471) |
 | `P0.56` | [#463](https://github.com/frankbria/iris/issues/463) | Portal: visual diff images and baseline approval | P0.40 (#268), P0.55 (#460) | DONE (PR #474) |
 | `P0.57` | [#472](https://github.com/frankbria/iris/issues/472) | Purge visual artifacts from object storage | P0.40 (#268) | DONE (PR #477) |
@@ -210,7 +210,7 @@ production.
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
 | `P2.1` | [#312](https://github.com/frankbria/iris/issues/312) | RPC observation method: screenshots and page snapshots ("eyes") | P0.24 (#341) | DONE (#548) |
-| `P2.2` | [#362](https://github.com/frankbria/iris/issues/362) | MCP tool: follow-up items | P0.7 (#334) | TODO |
+| `P2.2` | [#362](https://github.com/frankbria/iris/issues/362) | MCP tool: follow-up items | P0.7 (#334) | DONE (#643) |
 | `P2.3` | [#314](https://github.com/frankbria/iris/issues/314) | Hosted MCP over HTTP with tenant auth and metering | P0.24 (#341), P0.35 (#263), P2.2 (#362) | TODO |
 | `P2.4` | [#315](https://github.com/frankbria/iris/issues/315) | Per-plan artifact storage quota | P0.29 (#257), P0.37 (#346) | DONE (#551) |
 | `P2.5` | [#316](https://github.com/frankbria/iris/issues/316) | Zero-downtime deploys | P0.45 (#273), P1.30 (#309), P0.59 (#440) | TODO |
@@ -268,6 +268,9 @@ production.
 | `P3.30` | [#603](https://github.com/frankbria/iris/issues/603) | iris run: a malformed budget variable exits 3 instead of a config error | P3.18 (#510) | DONE (#607) |
 | `P3.20` | [#518](https://github.com/frankbria/iris/issues/518) | CRAP tech debt: changed functions over the ceiling | — | DONE (#608, #610) |
 | `P3.31` | [#609](https://github.com/frankbria/iris/issues/609) | Lizard misreads src/watcher.ts, so changed lines there fail the CRAP gate | P3.20 (#518) | DONE (#611) |
+| `P3.33` | [#644](https://github.com/frankbria/iris/issues/644) | CI review job fails at "Fetch the PR diff" when the diff holds a raw ESC byte | — | TODO |
+| `P3.34` | [#645](https://github.com/frankbria/iris/issues/645) | stripUserinfo and redactString leave part of a password that contains an @ or a space | — | TODO |
+| `P3.35` | [#646](https://github.com/frankbria/iris/issues/646) | MCP tool: offer the keyboard checks, and decide what `passed` means against `--fail-on` | P2.2 (#362) | BLOCKED (needs-owner) |
 
 ---
 
