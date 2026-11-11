@@ -10,6 +10,8 @@ const BLOCKED = 'blocked by navigation policy';
 /** Only where Playwright puts the code, and bounded: the rest of the line names a URL. */
 const NETWORK_ERROR = /^(?:[\w.]+: )?(net::ERR_[A-Z0-9_]{1,60})(?![A-Z0-9_])/;
 const TIMED_OUT = /Timeout \d+ ?ms exceeded|did not finish within/;
+/** Playwright's launch call, or IRIS's own message about it (src/browser.ts). */
+const LAUNCH_FAILED = /browserType\.launch|Chromium could not start/;
 
 /**
  * The kind of address the URL policy refused, from its own message (src/url-policy.ts):
@@ -42,6 +44,10 @@ export function scanFailureReason(detail: string): string {
   const networkError = NETWORK_ERROR.exec(detail);
   if (networkError) return `the page could not be loaded (${networkError[1]})`;
   if (TIMED_OUT.test(detail)) return 'the page did not finish loading in time';
+  // The machine's fault, not the page's: the caller should stop retrying other URLs.
+  if (LAUNCH_FAILED.test(detail)) {
+    return 'the browser could not be started on the server (details are on the server log)';
+  }
   return 'the scan could not be completed (details are on the server log)';
 }
 

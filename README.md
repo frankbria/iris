@@ -858,8 +858,8 @@ and the page under test chooses much of what an error or a redirect contains. So
 
 - A failure is `Accessibility scan failed for <your URL>: <reason>`, with the reason
   from a fixed list: the kind of address the navigation policy blocked (never the
-  redirect target itself), a `net::ERR_*` code, a timeout, or "the scan could not
-  be completed". The error's own text (local paths, addresses) goes to the
+  redirect target itself), a `net::ERR_*` code, a timeout, "the browser could not
+  be started on the server", or "the scan could not be completed". The error's own text (local paths, addresses) goes to the
   server's stderr.
 - A redirected scan reports `redirected: true` and the landing page's origin and
   path, at most 200 characters. Its query string and fragment, where sign-in

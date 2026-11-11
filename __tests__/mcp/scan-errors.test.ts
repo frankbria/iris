@@ -86,9 +86,18 @@ describe('scanFailureReason', () => {
     },
   );
 
+  it.each([
+    "browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium-1200/chrome",
+    'Chromium could not start its sandbox on this host. Allow unprivileged user namespaces',
+  ])('says the browser could not start, without the path or the advice: %s', (detail) => {
+    expect(scanFailureReason(detail)).toBe(
+      'the browser could not be started on the server (details are on the server log)',
+    );
+  });
+
   it('says nothing about a failure it does not recognise', () => {
     const reason = scanFailureReason(
-      "browserType.launch: Executable doesn't exist at /root/.cache/ms-playwright/chromium-1200/chrome",
+      'ENOSPC: no space left on device, write /var/lib/iris/cache/profile-41873',
     );
 
     expect(reason).toBe('the scan could not be completed (details are on the server log)');

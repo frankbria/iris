@@ -130,7 +130,7 @@ model, and the page under test chooses much of what an error or a redirect conta
 - **Failures carry a reason from a fixed vocabulary** (`scanFailureReason`,
   src/mcp/scan-errors.ts): policy block by address kind, redirect to a blocked address (the
   target is never named), a `net::ERR_*` code (only at the start of Playwright's message, at most 60 characters),
-  timeout, else "could not be completed". The address kind is read after the last
+  timeout, a browser that could not launch, else "could not be completed". The address kind is read after the last
   "blocked by navigation policy", never from the refused URL before it. It
   matches on the guard's and Playwright's message text, so a reworded `guardedGoto` error
   degrades to the generic reason; `scan-errors.test.ts` pins the shapes. The raw first line
