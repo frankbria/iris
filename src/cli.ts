@@ -1413,6 +1413,95 @@ admin
     });
   });
 
+/**
+ * The artifact bucket's own backup (#445): versioning keeps what a delete or an overwrite
+ * replaced, these commands bring it back. They need `IRIS_S3_*` only, no database. Exit 2
+ * outside hosted mode, 3 without a store or when the store refuses, 1 for nothing found.
+ */
+async function withArtifactBucket(
+  fn: (store: import('./artifact-store').S3ArtifactStore) => Promise<string | null>,
+): Promise<void> {
+  const { isHostedMode } = await import('./hosted');
+  if (!isHostedMode()) {
+    console.error('iris admin runs in hosted mode only: set IRIS_HOSTED=1');
+    process.exit(2); // Invalid usage
+    return;
+  }
+  let code = 0;
+  let store: import('./artifact-store').S3ArtifactStore | null = null;
+  try {
+    store = (await import('./artifact-store')).resolveArtifactStore();
+    if (!store) throw new Error('No artifact store: IRIS_S3_ENDPOINT is not set');
+    const notFound = await fn(store);
+    if (notFound) {
+      console.error(notFound);
+      code = 1;
+    }
+  } catch (err) {
+    console.error((err as Error).message);
+    code = 3; // Environment/runtime error
+  } finally {
+    store?.close();
+  }
+  if (code) process.exit(code);
+}
+
+const formatVersion = (v: import('./artifact-store').ArtifactVersion) =>
+  [
+    v.lastModified.toISOString(),
+    v.versionId,
+    v.deleteMarker ? 'deleted' : `${v.size} bytes`,
+    ...(v.latest ? ['current'] : []),
+  ].join('  ');
+
+admin
+  .command('artifact-versioning')
+  .description('Print whether the artifact bucket keeps old versions; --enable turns it on')
+  .option('--enable', 'Keep deleted and overwritten objects as versions from now on')
+  .action((options: { enable?: boolean }) =>
+    withArtifactBucket(async (store) => {
+      if (options.enable) await store.enableVersioning();
+      const state = (await store.versioningEnabled()) ? 'enabled' : 'off';
+      console.log(`bucket ${store.bucket}: versioning ${state}`);
+      return null;
+    }),
+  );
+
+admin
+  .command('artifact-versions <key>')
+  .description('List the stored versions of one object, current first')
+  .action((key: string) =>
+    withArtifactBucket(async (store) => {
+      const versions = await store.versions(key);
+      for (const version of versions) console.log(formatVersion(version));
+      return versions.length ? null : `no versions of ${key}`;
+    }),
+  );
+
+admin
+  .command('artifact-restore <key>')
+  .description('Make an older version of an overwritten object current again')
+  .requiredOption('--version-id <id>', 'The version id, from artifact-versions')
+  .action((key: string, options: { versionId: string }) =>
+    withArtifactBucket(async (store) => {
+      await store.restoreVersion(key, options.versionId);
+      console.log(`restored ${key} from version ${options.versionId}`);
+      return null;
+    }),
+  );
+
+admin
+  .command('artifact-undelete <keyOrPrefix>')
+  .description('Bring back deleted objects: one key, or everything under a prefix ending in /')
+  .action((target: string) =>
+    withArtifactBucket(async (store) => {
+      const count = await store.undelete(target);
+      if (!count) return `nothing deleted under ${target}`;
+      console.log(`undeleted ${count} object(s) under ${target}`);
+      return null;
+    }),
+  );
+
 /** Documented default port for a local Ollama daemon. */
 const DEFAULT_OLLAMA_ENDPOINT = 'http://localhost:11434';
 

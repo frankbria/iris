@@ -20,6 +20,11 @@
 # 4. BACKUP_RCLONE_REMOTE set: `rclone copy` every backup in the directory there. It
 #    skips files already copied, so a run after a failed copy catches up. Unset: warn,
 #    since the backups then share a disk with the database they back up.
+# 5. BACKUP_ARTIFACTS_SOURCE and BACKUP_ARTIFACTS_REMOTE set (#445): `rclone sync` the
+#    artifact bucket to <remote>/current. What the sync would delete or overwrite there
+#    is moved to <remote>/replaced/<UTC time> instead, and those directories are removed
+#    once older than BACKUP_KEEP_DAYS: an emptied or lost bucket cannot empty the copy,
+#    and the copy holds nothing longer than the backups hold the rows that name it.
 #
 # The recipients file holds age public keys only; the identity that decrypts the
 # backups is kept off the box. No recipients, no backup: it never writes plaintext.
@@ -29,7 +34,9 @@
 #      from it), BACKUP_DIR (default /var/backups/iris), BACKUP_RECIPIENTS (default
 #      /etc/iris/backup-recipients.txt), BACKUP_COMPOSE_PROJECT (default
 #      iris-production), BACKUP_KEEP_DAYS (default 14, >= 1), BACKUP_KEEP_MIN (default
-#      7, >= 1), BACKUP_RCLONE_REMOTE (e.g. `offsite:iris-backups`, optional).
+#      7, >= 1), BACKUP_RCLONE_REMOTE (e.g. `offsite:iris-backups`, optional),
+#      BACKUP_ARTIFACTS_SOURCE and BACKUP_ARTIFACTS_REMOTE (rclone paths, e.g.
+#      `artifacts:iris` and `offsite:iris-artifacts`; optional, both or neither).
 set -euo pipefail
 umask 077
 
@@ -50,6 +57,11 @@ recipients=${BACKUP_RECIPIENTS:-/etc/iris/backup-recipients.txt}
 project=${BACKUP_COMPOSE_PROJECT:-iris-production}
 keep_days=$(count BACKUP_KEEP_DAYS "${BACKUP_KEEP_DAYS:-14}")
 keep_min=$(count BACKUP_KEEP_MIN "${BACKUP_KEEP_MIN:-7}")
+artifacts_source=${BACKUP_ARTIFACTS_SOURCE:-}
+artifacts_remote=${BACKUP_ARTIFACTS_REMOTE:-}
+if [ -n "$artifacts_source$artifacts_remote" ] && { [ -z "$artifacts_source" ] || [ -z "$artifacts_remote" ]; }; then
+  fail 'BACKUP_ARTIFACTS_SOURCE and BACKUP_ARTIFACTS_REMOTE must be set together'
+fi
 
 grep -q '^age1' "$recipients" 2>/dev/null \
   || fail "no age recipients in $recipients: refusing to write an unencrypted backup"
@@ -104,4 +116,24 @@ if [ -n "${BACKUP_RCLONE_REMOTE:-}" ]; then
   log "copied to $BACKUP_RCLONE_REMOTE"
 else
   log 'WARNING: BACKUP_RCLONE_REMOTE is unset; the backups are on the same box as the database'
+fi
+
+if [ -n "$artifacts_source" ]; then
+  rclone sync "$artifacts_source" "$artifacts_remote/current" \
+    --backup-dir "$artifacts_remote/replaced/$stamp" \
+    || fail "off-site copy of $artifacts_source to $artifacts_remote failed (the next run retries)"
+  log "synced $artifacts_source to $artifacts_remote/current"
+  # Names are UTC stamps, so they compare as text. Exit 3 is rclone's "directory not
+  # found": nothing has been replaced yet.
+  cutoff=$(date -u -d "$keep_days days ago" +%Y%m%dT%H%M%SZ)
+  replaced=$(rclone lsf --dirs-only "$artifacts_remote/replaced") || [ $? = 3 ] \
+    || fail "cannot list $artifacts_remote/replaced"
+  while IFS= read -r name; do
+    name=${name%/}
+    if [[ "$name" =~ ^[0-9]{8}T[0-9]{6}Z$ && "$name" < "$cutoff" ]]; then
+      rclone purge "$artifacts_remote/replaced/$name" \
+        || fail "cannot delete $artifacts_remote/replaced/$name"
+      log "deleted $artifacts_remote/replaced/$name"
+    fi
+  done <<<"$replaced"
 fi

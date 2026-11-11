@@ -16,6 +16,11 @@ import { forgetArtifacts } from './storage-quota';
 export const GRACE_DAYS = 30;
 export const RUN_RETENTION_DAYS = 90;
 export const RECORD_RETENTION_YEARS = 7;
+/**
+ * How long a versioned bucket keeps a deleted or overwritten image (#445): the window the
+ * Postgres backups keep by default (`BACKUP_KEEP_DAYS`), so a restored dump finds its images.
+ */
+export const ARTIFACT_VERSION_DAYS = 14;
 
 /** Refusals an operator should see as such (unknown org, already purged, …): exit 1. */
 export class OffboardingError extends Error {
@@ -39,6 +44,8 @@ export interface RetentionReport {
   artifactPrefixesPurged: number;
   /** Superseded baseline images deleted this pass (#475). */
   baselinesCollected: number;
+  /** Old versions and spent delete markers removed from a versioned bucket (#445). */
+  artifactVersionsPruned: number;
   /** Steps that failed this pass (logged); non-empty makes the CLI exit 3. */
   failures: string[];
 }
@@ -484,6 +491,14 @@ export function offboarding(db: Kysely<unknown>) {
       if (baselines.failed) failures.push('baselines');
       const baselinesCollected = baselines.collected;
 
+      // After the deletions above, so what they just deleted starts its 14 days today.
+      const versionCutoff = new Date(now.getTime() - ARTIFACT_VERSION_DAYS * 86_400_000);
+      const artifactVersionsPruned = await step(
+        'versions',
+        0,
+        async () => (await artifacts?.pruneVersions?.(versionCutoff)) ?? 0,
+      );
+
       const report = {
         orgsPurged,
         tombstonesDropped,
@@ -493,6 +508,7 @@ export function offboarding(db: Kysely<unknown>) {
         termsDropped,
         artifactPrefixesPurged,
         baselinesCollected,
+        artifactVersionsPruned,
         failures,
       };
       log(failures.length ? 'error' : 'info', 'retention pass', {

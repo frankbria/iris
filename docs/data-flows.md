@@ -191,7 +191,7 @@ private S3-compatible bucket (`src/artifact-store.ts`, #257):
 | Purpose | Visual regression testing: comparing a page with its approved look. |
 | Where | Bucket keys `org/<org>/project/<project>/run/<run uuid>/{current,diff}/<name>.png` and `org/<org>/project/<project>/baselines/<name>.png`. |
 | Access | The org's API keys, through run detail's signed URLs (5 minutes, at most 15; only that org's keys for that run, #460). The bucket is never public. |
-| Retention | Run images: with the run, **90 days** after it finishes; current baselines: until the org is purged; a replaced baseline image, once no remaining run links it and it is older than 90 days (#475; images stored before #315's accounting stay until the org is purged). The daily retention pass queues each prefix (`artifact_purges`, migration 0012) in the transaction that deletes its rows and deletes the objects when the container has `IRIS_S3_*`; a store failure is retried by the next pass (#472). A purged org's prefix is swept once more a day after the purge, for images a job already running at the purge wrote afterwards (#476). |
+| Retention | Run images: with the run, **90 days** after it finishes; current baselines: until the org is purged; a replaced baseline image, once no remaining run links it and it is older than 90 days (#475; images stored before #315's accounting stay until the org is purged). The daily retention pass queues each prefix (`artifact_purges`, migration 0012) in the transaction that deletes its rows and deletes the objects when the container has `IRIS_S3_*`; a store failure is retried by the next pass (#472). A purged org's prefix is swept once more a day after the purge, for images a job already running at the purge wrote afterwards (#476). On a bucket with versioning on (#445), a deleted or replaced image stays as a version for **14 days** after it stopped being current, then the same pass removes it for good; the off-site copy of the bucket, when configured, keeps it `BACKUP_KEEP_DAYS` (default 14). |
 | Third parties | The hosting / object-storage provider (#273). Not sent to an AI vendor: hosted visual jobs run no AI analysis yet. |
 
 ### Browser sessions
@@ -227,7 +227,7 @@ container.
 | Data | A `pg_dump` of the whole database (everything above that lives in Postgres) and the BYOK master key file. Not the SQLite ledger or cache. |
 | Where | `/var/backups/iris` on the host; optionally copied off the box with rclone to `BACKUP_RCLONE_REMOTE` (`deploy/backup.sh`, #274). |
 | Encryption | Encrypted with `age` to public keys before being written; the decryption identity stays off the box. The script refuses to write plaintext. |
-| Retention | On the host: the newest `BACKUP_KEEP_MIN` (default **7**) of each kind are always kept; the rest are deleted once older than `BACKUP_KEEP_DAYS` (default **14**). The off-box copy is `rclone copy`, which deletes nothing: its retention is the remote's own policy, **undecided (#349, #445)**. A deleted record therefore survives in backups until they age out. |
+| Retention | On the host: the newest `BACKUP_KEEP_MIN` (default **7**) of each kind are always kept; the rest are deleted once older than `BACKUP_KEEP_DAYS` (default **14**). The off-box copy is `rclone copy`, which deletes nothing: its retention is the remote's own policy, **undecided (#349)**. A deleted record therefore survives in backups until they age out. |
 
 ## Transmissions to third parties
 
@@ -279,6 +279,13 @@ contact and payment details and metered usage (#264); update this section then.
 
 Only when `BACKUP_RCLONE_REMOTE` is set: the age-encrypted backups above. The storage
 provider cannot read them.
+
+Only when `BACKUP_ARTIFACTS_SOURCE` and `BACKUP_ARTIFACTS_REMOTE` are set (#445): a copy
+of the artifact bucket (tenants' screenshots, diffs and baselines), synced daily by
+`deploy/backup.sh`. Deleted and replaced images are kept there `BACKUP_KEEP_DAYS` (default
+14), then removed. The images are not encrypted by IRIS: that provider can read them
+unless the operator's rclone remote is a `crypt` remote (the runbook recommends one), and
+it is a subprocessor like the bucket's own provider.
 
 ### Sites under test
 

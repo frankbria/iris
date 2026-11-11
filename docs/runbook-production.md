@@ -228,7 +228,7 @@ directory, and deletes the rest once older than `BACKUP_KEEP_DAYS` (default 14).
 must be whole numbers of at least 1, checked before anything runs. Without a
 recipients file the script refuses to run: it never writes an unencrypted dump.
 
-Pending: object-storage versioning and replication, #445 (blocked by #257).
+The artifact bucket is not in these files: see "Artifact bucket backups" below (#445).
 
 ### Why everything the backup runs is root-owned
 
@@ -310,7 +310,8 @@ The timer runs daily at 03:15 UTC plus up to 30 minutes of random delay.
 sandboxed (`ProtectSystem=strict`, writable only `/var/backups/iris` and `/etc/iris`;
 `ProtectHome`, `PrivateTmp`, `NoNewPrivileges`), with a 2-hour limit. Optional
 settings in `/etc/iris/backup.env`: `BACKUP_KEEP_DAYS`, `BACKUP_KEEP_MIN`,
-`BACKUP_RCLONE_REMOTE`, `BACKUP_COMPOSE_PROJECT`.
+`BACKUP_RCLONE_REMOTE`, `BACKUP_COMPOSE_PROJECT`, and `BACKUP_ARTIFACTS_SOURCE` with
+`BACKUP_ARTIFACTS_REMOTE` (the artifact bucket's off-site copy, #445, below).
 
 ### Restore
 
@@ -395,6 +396,99 @@ of every table with the source. Record each one here.
 Restore times include the decrypt check, the serving-database check and starting the
 disposable container: about 9 s on the loaded host of the first drill (an empty
 database took 9.0 s), about 4 s at the second.
+
+## Artifact bucket backups (issue #445)
+
+Screenshots, diffs and baselines live in the artifact bucket, not in Postgres, so the
+dump does not hold them. Two things protect them, and both work on any S3-compatible
+bucket (the same steps on staging and production):
+
+- **Versions in the bucket**, against a delete or an overwrite (a bug, an operator
+  mistake, a bad approval). With versioning on, the old object stays as a version.
+- **A copy somewhere else**, against losing the bucket or its provider.
+
+Neither keeps data longer than the retention policy allows: a deleted or replaced image
+is gone from the bucket 14 days after it stopped being current, and from the copy after
+`BACKUP_KEEP_DAYS` (default 14). That is the window the Postgres backups keep, so a
+restored dump still finds the images its rows name.
+
+### Turn versioning on (once per bucket)
+
+```bash
+cd "$(readlink -f /opt/iris-production/current)"
+docker compose exec iris node dist/cli.js admin artifact-versioning            # prints the state
+docker compose exec iris node dist/cli.js admin artifact-versioning --enable
+```
+
+The access key needs the bucket's versioning permissions (`s3:GetBucketVersioning`,
+`s3:PutBucketVersioning`, `s3:ListBucketVersions`, `s3:GetObjectVersion`,
+`s3:DeleteObjectVersion` in AWS terms), or enable versioning in the provider's console
+and give the key the last three. Do not add a provider lifecycle rule for old versions:
+the daily retention pass (`iris admin retention`, "The daily pass" below) removes
+versions that stopped being current more than 14 days ago, and delete markers with
+nothing left behind them, and reports the count as `artifactVersionsPruned`. Objects
+stored before versioning was on are covered from their next overwrite or delete.
+
+### Restore an object
+
+Object keys are in run detail's artifact URLs and in `visual_baselines.object_key`:
+`org/<org>/project/<project>/run/<run>/{current,diff}/<name>.png` and
+`org/<org>/project/<project>/baselines/<name>.png`.
+
+```bash
+# Deleted: one key, or everything under a prefix (it must end in /)
+docker compose exec iris node dist/cli.js admin artifact-undelete org/<org>/project/<project>/run/<run>/
+
+# Overwritten: list the versions (current first), then restore the one you want
+docker compose exec iris node dist/cli.js admin artifact-versions org/<org>/project/<project>/baselines/<name>.png
+docker compose exec iris node dist/cli.js admin artifact-restore org/<org>/project/<project>/baselines/<name>.png --version-id <id>
+```
+
+`artifact-undelete` removes the delete markers in front of each key's newest version;
+`artifact-restore` copies the chosen version over the key (the replaced one stays a
+version). Both exit 1 when there was nothing to bring back and 3 when the store refuses.
+They restore objects, not rows: use them for objects whose rows still exist (deleted or
+overwritten by mistake), or together with a database restore of the same period. An
+image undeleted after its run was purged has no row, is not counted against the org's
+storage, and stays until the org is purged.
+
+### The off-site copy
+
+`deploy/backup.sh` syncs the bucket to a second remote after the Postgres backup, when
+both settings are in `/etc/iris/backup.env`:
+
+```bash
+BACKUP_ARTIFACTS_SOURCE=artifacts:<bucket>          # an rclone remote for the artifact bucket (read)
+BACKUP_ARTIFACTS_REMOTE=offsite:<bucket-or-path>    # another provider or region (read, write, delete)
+```
+
+Define both remotes in `/etc/iris/rclone.conf` (`sudo RCLONE_CONFIG=/etc/iris/rclone.conf
+rclone config`). The images are stored as they are, so wrap the destination in an rclone
+`crypt` remote unless its provider is one you would trust with the bucket itself, and
+keep the crypt passwords off the box as well. Each run:
+
+1. `rclone sync <source> <remote>/current --backup-dir <remote>/replaced/<UTC time>`:
+   what the sync would delete or overwrite in the copy is moved aside, not deleted. An
+   emptied or recreated bucket therefore cannot empty the copy.
+2. Removes `<remote>/replaced/<UTC time>` directories older than `BACKUP_KEEP_DAYS`.
+
+A failure exits non-zero (the backup alert) and the next run retries. One setting
+without the other refuses to run. To restore from the copy:
+`rclone copy offsite:<bucket-or-path>/current/<prefix> artifacts:<bucket>/<prefix>`
+(add files from `replaced/<UTC time>/` for something deleted since).
+
+### Drill log
+
+Each drill deletes and overwrites objects in a versioned bucket, restores them with the
+commands above and compares checksums. Record each one here.
+
+| Date       | Where                                                    | Data                                              | Damage                                             | Restore                                                                  | Result                                    |
+| ---------- | -------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------- |
+| 2026-11-11 | local, pinned `chrislusf/seaweedfs:4.48` (not staging) | 201 objects, 100 kB each: 200 run images, 1 baseline | run prefix purged (200 deletes), baseline overwritten | `artifact-undelete` 1.8 s, `artifact-versions` + `artifact-restore` 3.2 s | SHA-256 over all 201 objects equals the one taken before the damage |
+
+The drill on the **staging bucket** is still to do: staging has no bucket until #514.
+The off-site copy has not run against a real rclone yet (its test uses a stub): run it
+once by hand on staging and check `current/` and `replaced/` on the remote.
 
 ## Monitoring and alerts (issue #275)
 
@@ -717,7 +811,9 @@ and fails the unit; the next day's run picks up whatever was left. Settings
 (`RETENTION_COMPOSE_PROJECT`, `RETENTION_SERVICES`) go in `/etc/iris/retention.env`.
 
 A purged org's data stays in backups until they age out (14 days on the host; the
-off-box copy follows its remote's policy, #445).
+off-box copy of the dumps follows its remote's policy). Its images stay 14 days as
+versions in a versioned bucket, and `BACKUP_KEEP_DAYS` in the bucket's off-site copy
+(#445, "Artifact bucket backups").
 
 ## Troubleshooting
 
