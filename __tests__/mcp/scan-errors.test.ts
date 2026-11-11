@@ -4,7 +4,7 @@
  * so no browser; `tools.test.ts` shows the same through a real scan.
  */
 
-import { scanFailureReason, scannedPage } from '../../src/mcp/scan-errors';
+import { scanFailureReason, scannedPage, withoutCredentials } from '../../src/mcp/scan-errors';
 
 describe('scanFailureReason', () => {
   it('names the category of a blocked redirect, never its target', () => {
@@ -95,6 +95,25 @@ describe('scanFailureReason', () => {
   });
 });
 
+describe('withoutCredentials', () => {
+  it('returns a URL without credentials as it was written', () => {
+    expect(withoutCredentials('http://LOCALHOST:3000')).toBe('http://LOCALHOST:3000');
+  });
+
+  it.each([
+    'http://admin:hunter2@localhost:3000/a?b=1#c',
+    'http://admin:part1@part2@localhost:3000/a?b=1#c',
+    'http://admin:correct horse@localhost:3000/a?b=1#c',
+    'http://admin@localhost:3000/a?b=1#c',
+  ])('cuts the credentials from %s', (url) => {
+    expect(withoutCredentials(url)).toBe('http://localhost:3000/a?b=1#c');
+  });
+
+  it('repeats nothing of text that is not a URL', () => {
+    expect(withoutCredentials('http://admin:correct horse@bad host/')).toBe('the requested URL');
+  });
+});
+
 describe('scannedPage', () => {
   it('reports the requested URL when the scan stayed on it', () => {
     expect(
@@ -128,6 +147,12 @@ describe('scannedPage', () => {
     expect(
       scannedPage('http://admin:part1@part2@localhost:3000/', 'http://localhost:3000/').url,
     ).toBe('http://localhost:3000/');
+  });
+
+  it('cuts a password that contains a space whole', () => {
+    expect(
+      scannedPage('http://admin:correct horse@localhost:3000/a', 'http://localhost:3000/a').url,
+    ).toBe('http://localhost:3000/a');
   });
 
   it('cuts a path segment long enough to be a token from a landing URL', () => {

@@ -18,8 +18,7 @@ import { AccessibilityRunner } from '../a11y/a11y-runner';
 import { assertNavigationAllowed } from '../url-policy';
 import { wcagTags } from '../a11y/wcag';
 import { log } from '../log';
-import { stripUserinfo } from '../report-encoding';
-import { scanFailureReason, scannedPage } from './scan-errors';
+import { scanFailureReason, scannedPage, withoutCredentials } from './scan-errors';
 import { ScanLimiter, ScanQueueFullError } from './scan-limiter';
 
 export const RUN_ACCESSIBILITY_TEST = 'run_accessibility_test';
@@ -105,9 +104,9 @@ function describeError(error: unknown): string {
  */
 function scanFailure(url: string, error: unknown) {
   const detail = describeError(error);
-  log('warn', 'mcp scan failed', { url: stripUserinfo(url), detail });
+  log('warn', 'mcp scan failed', { url: withoutCredentials(url), detail });
   return toolError(
-    `Accessibility scan failed for ${stripUserinfo(url)}: ${scanFailureReason(detail)}.`,
+    `Accessibility scan failed for ${withoutCredentials(url)}: ${scanFailureReason(detail)}.`,
   );
 }
 
@@ -182,9 +181,13 @@ export function registerTools(server: McpServer): void {
       try {
         assertNavigationAllowed(url);
       } catch (error) {
-        // The policy's reason names only what the caller sent; a malformed URL is
-        // quoted back, so its credentials are cut.
-        return toolError(stripUserinfo(describeError(error)));
+        // The policy's reason names a scheme or a host, except for a URL it could not
+        // parse, which it quotes whole: credentials included, and nothing can find them
+        // in text that is not a URL.
+        const reason = describeError(error);
+        return toolError(
+          reason.includes('malformed URL') ? 'Navigation blocked: malformed URL.' : reason,
+        );
       }
 
       let result;
@@ -211,7 +214,7 @@ export function registerTools(server: McpServer): void {
 
       const axeResult = result.results[0]?.axeResult;
       if (!axeResult) {
-        return toolError(`Accessibility scan returned no result for ${stripUserinfo(url)}.`);
+        return toolError(`Accessibility scan returned no result for ${withoutCredentials(url)}.`);
       }
 
       const violations = axeResult.violations.map((violation) => ({
@@ -226,7 +229,7 @@ export function registerTools(server: McpServer): void {
       // when it redirected. Reporting the request URL would misattribute every
       // violation on the page the scan really landed on.
       const { url: scannedUrl, redirected } = scannedPage(url, axeResult.url);
-      const redirectNote = redirected ? ` (redirected from ${stripUserinfo(url)})` : '';
+      const redirectNote = redirected ? ` (redirected from ${withoutCredentials(url)})` : '';
 
       // axe's `incomplete`: rules it could not decide (contrast over an image, ...). Dropping
       // them made such a page read as clean (#290).

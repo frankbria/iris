@@ -5,8 +5,6 @@
  * path from a failed browser launch, a token in a landing page's query string.
  */
 
-import { stripUserinfo } from '../report-encoding';
-
 const REDIRECT_BLOCKED = /redirects to .* blocked by navigation policy/;
 const BLOCKED = 'blocked by navigation policy';
 /** Only where Playwright puts the code, and bounded: the rest of the line names a URL. */
@@ -75,6 +73,20 @@ function parsed(url: string): URL | null {
 }
 
 /**
+ * The caller's URL as a result may repeat it: without `user:password@`. Parsed, not
+ * pattern-matched: a password may hold a space or an `@`, which no pattern over free text
+ * can follow. Unchanged when it carries no credentials, so the caller sees its own spelling.
+ */
+export function withoutCredentials(url: string): string {
+  const target = parsed(url);
+  if (!target) return 'the requested URL';
+  if (!target.username && !target.password) return url;
+  target.username = '';
+  target.password = '';
+  return target.href;
+}
+
+/**
  * A URL as the network sees it. The runner reports the response's URL, which never has
  * the request's fragment or credentials: without this, `/#/checkout` read as a redirect.
  */
@@ -97,7 +109,7 @@ export function scannedPage(
   scanned: string,
 ): { url: string; redirected: boolean } {
   if (!scanned || asRequested(scanned) === asRequested(requested)) {
-    return { url: stripUserinfo(requested), redirected: false };
+    return { url: withoutCredentials(requested), redirected: false };
   }
   const landed = parsed(scanned);
   return { url: landed ? landedUrl(landed) : 'an unreadable URL', redirected: true };

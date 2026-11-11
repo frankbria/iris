@@ -83,9 +83,6 @@ export function safeHref(url: string): string | null {
  */
 export const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
 
-/**
- * Every `scheme://user:password@` in free text, without the userinfo (#254, #287). Up to
- * the last `@` of the authority, as a URL parser reads it: a password may contain one (#362).
- */
+/** Every `scheme://user:password@` in free text, without the userinfo (#254, #287). */
 export const stripUserinfo = (text: string): string =>
-  text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi, '$1');
+  text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1');

@@ -136,14 +136,17 @@ model, and the page under test chooses much of what an error or a redirect conta
   degrades to the generic reason; `scan-errors.test.ts` pins the shapes. The raw first line
   goes to stderr (`log('warn', 'mcp scan failed')`). A new failure mode worth telling the
   caller about is a new branch there, never a pass-through.
+- **The request URL is repeated through `withoutCredentials()`**, which parses it: a
+  password may hold a space or an `@`, which no pattern over free text can follow (codex
+  review, twice). A URL that does not parse is never quoted back ("malformed URL.").
 - **`scannedPage(requested, scanned)`**: same URL reports the request without userinfo; a
   redirect reports `redirected: true` and origin plus path, at most 200 characters, path
   segments of 32+ characters cut to `…` (tokens; shorter ones show). "Same" is compared as
   parsed `href`s without fragment and userinfo: the runner's URL is the response's, which
   has neither, so `/#/route` read as a redirect (internal review).
-- **`stripUserinfo` cuts to the authority's last `@`** (src/report-encoding.ts): a password
-  may contain one, and cutting at the first left the rest in the text (codex review).
-  `redactString`'s `USERINFO` (src/log.ts) still stops at the first.
+- `stripUserinfo` (src/report-encoding.ts) and `redactString` (src/log.ts) are patterns over
+  free text and stop at the first `@` and at whitespace; do not use them on a URL you hold
+  whole.
 - **`ScanLimiter(2, 8)`** (src/mcp/scan-limiter.ts), one per process: 2 scans run, 8 wait in
   arrival order, the next is a tool error at once. A finishing scan hands its slot to the
   head of the queue. Constants until hosted MCP (#314) needs per-tenant limits. A cancelled

@@ -302,12 +302,11 @@ describe('run_accessibility_test tool', () => {
       expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });
     }, 120_000);
 
-    it('cuts credentials from a malformed URL it quotes back', async () => {
-      const result = await callTool({ url: 'http://admin:hunter2@bad host/' });
+    it('does not quote a malformed URL back, credentials and all', async () => {
+      const result = await callTool({ url: 'http://admin:correct horse@bad host/' });
 
       expect(result.isError).toBe(true);
-      expect(result.content?.[0]?.text).toMatch(/malformed URL/i);
-      expect(result.content?.[0]?.text).not.toContain('hunter2');
+      expect(result.content?.[0]?.text).toBe('Navigation blocked: malformed URL.');
     });
 
     it('says why an allowed URL that redirects to a blocked host failed, without the target', async () => {
