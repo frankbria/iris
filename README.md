@@ -387,6 +387,7 @@ without limit:
 | open connections | `--max-connections <n>` | 16 | handshake refused, HTTP `503` |
 | browser sessions, server-wide | `--max-sessions <n>` | 4 | `launchBrowser` error `-32000` |
 | actions per `executeBrowserAction` | `--max-actions <n>` | 100 | `-32602` for an `actions` array; `success: false` when an `instruction` translates to more |
+| characters in a `selector` or an assertion `target` | (fixed) | 4,096 | `-32602` for an `actions` array; an `instruction` never translates to a longer one (it is left to the AI, whose plan is checked the same way) |
 | requests per minute, per API key (hosted) | `--rate-per-key <n>` | 120 | error `-32029` "Rate limit exceeded", `data.retryAfterMs`; the request is not run |
 | requests per minute, per org (hosted) | `--rate-per-org <n>` | 300 | same; all of an org's keys share it |
 | browser sessions per org (hosted) | `--max-sessions-per-org <n>` | 2 | `launchBrowser` error `-32000` |

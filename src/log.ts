@@ -1,5 +1,6 @@
 import { isHostedMode } from './hosted';
 import { metrics } from './metrics';
+import { replaceUserinfo } from './report-encoding';
 
 /**
  * Structured logging (#275), with no dependency. Hosted mode writes one JSON object
@@ -35,11 +36,13 @@ function threshold(): LogLevel {
  */
 const SECRET_FIELD =
   /authorization|cookie|token|secret|passw(or)?d|api[-_]?key|^key$|credential|(database|smtp)[-_]?url|^(text|value|instruction|params|body)$/i;
-/** Up to the last `@` of the authority, as a URL parser reads it (#645); see `stripUserinfo`. */
-const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
 const AUTH_SCHEME = /\b(Bearer|Basic)\s+\S+/gi;
-/** Every query or fragment parameter: `$1` separator and name, `$2` the name, `$3` the value. */
-const QUERY_PARAM = /([?&;#]([^=&;#\s]*)=)([^&;#\s]*)/g;
+/**
+ * Every query or fragment parameter: `$1` separator and name, `$2` the name, `$3` `=value`.
+ * The value is optional so that a name with none is still taken in one match (#658): a name
+ * may hold `?`, and a run of them was scanned again from each one.
+ */
+const QUERY_PARAM = /([?&;#]([^=&;#\s]*))(=[^&;#\s]*)?/g;
 /** A parameter name that looks secret: its value is cut. */
 const SECRET_NAME = /token|key|passw(?:or)?d|secret|sig|auth|session|credential/i;
 
@@ -57,11 +60,11 @@ const MAX_DEPTH = 4;
 
 /** `text` with URL userinfo, `Bearer`/`Basic` credentials, secret query values and keys cut. */
 export function redactString(text: string): string {
-  return text
-    .replace(USERINFO, '$1[redacted]@')
+  // Up to the last `@` of the authority, as a URL parser reads it (#645); see `stripUserinfo`.
+  return replaceUserinfo(text, () => '[redacted]@')
     .replace(AUTH_SCHEME, '$1 [redacted]')
-    .replace(QUERY_PARAM, (all, head: string, name: string) =>
-      SECRET_NAME.test(decodedName(name)) ? `${head}[redacted]` : all,
+    .replace(QUERY_PARAM, (all: string, head: string, name: string, value?: string) =>
+      value !== undefined && SECRET_NAME.test(decodedName(name)) ? `${head}=[redacted]` : all,
     )
     .replace(API_KEY, 'iris_[redacted]');
 }

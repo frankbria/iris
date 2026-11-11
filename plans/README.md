@@ -204,6 +204,7 @@ production.
 | `P1.35` | [#379](https://github.com/frankbria/iris/issues/379) | Egress proxy timeouts, configurable popup cap, per-session page cap | P0.11 (#338) | DONE (#542) |
 | `P1.36` | [#408](https://github.com/frankbria/iris/issues/408) | Portal: remove members, change roles, leave an org | P0.22 (#250) | DONE (#543) |
 | `P1.39` | [#442](https://github.com/frankbria/iris/issues/442) | Job-level deadline: a hung browser holds the worker forever | P0.52 (#435) | DONE (#545) |
+| `P1.43` | [#658](https://github.com/frankbria/iris/issues/658) | Credential-stripping patterns take quadratic time on long input: one request can block the hosted RPC server | P3.34 (#645) | DONE: the userinfo and query-parameter patterns are linear with the same match set; error text is cut to 16,384 units before the patterns; selectors and assertion targets are bounded at 4,096 characters |
 
 ### P2 — Post-launch fast-follow
 

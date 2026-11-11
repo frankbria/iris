@@ -618,3 +618,10 @@ Write/Edit, not as a pre-push afterthought.
 - **Portal files are formatted by the portal's own prettier.** Run `npx prettier` from `apps/portal`; the root `format:check` does not cover them, and the root config wraps differently (#541).
 - **"Fixed upstream" is checked three ways (#565):** read the workflow at the ref this repo calls, run its deciding step on the failing input, and find a PR where the failure happened after the fix. The third showed what the first two could not: the check stays green and the PR comments carry the signal.
 - **A browser error quotes the URL percent-encoded; only our own messages repeat it raw (#645).** A test that a raw spelling (a space, a second `@`) is cut must fail the page with a policy refusal: the first version failed it with `net::ERR_*` and passed without the change it was written for (found by the internal review, not by a mutation check, because the browser suite cannot run on the build host).
+
+## 2026-11-11 — #658 linear credential patterns
+
+- **Time every pattern in the chain, not the one the issue names.** The issue named the two userinfo patterns; a ten-line script over every pattern in `redactString` and a dozen shapes found `QUERY_PARAM` quadratic on a run of `?` as well.
+- **A fast path can hide the slow path from its own test.** `replaceUserinfo` returns at once on text without `://`, so the "letters" shapes never reached the pattern and putting the old pattern back failed one test instead of five. Each shape now also runs behind a `://`. Put the old code back before trusting a performance test.
+- **A timing test climbs a ladder.** 1 kB, 10 kB, 100 kB, 1 MB with each step under forty-fold: the old pattern fails the first step within a second, where a single 1 MB against 100 kB comparison would have run for half an hour before failing.
+- **Cutting text before a redaction pattern needs a rule for the edge.** A cut inside `scheme://user:pass` leaves the password without the `@` the pattern looks for; drop the unterminated tail.

@@ -502,7 +502,7 @@ tables.
   `describeAction()`, which never includes what a `fill` typed, and a navigate URL
   loses its `user:password@` (`urlWithoutUserinfo`, parsed; the same URL quoted in the
   action's error is cut the same way, #645). Errors are cut to 500 characters and lose terminal colour
-  codes (`stripAnsi`, src/report-encoding.ts, #420: Playwright colours its call log). The write is awaited
+  codes (`strippedError`, src/report-encoding.ts, #420: Playwright colours its call log; only the first 16,384 units reach the patterns, #658). The write is awaited
   before the reply, so a reply means the run is recorded (#269 reads it). A failed write is logged, and the request still succeeds. Local
   (token) connections record nothing.
 - **Local: `sqliteHistoryStore(path)`** over the #77 tables. `test_results` has no kind

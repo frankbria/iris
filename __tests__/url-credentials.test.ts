@@ -5,7 +5,12 @@
  */
 
 import { redactString } from '../src/log';
-import { stripUserinfo, urlWithoutUserinfo } from '../src/report-encoding';
+import {
+  ERROR_TEXT_MAX,
+  strippedError,
+  stripUserinfo,
+  urlWithoutUserinfo,
+} from '../src/report-encoding';
 
 // Assembled so no credential-shaped literal sits in the source.
 const PART_ONE = 'part1';
@@ -93,4 +98,160 @@ describe('redactString', () => {
       expect(redactString(text)).toBe(text);
     },
   );
+});
+
+// #658: the patterns used to begin with an unanchored scheme, so a long run of scheme
+// characters was scanned again from each of its positions.
+describe('match set of the linear patterns (#658)', () => {
+  it.each([
+    ['...http://u:p@h', '...http://h', '...http://[redacted]@h'],
+    ['1http://u:p@h', '1http://h', '1http://[redacted]@h'],
+    ['a-b+c.d://u:p@h', 'a-b+c.d://h', 'a-b+c.d://[redacted]@h'],
+    ['HTTP://U:P@H', 'HTTP://H', 'HTTP://[redacted]@H'],
+    ['123://u:p@h', '123://u:p@h', '123://u:p@h'],
+    ['http://@h', 'http://@h', 'http://[redacted]@h'],
+    ['x://a/http://u:p@h', 'x://a/http://h', 'x://a/http://[redacted]@h'],
+  ])('%s', (text, stripped, redacted) => {
+    expect(stripUserinfo(text)).toBe(stripped);
+    expect(redactString(text)).toBe(redacted);
+  });
+
+  it.each([
+    ['??token=abc', '??token=[redacted]'],
+    ['?a?token=abc&b=1', '?a?token=[redacted]&b=1'],
+    ['?a?b&token=abc', '?a?b&token=[redacted]'],
+    ['?token', '?token'],
+    ['?=abc', '?=abc'],
+  ])('query parameter %s', (text, redacted) => {
+    expect(redactString(text)).toBe(redacted);
+  });
+
+  // The patterns as they were on main before #658, kept as the reference.
+  const oldStrip = (text: string) => text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]+@/gi, '$1');
+  const oldRedact = (text: string) =>
+    text
+      .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi, '$1[redacted]@')
+      .replace(/([?&;#]([^=&;#\s]*)=)([^&;#\s]*)/g, (all, head: string, name: string) =>
+        /token|key|passw(?:or)?d|secret|sig|auth|session|credential/i.test(name)
+          ? `${head}[redacted]`
+          : all,
+      );
+
+  it('agrees with the old patterns on 60,000 generated strings', () => {
+    // A small alphabet makes schemes, authorities and parameters collide often.
+    const alphabet = ['a', 'Z', '1', '.', '-', ':', '/', '/', '@', ' ', '?', '#', '=', '&', 'key'];
+    let seed = 658;
+    const next = (below: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return Math.floor((seed / 2147483648) * below);
+    };
+    const differing: string[] = [];
+    for (let i = 0; i < 60_000; i++) {
+      let text = next(4) === 0 ? 'a://' : '';
+      for (let length = next(20); length > 0; length--) text += alphabet[next(alphabet.length)];
+      if (stripUserinfo(text) !== oldStrip(text) || redactString(text) !== oldRedact(text)) {
+        differing.push(text);
+      }
+    }
+    expect(differing).toEqual([]);
+  });
+});
+
+describe('time on adversarial input (#658)', () => {
+  // Fastest of five runs on a monotonic clock, compared as a ratio: a clock that steps back
+  // (#190) or a busy machine (#142) cannot make a linear scan look quadratic that way.
+  const fastest = (run: () => unknown) => {
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) {
+      const start = performance.now();
+      run();
+      best = Math.min(best, performance.now() - start);
+    }
+    return best;
+  };
+  const shapes: Array<[string, (length: number) => string]> = [
+    ['letters', (n) => 'a'.repeat(n)],
+    ['a1a1…', (n) => 'a1'.repeat(n / 2)],
+    ['a.a.…', (n) => 'a.'.repeat(n / 2)],
+    [
+      'a long scheme before an authority with no @',
+      (n) => `${'a'.repeat(n / 2)}://${'b'.repeat(n / 2)}`,
+    ],
+    ['a://a://…', (n) => 'a://'.repeat(n / 4)],
+    ['question marks', (n) => '?'.repeat(n)],
+    ['?a?a…', (n) => '?a'.repeat(n / 2)],
+    ['a key that never ends', (n) => `iris_${'a'.repeat(n)}_`],
+    ['Bearer and spaces', (n) => `Bearer${' '.repeat(n)}`],
+    ['an escape sequence that never ends', (n) => `\x1b[${'0'.repeat(n)}`],
+  ];
+
+  it.each(shapes)('%s: ten times the input takes about ten times as long', (_name, shape) => {
+    // Also behind a `://`: text without one never reaches the userinfo pattern.
+    const inputs = [shape, (length: number) => `:// ${shape(length)}`];
+    for (const helper of [stripUserinfo, redactString, strippedError]) {
+      for (const input of inputs) {
+        let previous = fastest(() => helper(input(1_000)));
+        for (const length of [10_000, 100_000, 1_000_000]) {
+          const text = input(length);
+          const time = fastest(() => helper(text));
+          // Quadratic time is a hundredfold per step, and the old patterns fail the first
+          // one within a second. Under a millisecond the clock is too coarse to divide by.
+          expect(time).toBeLessThan(40 * Math.max(previous, 1));
+          previous = time;
+        }
+      }
+    }
+  });
+});
+
+describe('strippedError (#658)', () => {
+  it('strips colour codes and credentials from a short error', () => {
+    expect(strippedError('\x1b[2mgoto http://u:p@host/\x1b[22m failed')).toBe(
+      'goto http://host/ failed',
+    );
+  });
+
+  it('follows a space in the password of the URL it is told the error quotes', () => {
+    const url = `http://${SPACE_PASSWORD}@host/a`;
+    expect(strippedError(`Navigation to ${url} refused`, url)).toBe(
+      'Navigation to http://host/a refused',
+    );
+  });
+
+  it('gives the patterns at most ERROR_TEXT_MAX characters', () => {
+    const out = strippedError(`${'word '.repeat(ERROR_TEXT_MAX)}http://u:p@host/`);
+    expect(out).toBe('word '.repeat(ERROR_TEXT_MAX).slice(0, ERROR_TEXT_MAX));
+  });
+
+  it('leaves a text of exactly ERROR_TEXT_MAX characters whole', () => {
+    const text = `${'x'.repeat(ERROR_TEXT_MAX - 14)} http://u:pass`;
+    expect(text).toHaveLength(ERROR_TEXT_MAX);
+    expect(strippedError(text)).toBe(text);
+  });
+
+  // A cut inside a URL separates its userinfo from the `@` the pattern needs.
+  it('drops a URL the cut lands in before its @', () => {
+    const lead = 'x'.repeat(ERROR_TEXT_MAX - 13);
+    const out = strippedError(`${lead} http://u:pass@host/ and more`);
+    expect(out).toBe(`${lead} http`);
+  });
+
+  it('keeps a URL whose authority ended before the cut', () => {
+    const lead = 'x'.repeat(ERROR_TEXT_MAX - 20);
+    const out = strippedError(`${lead} http://u:p@host/path/that/goes/on`);
+    expect(out).toBe(`${lead} http://host/pat`);
+  });
+
+  it('drops a partial copy of the quoted URL at the cut, whatever its password holds', () => {
+    const url = `http://${SPACE_PASSWORD}@host/next=http://other/x`;
+    const whole = `Navigation to ${url} refused. `;
+    const lead = 'x'.repeat(ERROR_TEXT_MAX - whole.length - url.length + 8);
+    const out = strippedError(`${lead}${whole}${url} and more`, url);
+    expect(out).toBe(`${lead}Navigation to http://host/next=http://other/x refused. `);
+  });
+
+  it('does not end on half a surrogate pair', () => {
+    const out = strippedError(`${'x'.repeat(ERROR_TEXT_MAX - 1)}😀 tail`);
+    expect(out).toBe('x'.repeat(ERROR_TEXT_MAX - 1));
+  });
 });
