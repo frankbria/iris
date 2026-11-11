@@ -57,8 +57,8 @@ export default async function AuditPage({
       </div>
       <p className="text-sm text-muted-foreground">
         Entries are kept for {AUDIT_RETENTION_DAYS} days. The entry for an API
-        key&apos;s creation is kept longer, while the key exists and its
-        creator still has an account.
+        key&apos;s creation is kept longer, while the key exists and its creator
+        still has an account.
       </p>
       {page === null ? (
         <p role="status" className="text-sm">
