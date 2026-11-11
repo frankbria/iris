@@ -719,6 +719,33 @@ and fails the unit; the next day's run picks up whatever was left. Settings
 A purged org's data stays in backups until they age out (14 days on the host; the
 off-box copy follows its remote's policy, #445).
 
+## When the dependency audit fails (issue #363)
+
+The last step of CI's `build` job is `npm audit --omit=dev --audit-level=high`. It fails
+the build, and so holds back both deploys, when a production dependency of the root
+package or of the portal has a known high or critical advisory. It can start failing on
+an unchanged `main`: the advisory is new, the code is not. The log names the package, the
+advisory and the path to it.
+
+1. **"audit endpoint returned an error"** is the registry not answering, not a finding.
+   Re-run the job.
+2. **A fixed release exists inside the declared range**: `npm audit fix --omit=dev`
+   (never `--force`), commit `package-lock.json`, open a PR. Dependabot usually opens the
+   same PR on its own (the `security-updates` group).
+3. **A fixed release exists, but a package in between pins the vulnerable one**: add the
+   fixed version under `overrides` in the root `package.json`, run `npm install`, and say
+   in the PR which package holds it back, so the override can be removed later.
+4. **No fixed release exists**: read the advisory against how IRIS uses the package, then
+   replace or drop the dependency, or wait for the fix. Deploys stay held meanwhile; that
+   is the gate working. Do not lower `--audit-level`, add `|| true` or mark the step
+   `continue-on-error` (a test fails on each): an exception to the gate is the owner's
+   decision, made in a PR that says which advisory and until when.
+
+Advisories in development dependencies do not fail the build. They show under the
+repository's Dependabot alerts, and Dependabot's security updates fix them. For some,
+`npm audit` proposes a major downgrade of the test tooling as the "fix": ignore that and
+wait for the upstream release.
+
 ## Troubleshooting
 
 Run these from the serving release: `cd "$(readlink -f /opt/iris-production/current)"`.

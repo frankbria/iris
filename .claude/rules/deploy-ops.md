@@ -256,6 +256,20 @@ break and expensive to rediscover:
   lockfile also lists the portal's packages, which are not installed, so it reads installed
   `package.json`s, not lockfile entries).
 
+- **Dependency audit gate (#363).** The last step of CI's `build` job is
+  `npm audit --omit=dev --audit-level=high`: a high or critical advisory in a production
+  dependency fails the build, and both deploy jobs `need` it. One lockfile, so the one
+  command covers the root package and the portal workspace (a lockfile under `apps/portal`
+  would take the portal out; a test refuses one). It fails closed when the registry's
+  advisory endpoint does not answer (exit 1, "audit endpoint returned an error"): re-run
+  the job. Development dependencies are outside it on purpose: their advisories come as
+  Dependabot security updates (the `security-updates` group), and `npm audit`'s "fix" for
+  several of them is a major downgrade (`jest@25`). A fix that a package in between holds
+  back is an `overrides` entry in the root `package.json`; an advisory with no fix holds
+  deploys until the dependency is replaced or fixed, and the gate is never lowered to get
+  past it (runbook, "When the dependency audit fails"). `container-config.test.ts` pins
+  the command, that no build step is `continue-on-error`, and the two `needs: build`.
+
 The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a
 file because compose interprets `${...}` in an inline script as its own syntax.

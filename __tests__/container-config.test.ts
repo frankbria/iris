@@ -556,3 +556,65 @@ describe('workflow pinning and deploy configuration (issue #359)', () => {
     }
   });
 });
+
+/**
+ * The dependency audit gate (issue #363) is one line of ci.yml. Nothing else fails when
+ * it is deleted, made advisory or widened to a level that never trips, so these pin it.
+ * That it does catch a vulnerable production dependency of either package is shown
+ * against the registry in the PR, not here: the suite makes no network calls.
+ */
+describe('dependency audit gate (issue #363)', () => {
+  const ci = read('.github/workflows/ci.yml')
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  /** One top-level job's text, from its key to the next job's key. */
+  const job = (name: string) => {
+    const start = ci.indexOf(`\n  ${name}:\n`);
+    expect(start).toBeGreaterThan(-1);
+    const next = ci.slice(start + 1).search(/\n {2}[\w-]+:\n/);
+    return next === -1 ? ci.slice(start) : ci.slice(start, start + 1 + next);
+  };
+
+  it('fails the build on a high or critical advisory in a production dependency', () => {
+    const audits = ci.split('\n').filter((line) => /npm audit/.test(line));
+    expect(audits.map((line) => line.trim())).toEqual([
+      '- run: npm audit --omit=dev --audit-level=high',
+    ]);
+    expect(job('build')).toContain(audits[0]);
+  });
+
+  it('cannot be passed over: no step of the build job may fail quietly', () => {
+    expect(job('build')).not.toMatch(/continue-on-error/);
+  });
+
+  it('gates both deploys, which run only after the build job', () => {
+    for (const deploy of ['deploy-staging', 'deploy-production']) {
+      expect(job(deploy)).toMatch(/^\n {2}[\w-]+:\n {4}needs: build\n/);
+    }
+  });
+
+  // `npm audit` reads the lockfile next to it. The portal is a workspace of the root
+  // package, so one audit covers both; a lockfile of its own would take it out.
+  it('covers the portal: it is a workspace with no lockfile of its own', () => {
+    const root = JSON.parse(read('package.json')) as { workspaces: string[] };
+    expect(root.workspaces).toContain('apps/*');
+    expect(fs.existsSync(path.join(ROOT, 'apps/portal/package.json'))).toBe(true);
+    expect(fs.existsSync(path.join(ROOT, 'apps/portal/package-lock.json'))).toBe(false);
+    expect(fs.existsSync(path.join(ROOT, 'apps/portal/npm-shrinkwrap.json'))).toBe(false);
+  });
+
+  // Development dependencies are outside the gate; their advisories arrive as
+  // Dependabot security updates, whose PRs then pass through it.
+  it('leaves development dependencies to Dependabot security updates for the one lockfile', () => {
+    const dependabot = read('.github/dependabot.yml');
+    const npm = dependabot.slice(
+      dependabot.indexOf('- package-ecosystem: npm'),
+      dependabot.indexOf('- package-ecosystem: github-actions'),
+    );
+    expect(npm).toMatch(/directory: \/\n/);
+    expect(npm).toMatch(
+      /security-updates:\n\s+applies-to: security-updates\n\s+patterns: \["\*"\]/,
+    );
+  });
+});

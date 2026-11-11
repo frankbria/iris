@@ -214,14 +214,14 @@ production.
 | `P2.3` | [#314](https://github.com/frankbria/iris/issues/314) | Hosted MCP over HTTP with tenant auth and metering | P0.24 (#341), P0.35 (#263), P2.2 (#362) | DONE (#647) |
 | `P2.4` | [#315](https://github.com/frankbria/iris/issues/315) | Per-plan artifact storage quota | P0.29 (#257), P0.37 (#346) | DONE (#551) |
 | `P2.5` | [#316](https://github.com/frankbria/iris/issues/316) | Zero-downtime deploys | P0.45 (#273), P1.30 (#309), P0.59 (#440) | TODO |
-| `P2.6` | [#317](https://github.com/frankbria/iris/issues/317) | Public status page | P0.47 (#275) | TODO |
+| `P2.6` | [#317](https://github.com/frankbria/iris/issues/317) | Public status page | P0.47 (#275), P0.59 (#440) | BLOCKED (needs-owner: where the page is hosted) |
 | `P2.7` | [#318](https://github.com/frankbria/iris/issues/318) | Store money as integer micro-units | P0.35 (#263) | DONE (#552) |
 | `P2.8` | [#319](https://github.com/frankbria/iris/issues/319) | Watcher: `--execute` targets and nested ignore globs | — | DONE (#553) |
 | `P2.9` | [#320](https://github.com/frankbria/iris/issues/320) | npm package publish-readiness | — | DONE (#554) |
 | `P2.10` | [#321](https://github.com/frankbria/iris/issues/321) | Local SQLite: real migration runner or delete dead migrations | P0.20 (#248) | DONE (#555) |
 | `P2.11` | [#322](https://github.com/frankbria/iris/issues/322) | Accessibility of IRIS own reports | P0.18 (#339) | DONE (#556) |
 | `P2.12` | [#323](https://github.com/frankbria/iris/issues/323) | Capture engine: do not force `transform: none` on every element | — | DONE (#557) |
-| `P2.13` | [#363](https://github.com/frankbria/iris/issues/363) | Dependency audit gate | — | TODO |
+| `P2.13` | [#363](https://github.com/frankbria/iris/issues/363) | Dependency audit gate | — | DONE (#PRNUM) |
 | `P2.14` | [#378](https://github.com/frankbria/iris/issues/378) | Agent mode: per-origin asset allowlist under a pinned origin | — | DONE (#558) |
 | `P2.15` | [#412](https://github.com/frankbria/iris/issues/412) | Portal: rename and disable API keys | P0.23 (#340) | DONE (#559) |
 | `P2.19` | [#457](https://github.com/frankbria/iris/issues/457) | Account-level bans (user suspension) | P1 (#348) | DONE (#560) |
@@ -271,6 +271,7 @@ production.
 | `P3.33` | [#644](https://github.com/frankbria/iris/issues/644) | CI review job fails at "Fetch the PR diff" when the diff holds a raw ESC byte | — | TODO |
 | `P3.34` | [#645](https://github.com/frankbria/iris/issues/645) | stripUserinfo and redactString leave part of a password that contains an @ or a space | — | TODO |
 | `P3.35` | [#646](https://github.com/frankbria/iris/issues/646) | MCP tool: offer the keyboard checks, and decide what `passed` means against `--fail-on` | P2.2 (#362) | BLOCKED (needs-owner) |
+| `P3.36` | [#648](https://github.com/frankbria/iris/issues/648) | Hosted MCP: report where a redirect landed, and axe's help URL for each violated rule | P2.3 (#314) | TODO |
 
 ---
 
