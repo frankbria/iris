@@ -58,6 +58,7 @@ export { AIClientFactory, ClientType, createAIClient, createResolvedAIClient } f
 // Model identity: the built-in pins plus the runtime probe that repairs them (#184).
 export {
   DEFAULT_MODELS,
+  ModelNotForImagesError,
   ModelUnavailableError,
   listModels,
   resolveModel,

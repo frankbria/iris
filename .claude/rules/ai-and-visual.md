@@ -136,7 +136,12 @@ paths:
   HTML, JUnit (`iris.aiUnavailable` testsuite property) and Markdown reports carry the same
   run-level note (`aiUnavailableNote()`, src/visual/reporter.ts, #484). A `ModelUnavailableError`
   (a model the provider does not serve) still fails the comparison closed as `breaking`, and now
-  counts in `aiUnavailable` with `summary.aiUnavailableReason` naming it
+  counts in `aiUnavailable` with `summary.aiUnavailableReason` naming it. A model outside the
+  vision table is a `ModelNotForImagesError` (models.ts, #652): the smart client still tries
+  the fallback vendors, and throws it itself (not "All providers failed") when none of them
+  failed for a reason of its own; the classifier answers it with the fallback classified
+  `MODEL_UNAVAILABLE` and described by the reason alone, so the comparison is graded by its
+  pixels and the same `AI: unavailable for N comparison(s): <reason>` line names it
 - **Vision capability is a table, Ollama's is its own answer (#298).** `isVisionModel(provider,
   model)` (src/ai-client/models.ts) is the one capability check: id prefixes per family. It
   replaced name guesses (`includes('gpt-4')`, `llava|bakllava`) that skipped every newer vision
@@ -163,7 +168,9 @@ paths:
   which refuse `none`) and no `temperature`, which they refuse unless effort is `none` (#523);
   reasoning is billed as output inside the 1000-token cap, hence `none`. The o-series
   and the first `gpt-5` (`gpt-5`, `-mini`, `-nano`: no `none` effort) get neither
-  (`isReasoningModel()`, #520); anything else keeps `temperature: 0.1`. A vision model outside
+  (`isReasoningModel()`, #520); anything else keeps `temperature: 0.1`. A fine-tuned id
+  (`ft:<base model>:<org>:<suffix>:<id>`) gets its base model's options (#652; sampling only:
+  the vision table and the price table do not look inside an `ft:` id). A vision model outside
   the table fails with "is not one IRIS uses for images", not "is not available". Anthropic requests send no `temperature`: API version
   2026-10-21 (SDK 1.0) removed sampling parameters. The #523 request shape was written from
   OpenAI's model pages and migration guide and is pinned by request-shape tests; no live call

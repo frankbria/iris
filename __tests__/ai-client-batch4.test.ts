@@ -18,7 +18,11 @@ import {
 } from '../src/ai-client/base';
 import { BudgetExceededError, DEFAULT_PRICING, toMicros } from '../src/ai-client/cost-tracker';
 import { AIClientFactory } from '../src/ai-client/factory';
-import { DEFAULT_MODELS, ModelUnavailableError } from '../src/ai-client/models';
+import {
+  DEFAULT_MODELS,
+  ModelNotForImagesError,
+  ModelUnavailableError,
+} from '../src/ai-client/models';
 import { ImagePreprocessor } from '../src/ai-client/preprocessor';
 import { IrisConfig } from '../src/config';
 
@@ -1980,9 +1984,62 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       } as never);
       const smart = createSmartClient(configFor(), smartOpts);
 
-      await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(
+      const refusal = smart.analyzeVisualDiff(request);
+      await expect(refusal).rejects.toThrow(
         /^openai model "openai-model" is not one IRIS uses for images .*--ai-model$/,
       );
+      // #652: typed, so the classifier can name it as the reason AI was unavailable.
+      await expect(refusal).rejects.toBeInstanceOf(ModelNotForImagesError);
+    });
+
+    // #652: an outage is not that fault, and must not be reported as one.
+    it('does not call an unavailable provider a model fault', async () => {
+      jest.spyOn(AIClientFactory, 'create').mockReturnValue({
+        isAvailable: async () => false,
+        supportsVision: () => true,
+        analyzeVisualDiff: jest.fn(),
+      } as never);
+      const smart = createSmartClient(configFor(), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).rejects.not.toBeInstanceOf(
+        ModelNotForImagesError,
+      );
+    });
+
+    // #652: with fallback on and nobody else able to answer, the cause is still the model.
+    it('keeps the model fault typed when the fallback vendors are merely unavailable', async () => {
+      jest.spyOn(AIClientFactory, 'create').mockImplementation(
+        (config) =>
+          ({
+            isAvailable: async () => false,
+            supportsVision: () => config.ai.provider !== 'openai',
+            analyzeVisualDiff: jest.fn(),
+          }) as never,
+      );
+      const smart = createSmartClient(configFor(true), smartOpts);
+
+      const refusal = smart.analyzeVisualDiff(request);
+      await expect(refusal).rejects.toBeInstanceOf(ModelNotForImagesError);
+      await expect(refusal).rejects.toThrow(/^openai model "openai-model" is not one IRIS uses/);
+    });
+
+    // A fallback vendor that failed for its own reason is the last error, as before.
+    it('reports a fallback vendor that really failed, not the model fault before it', async () => {
+      jest.spyOn(AIClientFactory, 'create').mockImplementation(
+        (config) =>
+          ({
+            isAvailable: async () => config.ai.provider !== 'openai',
+            supportsVision: () => config.ai.provider !== 'openai',
+            analyzeVisualDiff: async () => {
+              throw new Error(`${config.ai.provider} is down`);
+            },
+          }) as never,
+      );
+      const smart = createSmartClient(configFor(true), smartOpts);
+
+      const refusal = smart.analyzeVisualDiff(request);
+      await expect(refusal).rejects.toThrow(/^All providers failed\. Last error: \w+ is down$/);
+      await expect(refusal).rejects.not.toBeInstanceOf(ModelNotForImagesError);
     });
 
     it("keeps the configured provider's real error when later vendors are merely unavailable", async () => {

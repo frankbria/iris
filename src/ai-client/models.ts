@@ -114,13 +114,19 @@ const TAKES_REASONING_EFFORT = /^gpt-(?:5\.\d|6)/i;
 const NO_EFFORT_NONE = /^gpt-6(?:-astra|\.1-sol)(?:$|-)/i;
 
 /**
+ * A fine-tuned id is `ft:<base model>:<org>:<suffix>:<id>`, and it takes the options its
+ * base model takes (#652): the family patterns above anchor at the start of an id.
+ */
+const fineTuneBase = (model: string): string => /^ft:([^:]+)/i.exec(model)?.[1] ?? model;
+
+/**
  * The sampling options an OpenAI Chat Completions request may carry for `model`.
  *
  * `gpt-5.x` and `gpt-6` (#523) reason before they answer unless told not to, and the
  * reasoning is billed as output inside the 1000-token reply cap, so IRIS asks for none.
  * They refuse `temperature` whenever effort is not `none`; it is left out for all of them,
  * which every one accepts. The o-series and the first `gpt-5` take neither (#520).
- * Anything else keeps 0.1.
+ * Anything else keeps 0.1. A fine-tuned model gets what its base model gets (#652).
  *
  * shortcut: `gpt-6-astra` and `gpt-6.1-sol` reason at `low` inside the same 1000-token
  * cap, so a long deliberation can leave no room for the answer (a billed, rejected
@@ -130,9 +136,10 @@ export function openAISampling(model: string): {
   temperature?: number;
   reasoning_effort?: 'none' | 'low';
 } {
-  if (isReasoningModel(model)) return {};
-  if (TAKES_REASONING_EFFORT.test(model)) {
-    return { reasoning_effort: NO_EFFORT_NONE.test(model) ? 'low' : 'none' };
+  const family = fineTuneBase(model);
+  if (isReasoningModel(family)) return {};
+  if (TAKES_REASONING_EFFORT.test(family)) {
+    return { reasoning_effort: NO_EFFORT_NONE.test(family) ? 'low' : 'none' };
   }
   return { temperature: 0.1 };
 }
@@ -230,6 +237,27 @@ export class ModelUnavailableError extends Error {
           : ''),
     );
     this.name = 'ModelUnavailableError';
+  }
+}
+
+/**
+ * A configured model the provider may well serve, but that IRIS does not send images to:
+ * outside the vision table (text-only, deprecated or unknown, #523).
+ *
+ * The user's to change, like {@link ModelUnavailableError}, but not thrown past the
+ * fallback chain: another vendor may still answer. When none does, the classifier names
+ * it as the reason AI was unavailable (#652) instead of an anonymous outage.
+ */
+export class ModelNotForImagesError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly model: string,
+  ) {
+    super(
+      `${provider} model "${model}" is not one IRIS uses for images ` +
+        `(text-only, deprecated or unknown); choose another with --ai-model`,
+    );
+    this.name = 'ModelNotForImagesError';
   }
 }
 

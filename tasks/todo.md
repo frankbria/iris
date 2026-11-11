@@ -1,50 +1,40 @@
-# #648 [P3.36] Hosted MCP: report where a redirect landed, and axe's help URL for each violated rule
+# #652 [P3.37] Price table: delete deprecated rows after their shutdown dates; sampling options for fine-tuned ids
 
 ## Plan (self-authored; no plan on the issue)
 
-The hosted MCP tool (`src/mcp/hosted.ts`) words its answer from the stored a11y page result
-(`resultsOf` in `src/history-store.ts`). The stored `url` is the page as requested, so a scan
-that was redirected reads as findings on the requested URL; and the stored rules have no
-documentation link.
+The issue has five items. Two can be done now; three wait on a date or on #651 and stay
+open on the issue (this PR does not close it).
 
-1. **Store where a redirect landed.** `resultsOf` adds `landedUrl` to an a11y page result
-   when `scannedPage(page.page, page.axeResult.url)` says the scan was redirected: origin and
-   path, long segments cut, at most 200 characters (the cut the stdio tool already uses).
-   Absent when the scan stayed where it was asked, and for a page that could not be scanned.
-   Tests: `__tests__/db/history-store.test.ts`.
-2. **Derive axe's help URL, store nothing.** `axeRuleHelpUrl(ruleId)` builds
-   `https://dequeuniversity.com/rules/axe/<major.minor>/<rule>?application=axeAPI` from the
-   installed axe-core's `package.json` (read without loading axe into the API process). A
-   test holds it equal to `helpUrl` of every rule `axe.getRules()` lists, so an axe upgrade
-   that changes the form goes red. Tests: `__tests__/mcp/axe-help-url.test.ts`.
-3. **The hosted tool reports both.** `url` becomes the page that was scanned, `redirected`
-   says whether that differs from the request, `redirectedFrom` carries the requested URL
-   when it does; each violation gains `helpUrl`; the text names both. Tests:
-   `__tests__/mcp/hosted-http.test.ts`, and a redirect case in the real-browser
-   `__tests__/hosted-mcp-job.test.ts` (CI only on this host).
-4. **Docs.** `docs/data-flows.md` (what is newly stored), `.claude/rules/rpc-server.md`,
-   `docs/integration-surfaces.md` / README where the hosted tool's output is described,
-   `plans/README.md` (P3.36 done; the P3.38 row for #660 that iteration 13 asked for).
+1. **A fine-tuned id gets its base model's sampling options.** `openAISampling()`
+   (`src/ai-client/models.ts`) reads the base model out of `ft:<base>:<org>:<suffix>:<id>`
+   before it applies the family patterns. Tests: request-shape cases in
+   `__tests__/ai-client.test.ts`.
+2. **`iris visual-diff` names a model IRIS does not use for images.** The smart client's
+   refusal becomes a typed `ModelNotForImagesError`; the classifier answers it with its
+   fallback, classified `MODEL_UNAVAILABLE` and described by the reason; the runner's
+   existing rule then fills `summary.aiUnavailableReason`, which the CLI line and the HTML,
+   JUnit and Markdown reports already print. Tests: `ai-client-batch4.test.ts`,
+   `visual/ai-classifier-refactored.test.ts`, `visual/visual-runner.test.ts`, and the real
+   chain in `visual/ai-unavailable-exit.test.ts` (needs a browser: CI).
+3. Docs: `.claude/rules/ai-and-visual.md`, `plans/README.md`.
 
-## Acceptance criteria
+## Decisions
 
-- [ ] A hosted a11y result records the landing URL when it differs from the request, cut as
-      `scannedPage()` does, and the MCP tool reports it with `redirected`.
-- [ ] Each violated rule carries axe's help URL in the tool result (stored, or derived from
-      the installed axe version).
-- [ ] `docs/data-flows.md` says what is newly stored.
+- The comparison is still graded by its pixels (the #281 fallback), not failed closed as
+  `breaking` like a model the provider does not serve (#484): the issue asks for the
+  reason on the line, not for a different verdict.
+- With `ai.fallback` on, the other vendors are still tried. When none of them failed for a
+  reason of its own, the model fault is thrown as itself instead of "All providers failed".
+- Sampling only: the vision table and the price table do not look inside an `ft:` id.
 
-## Decisions taken (no architectural fork)
+## Not in this PR (left on #652)
 
-- **Help URL derived, not stored.** The issue allows either. axe runs inside the page under
-  test, so the `helpUrl` it returns is text a hostile page can choose; a derived URL is built
-  from the rule id alone, always points at Deque, and also covers runs stored since #647.
-  The version in it is the one installed when the result is read, not when it was scanned.
-- **`url` in the hosted result changes meaning on a redirect** (the scanned page, as the
-  stdio tool reports it); `redirectedFrom` keeps the requested URL readable for a caller
-  that only holds a job id.
-- **A relative page pattern records no landing URL.** `iris a11y` with a `baseURL` stores the
-  pattern (`/checkout`), and history does not know the base it was resolved against; hosted
-  jobs always carry absolute URLs, which is what the issue is about.
-- **axe's rule description is not added**: the context mentions it, the criteria do not, and
-  it would have to be stored (page-chosen text) or loaded from axe in the API process.
+- Deleting deprecated price rows: the first date is 2026-11-30.
+- GPT-5.6 Sol's row after its promotion ends on 2026-11-30.
+- The reply cap for `gpt-6-astra` / `gpt-6.1-sol`: waits on #651 (needs-owner).
+
+## Acceptance criteria covered
+
+- [x] A fine-tuned id (`ft:gpt-6-luna:org::id`) gets its base model's options
+- [x] `iris visual-diff`'s `AI: unavailable for N comparison(s)` line shows the reason for a
+      model not offered for vision
