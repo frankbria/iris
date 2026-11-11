@@ -38,7 +38,7 @@ IRIS runs two ways, and most of this README is about the first.
 | | **Local CLI** (this package) | **Hosted service** ([ADR 0001](docs/adr/0001-hosted-architecture.md)) |
 |---|---|---|
 | What you run | `iris run`, `watch`, `visual-diff`, `a11y`, `connect`, and `iris-mcp` | Nothing: an org signs up in the portal and calls the API |
-| Interface | CLI (JSON output), MCP stdio, local `iris connect` with a shared token | REST `/v1/…` (a11y and visual-diff jobs, results) and JSON-RPC over WSS, with org API keys |
+| Interface | CLI (JSON output), MCP stdio, local `iris connect` with a shared token | REST `/v1/…` (a11y and visual-diff jobs, results), JSON-RPC over WSS and MCP over HTTP (`/v1/mcp`), with org API keys |
 | AI keys | Yours, from the environment or `~/.iris/config.json` | The org's own keys (BYOK, encrypted at rest) or IRIS's managed credits |
 | Storage | SQLite and files under `~/.iris` (or `IRIS_DATA_DIR`) | PostgreSQL per org; screenshots in private S3-compatible storage |
 | Baselines | Git branches | Per project, changed only by approval |
@@ -842,6 +842,38 @@ cp .mcp.json.example .mcp.json
 Then start Claude Code in the project and approve the server when prompted;
 `claude mcp list` should report `iris ... ✔ Connected`. Installed globally, the
 `iris-mcp` bin is the same entry point.
+
+#### Hosted: MCP over HTTP
+
+The hosted service speaks MCP too, at `POST /v1/mcp` (Streamable HTTP), with the same org
+API key as the REST API:
+
+```json
+{
+  "mcpServers": {
+    "iris-hosted": {
+      "type": "http",
+      "url": "https://<your IRIS host>/v1/mcp",
+      "headers": { "Authorization": "Bearer iris_..." }
+    }
+  }
+}
+```
+
+| | |
+|---|---|
+| **Tools** | `run_accessibility_test { url, wcagLevel? }` and `get_accessibility_test_result { jobId }` |
+| **What a call does** | queues the same job as `POST /v1/a11y/jobs` with one URL: a worker scans the page, and the run appears in the org's history (`GET /v1/runs`, the portal) and counts as one run on the plan |
+| **Output** | `{ jobId, status }`, and once `status` is `finished`: `url, passed, violationCount, violations[] ({ id, impact, nodes }), needsReviewRules[], keyboardPassed`. `passed` is true when axe reported no violation and the keyboard checks passed |
+| **Slow scans** | a call waits up to 45 s, then answers `status: "queued"` or `"running"` with the `jobId`; `get_accessibility_test_result` reads the result later and costs nothing |
+| **Limits** | the key's and org's request rate (HTTP 429), the org's 10 queued or running jobs and the plan's monthly runs (both a tool error; no scan starts) |
+| **URLs** | public `http(s)` pages only, without credentials: private, loopback and metadata addresses are refused before a run is spent |
+| **Transport** | stateless: one JSON response per `POST`, no session id, no SSE stream (`GET` and `DELETE` answer 405); JSON-RPC batches are refused |
+
+A client that disconnects while its scan is still waiting in the queue has the scan
+withdrawn: it never runs and is not counted. One a worker has already started finishes
+and is counted. Unlike the local tool, the hosted one reports the page as requested (not
+where a redirect landed) and names each violated rule without axe's description text.
 
 **Redirects are followed, and every hop is checked.** Pass `http://localhost:3000`
 to a site whose root redirects to `/login` and you get a scan of `/login`.

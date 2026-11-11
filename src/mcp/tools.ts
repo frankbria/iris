@@ -29,7 +29,7 @@ export const MAX_CONCURRENT_SCANS = 2;
 export const MAX_WAITING_SCANS = 8;
 
 // One per process, not per server: the bound is on this machine's browsers.
-// shortcut: fixed numbers, make them per-tenant limits when MCP is hosted (#314).
+// Local only: hosted MCP (./hosted.ts) queues jobs and is capped per org instead.
 const scans = new ScanLimiter(MAX_CONCURRENT_SCANS, MAX_WAITING_SCANS);
 
 const inputSchema = {
