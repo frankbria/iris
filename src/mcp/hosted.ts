@@ -53,7 +53,10 @@ const outputSchema = {
   redirected: z
     .boolean()
     .optional()
-    .describe('True when the scan landed on another URL than the request.'),
+    .describe(
+      'True when the scan landed on another URL than the request. A scan stored before ' +
+        'redirects were recorded reads false.',
+    ),
   redirectedFrom: z
     .string()
     .optional()
