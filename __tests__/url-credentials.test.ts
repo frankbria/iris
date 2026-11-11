@@ -179,6 +179,7 @@ describe('time on adversarial input (#658)', () => {
     ],
     ['a://a://…', (n) => 'a://'.repeat(n / 4)],
     ['question marks', (n) => '?'.repeat(n)],
+    ['ampersands', (n) => '&'.repeat(n)],
     ['?a?a…', (n) => '?a'.repeat(n / 2)],
     ['a key that never ends', (n) => `iris_${'a'.repeat(n)}_`],
     ['Bearer and spaces', (n) => `Bearer${' '.repeat(n)}`],
@@ -275,6 +276,55 @@ describe('strippedError (#658)', () => {
     // A space keeps the trailing-authority rule out of it; the lead makes the text long.
     const lead = ' '.repeat(ERROR_TEXT_MAX - tail.length);
     expect(strippedError(`${lead}${tail} and more`, quoted).trimStart()).toBe(kept);
+  });
+
+  // codex review: the partial-copy rule cut the end off a whole copy, which then no longer
+  // matched the URL, and the pattern cannot follow the space in its password.
+  it('keeps a whole copy of a quoted URL that ends with its own beginning', () => {
+    const url = `http://${SPACE_PASSWORD}@host/http`;
+    const colour = '\x1b[2m'.repeat(4000);
+    const lead = 'x'.repeat(ERROR_TEXT_MAX - colour.length - url.length);
+    expect(strippedError(`${colour}${lead}${url} refused`, url)).toBe(`${lead}http://host/`);
+    expect(stripUserinfo(`${lead}${url} refused`, url)).toBe(`${lead}http://host/http refused`);
+  });
+
+  // The property behind every case above: cutting first may lose the end of the text, and
+  // nothing else. Whatever the uncut text has stripped is then stripped here too.
+  it('gives a prefix of what stripping the whole text gives, on 4,000 generated texts', () => {
+    let seed = Number(process.env.IRIS_FUZZ_SEED ?? 65800);
+    const next = (below: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return Math.floor((seed / 2147483648) * below);
+    };
+    const pick = (from: string[]) => from[next(from.length)];
+    const urls = [
+      `http://${SPACE_PASSWORD}@host/http`,
+      `http://${AT_PASSWORD}@h/a?b=http://x`,
+      'http:u:p@host/',
+      'ab://a b@ab://a',
+    ];
+    const pieces = (url: string) => [
+      'a', 'b', 'p', ' ', '/', '?', '#', '@', ':', '://', 'http', 'http://', 'u:p@', 'h/',
+      '\x1b', '\x1b[', '\x1b[2m', '\x1b[?25l', '😀', url, url, url.slice(0, 9), url.slice(0, -3),
+    ]; // prettier-ignore
+    const failures: string[] = [];
+    const cases = Number(process.env.IRIS_FUZZ_CASES ?? 4000);
+    for (let i = 0; i < cases; i++) {
+      const url = pick(urls);
+      const from = pieces(url);
+      let tail = '';
+      for (let count = 1 + next(14); count > 0; count--) tail += pick(from);
+      // The cut lands somewhere inside the generated part.
+      const before = next(tail.length + 1);
+      const text = `${'x'.repeat(ERROR_TEXT_MAX - before)}${tail}`;
+      const quoted = next(4) === 0 ? undefined : url;
+      const whole = stripUserinfo(text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ''), quoted);
+      const cut = strippedError(text, quoted);
+      if (!whole.startsWith(cut) || /[\uD800-\uDBFF]$/.test(cut)) {
+        failures.push(JSON.stringify({ tail, before, quoted, cut: cut.slice(-40) }));
+      }
+    }
+    expect(failures.slice(0, 5)).toEqual([]);
   });
 
   it('agrees with comparing every suffix, on 20,000 generated pairs', () => {

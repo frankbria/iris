@@ -134,12 +134,13 @@ export function replaceUserinfo(text: string, replacement: (userinfo: string) =>
  * its parsed form first.
  */
 export function stripUserinfo(text: string, quotedUrl?: string): string {
-  const withoutQuoted = quotedUrl
-    ? text.split(quotedUrl).join(urlWithoutUserinfo(quotedUrl))
-    : text;
   // An empty userinfo (`http://@host`) is left as it was written.
-  return replaceUserinfo(withoutQuoted, (userinfo) => (userinfo ? '' : '@'));
+  return replaceUserinfo(withoutQuoted(text, quotedUrl), (userinfo) => (userinfo ? '' : '@'));
 }
+
+/** `text` with each whole copy of `quotedUrl` replaced by its parsed form. */
+const withoutQuoted = (text: string, quotedUrl?: string): string =>
+  quotedUrl ? text.split(quotedUrl).join(urlWithoutUserinfo(quotedUrl)) : text;
 
 /** The most error text the stripping patterns are given, in UTF-16 units (#658). */
 export const ERROR_TEXT_MAX = 16_384;
@@ -181,14 +182,17 @@ const PARTIAL_ANSI_TAIL = /\x1b(?:\[[0-?]*[ -/]*)?$/;
  * The first `ERROR_TEXT_MAX` units of `text`, by code point, without colour codes. A cut can
  * land inside a URL whose `@` is past it, and what is left of the userinfo would no longer be
  * recognised. So a cut text also ends before a partial copy of `quotedUrl` and before an
- * authority that nothing terminates. Colour codes go first: one inside a URL holds a `?` or a
- * `;`, which would read as the authority's end (codex review).
+ * authority that nothing terminates. The order matters (codex review, twice): colour codes
+ * go first, since one inside a URL can hold a `?`, which would read as the authority's end;
+ * and whole copies of `quotedUrl` are replaced before a partial one is looked for, since a
+ * URL may end with its own beginning (`http://u:p@host/http`).
  */
 function headOfErrorText(text: string, quotedUrl: string): string {
   if (text.length <= ERROR_TEXT_MAX) return stripAnsi(text);
   const lastIsHighSurrogate = (text.charCodeAt(ERROR_TEXT_MAX - 1) & 0xfc00) === 0xd800;
   const cut = text.slice(0, ERROR_TEXT_MAX - (lastIsHighSurrogate ? 1 : 0));
-  const head = withoutPartialCopy(stripAnsi(cut).replace(PARTIAL_ANSI_TAIL, ''), quotedUrl);
+  const plain = stripAnsi(cut).replace(PARTIAL_ANSI_TAIL, '');
+  const head = withoutPartialCopy(withoutQuoted(plain, quotedUrl), quotedUrl);
   const scheme = head.lastIndexOf('://');
   return scheme !== -1 && !/[\s/?#]/.test(head.slice(scheme + 3)) ? head.slice(0, scheme) : head;
 }

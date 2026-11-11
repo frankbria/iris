@@ -177,7 +177,14 @@ model, and the page under test chooses much of what an error or a redirect conta
   (#658): colour codes and userinfo cut from the first `ERROR_TEXT_MAX` (16,384) UTF-16
   units, cut before any pattern runs. A cut can land inside a URL whose `@` is past it, so
   a cut text also loses a trailing partial copy of `quotedUrl`, a trailing authority that
-  nothing terminates, and a lone high surrogate. Used by `boundedError` (history store) and
+  nothing terminates, and a lone high surrogate. Three things codex found in that edge
+  handling: colour codes must leave the cut text **before** the edge is judged (one inside a
+  userinfo holds a `?`, which read as the authority's end, and removing it afterwards
+  exposed the password), a code the cut ended included; and the partial copy is found with
+  Knuth-Morris-Pratt, because comparing each suffix with the URL took a second on 16,384
+  repeated letters; and whole copies of `quotedUrl` are replaced before a partial one is
+  looked for, because a URL may end with its own beginning (`…@host/http`) and cutting that
+  off left a copy the exact replacement no longer matched. Edge handling for a bound is code an attacker also reaches: time it. Used by `boundedError` (history store) and
   the a11y runner's `erroredPage`, so an a11y page error is at most 16,384 units now.
 - **`MAX_SELECTOR_LENGTH` = 4,096** (src/actions.ts, #658) bounds `selector` (click, fill)
   and an assertion's `target` in the shared `ActionSchema`: `-32602` at the RPC boundary,
