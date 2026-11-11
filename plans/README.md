@@ -333,6 +333,9 @@ developer, one session.
 | `P3.3` | [#35](https://github.com/frankbria/iris/issues/35) | Remove dead migration framework / unify `schema_version` | improve | — | TODO |
 | `P3.4` | [#36](https://github.com/frankbria/iris/issues/36) | Bound AI vision cache growth (call `pruneExpired()`) | improve | — | TODO |
 | `P3.5` | [#37](https://github.com/frankbria/iris/issues/37) | Low-sev hardening bundle (logs, git-branch warn, shutdown, perms) | improve | — | TODO |
+| `P3.33` | [#644](https://github.com/frankbria/iris/issues/644) | CI review job fails at "Fetch the PR diff" when the diff holds a raw ESC byte | — | TODO |
+| `P3.34` | [#645](https://github.com/frankbria/iris/issues/645) | stripUserinfo and redactString leave part of a password that contains an @ or a space | — | TODO |
+| `P3.35` | [#646](https://github.com/frankbria/iris/issues/646) | MCP tool: offer the keyboard checks, and decide what `passed` means against `--fail-on` | P2.2 (#362) | BLOCKED (needs-owner) |
 
 **Recommended order:** `P0.1` → `P1.1`/`P1.2`/`P1.3` → `P2.x` → `P3.x`.
 Do `P3.2` before `P1.1` (don't publish a throwing API surface). Do `P2.5`
