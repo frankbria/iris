@@ -4,7 +4,12 @@
  * so no browser; `tools.test.ts` shows the same through a real scan.
  */
 
-import { scanFailureReason, scannedPage, withoutCredentials } from '../../src/mcp/scan-errors';
+import {
+  loggedDetail,
+  scanFailureReason,
+  scannedPage,
+  withoutCredentials,
+} from '../../src/mcp/scan-errors';
 
 describe('scanFailureReason', () => {
   it('names the category of a blocked redirect, never its target', () => {
@@ -122,6 +127,29 @@ describe('withoutCredentials', () => {
 
   it('repeats nothing of text that is not a URL', () => {
     expect(withoutCredentials('http://admin:correct horse@bad host/')).toBe('the requested URL');
+  });
+});
+
+describe('loggedDetail', () => {
+  it('cuts the credentials from every place an error repeats the requested URL', () => {
+    const requested = 'http://admin:correct horse@localhost:3000/go';
+
+    expect(
+      loggedDetail(
+        `${requested} redirects to http://169.254.169.254/, which is blocked by navigation ` +
+          `policy (asked for ${requested})`,
+        requested,
+      ),
+    ).toBe(
+      'http://localhost:3000/go redirects to http://169.254.169.254/, which is blocked by ' +
+        'navigation policy (asked for http://localhost:3000/go)',
+    );
+  });
+
+  it('leaves an error that does not name the URL as it is', () => {
+    expect(loggedDetail('page.goto: Timeout 30000ms exceeded.', 'http://a:b@localhost/')).toBe(
+      'page.goto: Timeout 30000ms exceeded.',
+    );
   });
 });
 

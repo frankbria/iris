@@ -18,7 +18,7 @@ import { AccessibilityRunner } from '../a11y/a11y-runner';
 import { assertNavigationAllowed } from '../url-policy';
 import { wcagTags } from '../a11y/wcag';
 import { log } from '../log';
-import { scanFailureReason, scannedPage, withoutCredentials } from './scan-errors';
+import { loggedDetail, scanFailureReason, scannedPage, withoutCredentials } from './scan-errors';
 import { ScanLimiter, ScanQueueFullError } from './scan-limiter';
 
 export const RUN_ACCESSIBILITY_TEST = 'run_accessibility_test';
@@ -104,7 +104,10 @@ function describeError(error: unknown): string {
  */
 function scanFailure(url: string, error: unknown) {
   const detail = describeError(error);
-  log('warn', 'mcp scan failed', { url: withoutCredentials(url), detail });
+  log('warn', 'mcp scan failed', {
+    url: withoutCredentials(url),
+    detail: loggedDetail(detail, url),
+  });
   return toolError(
     `Accessibility scan failed for ${withoutCredentials(url)}: ${scanFailureReason(detail)}.`,
   );

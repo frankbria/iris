@@ -95,6 +95,15 @@ export function withoutCredentials(url: string): string {
 }
 
 /**
+ * An error's text as the server logs it: the requested URL, which the guard's messages
+ * repeat as the caller wrote it, without its credentials. The logger's own redaction is a
+ * pattern and loses a password that holds a space.
+ */
+export function loggedDetail(detail: string, requested: string): string {
+  return detail.split(requested).join(withoutCredentials(requested));
+}
+
+/**
  * A URL as the network sees it. The runner reports the response's URL, which never has
  * the request's fragment or credentials: without this, `/#/checkout` read as a redirect.
  */
