@@ -280,7 +280,7 @@ production.
 | `P3.34` | [#645](https://github.com/frankbria/iris/issues/645) | stripUserinfo and redactString leave part of a password that contains an @ or a space | — | DONE: both cut to the authority's last `@`; a URL held whole is parsed (`urlWithoutUserinfo`, `stripUserinfo(text, quotedUrl)`); a raw space in free text stays a documented limit |
 | `P3.35` | [#646](https://github.com/frankbria/iris/issues/646) | MCP tool: offer the keyboard checks, and decide what `passed` means against `--fail-on` | P2.2 (#362) | BLOCKED (needs-owner) |
 | `P3.36` | [#648](https://github.com/frankbria/iris/issues/648) | Hosted MCP: report where a redirect landed, and axe's help URL for each violated rule | P2.3 (#314) | DONE: a redirected page's result stores `landedUrl` (origin and path, cut); the tool reports it as `url` with `redirected` and `redirectedFrom`; each rule's `helpUrl` is derived from the installed axe version, not stored |
-| `P3.37` | [#652](https://github.com/frankbria/iris/issues/652) | Price table: delete deprecated rows after their shutdown dates; sampling options for fine-tuned ids | P2.29 (#523) | TODO |
+| `P3.37` | [#652](https://github.com/frankbria/iris/issues/652) | Price table: delete deprecated rows after their shutdown dates; sampling options for fine-tuned ids | P2.29 (#523) | PARTIAL: fine-tuned sampling and the visual-diff reason are done; the price rows wait for their dates (first 2026-11-30), the reply cap for #651 |
 | `P3.38` | [#660](https://github.com/frankbria/iris/issues/660) | redactString: a run of bare separators costs a callback each (1 MB of & takes about 360 ms) | P1.43 (#658) | TODO |
 
 ---

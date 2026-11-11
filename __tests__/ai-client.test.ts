@@ -149,6 +149,29 @@ describe('AI Client', () => {
       expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('reasoning_effort');
     });
 
+    // #652: a fine-tuned id is `ft:<base model>:<org>:<suffix>:<id>`, and the family
+    // patterns anchor at the start, so it used to fall through to `temperature: 0.1`,
+    // which a gpt-6 or o-series base refuses with a 400.
+    it.each([
+      ['ft:gpt-6-luna:acme::Abc123', { reasoning_effort: 'none' }],
+      ['ft:gpt-6-astra:acme:support:Abc123', { reasoning_effort: 'low' }],
+      ['ft:gpt-5.4-mini-2026-03-17:acme::Abc123', { reasoning_effort: 'none' }],
+      ['ft:o4-mini-2025-04-16:acme::Abc123', {}],
+      ['ft:gpt-5-mini:acme::Abc123', {}],
+      ['ft:gpt-4.1-mini-2025-04-14:acme::Abc123', { temperature: 0.1 }],
+      // Not a fine-tuned id: `ft:` only counts at the start.
+      ['my-ft:gpt-6-luna', { temperature: 0.1 }],
+    ])("sends the fine-tuned %s its base model's sampling options", async (model, sampling) => {
+      mockCreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
+      });
+      const client = createAIClient({ ...config, ai: { ...config.ai, model } });
+      await client.translateInstruction({ instruction: 'click the submit button' });
+      const { temperature, reasoning_effort } = mockCreate.mock.calls[0][0];
+      expect(JSON.parse(JSON.stringify({ temperature, reasoning_effort }))).toEqual(sampling);
+      expect(mockCreate.mock.calls[0][0].model).toBe(model);
+    });
+
     it('should handle API errors gracefully', async () => {
       mockCreate.mockRejectedValue(new Error('API Error'));
 

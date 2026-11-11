@@ -11,7 +11,10 @@ import { pathToFileURL } from 'url';
 import { escapeHtml, escapeMarkdown, escapeXml } from '../report-encoding';
 import type { VisualTestResult } from './visual-runner';
 
-/** `aiAnalysis.classification` of a comparison whose configured model is not served (#484). */
+/**
+ * `aiAnalysis.classification` of a comparison whose configured model is not served (#484)
+ * or is not one IRIS sends images to (#652); its `description` is the reason.
+ */
 export const MODEL_UNAVAILABLE = 'model-unavailable';
 
 /**
