@@ -236,7 +236,9 @@ production.
 | `P2.29` | [#523](https://github.com/frankbria/iris/issues/523) | Cost tracker: price the current models, discontinue the deprecated ones | P1 (#298) | DONE (#650) |
 | `P2.30` | [#528](https://github.com/frankbria/iris/issues/528) | RPC server: JSON-RPC batch requests (decided: not supported) | — | DONE (#575) |
 | `P2.31` | [#541](https://github.com/frankbria/iris/issues/541) | Audit log: a read surface for org admins, and a retention period (90 days) | P1 (#361) | DONE (#577, #653) |
+| `P2.32` | [#639](https://github.com/frankbria/iris/issues/639) | Deploy job: pass IRIS_BILLING_GRACE_DAYS to settings.env so the payment grace period is configurable in production | P0.38 (#266) | BLOCKED (needs-owner) |
 | `P2.33` | [#651](https://github.com/frankbria/iris/issues/651) | Live-check the gpt-6 request shape with a real OpenAI key, and confirm the model decisions of #650 | P2.29 (#523) | BLOCKED (needs-owner) |
+| `P2.34` | [#654](https://github.com/frankbria/iris/issues/654) | Privacy policy: say how long audit log entries are kept (90 days, #541) | P2.31 (#541) | BLOCKED (needs-owner) |
 | `P2.26` | [#513](https://github.com/frankbria/iris/issues/513) | Credential references hardening: origin binding and transformed values | P1.16 (#352) | DONE (#571) |
 
 ### P3 — Polish / test trust / hygiene
@@ -262,6 +264,7 @@ production.
 | `P3.18` | [#510](https://github.com/frankbria/iris/issues/510) | iris run: a distinct exit code for a provider outage, in one-shot and --agent mode | — | DONE (#598) |
 | `P3.19` | [#511](https://github.com/frankbria/iris/issues/511) | iris watch: report a provider outage as a failure with its reason | — | DONE (#599) |
 | `P3.22` | [#564](https://github.com/frankbria/iris/issues/564) | worker-cli heartbeat test counts wall-clock beats: flaky on a loaded runner | — | DONE (#602) |
+| `P3.23` | [#565](https://github.com/frankbria/iris/issues/565) | GLM review job passes when its model call errors: PRs get a 1-second non-review | — | CLOSED: fixed upstream (frankbria/glm-review#15 to #17); the notice and real reviews verified 2026-11-11, the provider-side cause on the owner's word |
 | `P3.21` | [#519](https://github.com/frankbria/iris/issues/519) | Pattern translator: reject prose with a selector token glued in | — | DONE (#600) |
 | `P3.25` | [#570](https://github.com/frankbria/iris/issues/570) | backup.sh: a container that stops between discovery and exec fails with Docker's message | — | DONE (#605) |
 | `P3.26` | [#573](https://github.com/frankbria/iris/issues/573) | AI client request builders are CC 16: split translateInstruction / analyzeVisualDiff | — | DONE (#606) |
@@ -271,6 +274,7 @@ production.
 | `P3.30` | [#603](https://github.com/frankbria/iris/issues/603) | iris run: a malformed budget variable exits 3 instead of a config error | P3.18 (#510) | DONE (#607) |
 | `P3.20` | [#518](https://github.com/frankbria/iris/issues/518) | CRAP tech debt: changed functions over the ceiling | — | DONE (#608, #610) |
 | `P3.31` | [#609](https://github.com/frankbria/iris/issues/609) | Lizard misreads src/watcher.ts, so changed lines there fail the CRAP gate | P3.20 (#518) | DONE (#611) |
+| `P3.32` | [#641](https://github.com/frankbria/iris/issues/641) | Portal: credit left ignores held managed-AI reservations, so it can show credit the resolver refuses | P0.43 (#271) | BLOCKED (#271, draft PR #640) |
 | `P3.33` | [#644](https://github.com/frankbria/iris/issues/644) | CI review job fails at "Fetch the PR diff" when the diff holds a raw ESC byte | — | TODO |
 | `P3.34` | [#645](https://github.com/frankbria/iris/issues/645) | stripUserinfo and redactString leave part of a password that contains an @ or a space | — | TODO |
 | `P3.35` | [#646](https://github.com/frankbria/iris/issues/646) | MCP tool: offer the keyboard checks, and decide what `passed` means against `--fail-on` | P2.2 (#362) | BLOCKED (needs-owner) |
