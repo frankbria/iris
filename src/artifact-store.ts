@@ -380,6 +380,15 @@ export class S3ArtifactStore implements ArtifactStore {
     if (!(await this.versioningEnabled())) return 0;
     const doomed: VersionRef[] = [];
     const spentMarkers: VersionRef[] = [];
+    let pruned = 0;
+    // Markers after the versions they hide, and only once those are gone: a marker deleted
+    // while its version survived a failed delete would make a purged image readable again.
+    const flush = async () => {
+      await this.deleteVersions(doomed);
+      await this.deleteVersions(spentMarkers);
+      pruned += doomed.length + spentMarkers.length;
+      doomed.length = spentMarkers.length = 0;
+    };
     for await (const [key, versions] of this.keyVersions()) {
       // A version stopped being current when the one in front of it was written.
       const expired = versions.filter((_, i) => i > 0 && versions[i - 1].lastModified < olderThan);
@@ -388,12 +397,11 @@ export class S3ArtifactStore implements ArtifactStore {
       const [head] = versions;
       if (head.deleteMarker && expired.length === versions.length - 1)
         spentMarkers.push({ Key: key, VersionId: head.versionId });
+      // Whole keys at a time, so memory stays bounded on a large backlog.
+      if (doomed.length + spentMarkers.length >= 1000) await flush();
     }
-    // Markers last, and only once what they hide is gone: a marker deleted while its
-    // version survived a failed delete would make a purged image readable again.
-    await this.deleteVersions(doomed);
-    await this.deleteVersions(spentMarkers);
-    return doomed.length + spentMarkers.length;
+    await flush();
+    return pruned;
   }
 
   private async deleteVersions(refs: VersionRef[]): Promise<void> {
