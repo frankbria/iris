@@ -94,9 +94,9 @@ is processed in Chromium's memory for the duration of the job.
 
 | | |
 |---|---|
-| Data | `usage_events`: org, run, kind (`browser_minutes`, `text_call`, `vision_call`, `agent_turn`, `a11y_job`, `visual_job`, `observation`), quantity, unit cost, billing mode, estimated flag, idempotency key. No content. |
+| Data | `usage_events`: org, run, kind (`browser_minutes`, `text_call`, `vision_call`, `agent_turn`, `a11y_job`, `visual_job`, `observation`), quantity, unit cost, billing mode, estimated flag, idempotency key, and when a managed row was sent to the Stripe meter (`stripe_reported_at`, #264). No content. |
 | Purpose | Metering and billing (#263). |
-| Where | Postgres, `0001`, `0003`; `src/billing/usage.ts`. |
+| Where | Postgres, `0001`, `0003`, `0021`; `src/billing/usage.ts`, `src/billing/stripe-meter.ts`. |
 | Access | Operators; the org's own usage view (#271, pending). |
 | Retention | While the org exists, and **7 years** after it is purged, on a tombstone org with no name, members or keys (pseudonymised); then deleted. The 7 years is the owner's decision pending counsel's confirmation for the jurisdiction (#450). |
 
@@ -290,7 +290,12 @@ stores them. Stripe sends IRIS signed webhook events (`POST /v1/stripe/webhook`)
 known customer, `iris connect` calls the Stripe API once (list that customer's
 subscriptions, sending the customer id) and keeps the current subscription's id and status,
 and the event id (Org billing, above); the event's own payload is not stored or applied.
-Metered usage is #264. Stripe is a subprocessor; its retention applies.
+The worker also reports managed AI usage to a Stripe meter (#264,
+`src/billing/stripe-meter.ts`): per `managed` usage row, the org's Stripe customer id, the
+row's provider cost in micro-USD, its time, and an identifier made from the row's id
+(`usage-<uuid>`). No kind, model, run or content is sent, and BYOK and platform usage never
+are. `iris admin billing-reconcile` reads the meter's totals per customer back.
+Stripe is a subprocessor; its retention applies.
 
 ### Off-box backup storage
 

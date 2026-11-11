@@ -448,7 +448,7 @@ docker exec "$c" node -e 'fetch("http://127.0.0.1:9464/metrics").then(r => r.tex
   `iris_errors_total` (lines logged at `error`), `iris_up`, `iris_start_time_seconds`.
 - worker: `iris_jobs_total{kind,outcome}` (`finished`, `error`, `lost`),
   `iris_job_duration_seconds`, `iris_jobs_reaped_total{result}`,
-  `iris_job_queue_depth`, plus `iris_errors_total`, `iris_up`, `iris_start_time_seconds`.
+  `iris_job_queue_depth`, `iris_stripe_meter_events_total{outcome}` (`sent`, `rejected`; #264), plus `iris_errors_total`, `iris_up`, `iris_start_time_seconds`.
 
 No series carries an org id. Per-org usage is in the `usage_events` table (#263). A
 Prometheus server is optional; if you run one, run it on the box and scrape through the
@@ -664,7 +664,7 @@ worker gets them once hosted jobs make AI calls) (#549):
 Unset, managed mode falls through to each org's own key. One without the other stops
 `iris connect` (exit 3). The vendor is then IRIS's subprocessor for those orgs (the
 subprocessor page says so). Managed spend is `usage_events` with `billing_mode = managed`;
-Stripe reporting is #264.
+the worker reports it to a Stripe meter ("Stripe billing", below).
 
 ## Stripe billing (issues #261, #345)
 
@@ -686,7 +686,15 @@ signed webhook. Set up once per Stripe mode (test first, then live):
    `customer.subscription.created`, `customer.subscription.updated`,
    `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Copy its
    signing secret (`whsec_…`).
-4. **The `production` GitHub environment** (the deploy passes them to `iris` and the portal):
+4. **Meter** (Billing → Meters; #264): one meter with the event name
+   `iris_managed_ai_micro_usd` (`METER_EVENT_NAME` in `src/billing/stripe-meter.ts`),
+   aggregation **sum**, and the default payload keys (`stripe_customer_id`, `value`). Its
+   unit is one millionth of a US dollar of provider cost. The meter records usage whether or
+   not a price uses it. No price is needed today: managed usage stops at the plan's included
+   credit. Charging for usage beyond it would be a metered price on this meter (for example
+   $1 per 1,000,000 units), which is an owner decision.
+5. **The `production` GitHub environment** (the deploy passes them to `iris`, the worker and
+   the portal):
 
 | Name | Kind | Value |
 | --- | --- | --- |
@@ -701,9 +709,43 @@ the portal's `/org` fail. Check from the Stripe dashboard that a test event is a
 localhost:4000/v1/stripe/webhook` prints a secret to use as `IRIS_STRIPE_WEBHOOK_SECRET`.
 Each event makes `iris connect` read the customer's subscriptions from the Stripe API (10 s
 timeout, no retries); when Stripe is unreachable it answers 500 and Stripe redelivers, so
-the API key needs read access to subscriptions. The grace period and suspension on failed payments are #266; until then `invoice.payment_failed`
+the API key needs read access to subscriptions, and for the meter: write access to meter
+events and read access to meters and their event summaries. The grace period and suspension on failed payments are #266; until then `invoice.payment_failed`
 only shows `past due` and keeps the plan. Purging an org does not cancel its Stripe
 subscription: cancel it in the dashboard first.
+
+### Usage reporting and reconciliation (issue #264)
+
+With Stripe configured, the worker sends every unreported `managed` usage row to the meter
+every 5 minutes: one meter event per row, at the time the usage happened, with the row's id
+as identifier and idempotency key, so a resend is not a second charge (Stripe promises that
+for 24 hours). Only one worker reports at a time (a Postgres advisory lock). BYOK and
+platform usage are never sent. A partial `IRIS_STRIPE_*` stops the worker (exit 3).
+
+Not sent, and left unreported: rows of an org with no Stripe customer (a support grant on a
+free org), rows older than 34 days (Stripe refuses a timestamp past 35), and rows Stripe
+rejects (logged as `stripe meter report` with `firstRejection`; counted in
+`iris_stripe_meter_events_total{outcome="rejected"}` on the worker's metrics port). Stripe
+checks the customer asynchronously: an event for a customer deleted in Stripe is accepted
+and then dropped there, which only the reconciliation shows. One loss never reaches the
+ledger, so no report can show it: an AI call whose usage row failed to write (its credit
+stays held for the month, #482). Browser minutes are not billed through the meter.
+
+After a billing period closes, compare the ledger with Stripe:
+
+```bash
+docker compose exec iris node dist/cli.js admin billing-reconcile \
+  --from 2026-11-01T00:00:00Z --to 2026-12-01T00:00:00Z
+```
+
+It prints one JSON row per org with managed usage in the period, in micro-USD:
+`ledgerMicroUsd`, `estimatedMicroUsd` (the part priced at an estimated rate because the
+model had no price row, #243; it is reported to Stripe as it is, the same amount the org's
+credit was charged), `unreportedMicroUsd`, `stripeMicroUsd` (`null` without a customer) and
+`differenceMicroUsd` (ledger minus Stripe). Exit 0 when every difference is 0, else 3. The
+period must be on whole minutes. Stripe aggregates asynchronously, so run it some minutes
+after the worker's last pass. A positive difference with `unreportedMicroUsd` equal to it is
+usage waiting or unsendable; any other difference needs a look at the Stripe meter's events.
 
 ## Retention and offboarding (issue #349)
 

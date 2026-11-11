@@ -324,19 +324,19 @@ describe('docker-compose.production.yml (issue #273)', () => {
     expect(file).toMatch(/^  managed_ai_key:\n    file: \.\/secrets\/managed_ai_key$/m);
   });
 
-  // Stripe billing (#261, #345): the webhook runs in iris, Checkout and the Portal in the portal.
+  // Stripe billing (#261, #345): the webhook runs in iris, Checkout and the Portal in the
+  // portal, and the meter report in the worker (#264, ADR 0001 §1).
   const STRIPE = [
     'IRIS_STRIPE_SECRET_KEY_FILE',
     'IRIS_STRIPE_WEBHOOK_SECRET_FILE',
     'IRIS_STRIPE_PRICE_PRO',
     'IRIS_STRIPE_PRICE_TEAM',
   ];
-  it.each(['iris', 'portal'])('passes Stripe billing to %s, empty when unset', (name) => {
+  it.each(['iris', 'worker', 'portal'])('passes Stripe billing to %s, empty when unset', (name) => {
     const s = service(name);
     for (const v of STRIPE) expect(s).toMatch(new RegExp(`^\\s+${v}: \\$\\{${v}:-\\}$`, 'm'));
     expect(s).toMatch(/^\s+- stripe_secret_key$/m);
     expect(s).toMatch(/^\s+- stripe_webhook_secret$/m);
-    expect(service('worker')).not.toMatch(/STRIPE/);
     expect(file).toMatch(/^  stripe_secret_key:\n    file: \.\/secrets\/stripe_secret_key$/m);
     expect(file).toMatch(
       /^  stripe_webhook_secret:\n    file: \.\/secrets\/stripe_webhook_secret$/m,

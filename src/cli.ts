@@ -1143,7 +1143,16 @@ program
     const { runWorker } = await import('./worker');
     let db: ReturnType<typeof createPostgresDb> | undefined;
     let artifacts: import('./artifact-store').ArtifactStore | null = null;
+    let meters: import('./billing/stripe-meter').UsageMeters | null = null;
     try {
+      // The Stripe meter report (#264) runs here when billing is configured. Partial
+      // config: exit 3, or managed usage would quietly never reach Stripe.
+      const { resolveStripeConfig, stripeClient } = await import('./billing/stripe');
+      const stripe = resolveStripeConfig();
+      if (stripe) {
+        const { stripeMeters } = await import('./billing/stripe-meter');
+        meters = stripeMeters(stripeClient(stripe, { timeout: 10_000 }));
+      }
       // Visual jobs (#268) need somewhere to put images; without IRIS_S3_* the worker
       // runs a11y jobs only (and the API refuses visual ones). Partial config: exit 3.
       artifacts = (await import('./artifact-store')).resolveArtifactStore();
@@ -1171,6 +1180,8 @@ program
     process.on('SIGTERM', onSignal);
     console.log(`iris worker: waiting for jobs (${artifacts ? 'a11y, visual' : 'a11y only'})`);
     try {
+      const { runMeterReports } = await import('./billing/stripe-meter');
+      const reports = meters ? runMeterReports({ db, meters, signal: stop.signal }) : undefined;
       await runWorker({
         jobs: postgresJobs(db),
         signal: stop.signal,
@@ -1188,6 +1199,8 @@ program
           return quotaArtifacts(store, db, orgId, artifactStorageBytes);
         },
       });
+      // Stopped by the same signal: its current pass ends before the database closes.
+      await reports;
     } finally {
       await db.destroy();
     }
@@ -1410,6 +1423,33 @@ admin
       // A failed step is logged and the rest still ran; exit 3 so the timer alerts.
       if (report.failures.length)
         throw new Error(`retention steps failed: ${report.failures.join(', ')}`);
+    });
+  });
+
+const parseTime = (value: string) => new Date(value);
+
+admin
+  .command('billing-reconcile')
+  .description(
+    'Managed AI usage per org for a period: the ledger total against the Stripe meter total ' +
+      '(micro-USD). Exits 3 when they differ',
+  )
+  .requiredOption(
+    '--from <time>',
+    'Period start (inclusive), ISO 8601 on a whole minute',
+    parseTime,
+  )
+  .requiredOption('--to <time>', 'Period end (exclusive), ISO 8601 on a whole minute', parseTime)
+  .action(async (options: { from: Date; to: Date }) => {
+    await withAdminDb(async (_s, db) => {
+      const { resolveStripeConfig, stripeClient } = await import('./billing/stripe');
+      const { meterReconciliation, stripeMeters } = await import('./billing/stripe-meter');
+      const config = resolveStripeConfig();
+      if (!config) throw new Error('Stripe billing is not configured (IRIS_STRIPE_*)');
+      const report = await meterReconciliation(db, stripeMeters(stripeClient(config)), options);
+      console.log(JSON.stringify(report));
+      const differing = report.filter((row) => row.differenceMicroUsd !== 0).length;
+      if (differing) throw new Error(`the ledger and Stripe differ for ${differing} org(s)`);
     });
   });
 

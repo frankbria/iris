@@ -262,4 +262,57 @@ describe('iris admin refusals', () => {
     expect(report.failures).toEqual([expect.stringMatching(/^artifact store: IRIS_S3_BUCKET set/)]);
     expect(report).toHaveProperty('sessionsDeleted');
   }, 120_000);
+
+  describe('billing-reconcile (#264)', () => {
+    const STRIPE = {
+      IRIS_STRIPE_SECRET_KEY: 'sk_test_placeholder',
+      IRIS_STRIPE_WEBHOOK_SECRET: 'whsec_placeholder',
+      IRIS_STRIPE_PRICE_PRO: 'price_pro',
+      IRIS_STRIPE_PRICE_TEAM: 'price_team',
+    };
+    const reconcile = (from: string, to: string, more: NodeJS.ProcessEnv = STRIPE) =>
+      iris(['admin', 'billing-reconcile', '--from', from, '--to', to], { ...env, ...more });
+
+    test('without Stripe configured it exits 3 and says so', async () => {
+      const r = await reconcile('2026-06-01T00:00:00Z', '2026-07-01T00:00:00Z', {});
+      expect(r.code).toBe(3);
+      expect(r.stderr).toMatch(/Stripe billing is not configured/);
+    }, 60_000);
+
+    test('a period that is not whole minutes is refused', async () => {
+      const r = await reconcile('2026-06-01T00:00:30Z', 'never');
+      expect(r.code).toBe(3);
+      expect(r.stderr).toMatch(/whole minutes/);
+    }, 60_000);
+
+    // A placeholder key: any call that reached Stripe would fail. Neither case makes one,
+    // since only an org with a Stripe customer has a meter total to read.
+    test('prints the report: empty and exit 0, or exit 3 when the ledger and Stripe differ', async () => {
+      const empty = await reconcile('2026-06-01T00:00:00Z', '2026-07-01T00:00:00Z');
+      expect(empty.code).toBe(0);
+      expect(JSON.parse(empty.stdout)).toEqual([]);
+
+      await sql`insert into organization (id, name, slug, "createdAt")
+        values ('org-meter', 'M', 'meter', now())`.execute(db);
+      await sql`insert into usage_events
+          (org_id, kind, quantity, billing_mode, idempotency_key, unit_cost_usd, created_at)
+        values ('org-meter', 'text_call', 2, 'managed', 'granted', 0.25, '2026-08-10T00:00:00Z')`.execute(
+        db,
+      );
+      const differs = await reconcile('2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z');
+      expect(JSON.parse(differs.stdout)).toEqual([
+        {
+          orgId: 'org-meter',
+          customerId: null,
+          ledgerMicroUsd: 500_000,
+          estimatedMicroUsd: 0,
+          unreportedMicroUsd: 500_000,
+          stripeMicroUsd: null,
+          differenceMicroUsd: 500_000,
+        },
+      ]);
+      expect(differs.code).toBe(3);
+      expect(differs.stderr).toMatch(/differ for 1 org/);
+    }, 120_000);
+  });
 });
