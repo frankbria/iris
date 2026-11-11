@@ -4,9 +4,9 @@
 
 1. Read OpenAI's pages (pricing, deprecations, model optimization, vision fine-tuning,
    the model pages), 2026-11-11.
-2. Tests first: `__tests__/ai-model-pricing.test.ts` (the four fine-tuned rows, a fine-tune
-   with no row stays an estimate, ids without `ft:` unchanged), `__tests__/ai-client-models.test.ts`
-   (`isVisionModel` is false for every fine-tuned id; the refusal says why).
+2. Tests first: `__tests__/ai-fine-tuned-ids.test.ts` (the four fine-tuned rows, a fine-tune
+   with no row stays an estimate, ids without `ft:` unchanged, `isVisionModel` is false for
+   every fine-tuned id, the refusal says why).
 3. `fineTunedBase()` exported from `src/ai-client/models.ts`; `ModelNotForImagesError` names
    a fine-tuned id as such; `CostTracker.resolveKey` prices `ft:<base>:<org>:<suffix>:<id>`
    by the row `ft:<base>`; four rows in `DEFAULT_PRICING`.

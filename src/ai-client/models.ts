@@ -119,7 +119,7 @@ const NO_EFFORT_NONE = /^gpt-6(?:-astra|\.1-sol)(?:$|-)/i;
  * (#652: the family patterns above anchor at the start of an id) and is priced by its own
  * row, `ft:<base model>` (#664).
  */
-export const fineTunedBase = (model: string): string | undefined => /^ft:([^:]+)/i.exec(model)?.[1];
+export const fineTunedBase = (model: string): string | undefined => /^ft:([^:]+)/.exec(model)?.[1];
 
 /**
  * The sampling options an OpenAI Chat Completions request may carry for `model`.

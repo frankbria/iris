@@ -83,7 +83,15 @@ describe('fine-tuned OpenAI ids (#664)', () => {
     });
 
     it('has no fine-tuned row for another provider', () => {
-      expect(tracker.priceIsEstimated('anthropic', 'ft:gpt-4o-2024-08-06:acme::AbC123')).toBe(true);
+      const model = 'ft:gpt-4o-2024-08-06:acme::AbC123';
+      expect(tracker.priceIsEstimated('anthropic', model)).toBe(true);
+      // The dearest rate, not OpenAI's $3.75/$15 for that base.
+      expect(cost('anthropic', model)).toBeCloseTo((1000 * 10 + 1000 * 50) / M, 12);
+    });
+
+    it('reads the prefix as OpenAI writes it, in lower case', () => {
+      expect(fineTunedBase('FT:gpt-4o-2024-08-06:acme::AbC123')).toBeUndefined();
+      expect(tracker.priceIsEstimated('openai', 'FT:gpt-4o-2024-08-06:acme::AbC123')).toBe(true);
     });
 
     it('does not make a fine-tuned row the price of its base model', () => {
