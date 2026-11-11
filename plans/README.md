@@ -264,7 +264,7 @@ production.
 | `P3.18` | [#510](https://github.com/frankbria/iris/issues/510) | iris run: a distinct exit code for a provider outage, in one-shot and --agent mode | — | DONE (#598) |
 | `P3.19` | [#511](https://github.com/frankbria/iris/issues/511) | iris watch: report a provider outage as a failure with its reason | — | DONE (#599) |
 | `P3.22` | [#564](https://github.com/frankbria/iris/issues/564) | worker-cli heartbeat test counts wall-clock beats: flaky on a loaded runner | — | DONE (#602) |
-| `P3.23` | [#565](https://github.com/frankbria/iris/issues/565) | GLM review job passes when its model call errors: PRs get a 1-second non-review | — | CLOSED: fixed upstream (frankbria/glm-review#15, #17), verified 2026-11-11 |
+| `P3.23` | [#565](https://github.com/frankbria/iris/issues/565) | GLM review job passes when its model call errors: PRs get a 1-second non-review | — | CLOSED: fixed upstream (frankbria/glm-review#15 to #17); the notice and real reviews verified 2026-11-11, the provider-side cause on the owner's word |
 | `P3.21` | [#519](https://github.com/frankbria/iris/issues/519) | Pattern translator: reject prose with a selector token glued in | — | DONE (#600) |
 | `P3.25` | [#570](https://github.com/frankbria/iris/issues/570) | backup.sh: a container that stops between discovery and exec fails with Docker's message | — | DONE (#605) |
 | `P3.26` | [#573](https://github.com/frankbria/iris/issues/573) | AI client request builders are CC 16: split translateInstruction / analyzeVisualDiff | — | DONE (#606) |
