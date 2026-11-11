@@ -722,11 +722,12 @@ every portal page.
   subscription paid) the suspension is lifted in the same transaction. If Stripe gives up
   and cancels the subscription, the org drops to Free and the suspension is lifted too.
 - **To give a customer more time**: `admin unsuspend-org <orgId> --reason "…"`. IRIS
-  suspends once per failed payment, so your unsuspend stays until the payment is settled or
-  a later invoice fails.
+  suspends once per failed payment, so your unsuspend stays until the payment is settled
+  (a later failure, after that, starts a new grace period).
 - **An abuse suspension is separate.** A paid invoice lifts only a suspension by `billing`.
-  To hold a billing-suspended org for another reason, `unsuspend-org` then `suspend-org`
-  with your reason: the latest row is then yours.
+  `suspend-org` on a billing-suspended org records yours over it, so the org stays
+  suspended when the invoice is paid. `delete-org` does the same; if you `restore-org`
+  while the payment is still failing, the org is suspended for it again within a minute.
 - Each step is in the org's audit log: `billing.grace_start`, `billing.suspend`,
   `billing.restore`.
 - Align Stripe's own retry schedule (Settings → Billing → Subscriptions and emails →

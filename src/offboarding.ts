@@ -3,7 +3,7 @@ import * as path from 'path';
 import Database from 'better-sqlite3';
 import { sql, type Kysely, type RawBuilder } from 'kysely';
 import { log } from './log';
-import { BILLING_ACTOR } from './billing/payment-grace';
+import { BILLING_ACTOR } from './org-suspension';
 import { orgArtifacts, type ArtifactStore } from './artifact-store';
 import { forgetArtifacts } from './storage-quota';
 
@@ -257,8 +257,14 @@ export function offboarding(db: Kysely<unknown>) {
           on conflict (org_id) do nothing returning purge_after`.execute(tx);
         if (!inserted.rows.length)
           throw new OffboardingError(`Deletion of ${orgId} was already requested`);
+        // A failed payment's suspension is replaced by this one (#266), so its
+        // once-per-failure mark goes: if the deletion is cancelled while the payment is
+        // still failing, the sweep suspends again. Before the lock: billing takes the
+        // org_billing row first, then the suspension lock.
+        await sql`update org_billing set payment_suspended_at = null
+          where org_id = ${orgId}`.execute(tx);
         await lockSuspensions(tx, orgId);
-        // Over a billing suspension too (#266): a late payment lifts only billing's own
+        // Over a billing suspension too: a late payment lifts only billing's own
         // row, and must not reopen an org that is waiting to be purged.
         const last = await latestSuspension(tx, orgId);
         if (last?.action !== 'suspend' || last.actor === BILLING_ACTOR)

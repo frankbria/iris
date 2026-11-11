@@ -49,7 +49,8 @@ export const MIGRATIONS = {
   '0018_managed_ai_reservations': managedAiReservations,
   '0019_user_active_orgs': userActiveOrgs,
   '0020_org_billing': orgBilling,
-  // 0021 is #264's (usage reported to Stripe), in review separately.
+  // 0021 is #264's (usage reported to Stripe), in review separately. It must merge first:
+  // the Migrator refuses a migration that sorts before one already applied.
   '0022_billing_grace': billingGrace,
 };
 

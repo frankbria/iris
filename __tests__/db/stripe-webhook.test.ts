@@ -560,15 +560,73 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
       expect(await sweep(new Date(deadline.getTime() + 29 * DAY_MS))).toEqual([]);
     });
 
-    it('a payment that settles while the sweep runs ends with the org active', async () => {
+    it('re-reads an org under its row lock: a payment settling mid-sweep is seen', async () => {
       const deadline = await failedPayment('org-race', 'cus_race');
-      stripeState.set('cus_race', [snapshot('sub_org-race', 'active', 'price_pro', 1)]);
-      await Promise.all([
-        suspendOverdueOrgs(db, after(deadline)),
-        deliver(event('invoice.paid', 'cus_race')),
-      ]);
+      // The webhook's transaction, held open: row locked, the failure cleared, not committed.
+      const settling = await db.startTransaction().execute();
+      await sql`update org_billing set payment_grace_ends_at = null
+        where org_id = 'org-race'`.execute(settling);
+      const pass = sweep(after(deadline));
+      // The sweep listed the org as overdue (it reads committed rows) and now waits on the lock.
+      for (;;) {
+        const { rows } = await sql`select 1 from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock'`.execute(db);
+        if (rows.length) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await settling.commit().execute();
+      expect(await pass).toEqual([]);
       expect(await suspended('org-race')).toBe(false);
-      expect(await sweep(after(deadline))).toEqual([]);
+    });
+
+    it("records an operator's suspension over billing's, and a paid invoice leaves it", async () => {
+      const deadline = await failedPayment('org-held', 'cus_held');
+      await suspendOverdueOrgs(db, after(deadline));
+      expect(await orgSuspensions(db).suspend('org-held', OPERATOR)).toMatchObject({
+        changed: true,
+        last: { actor: 'ops' },
+      });
+      // Billing's own second suspension is still nothing new.
+      expect(
+        (await orgSuspensions(db).suspend('org-held', { reason: 'again', actor: 'billing' }))
+          .changed,
+      ).toBe(false);
+      await settle('org-held', 'cus_held');
+      expect(await suspended('org-held')).toBe(true);
+    });
+
+    it('suspends again when a deletion over a billing suspension is cancelled unpaid', async () => {
+      const deadline = await failedPayment('org-back', 'cus_back');
+      await suspendOverdueOrgs(db, after(deadline));
+      await sql`insert into "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+        values ('user-back', 'Back', 'back@iris.test', true, now(), now())`.execute(db);
+      await sql`insert into member (id, "organizationId", "userId", role, "createdAt")
+        values ('member-back', 'org-back', 'user-back', 'owner', now())`.execute(db);
+      await offboarding(db).requestOrgDeletion('org-back', { reason: 'closing', actor: 'ops' });
+      await offboarding(db).restoreOrg('org-back', { actor: 'ops' });
+      expect(await suspended('org-back')).toBe(false);
+      expect(await sweep(after(deadline))).toEqual(['org-back']);
+    });
+
+    it('one org that cannot be suspended does not keep the others active', async () => {
+      const first = await failedPayment('org-poison', 'cus_poison');
+      const second = await failedPayment('org-after', 'cus_after');
+      const errors: string[] = [];
+      jest.spyOn(console, 'error').mockImplementation((line) => {
+        errors.push(String(line));
+      });
+      await sql`alter table audit_log add constraint poison
+        check (org_id <> 'org-poison' or action <> 'billing.suspend') not valid`.execute(db);
+      try {
+        const now = after(first > second ? first : second);
+        expect(await sweep(now)).toEqual(['org-after']);
+        expect(await suspended('org-poison')).toBe(false);
+        expect(errors.join('')).toContain('payment suspension failed orgId=org-poison');
+        await sql`alter table audit_log drop constraint poison`.execute(db);
+        expect(await sweep(now)).toEqual(['org-poison']);
+      } finally {
+        await sql`alter table audit_log drop constraint if exists poison`.execute(db);
+      }
     });
 
     it('the sweep timer suspends an overdue org, and outlives a failed pass', async () => {

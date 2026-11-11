@@ -1,7 +1,7 @@
 import { sql, type Kysely } from 'kysely';
 import { recordAudit } from '../audit-log';
 import { errMessage, log } from '../log';
-import { orgSuspensions, suspendedSql } from '../org-suspension';
+import { BILLING_ACTOR, orgSuspensions, suspendedSql } from '../org-suspension';
 
 /**
  * Payment failure (#266): a grace period, then suspension, then restore.
@@ -12,9 +12,6 @@ import { orgSuspensions, suspendedSql } from '../org-suspension';
  * enforcement applies unchanged; a settled payment clears the deadline and lifts that
  * suspension, and only that one.
  */
-
-/** The actor on suspension rows this module writes, and the only ones it lifts. */
-export const BILLING_ACTOR = 'billing';
 
 const GRACE_DAYS_SETTING = 'IRIS_BILLING_GRACE_DAYS';
 const DEFAULT_GRACE_DAYS = 7;
@@ -78,7 +75,8 @@ export async function trackPayment(
  * operator's later `unsuspend-org` is an extension that stays. An org already suspended
  * (by an operator) is left for a later pass, which suspends it if that is lifted first.
  * Each org is re-read under the webhook's row lock, so a payment settling at the same
- * moment either is seen here or lifts the suspension after it.
+ * moment either is seen here or lifts the suspension after it. An org that fails is logged
+ * and left for the next pass; the others are still suspended.
  *
  * @returns the orgs this call suspended
  */
@@ -92,7 +90,7 @@ export async function suspendOverdueOrgs(
     where ${due} and not ${suspendedSql(sql.ref('org_billing.org_id'))}`.execute(db);
   const suspended: string[] = [];
   for (const { org_id: orgId } of rows) {
-    const done = await db.transaction().execute(async (tx) => {
+    const suspend = db.transaction().execute(async (tx) => {
       const locked = await sql<{ ends: Date }>`
         select payment_grace_ends_at as ends from org_billing
         where org_id = ${orgId} and ${due} for update`.execute(tx);
@@ -110,6 +108,11 @@ export async function suspendOverdueOrgs(
         metadata: { graceEndedAt: locked.rows[0].ends.toISOString() },
       });
       return true;
+    });
+    // One org's failure must not keep the orgs after it active: logged, retried next pass.
+    const done = await suspend.catch((err: unknown) => {
+      log('error', 'payment suspension failed', { orgId, err: errMessage(err) });
+      return false;
     });
     if (done) suspended.push(orgId);
   }

@@ -11,6 +11,12 @@ import { revokeKeysCreatedBy } from './member-keys';
 
 export type SuspensionAction = 'suspend' | 'unsuspend';
 
+/**
+ * The actor of a suspension for a failed payment (#266, src/billing/payment-grace.ts). A
+ * settled payment lifts a suspension whose latest row is this actor's, and no other.
+ */
+export const BILLING_ACTOR = 'billing';
+
 export interface SuspensionEvent {
   action: SuspensionAction;
   reason: string;
@@ -125,7 +131,7 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
 
   /**
    * Records `action` unless the subject is already in that state (then nothing is
-   * written). Serialized per subject, so two operators acting at once record one change.
+   * written; a suspension over billing's own is the exception, below). Serialized per subject, so two operators acting at once record one change.
    * On a transaction it writes there, and is logged before that transaction commits.
    */
   const act = async (
@@ -139,7 +145,11 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
       const id = await subject.resolve(tx, ref);
       await sql`select pg_advisory_xact_lock(hashtext(${subject.table + ':' + id}))`.execute(tx);
       const last = await latest(tx, id);
-      if ((last?.action ?? 'unsuspend') === action) {
+      // Anyone else's suspension is recorded over billing's (#266): otherwise the next
+      // paid invoice would lift it, and an abuse suspension would end with a payment.
+      const overBilling =
+        action === 'suspend' && last?.actor === BILLING_ACTOR && actor.trim() !== BILLING_ACTOR;
+      if ((last?.action ?? 'unsuspend') === action && !overBilling) {
         return { id, suspended: action === 'suspend', last, changed: false };
       }
       // Dated strictly after the subject's latest row, under the lock: `now()` is when the

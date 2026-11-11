@@ -278,12 +278,17 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   on its `org_billing` row, the lock the webhook holds, so a payment settling at that
   moment is either seen or lifts the suspension afterwards.
 - **Once per failure** (`payment_suspended_at`): an operator's `unsuspend-org` after it is an
-  extension that lasts until the payment settles or the next failure. An org an operator
+  extension that lasts until the payment settles (a failure after that is a new one). An org an operator
   already suspended is skipped while suspended, and suspended for billing if that is lifted.
 - **Restore lifts only billing's own suspension** (the latest row is `suspend` by
-  `billing`). An operator's survives a paid invoice. `requestOrgDeletion` stamps its
-  suspension over a billing one for the same reason: a card retry that succeeds during the
-  30 days must not reopen an org waiting to be purged.
+  `billing`). An operator's survives a paid invoice, and `suspend` by anyone else is
+  recorded **over** a billing suspension (`act()` in org-suspension.ts, the one case where
+  an already-suspended org gets a row). `requestOrgDeletion` stamps over it too (a card
+  retry during the 30 days must not reopen an org waiting to be purged) and clears
+  `payment_suspended_at`, so a `restoreOrg` while still unpaid is suspended again.
+  `BILLING_ACTOR` lives in org-suspension.ts (payment-grace imports that module).
+- **One org's failure does not stop a pass**: logged (`payment suspension failed`), retried
+  next minute.
 - **A cancelled subscription ends the failure** like a paid one: the plan is free (#345) and
   the suspension lifts.
 - **`orgSuspensions(tx)` joins a caller's transaction** (`db.isTransaction`, as `setPlan`);
