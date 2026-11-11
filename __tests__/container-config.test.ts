@@ -598,7 +598,8 @@ describe('dependency audit gate (issue #363)', () => {
       expect(settings).toMatch(/\n {4}needs: (build|\[build\])\n/);
       // A status function in the job's `if` would run it after a failed build.
       expect(settings).toMatch(/\n {4}if: /);
-      expect(settings).not.toMatch(/always\(\)|cancelled\(\)|failure\(\)/);
+      // Function names are case-insensitive and may be spaced from the bracket.
+      expect(settings).not.toMatch(/\b(always|cancelled|failure)\s*\(/i);
     }
   });
 
