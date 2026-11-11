@@ -182,8 +182,9 @@ model, and the page under test chooses much of what an error or a redirect conta
   (`\?(?<=(?:^|[=&;#\s])[^?=&;#\s]*\?)`). That is the same match set, because a later `?`
   of the same name reaches the same end; and it is linear, because the lookbehind stands
   **after** the `\?` (so it runs only at a `?`) and reads back no further than the `?`
-  before it. Written before the `\?` it would run at every position and read back through
-  a long name each time. A megabyte of any separator is now about 9 ms. Tests in
+  before it. Written before the `\?` it measured the same on V8, but only
+  because the engine skips positions where no `?` follows; after it, nothing depends on that.
+  A megabyte of any separator is now about 9 ms. Tests in
   `url-credentials.test.ts`: the megabyte cases compare against the pre-#658 pattern timed
   in the same test (a ratio, never an absolute time: #142, #190), and the 60,000-string
   comparison has `;`, `%` and an encoded `k` in its alphabet, with the name decoded in its
