@@ -221,7 +221,7 @@ production.
 | `P2.10` | [#321](https://github.com/frankbria/iris/issues/321) | Local SQLite: real migration runner or delete dead migrations | P0.20 (#248) | DONE (#555) |
 | `P2.11` | [#322](https://github.com/frankbria/iris/issues/322) | Accessibility of IRIS own reports | P0.18 (#339) | DONE (#556) |
 | `P2.12` | [#323](https://github.com/frankbria/iris/issues/323) | Capture engine: do not force `transform: none` on every element | — | DONE (#557) |
-| `P2.13` | [#363](https://github.com/frankbria/iris/issues/363) | Dependency audit gate | — | DONE (#PRNUM) |
+| `P2.13` | [#363](https://github.com/frankbria/iris/issues/363) | Dependency audit gate | — | DONE (#649) |
 | `P2.14` | [#378](https://github.com/frankbria/iris/issues/378) | Agent mode: per-origin asset allowlist under a pinned origin | — | DONE (#558) |
 | `P2.15` | [#412](https://github.com/frankbria/iris/issues/412) | Portal: rename and disable API keys | P0.23 (#340) | DONE (#559) |
 | `P2.19` | [#457](https://github.com/frankbria/iris/issues/457) | Account-level bans (user suspension) | P1 (#348) | DONE (#560) |
