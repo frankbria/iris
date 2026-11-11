@@ -3,6 +3,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { MAX_POPUPS_PER_CONTEXT } from './url-policy-guard';
 import { createServer, IncomingMessage, ServerResponse, STATUS_CODES } from 'http';
 import { handleJobsRequest, type ApiJobs, type RunReader } from './jobs-api';
+import { handleMcpRequest, MCP_PATH } from './mcp/hosted';
 import type { ArtifactStore } from './artifact-store';
 import { randomUUID, timingSafeEqual } from 'crypto';
 import { z } from 'zod';
@@ -301,6 +302,11 @@ export interface ServerLimits {
   maxConnectionsPerOrg: number;
   /** Queued + running jobs one org may have (#267); the next submit gets HTTP 429. */
   maxQueuedJobsPerOrg: number;
+  /**
+   * How long a hosted MCP tool call waits for its scan (#314) before answering with the job
+   * id instead. Below the ingress's 75 s read timeout, or a slow scan would read as a 504.
+   */
+  mcpScanWaitMs: number;
 }
 
 /**
@@ -323,6 +329,7 @@ export const DEFAULT_SERVER_LIMITS: Readonly<ServerLimits> = Object.freeze({
   maxSessionsPerOrg: 2,
   maxConnectionsPerOrg: 8,
   maxQueuedJobsPerOrg: 10,
+  mcpScanWaitMs: 45_000,
 });
 
 /** JSON-RPC error code for a request refused by a rate limit (#342). */
@@ -557,7 +564,7 @@ function restOutcome(status: number | undefined, rateLimited: boolean): Outcome 
 function restRoute(req: IncomingMessage): string {
   const path = (req.url ?? '').split('?')[0];
   const route =
-    path === '/v1/a11y/jobs' || path === '/v1/runs'
+    path === '/v1/a11y/jobs' || path === '/v1/runs' || path === MCP_PATH
       ? path
       : /^\/v1\/jobs\/[^/]+$/.test(path)
         ? '/v1/jobs/:id'
@@ -804,7 +811,11 @@ export function startServer(port: number, options?: StartServerOptions): WebSock
     const rest: RestRequest = { tenant: undefined, rateLimited: false };
     logRestRequest(req, res, rest);
     if (options?.jobs) {
-      void handleJobsRequest(req, res, jobsOptions(options.jobs, rest));
+      const deps = jobsOptions(options.jobs, rest);
+      // Hosted MCP (#314): the same keys, budgets and job queue, spoken as MCP.
+      if ((req.url ?? '').split('?')[0] === MCP_PATH) {
+        void handleMcpRequest(req, res, { ...deps, waitMs: limits.mcpScanWaitMs });
+      } else void handleJobsRequest(req, res, deps);
       return;
     }
     answerUpgradeRequired(res);
