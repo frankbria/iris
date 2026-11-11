@@ -14,6 +14,7 @@ import { Client } from 'pg';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
 import { InvalidCursorError, postgresHistory, RunInput } from '../../src/history-store';
+import type { Action } from '../../src/actions';
 import type { VisualTestResult } from '../../src/visual/visual-runner';
 import type { AccessibilityTestResult } from '../../src/a11y/a11y-runner';
 
@@ -273,6 +274,43 @@ const a11yRun = {
     const stored = (await history().forOrg(A).get(id))!.results[0].result.error as string;
     expect([...stored]).toHaveLength(500);
     expect(stored.endsWith('😀')).toBe(true);
+  });
+
+  // #658: the patterns see a bounded start of the text, and a URL the bound lands in goes
+  // whole, so the part of its password before the cut is not stored as ordinary text.
+  it('strips a megabyte of error from its first 16,384 characters only', async () => {
+    const url = `https://${['tester', 'not a-secret'].join(':')}@site.example/x`;
+    const record = (error: string, action: Action) =>
+      history()
+        .forOrg(A)
+        .record({
+          kind: 'rpc',
+          success: false,
+          startedAt: started,
+          finishedAt: finished,
+          results: [{ success: false, action, error }],
+        });
+    const stored = async (id: string) =>
+      (await history().forOrg(A).get(id))!.results[0].result.error as string;
+
+    const long = await record(`ftp://${USERINFO}@h/ ${'a'.repeat(1_000_000)}`, {
+      type: 'click',
+      selector: '#a',
+    });
+    expect(await stored(long)).toBe(`ftp://h/ ${'a'.repeat(491)}`);
+
+    // Colour codes fill the text almost to the bound, so the cut lands inside the password.
+    const colour = (count: number) => '\x1b[2m'.repeat(count);
+    const cutInQuoted = await record(`${colour(4090)}to ${url} ${'b'.repeat(1_000_000)}`, {
+      type: 'navigate',
+      url,
+    });
+    expect(await stored(cutInQuoted)).toBe('to ');
+    const cutInAuthority = await record(`${colour(4091)}see ftp://${USERINFO}@h/`, {
+      type: 'click',
+      selector: '#a',
+    });
+    expect(await stored(cutInAuthority)).toBe('see ftp');
   });
 
   it('records a run whose strings hold a lone surrogate instead of losing it', async () => {

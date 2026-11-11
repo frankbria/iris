@@ -11,6 +11,7 @@ import os from 'os';
 import path from 'path';
 import type { AddressInfo } from 'net';
 import { AccessibilityRunner, AccessibilityRunnerConfig } from '../../src/a11y/a11y-runner';
+import { ERROR_TEXT_MAX } from '../../src/report-encoding';
 
 const PAGE = (title: string) =>
   'data:text/html;charset=utf-8,' +
@@ -169,6 +170,20 @@ describe('a11y runner page isolation (#287)', () => {
     },
     120_000,
   );
+
+  // #658: the error repeats a URL of any length, and the patterns get a bounded start of it.
+  // The cut lands inside the URL, so the whole copy goes, password included.
+  it('bounds the error of a refused page before stripping it', async () => {
+    const withCreds =
+      broken.replace('http://', 'http://ops:hunter2 again@') + `?q=${'q'.repeat(40_000)}`;
+    const result = await new AccessibilityRunner(
+      config([withCreds], { urlPolicy: { blockPrivateHosts: true } }),
+    ).run();
+    const error = result.results[0].error ?? '';
+    expect(error).not.toBe('');
+    expect(error.length).toBeLessThanOrEqual(ERROR_TEXT_MAX);
+    expect(error).not.toMatch(/hunter2|again|qqqq/);
+  }, 120_000);
 
   it('errors a page that hangs during the keyboard checks instead of waiting forever (#293)', async () => {
     // axe has its own timeout; the keyboard and screen-reader checks' page.evaluate calls

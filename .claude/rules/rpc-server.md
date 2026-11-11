@@ -159,6 +159,45 @@ model, and the page under test chooses much of what an error or a redirect conta
   Chromium and Playwright quote a URL in their own errors: only the guard's messages
   repeat it raw, so a browser test of the raw path must be a policy refusal. Tests:
   `url-credentials.test.ts` (no browser).
+- **A pattern that redacts must be linear in its input (#658).** Both userinfo patterns
+  began at the scheme (`[a-z][a-z0-9+.-]*:\/\/`), so a long run of scheme characters was
+  scanned again from each of its positions: 40,000 letters took 3 s, synchronously, and a
+  megabyte would have held the event loop for about half an hour. `QUERY_PARAM` had the
+  same shape (a parameter name may hold `?`). The fix keeps the match set:
+  `replaceUserinfo()` (src/report-encoding.ts, used by both helpers) matches the **whole
+  run** of scheme characters and makes `://userinfo@` an optional tail, so a run is consumed
+  by one match and no position inside it is retried; the callback cuts only when the tail
+  matched and the run holds a letter, and keeps what stands before it (`1http://u:p@h` →
+  `1http://h`). A lookbehind would have been shorter and would have leaked `...http://u:p@h`.
+  When adding a pattern to `redactString`, ask what happens on a megabyte of the character
+  its first class repeats; `url-credentials.test.ts` times every pattern at 1 kB, 10 kB,
+  100 kB and 1 MB and fails on a step over forty-fold (fastest of five, monotonic clock, a
+  1 ms floor), and compares both helpers with the old patterns on 60,000 generated strings.
+- **Page- or client-controlled error text goes through `strippedError(text, quotedUrl)`**
+  (#658): colour codes and userinfo cut from the first `ERROR_TEXT_MAX` (16,384) UTF-16
+  units, cut before any pattern runs. A cut can land inside a URL whose `@` is past it, so
+  a cut text also loses a trailing partial copy of `quotedUrl`, a trailing authority that
+  nothing terminates, and a lone high surrogate. Four things codex found in that edge
+  handling: colour codes must leave the cut text **before** the edge is judged (one inside a
+  userinfo holds a `?`, which read as the authority's end, and removing it afterwards
+  exposed the password), a code the cut ended included; and the partial copy is found with
+  Knuth-Morris-Pratt, because comparing each suffix with the URL took a second on 16,384
+  repeated letters; and whole copies of `quotedUrl` are replaced before a partial one is
+  looked for, because a URL may end with its own beginning (`…@host/http`) and cutting that
+  off left a copy the exact replacement no longer matched; and the text is cut again after
+  that replacement, which happens once, because a parsed URL percent-encodes its path and
+  can be six times as long as it was written. The property test holds all of it to one
+  rule: `strippedError(text, q)` is a prefix of `stripUserinfo(stripAnsi(text), q)`, at most
+  16,384 units, on generated texts (`IRIS_FUZZ_CASES`, `IRIS_FUZZ_SEED` for a longer run).
+  Edge handling for a bound is code an attacker also reaches: time it. Used by `boundedError` (history store) and
+  the a11y runner's `erroredPage`, so an a11y page error is at most 16,384 units now.
+- **`MAX_SELECTOR_LENGTH` = 4,096** (src/actions.ts, #658) bounds `selector` (click, fill)
+  and an assertion's `target` in the shared `ActionSchema`: `-32602` at the RPC boundary,
+  a translation failure on the AI parse path, and the pattern translator treats a longer
+  target as prose (it is not built through the schema; an instruction is at most 10,000
+  characters). What names an element is repeated into the
+  stored action, Playwright's call log and every error about it. What a `fill` types and a
+  navigate URL are not bounded here (the frame limit is).
 - **`ScanLimiter(2, 8)`** (src/mcp/scan-limiter.ts), one per process: 2 scans run, 8 wait in
   arrival order, the next is a tool error at once. A finishing scan hands its slot to the
   head of the queue. Stdio only: hosted MCP (#314) does not use it, its cap is the org's

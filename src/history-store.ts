@@ -1,6 +1,6 @@
 import { recordAudit } from './audit-log';
 import { StorageQuotaExceededError, storageUsage } from './storage-quota';
-import { stripAnsi, stripUserinfo, urlWithoutUserinfo } from './report-encoding';
+import { strippedError, stripUserinfo, urlWithoutUserinfo } from './report-encoding';
 import type Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
 import { describeAction } from './actions';
@@ -128,13 +128,13 @@ function violationCounts(page: AccessibilityTestResult['results'][number]) {
 }
 
 /**
- * An error as stored: terminal colour codes (#420) and URL userinfo stripped, at most `max`
- * characters, cut by code point (a cut inside a surrogate pair leaves a lone half, which
+ * An error as stored: terminal colour codes (#420) and URL userinfo stripped (from a bounded
+ * start of the text, #658), at most `max` characters, cut by code point (a cut inside a surrogate pair leaves a lone half, which
  * Postgres's json input rejects, losing the whole run). `quotedUrl` is the URL the error is
  * known to repeat (a navigation's target), whose credentials are cut by parsing it (#645).
  */
 const boundedError = (error: string, max = 500, quotedUrl?: string): string =>
-  [...stripUserinfo(stripAnsi(error), quotedUrl)].slice(0, max).join('');
+  [...strippedError(error, quotedUrl)].slice(0, max).join('');
 
 /**
  * One result per page, comparison or action. An RPC action is stored as

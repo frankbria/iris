@@ -18,7 +18,7 @@ import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
 import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
-import { escapeHtml, escapeXml, safeHref, stripAnsi, stripUserinfo } from '../report-encoding';
+import { escapeHtml, escapeXml, safeHref, strippedError } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 import { withPageTimeout } from '../page-timeout';
 
@@ -185,13 +185,11 @@ function erroredPage(
     // Stripped here, once: the CLI prints it and every report and store carries it. The
     // guard's messages repeat the URL it was asked for (the base URL included), so its
     // credentials are cut by parsing it: a password may hold a space, which the pattern
-    // cannot follow (#645).
+    // cannot follow (#645). Bounded before the patterns run: a page words its own errors (#658).
     // Never empty: an empty reason must not read as no error anywhere it is shown.
     error:
-      stripUserinfo(
-        stripAnsi(error instanceof Error ? error.message : String(error ?? '')),
-        navigatedUrl,
-      ) || 'Unknown error',
+      strippedError(error instanceof Error ? error.message : String(error ?? ''), navigatedUrl) ||
+      'Unknown error',
     passed: false,
     failureReasons: ['could not be scanned'],
     axeResult: {

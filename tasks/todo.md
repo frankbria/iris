@@ -1,39 +1,42 @@
-# #645 [P3.34] stripUserinfo and redactString leave part of a password that contains an @ or a space
+# #658 [P1.43] Credential-stripping patterns take quadratic time on long input
 
 ## Plan (self-authored; no plan on the issue)
 
-Both helpers cut `scheme://userinfo@` from free text with a pattern that stopped at the
-first `@`. A URL parser takes the last `@` of the authority.
+`stripUserinfo` (src/report-encoding.ts) and `redactString` (src/log.ts) start their userinfo
+pattern with an unanchored scheme, so on a long run of scheme characters every start position
+scans to the end of the run. Measured again before coding (10,000 and 40,000 characters):
+letters 189 ms / 2,677 ms; `a…a://b…b` 156 ms / 2,692 ms. Measuring every pattern in
+`redactString` found one more: `QUERY_PARAM` on a run of `?` (256 ms / 3,192 ms), because `?`
+is allowed in a parameter name.
 
-## Decisions
-
-- **Both patterns become `[^\s/?#]*@`** (the issue's wording): greedy to the last `@`
-  before `/`, `?`, `#` or whitespace, which is where a parser ends the authority.
-- **A raw space in a password stays out of the pattern's reach, on purpose.** In prose a
-  space ends a URL; reading on to a later `@` would eat ordinary text
-  (`see http://host and mail a@b`). Instead, whoever knows the URL says so:
-  `urlWithoutUserinfo(url)` parses a URL held whole, and `stripUserinfo(text, quotedUrl)`
-  replaces each occurrence of a URL the text is known to quote by its parsed form, then
-  runs the pattern.
-- **Call sites that hold the URL**: a11y page errors (`erroredPage`, the URL navigated), stored RPC
-  errors (the navigation target). The history store's private `withoutCredentials` is
-  replaced by the shared helper. The MCP module keeps its own (`withoutCredentials`,
-  `loggedDetail`): it answers "the requested URL" for unparseable text, a different contract.
-- **Not changed**: the hosted job API already refuses a URL with credentials (400), so
-  stored a11y and visual page URLs carry none; `redactString` gets the pattern fix only.
-
-## Steps
-
-1. [x] Tests first: `__tests__/url-credentials.test.ts` (pure), history-store cases (Postgres),
-   one a11y runner case (browser, CI only on this host).
-2. [x] `src/report-encoding.ts`: pattern, `urlWithoutUserinfo`, `stripUserinfo(text, quotedUrl?)`.
-3. [x] `src/log.ts`: `USERINFO` pattern.
-4. [x] Call sites: `src/a11y/a11y-runner.ts`, `src/history-store.ts`.
-5. [x] Docs: `.claude/rules/{rpc-server,ai-and-visual,hosted-data}.md`, `plans/README.md`.
+1. **Linear userinfo pattern, same match set.** Match the whole run of scheme characters and
+   make `://userinfo@` an optional tail: `([a-z0-9+.-]+)(:\/\/[^\s/?#]+@)?`. Every run is
+   consumed by one match, so no position inside it is tried again; the replacement applies
+   when the tail matched and the run holds a letter (the old pattern's leftmost match starts
+   at the run's first letter, and what precedes it stays). One helper in report-encoding,
+   used by both (`+` for `stripUserinfo`, `*` for `redactString`, as today).
+2. **Linear `QUERY_PARAM`**, same trick: `=value` becomes the optional tail.
+3. **Cut before the patterns** in `boundedError` and `erroredPage`: at most 16,384 UTF-16
+   units go to `stripAnsi` and the patterns. A cut can land inside a URL whose `@` is past
+   it, so a cut text also loses a trailing partial copy of the quoted URL, a trailing
+   authority with no terminator, and a lone high surrogate.
+4. **Selector bound (the issue asks for a decision): yes**, 4,096 characters on `selector`
+   (click, fill) and on an assertion's `target`, in the shared `ActionSchema`.
+5. Docs: `.claude/rules/rpc-server.md`, `ai-and-visual.md`, `docs/integration-surfaces.md`,
+   `plans/README.md` (P1.43 row), `tasks/lessons.md`.
 
 ## Acceptance criteria
 
-- [ ] Both patterns cut up to the last `@` of the authority, with tests for `user:a@b@host`
-  and for a URL whose query holds an `@` (left alone)
-- [ ] Where the text is known to be one URL, credentials are cut by parsing it; what free
-  text with a space in a password gets is decided and documented
+- [ ] Both helpers linear on adversarial input: 1 MB against 100 KB by ratio (letters,
+      `a1a1…`, `a.a.…`, plus `a…://b…` and `???…`), monotonic clock, never `Date.now()`
+- [ ] Match set unchanged: existing cases pass, plus `...http://u:p@h` and `1http://u:p@h`
+- [ ] Error text cut before the patterns in `boundedError` and `erroredPage`, by code point
+- [ ] Decision on an upper bound for RPC selectors
+
+## Assumptions and decisions
+
+- A 1 MB ratio test cannot be shown red on the old pattern (it would run for about half an
+  hour per shape); red is shown at 10,000 / 40,000 characters instead.
+- 16,384 units is far above the 500 code points stored and any real Playwright call log.
+- 4,096 characters is far above any selector a person or a model writes; a longer one is
+  refused with zod's message at the RPC boundary and in the AI parse path.
