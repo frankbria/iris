@@ -221,16 +221,21 @@ const result = {
 
     it('removes a queued job, frees the cap and audits it', async () => {
       await sql`delete from audit_log`.execute(db);
-      const id = await enqueue();
-      expect(await jobs().forOrg(A).cancel(id)).toBe(true);
+      // With the key that asked: both entries name it.
+      await sql`insert into apikey (id, "configId", "referenceId", key, "createdAt", "updatedAt")
+        values ('key-cancel', 'default', 'org-a', 'hash-cancel', now(), now())
+        on conflict do nothing`.execute(db);
+      const keyed = { orgId: 'org-a', apiKeyId: 'key-cancel' };
+      const id = await enqueue(keyed);
+      expect(await jobs().forOrg(keyed).cancel(id)).toBe(true);
       expect(await jobs().forOrg(A).get(id)).toBeNull();
       expect(await jobs().claim('a11y')).toBeNull();
       expect(
         await jobs().forOrg(A).enqueue({ kind: 'a11y', params }, { maxOutstanding: 1 }),
       ).not.toBeNull();
       expect((await audit()).slice(0, 2)).toEqual([
-        { action: 'job.submit', target: `run:${id}`, actor_api_key_id: null },
-        { action: 'job.cancel', target: `run:${id}`, actor_api_key_id: null },
+        { action: 'job.submit', target: `run:${id}`, actor_api_key_id: 'key-cancel' },
+        { action: 'job.cancel', target: `run:${id}`, actor_api_key_id: 'key-cancel' },
       ]);
     });
 

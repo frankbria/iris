@@ -728,6 +728,8 @@ export function startServer(port: number, options?: StartServerOptions): WebSock
   let verifying = 0;
   /** Shutting down (#309): readiness answers 503, new upgrades and requests are refused. */
   let draining = false;
+  /** Aborts with `draining`: a hosted MCP call waiting for its scan answers with the job id (#314). */
+  const drainStarted = new AbortController();
   /** RPC messages and REST requests being handled; a drain waits for them to reach zero. */
   let inFlight = 0;
 
@@ -814,7 +816,11 @@ export function startServer(port: number, options?: StartServerOptions): WebSock
       const deps = jobsOptions(options.jobs, rest);
       // Hosted MCP (#314): the same keys, budgets and job queue, spoken as MCP.
       if ((req.url ?? '').split('?')[0] === MCP_PATH) {
-        void handleMcpRequest(req, res, { ...deps, waitMs: limits.mcpScanWaitMs });
+        void handleMcpRequest(req, res, {
+          ...deps,
+          waitMs: limits.mcpScanWaitMs,
+          draining: drainStarted.signal,
+        });
       } else void handleJobsRequest(req, res, deps);
       return;
     }
@@ -1535,6 +1541,7 @@ export function startServer(port: number, options?: StartServerOptions): WebSock
 
   drainers.set(wss, async (deadlineMs) => {
     draining = true;
+    drainStarted.abort();
     const end = performance.now() + deadlineMs;
     // Upgrades still in their key check too: each gets its 503 once the check ends,
     // rather than a reset when the close destroys its socket.

@@ -14,9 +14,11 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'http';
+import { setTimeout as delay } from 'timers/promises';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { RunQuotaExceededError, type StoredJob, type TenantScope } from '../history-store';
 import { authorize, readBody, send, type ApiJobs, type JobsApiDeps } from '../jobs-api';
 import { errMessage, log } from '../log';
@@ -71,7 +73,6 @@ type ToolOutput = z.infer<z.ZodObject<typeof outputSchema>>;
 /** One page of a stored a11y run, as `history-store` writes it; older rows lack the rules. */
 const StoredPage = z.object({
   url: z.string().nullable(),
-  passed: z.boolean(),
   result: z.object({
     error: z.string().optional(),
     violations: z.record(z.string(), z.number()).default({}),
@@ -81,12 +82,14 @@ const StoredPage = z.object({
   }),
 });
 
-function toolError(message: string) {
-  return { isError: true, content: [{ type: 'text' as const, text: message }] };
+type ToolAnswer = CallToolResult & { structuredContent?: ToolOutput };
+
+function toolError(message: string): ToolAnswer {
+  return { isError: true, content: [{ type: 'text', text: message }] };
 }
 
-function toolResult(text: string, structuredContent: ToolOutput) {
-  return { content: [{ type: 'text' as const, text }], structuredContent };
+function toolResult(text: string, structuredContent: ToolOutput): ToolAnswer {
+  return { content: [{ type: 'text', text }], structuredContent };
 }
 
 /**
@@ -155,7 +158,8 @@ function describeJob(job: StoredJob) {
     jobId: job.id,
     status: 'finished',
     url,
-    passed: page.passed,
+    // Not the stored verdict: a job submitted over REST may have had a narrower `failOn`.
+    passed: violationCount === 0 && page.result.keyboardPassed,
     violationCount,
     violations,
     needsReviewRules: page.result.needsReviewRules,
@@ -174,17 +178,26 @@ export interface HostedToolsDeps {
   waitMs: number;
   /** Aborted when the client went away: a scan it still waits in the queue for is withdrawn. */
   gone: AbortSignal;
+  /**
+   * Aborted when the server starts to drain: a waiting call answers at once with its job id,
+   * which another replica (or this one, restarted) can read, instead of a reset socket.
+   */
+  draining: AbortSignal;
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Resolves after `ms`, or at once when `sooner` aborts: nothing waits out a poll interval. */
+const pause = (ms: number, sooner: AbortSignal) =>
+  delay(ms, undefined, { signal: sooner }).catch(() => undefined);
 
 /**
- * The job once it has finished, or as it stands when `waitMs` is over; `null` when the
- * caller went away (its job is withdrawn if no worker has taken it yet).
+ * The job once it has finished, or as it stands when `waitMs` is over or the server
+ * drains; `null` when the caller went away (its job is withdrawn if no worker has taken it
+ * yet).
  */
 async function awaitJob(id: string, deps: HostedToolsDeps): Promise<StoredJob | null> {
   const pollMs = Math.min(1_000, deps.waitMs / 4);
   const deadline = performance.now() + deps.waitMs;
+  const sooner = AbortSignal.any([deps.gone, deps.draining]);
   for (;;) {
     if (deps.gone.aborted) {
       await deps.jobs.cancel?.(id);
@@ -193,8 +206,8 @@ async function awaitJob(id: string, deps: HostedToolsDeps): Promise<StoredJob | 
     const job = await deps.jobs.get(id);
     if (!job) return null;
     const pending = job.status === 'queued' || job.status === 'running';
-    if (!pending || performance.now() >= deadline) return job;
-    await sleep(pollMs);
+    if (!pending || performance.now() >= deadline || deps.draining.aborted) return job;
+    await pause(pollMs, sooner);
   }
 }
 
@@ -219,7 +232,19 @@ async function runScan(url: string, wcagLevel: 'AA' | 'AAA', deps: HostedToolsDe
         'running. Call again when one has finished.',
     );
   }
-  const job = await awaitJob(id, deps);
+  let job: StoredJob | null;
+  try {
+    job = await awaitJob(id, deps);
+  } catch (error) {
+    // The scan is queued and will be billed: the caller must still get its id, or it
+    // would start (and pay for) a second one.
+    log('error', 'mcp scan wait failed', { jobId: id, err: errMessage(error) });
+    return toolResult(
+      `The scan was started but its status could not be read. Call ` +
+        `${GET_ACCESSIBILITY_TEST_RESULT} with jobId "${id}" for its result.`,
+      { jobId: id, status: 'queued' },
+    );
+  }
   // Nobody reads this: the client is gone.
   return job ? describeJob(job) : toolError('The scan was withdrawn.');
 }
@@ -231,6 +256,19 @@ async function readScan(jobId: string, deps: HostedToolsDeps) {
     return toolError('No accessibility scan with that id in this organization.');
   }
   return describeJob(job);
+}
+
+/**
+ * A tool's answer, or a fixed sentence when it threw. The SDK would answer a throw with the
+ * error's own message, and a database error's text is not for a model to read.
+ */
+async function answered(tool: string, call: () => Promise<ToolAnswer>): Promise<ToolAnswer> {
+  try {
+    return await call();
+  } catch (error) {
+    log('error', 'mcp tool failed', { tool, err: errMessage(error) });
+    return toolError('The scan service could not answer. Try again shortly.');
+  }
 }
 
 export function registerHostedTools(server: McpServer, deps: HostedToolsDeps): void {
@@ -264,7 +302,8 @@ export function registerHostedTools(server: McpServer, deps: HostedToolsDeps): v
         openWorldHint: true,
       },
     },
-    ({ url, wcagLevel }) => runScan(url, wcagLevel ?? 'AA', deps),
+    ({ url, wcagLevel }) =>
+      answered(RUN_ACCESSIBILITY_TEST, () => runScan(url, wcagLevel ?? 'AA', deps)),
   );
   server.registerTool(
     GET_ACCESSIBILITY_TEST_RESULT,
@@ -277,7 +316,7 @@ export function registerHostedTools(server: McpServer, deps: HostedToolsDeps): v
       outputSchema,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
-    ({ jobId }) => readScan(jobId, deps),
+    ({ jobId }) => answered(GET_ACCESSIBILITY_TEST_RESULT, () => readScan(jobId, deps)),
   );
 }
 
@@ -288,6 +327,8 @@ export type McpHttpDeps = Pick<
   jobs: { forOrg(scope: TenantScope): ApiJobs };
   /** `ServerLimits.mcpScanWaitMs`. */
   waitMs: number;
+  /** Aborted when the server starts to drain (#309). */
+  draining: AbortSignal;
 };
 
 function rpcError(res: ServerResponse, status: number, code: number, message: string): void {
@@ -327,13 +368,17 @@ export async function handleMcpRequest(
     if (req.method !== 'POST') {
       return send(res, 405, { error: 'Method not allowed' }, { allow: 'POST' });
     }
+    // Listening from the start: a client that leaves during the key check must not have
+    // a scan queued and waited on for nobody.
+    const gone = new AbortController();
+    res.on('close', () => gone.abort());
     const principal = await authorize(req, res, deps);
     if (!principal) return;
     const message = await readMessage(req, res);
     if (message === null) return;
 
     const plan = await deps.entitlements?.(principal.orgId);
-    const gone = new AbortController();
+    if (gone.signal.aborted) return;
     const server = new McpServer({ name: 'iris', version: packageVersion() });
     registerHostedTools(server, {
       jobs: deps.jobs.forOrg({ orgId: principal.orgId, apiKeyId: principal.keyId }),
@@ -341,15 +386,13 @@ export async function handleMcpRequest(
       monthlyRunLimit: plan?.runsPerMonth,
       waitMs: deps.waitMs,
       gone: gone.signal,
+      draining: deps.draining,
     });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
-    res.on('close', () => {
-      gone.abort();
-      void server.close();
-    });
+    res.on('close', () => void server.close());
     await server.connect(transport);
     await transport.handleRequest(req, res, message);
   } catch (err) {

@@ -15,7 +15,7 @@ process.env.IRIS_LOG_LEVEL = 'error';
 import { AddressInfo } from 'net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { startServer, type Authenticator, type Principal } from '../../src/protocol';
+import { drainServer, startServer, type Authenticator, type Principal } from '../../src/protocol';
 import { RunQuotaExceededError, type StoredJob, type TenantScope } from '../../src/history-store';
 import type { ApiJobs } from '../../src/jobs-api';
 
@@ -38,6 +38,8 @@ const authenticate: Authenticator = {
 type Row = StoredJob & { orgId: string; params: unknown; keyId?: string };
 let stored: Map<string, Row>;
 let canceled: string[];
+/** The job store's reads fail, as with the database away. */
+let readsFail = false;
 const jobs = {
   forOrg({ orgId, apiKeyId }: TenantScope): ApiJobs {
     return {
@@ -66,6 +68,7 @@ const jobs = {
         return id;
       },
       async get(id) {
+        if (readsFail) throw new Error('connect ECONNREFUSED 10.1.2.3:5432');
         const job = stored.get(id);
         return job && job.orgId === orgId ? job : null;
       },
@@ -162,6 +165,7 @@ const TOOLS_LIST = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' 
 beforeEach(() => {
   stored = new Map();
   canceled = [];
+  readsFail = false;
   suspendedOrgs.clear();
   runsPerMonth = undefined;
 });
@@ -354,6 +358,23 @@ describe('run_accessibility_test over HTTP', () => {
       violationCount: 1,
     });
 
+    // A REST job with a narrower failOn stored `passed: true` beside a minor violation:
+    // the tool's `passed` is its own definition, not that verdict.
+    Object.assign(stored.get(id)!, {
+      status: 'succeeded',
+      results: [
+        {
+          ...PAGE_RESULT,
+          passed: true,
+          result: {
+            violations: { critical: 0, serious: 0, moderate: 0, minor: 1 },
+            violationRules: [{ id: 'region', impact: 'minor', nodes: 1 }],
+          },
+        },
+      ],
+    });
+    expect((await read(id)).structuredContent).toMatchObject({ passed: false, violationCount: 1 });
+
     // Another org's id, an unknown one and a visual job all read as "no such scan".
     const other = await read(id, await connect('key-b'));
     expect(other.isError).toBe(true);
@@ -361,6 +382,61 @@ describe('run_accessibility_test over HTTP', () => {
     expect((await read('nope')).isError).toBe(true);
     stored.get(id)!.kind = 'visual';
     expect((await read(id)).isError).toBe(true);
+  });
+
+  it('answers a store failure in fixed words: the error text is not for a model', async () => {
+    const client = await connect();
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const [result] = await Promise.all([
+        scan(client),
+        // A stored result this code cannot read stands in for any throw inside a tool.
+        workerFinishes({ results: [{ url: null, passed: true, result: { violations: 'x' } }] }),
+      ]);
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toBe('The scan service could not answer. Try again shortly.');
+      expect(spy.mock.calls.flat().join('\n')).toContain('mcp tool failed');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('keeps the job id when the status cannot be read: the scan is queued and will be billed', async () => {
+    const client = await connect();
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      readsFail = true;
+      const result = await scan(client);
+      const id = [...stored.keys()][0];
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toEqual({ jobId: id, status: 'queued' });
+      expect(textOf(result)).not.toContain('ECONNREFUSED');
+      expect(canceled).toEqual([]);
+
+      // Reading it while the store is still away is the fixed sentence, not the error.
+      const read = await client.callTool({
+        name: 'get_accessibility_test_result',
+        arguments: { jobId: id },
+      });
+      expect(textOf(read)).toBe('The scan service could not answer. Try again shortly.');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('answers a waiting call with its job id when the server drains, and keeps the scan', async () => {
+    await new Promise((r) => server.close(() => r(null)));
+    await serve({ mcpScanWaitMs: 60_000 });
+    const client = await connect();
+    const call = scan(client);
+    for (let i = 0; i < 200 && stored.size === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    const id = [...stored.keys()][0];
+
+    // The drain completes because the call answered, well inside its deadline.
+    expect(await drainServer(server, 30_000)).toBe(true);
+    expect((await call).structuredContent).toEqual({ jobId: id, status: 'queued' });
+    expect(canceled).toEqual([]);
+    expect(stored.get(id)).toMatchObject({ status: 'queued' });
   });
 
   it('points a multi-page job at the REST API instead of reporting one page of it', async () => {
