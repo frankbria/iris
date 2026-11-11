@@ -233,7 +233,7 @@ production.
 | `P2.25` | [#504](https://github.com/frankbria/iris/issues/504) | Assertions that pass before the page settles (element_absent, url_matches) | — | DONE (#568) |
 | `P2.27` | [#520](https://github.com/frankbria/iris/issues/520) | OpenAI o-series: omit temperature | — | DONE (#572) |
 | `P2.28` | [#522](https://github.com/frankbria/iris/issues/522) | fetchWithTimeout covers the response body | — | DONE (#574) |
-| `P2.29` | [#523](https://github.com/frankbria/iris/issues/523) | Cost tracker: price the current models, discontinue the deprecated ones | P1 (#298) | DONE (#PRNUM) |
+| `P2.29` | [#523](https://github.com/frankbria/iris/issues/523) | Cost tracker: price the current models, discontinue the deprecated ones | P1 (#298) | DONE (#650) |
 | `P2.30` | [#528](https://github.com/frankbria/iris/issues/528) | RPC server: JSON-RPC batch requests (decided: not supported) | — | DONE (#575) |
 | `P2.26` | [#513](https://github.com/frankbria/iris/issues/513) | Credential references hardening: origin binding and transformed values | P1.16 (#352) | DONE (#571) |
 
