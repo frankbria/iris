@@ -134,9 +134,12 @@ export function replaceUserinfo(text: string, replacement: (userinfo: string) =>
  * its parsed form first.
  */
 export function stripUserinfo(text: string, quotedUrl?: string): string {
-  // An empty userinfo (`http://@host`) is left as it was written.
-  return replaceUserinfo(withoutQuoted(text, quotedUrl), (userinfo) => (userinfo ? '' : '@'));
+  return withoutPatternUserinfo(withoutQuoted(text, quotedUrl));
 }
+
+/** The pattern alone. An empty userinfo (`http://@host`) is left as it was written. */
+const withoutPatternUserinfo = (text: string): string =>
+  replaceUserinfo(text, (userinfo) => (userinfo ? '' : '@'));
 
 /** `text` with each whole copy of `quotedUrl` replaced by its parsed form. */
 const withoutQuoted = (text: string, quotedUrl?: string): string =>
@@ -178,30 +181,40 @@ function withoutPartialCopy(head: string, quotedUrl: string): string {
 /** The start of a colour code that the cut ended: `ESC`, `ESC [`, or one with no final byte. */
 const PARTIAL_ANSI_TAIL = /\x1b(?:\[[0-?]*[ -/]*)?$/;
 
+/** The first `ERROR_TEXT_MAX` units of `text`, never ending on half a surrogate pair. */
+function firstUnits(text: string): string {
+  if (text.length <= ERROR_TEXT_MAX) return text;
+  const lastIsHighSurrogate = (text.charCodeAt(ERROR_TEXT_MAX - 1) & 0xfc00) === 0xd800;
+  return text.slice(0, ERROR_TEXT_MAX - (lastIsHighSurrogate ? 1 : 0));
+}
+
 /**
- * The first `ERROR_TEXT_MAX` units of `text`, by code point, without colour codes. A cut can
- * land inside a URL whose `@` is past it, and what is left of the userinfo would no longer be
- * recognised. So a cut text also ends before a partial copy of `quotedUrl` and before an
- * authority that nothing terminates. The order matters (codex review, twice): colour codes
- * go first, since one inside a URL can hold a `?`, which would read as the authority's end;
- * and whole copies of `quotedUrl` are replaced before a partial one is looked for, since a
- * URL may end with its own beginning (`http://u:p@host/http`).
+ * The start of `text` without colour codes and with whole copies of `quotedUrl` parsed, at
+ * most `ERROR_TEXT_MAX` units. A cut can land inside a URL whose `@` is past it, and what is
+ * left of the userinfo would no longer be recognised. So a cut text also ends before a
+ * partial copy of `quotedUrl` and before an authority that nothing terminates. The order
+ * matters (codex review): colour codes go first, since one inside a URL can hold a `?`,
+ * which would read as the authority's end; whole copies are replaced before a partial one
+ * is looked for, since a URL may end with its own beginning (`http://u:p@host/http`); and
+ * the text is cut again after that, since a parsed URL can be longer than it was written.
  */
 function headOfErrorText(text: string, quotedUrl: string): string {
-  if (text.length <= ERROR_TEXT_MAX) return stripAnsi(text);
-  const lastIsHighSurrogate = (text.charCodeAt(ERROR_TEXT_MAX - 1) & 0xfc00) === 0xd800;
-  const cut = text.slice(0, ERROR_TEXT_MAX - (lastIsHighSurrogate ? 1 : 0));
-  const plain = stripAnsi(cut).replace(PARTIAL_ANSI_TAIL, '');
-  const head = withoutPartialCopy(withoutQuoted(plain, quotedUrl), quotedUrl);
-  const scheme = head.lastIndexOf('://');
-  return scheme !== -1 && !/[\s/?#]/.test(head.slice(scheme + 3)) ? head.slice(0, scheme) : head;
+  const cut = firstUnits(text);
+  const plain = cut === text ? stripAnsi(cut) : stripAnsi(cut).replace(PARTIAL_ANSI_TAIL, '');
+  const parsed = withoutQuoted(plain, quotedUrl);
+  const head = firstUnits(parsed);
+  if (cut === text && head === parsed) return head;
+  const whole = withoutPartialCopy(head, quotedUrl);
+  const scheme = whole.lastIndexOf('://');
+  return scheme !== -1 && !/[\s/?#]/.test(whole.slice(scheme + 3)) ? whole.slice(0, scheme) : whole;
 }
 
 /**
  * Error text a page or a client controls, as it may be stored or shown: without terminal
- * colour codes and URL userinfo (`quotedUrl` as for `stripUserinfo`). Cut to
- * `ERROR_TEXT_MAX` before any pattern runs (#658): such text has no length of its own.
+ * colour codes and URL userinfo (`quotedUrl` as for `stripUserinfo`), from at most
+ * `ERROR_TEXT_MAX` units of it, cut before any pattern runs (#658): such text has no length
+ * of its own. What a cut loses is the end of the text, never a credential's `@`.
  */
 export function strippedError(error: string, quotedUrl = ''): string {
-  return stripUserinfo(headOfErrorText(error, quotedUrl), quotedUrl);
+  return withoutPatternUserinfo(headOfErrorText(error, quotedUrl));
 }

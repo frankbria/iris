@@ -306,6 +306,7 @@ describe('strippedError (#658)', () => {
     const pieces = (url: string) => [
       'a', 'b', 'p', ' ', '/', '?', '#', '@', ':', '://', 'http', 'http://', 'u:p@', 'h/',
       '\x1b', '\x1b[', '\x1b[2m', '\x1b[?25l', '😀', url, url, url.slice(0, 9), url.slice(0, -3),
+      url.slice(4), `${url}😀😀😀😀`,
     ]; // prettier-ignore
     const failures: string[] = [];
     const cases = Number(process.env.IRIS_FUZZ_CASES ?? 4000);
@@ -320,11 +321,28 @@ describe('strippedError (#658)', () => {
       const quoted = next(4) === 0 ? undefined : url;
       const whole = stripUserinfo(text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ''), quoted);
       const cut = strippedError(text, quoted);
-      if (!whole.startsWith(cut) || /[\uD800-\uDBFF]$/.test(cut)) {
+      const sound = whole.startsWith(cut) && cut.length <= ERROR_TEXT_MAX;
+      if (!sound || /[\uD800-\uDBFF]$/.test(cut)) {
         failures.push(JSON.stringify({ tail, before, quoted, cut: cut.slice(-40) }));
       }
     }
     expect(failures.slice(0, 5)).toEqual([]);
+  });
+
+  // codex review: a parsed URL percent-encodes its path, so replacing copies can lengthen
+  // the text past the bound, and a second replacement rewrote what the first had produced.
+  it('stays within ERROR_TEXT_MAX when the parsed URL is longer than it was written', () => {
+    const url = `http://u:p@host/${'😀'.repeat(8000)}`;
+    const out = strippedError(`${url}${'x'.repeat(1000)}`, url);
+    expect(out.length).toBeLessThanOrEqual(ERROR_TEXT_MAX);
+    expect(out.startsWith('http://host/%F0%9F%98%80')).toBe(true);
+  });
+
+  it('replaces the quoted URL once, as stripping the whole text does', () => {
+    const url = `http://${SPACE_PASSWORD}@host/http`;
+    const tail = `${url}${url.slice(4)} END `;
+    const text = `${' '.repeat(ERROR_TEXT_MAX - tail.length)}${tail}extra`;
+    expect(stripUserinfo(text, url).startsWith(strippedError(text, url))).toBe(true);
   });
 
   it('agrees with comparing every suffix, on 20,000 generated pairs', () => {
