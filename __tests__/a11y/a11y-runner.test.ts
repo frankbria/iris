@@ -65,6 +65,9 @@ describe('AccessibilityRunner', () => {
     // Mock Playwright Page
     mockPage = {
       goto: jest.fn().mockResolvedValue(undefined),
+      // The document's URL, which the runner reports (#662): the page that was navigated
+      // to, unless a test says the page moved on.
+      url: jest.fn(() => mockPage.goto.mock.calls.at(-1)?.[0] ?? 'about:blank'),
       evaluate: jest.fn().mockResolvedValue([]),
       close: jest.fn().mockResolvedValue(undefined),
       // What installUrlPolicyGuard touches: the runner always installs it (#335).
@@ -370,6 +373,48 @@ describe('AccessibilityRunner', () => {
       expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000/about', {
         waitUntil: 'networkidle',
       });
+    });
+
+    // #662: the response of the navigation asked for is the first page; a page can move on.
+    it('hands axe the URL of the document it scans, without fragment or credentials', async () => {
+      mockPage.url.mockReturnValue('https://user:pw@example.com/login?next=1#access_token=s3cret');
+      accessibilityRunner = new AccessibilityRunner({
+        ...defaultConfig,
+        pages: ['https://example.com/account'],
+      });
+
+      await accessibilityRunner.run();
+
+      expect(mockAxeRunner.run).toHaveBeenCalledWith(
+        mockPage,
+        expect.any(String),
+        'https://example.com/login?next=1',
+      );
+    });
+
+    it('leaves a data: document URL as it is', async () => {
+      const page = 'data:text/html,<h1>hi</h1>#part';
+      accessibilityRunner = new AccessibilityRunner({ ...defaultConfig, pages: [page] });
+
+      await accessibilityRunner.run();
+
+      expect(mockAxeRunner.run).toHaveBeenCalledWith(mockPage, expect.any(String), page);
+    });
+
+    it('does not scan the error page a failed move leaves behind', async () => {
+      mockPage.url.mockReturnValue('chrome-error://chromewebdata/');
+      accessibilityRunner = new AccessibilityRunner({
+        ...defaultConfig,
+        pages: ['https://example.com/account'],
+      });
+
+      const result = await accessibilityRunner.run();
+
+      expect(mockAxeRunner.run).not.toHaveBeenCalled();
+      expect(result.results[0].error).toBe(
+        'https://example.com/account moved on to a page that could not be loaded',
+      );
+      expect(result.summary.passed).toBe(false);
     });
 
     it('should handle absolute URLs', async () => {
