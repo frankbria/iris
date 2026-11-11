@@ -606,3 +606,10 @@ Write/Edit, not as a pre-push afterthought.
 - **A pattern over free text cannot cut URL credentials**: a password may hold an `@` or a space (codex, two passes). When the whole string is a URL, parse it; when it does not parse, do not quote it.
 - **Run the demo against a failure the host really has.** The launch failure here showed that the new "fixed vocabulary" answered every scan with "could not be completed", which reads as the page's fault; it got its own reason.
 - **`gh pr diff` refuses a diff with a raw ESC byte in it**, and the CI Codex review job fails at "Fetch the PR diff" in 7 s (only the fallback reviewers ran). `__tests__/mcp/tools.test.ts` has one (`/<ESC>\[/`); a change within three lines of it puts it in the diff as context. Check with `git diff origin/main | grep -c $'\x1b'` before pushing, and keep new code away from such a line (or fix the workflow, #644).
+
+## 2026-11-11 — #314 hosted MCP (PR #647) and #363 audit gate
+
+- **Jest: test files go before `--coverageReporters`.** `npx jest --coverage --coverageReporters=lcov a.test.ts b.test.ts` reads the file names as more reporters and runs the whole suite. Write `npx jest a.test.ts b.test.ts --coverage --coverageReporters=lcov`.
+- **`npm audit`'s `fixAvailable` can be a downgrade.** For the dev-only advisories under jest it proposed `jest@25.1.0` (`isSemVerMajor: true`). Read the version before calling an advisory fixable.
+- **A CI gate that is one line needs a test that reads the workflow.** The audit step could be deleted, piped to `|| true` or raised to `critical` with every suite green. Pin the exact line, and break it seven ways to see the pin fail.
+- **To show an audit catches a workspace's dependency, plant one in a scratch copy**: `package.json`, `package-lock.json` and the workspace's `package.json` in a temp dir, `npm install --package-lock-only -w <workspace> lodash@4.17.20`, then the gate's command. No `node_modules`, nothing in the repo changes.
