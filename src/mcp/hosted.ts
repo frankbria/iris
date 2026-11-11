@@ -199,13 +199,14 @@ async function awaitJob(id: string, deps: HostedToolsDeps): Promise<StoredJob | 
   const deadline = performance.now() + deps.waitMs;
   const sooner = AbortSignal.any([deps.gone, deps.draining]);
   for (;;) {
-    if (deps.gone.aborted) {
-      await deps.jobs.cancel?.(id);
-      return null;
-    }
     const job = await deps.jobs.get(id);
     if (!job) return null;
     const pending = job.status === 'queued' || job.status === 'running';
+    // Checked after the read, before any return: the caller may have left during it.
+    if (pending && deps.gone.aborted) {
+      await deps.jobs.cancel?.(id);
+      return null;
+    }
     if (!pending || performance.now() >= deadline || deps.draining.aborted) return job;
     await pause(pollMs, sooner);
   }
