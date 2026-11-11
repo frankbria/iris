@@ -96,8 +96,8 @@ paths:
   exit 3 unless a scanned page has violations: those exit 4, `summary.scannedPassed`).
   The score covers scanned pages only (`null` when none was: an unscanned page has no
   violations and raised it). Errors are userinfo-stripped where they are made
-  (`stripUserinfo(text, page)`, src/report-encoding.ts: the page it was given is cut by
-  parsing, so a password with a space goes too, #645). The report directory is created before
+  (`stripUserinfo(text, navigatedUrl)`, src/report-encoding.ts: the URL navigated, base URL
+  included, is cut by parsing, so a password with a space goes too, #645). The report directory is created before
   writing. The hosted worker sets `failFast` (no browser time on pages whose results
   would be thrown away) and throws the page error itself, keeping fail-the-job semantics
 - **A WCAG level is WCAG 2.2 (#290).** `wcagTags(level)` (src/a11y/wcag.ts) is the one

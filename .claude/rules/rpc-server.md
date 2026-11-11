@@ -153,8 +153,11 @@ model, and the page under test chooses much of what an error or a redirect conta
   whole goes through `urlWithoutUserinfo()` (parsed; text that does not parse gets the
   pattern), and text known to quote one goes through `stripUserinfo(text, quotedUrl)`,
   which replaces each occurrence by its parsed form before the pattern runs (a11y page
-  errors with the page, stored RPC errors with the navigation target; `loggedDetail` does
-  the same for the MCP log). A space written `%20` has no such problem. Tests:
+  errors with the URL navigated, base URL included; stored RPC errors with the navigation
+  target; `loggedDetail` does
+  the same for the MCP log). A space written `%20` has no such problem, and that is how
+  Chromium and Playwright quote a URL in their own errors: only the guard's messages
+  repeat it raw, so a browser test of the raw path must be a policy refusal. Tests:
   `url-credentials.test.ts` (no browser).
 - **`ScanLimiter(2, 8)`** (src/mcp/scan-limiter.ts), one per process: 2 scans run, 8 wait in
   arrival order, the next is a tool error at once. A finishing scan hands its slot to the

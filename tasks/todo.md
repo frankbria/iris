@@ -15,7 +15,7 @@ first `@`. A URL parser takes the last `@` of the authority.
   `urlWithoutUserinfo(url)` parses a URL held whole, and `stripUserinfo(text, quotedUrl)`
   replaces each occurrence of a URL the text is known to quote by its parsed form, then
   runs the pattern.
-- **Call sites that hold the URL**: a11y page errors (`erroredPage`, the page), stored RPC
+- **Call sites that hold the URL**: a11y page errors (`erroredPage`, the URL navigated), stored RPC
   errors (the navigation target). The history store's private `withoutCredentials` is
   replaced by the shared helper. The MCP module keeps its own (`withoutCredentials`,
   `loggedDetail`): it answers "the requested URL" for unparseable text, a different contract.
