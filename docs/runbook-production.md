@@ -423,7 +423,10 @@ docker compose exec iris node dist/cli.js admin artifact-versioning --enable
 The access key needs the bucket's versioning permissions (`s3:GetBucketVersioning`,
 `s3:PutBucketVersioning`, `s3:ListBucketVersions`, `s3:GetObjectVersion`,
 `s3:DeleteObjectVersion` in AWS terms), or enable versioning in the provider's console
-and give the key the last three. Do not add a provider lifecycle rule for old versions:
+and give the key the last three. **Whether or not you turn versioning on, the key must be
+allowed to read the bucket's versioning state** (`s3:GetBucketVersioning`): the daily
+retention pass asks, and a refusal fails its `versions` step (exit 3, the retention
+alert) every day. Do not add a provider lifecycle rule for old versions:
 the daily retention pass (`iris admin retention`, "The daily pass" below) removes
 versions that stopped being current more than 14 days ago, and delete markers with
 nothing left behind them, and reports the count as `artifactVersionsPruned`. Objects
@@ -465,7 +468,10 @@ BACKUP_ARTIFACTS_REMOTE=offsite:<bucket-or-path>    # another provider or region
 Define both remotes in `/etc/iris/rclone.conf` (`sudo RCLONE_CONFIG=/etc/iris/rclone.conf
 rclone config`). The images are stored as they are, so wrap the destination in an rclone
 `crypt` remote unless its provider is one you would trust with the bucket itself, and
-keep the crypt passwords off the box as well. Each run:
+keep the crypt passwords off the box as well. **Leave versioning off on the destination
+bucket**: the sync moves and deletes files there, a versioned destination would keep a
+hidden version of each one, and nothing here removes those (or give it a lifecycle rule
+that expires noncurrent versions after `BACKUP_KEEP_DAYS`). Each run:
 
 1. `rclone sync <source> <remote>/current --backup-dir <remote>/replaced/<UTC time>`:
    what the sync would delete or overwrite in the copy is moved aside, not deleted. An

@@ -193,7 +193,10 @@ Versions in the bucket plus an off-site copy; runbook "Artifact bucket backups".
 - **A key's versions can straddle `ListObjectVersions` pages**, and versions and delete
   markers come as two lists. `keyVersions()` carries the page's last key
   (`NextKeyMarker`) into the next page. SeaweedFS timestamps have one-second resolution.
-- **Undelete removes delete markers** (no copy, history kept); restoring an overwrite is a
+- **Undelete removes all of a key's delete markers** (no copy, history kept; all, because
+  entries written within one second cannot be ordered), and the prune deletes spent markers
+  only after the versions behind them went (a marker gone first would re-expose a purged
+  image if the version's delete failed); restoring an overwrite is a
   `CopyObject` from the version. A purge on a versioned bucket only adds delete markers,
   so "purged" means unreadable at once and gone after the prune.
 - **`removeBucket()` (tests) deletes versions first**: a versioned bucket is not empty
@@ -203,7 +206,7 @@ Versions in the bucket plus an off-site copy; runbook "Artifact bucket backups".
   images for ever. `replaced/` directories are pruned by their name (a UTC stamp), not by
   `--min-age`: moved files keep their original modification time. `rclone lsf` exits 3
   when `replaced/` does not exist yet. The test's rclone is a stub; the sync has not run
-  against a real rclone or bucket.
+  against a real rclone or bucket. The destination must be unversioned (the runbook says so).
 
 ### npm Package (issue #320)
 

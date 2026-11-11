@@ -414,6 +414,17 @@ if (!s3Configured) {
     expect(await text(baseline)).toBe('approved look');
   });
 
+  // Written within one second, a version and two delete markers cannot be ordered by time.
+  it('undeletes a key deleted twice in the same second as it was written', async () => {
+    const key = shot('twice');
+    await store.put(key, Buffer.from('still here'), 'image/png');
+    await store.delete(key);
+    await store.delete(key);
+    expect(await store.undelete(key)).toBe(1);
+    expect(await text(key)).toBe('still here');
+    expect(await store.versions(key)).toHaveLength(1);
+  });
+
   it('undeletes a purged prefix across listing pages, and only that prefix', async () => {
     const keys = Array.from({ length: 1005 }, (_, i) =>
       runArtifactKey({
