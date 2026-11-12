@@ -43,9 +43,11 @@ interface GuardedStandIn {
   pause(event: PausedRequest): Promise<void>;
   /** Tell the guard a frame committed a document, as Chromium would. */
   commit(event: FrameNavigated): void;
+  /** Deliver one paused document to the browser net (#337), when the page has a browser. */
+  pauseOnBrowserNet?: (event: PausedRequest) => Promise<void>;
 }
 
-async function guardedStandIn(): Promise<GuardedStandIn> {
+async function guardedStandIn(withBrowser = false): Promise<GuardedStandIn> {
   let paused: ((event: PausedRequest) => Promise<void>) | undefined;
   let committed: ((event: FrameNavigated) => void) | undefined;
   const send = jest.fn(async (method: string) =>
@@ -58,12 +60,21 @@ async function guardedStandIn(): Promise<GuardedStandIn> {
       if (name === 'Page.frameNavigated') committed = handler as typeof committed;
     },
   };
+  let pausedOnNet: ((event: PausedRequest) => Promise<void>) | undefined;
+  const browser = {
+    newBrowserCDPSession: async () => ({
+      send: jest.fn().mockResolvedValue(undefined),
+      on: (name: string, handler: (event: never) => unknown) => {
+        if (name === 'Fetch.requestPaused') pausedOnNet = handler as typeof pausedOnNet;
+      },
+    }),
+  };
   const context = {
     newCDPSession: jest.fn().mockResolvedValue(session),
     route: jest.fn().mockResolvedValue(undefined),
     on: jest.fn(),
-    // No browser, so the browser net (#337) is skipped and only the page session records.
-    browser: jest.fn().mockReturnValue(null),
+    // Without a browser the browser net (#337) is skipped and only the page session records.
+    browser: jest.fn().mockReturnValue(withBrowser ? browser : null),
   };
   const goto = jest.fn();
   const url = jest.fn();
@@ -78,7 +89,15 @@ async function guardedStandIn(): Promise<GuardedStandIn> {
   await installUrlPolicyGuard(page, {});
   if (!paused) throw new Error('the guard registered no Fetch.requestPaused handler');
   if (!committed) throw new Error('the guard registered no Page.frameNavigated handler');
-  return { page, goto, url, send, pause: paused, commit: committed };
+  return {
+    page,
+    goto,
+    url,
+    send,
+    pause: paused,
+    commit: committed,
+    pauseOnBrowserNet: pausedOnNet,
+  };
 }
 
 const refusedDocument = (frameId: string, navigation = 'refused-navigation'): PausedRequest => ({
@@ -219,6 +238,19 @@ describe('the navigation an error page is explained by (#673)', () => {
       await pause(refusedDocument(MAIN_FRAME, 'redirected-navigation'));
       commit(errorPage('redirected-navigation'));
     });
+
+    expect(() => guardedDocumentUrl(guarded.page, REQUESTED)).toThrow(REFUSED);
+  });
+
+  it('a refusal the browser net answered first explains its error page too', async () => {
+    const guarded = await guardedStandIn(true);
+    guarded.goto.mockResolvedValue(null);
+    await guardedGoto(guarded.page, REQUESTED);
+    if (!guarded.pauseOnBrowserNet) throw new Error('the guard started no browser net');
+
+    await guarded.pauseOnBrowserNet(refusedDocument(MAIN_FRAME));
+    guarded.commit(errorPage('refused-navigation'));
+    guarded.url.mockReturnValue(ERROR_PAGE);
 
     expect(() => guardedDocumentUrl(guarded.page, REQUESTED)).toThrow(REFUSED);
   });
