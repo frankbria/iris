@@ -46,7 +46,36 @@ async function authorise(
   return billing ? { billing } : { error: "Billing is not available." }
 }
 
-/** Sends the user to Stripe Checkout for a first subscription to `plan`. */
+/**
+ * Where an Upgrade goes (#688): Checkout for a first subscription, the Customer Portal
+ * when the org already has one (plan changes happen there), or why neither.
+ */
+async function checkoutDestination(
+  billing: Billing,
+  organizationId: string,
+  plan: PaidPlan,
+  userId: string
+): Promise<{ url: string } | { error: string }> {
+  try {
+    const result = await billing.checkout(
+      organizationId,
+      plan,
+      billingReturnUrl(),
+      { userId }
+    )
+    if (result.outcome === "busy")
+      return {
+        error: "Billing is busy for this organization. Try again in a moment.",
+      }
+    if (result.outcome === "checkout") return { url: result.url }
+    return { url: await billing.portalUrl(organizationId, billingReturnUrl()) }
+  } catch (error) {
+    if (error instanceof BillingError) return { error: error.message }
+    throw error
+  }
+}
+
+/** Sends the user to Stripe Checkout, or to the Customer Portal once subscribed. */
 export async function startCheckout(
   _previous: BillingState,
   form: FormData
@@ -58,19 +87,14 @@ export async function startCheckout(
   if ("error" in allowed) return allowed
   const session = await getAuth().api.getSession({ headers: await headers() })
   if (!session) return { error: "Sign in again to change billing." }
-  let url: string
-  try {
-    url = await allowed.billing.checkoutUrl(
-      organizationId,
-      plan,
-      billingReturnUrl(),
-      { userId: session.user.id }
-    )
-  } catch (error) {
-    if (error instanceof BillingError) return { error: error.message }
-    throw error
-  }
-  redirect(url)
+  const destination = await checkoutDestination(
+    allowed.billing,
+    organizationId,
+    plan,
+    session.user.id
+  )
+  if ("error" in destination) return destination
+  redirect(destination.url)
 }
 
 /** Sends the user to the Stripe Customer Portal: plan changes, cards, cancelling. */

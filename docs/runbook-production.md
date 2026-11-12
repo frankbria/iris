@@ -678,10 +678,11 @@ signed webhook. Set up once per Stripe mode (test first, then live):
 2. **Customer Portal** (Settings → Billing → Customer portal): allow cancelling, updating
    the payment method and switching between the Pro and Team prices; save it. Upgrades
    and cancellations go through the Portal: Checkout is refused while a subscription is live.
-   **Also turn on Checkout's "limit customers to one subscription"** (Settings → Checkout):
-   IRIS refuses a second Checkout only once the first subscription's webhook has arrived, so
-   two Upgrade clicks within that window would otherwise create two live, billed
-   subscriptions. Confirm the setting's current location in Stripe's docs when you apply it.
+   IRIS enforces one subscription per org itself (#688): before each Checkout it lists the
+   customer's subscriptions from Stripe and sends an org that has one to the Customer
+   Portal, and it expires the customer's older open Checkout Sessions, so two Upgrade
+   clicks or two tabs cannot end in two subscriptions. Checkout's "limit customers to one
+   subscription" setting, if your account offers it, is optional extra protection.
 3. **Webhook endpoint** (Developers → Webhooks): `https://<public host>/v1/stripe/webhook`,
    API version `2026-10-28.endive` (`STRIPE_API_VERSION` in `src/billing/stripe.ts`), events `checkout.session.completed`,
    `customer.subscription.created`, `customer.subscription.updated`,

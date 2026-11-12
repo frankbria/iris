@@ -258,15 +258,47 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   cannot nest one.
 - **One customer per org**: created on first Checkout with idempotency key
   `customer-<orgId>` and `metadata.org_id`, stored `on conflict do nothing` (audited
-  `billing_customer.create`). Checkout is refused (`BillingError`) while a subscription is
-  live (`hasLiveSubscription`: any status but none/`canceled`/`incomplete_expired`); plan
-  changes and cancelling go through the Customer Portal, which must allow switching prices.
+  `billing_customer.create`). Plan changes and cancelling go through the Customer Portal,
+  which must allow switching prices.
+- **One subscription per org, enforced by IRIS (#688)**, not by Stripe's dashboard setting
+  (the owner's account does not offer it; the runbook calls it optional). `checkout()`
+  answers `{ outcome: 'checkout', url } | 'subscribed' | 'busy'`, and the portal action
+  sends `subscribed` to the Customer Portal. In order: the stored state
+  (`hasLiveSubscription`, any status but none/`canceled`/`incomplete_expired`) answers
+  `subscribed` without calling Stripe; the customer is ensured; then, in one transaction
+  under `pg_try_advisory_xact_lock(hashtext('stripe-checkout:' || org))`, the customer's
+  open Checkout Sessions are **expired first** and **then** Stripe's subscription list
+  (`status: 'all'`) is read: any `active`, `trialing`, `past_due`, `unpaid` or `paused` is
+  `subscribed`; else a new session is created. Expiring first matters: a session paid while
+  the guard runs cannot be expired (Stripe answers invalid-request, ignored), and the list
+  read after it then shows its subscription. The webhook's column alone was not enough:
+  it is empty between a paid Checkout and its event, and two tabs each held a payable session.
+- **Why a try-lock, a cap and bounded calls** (the #636 lesson): the lock's transaction
+  holds a connection of the portal's one pool (pg default `max` 10, which also serves
+  every sign-in and page) across up to four Stripe calls. So the lock is **try**, never a
+  wait: a second concurrent call for the org answers `busy` at once ("Billing is busy …
+  try again") instead of queuing on a connection, and the earlier session it would have
+  replaced stays the only open one. **At most `MAX_CONCURRENT_CHECKOUTS` (2) checkouts
+  hold a connection at once** across all orgs (an in-process counter, as the webhook's:
+  one portal process; past it `busy` before any connection is taken), and every Stripe
+  call under the lock has a 10 s timeout and no retries (`BOUNDED`), so at most 2 of 10
+  connections are held, each for a bounded time. An `incomplete` subscription in Stripe's
+  list does not refuse (Stripe expires it unpaid after 23 hours); a stored `incomplete`
+  still does, through `hasLiveSubscription`.
+- **Tests**: `db/stripe-billing.test.ts` runs the guard with the real SDK against a local
+  HTTP Stripe (each refusal status, the expire step, a session paid before its expiry, two
+  concurrent calls for one org giving one session and one `busy`, the cap with 8 tenant
+  queries still served); its test-mode part repeats the sequence, a trialing subscription
+  and the concurrent pair against Stripe. Test-mode org ids are new each run: the customer's
+  idempotency key lasts 24 hours and would hand back a customer a cleanup deleted. The
+  portal's `billing-actions.test.ts` pins the redirects; portal E2E's positive control is
+  an operator suspension (a live subscription's Checkout now reaches Stripe for the Portal).
 - **Portal**: `createAuth()` roles carry `billing: ['manage']` (owners, admins). Server
   actions `startCheckout` / `openBillingPortal` (`app/org/actions.ts`) check that
   permission for the form's org, then suspension (the Portal passes a billing one, #266),
   then redirect to Stripe. `lib/billing.ts`
   is `server-only`. Portal E2E sets placeholder `IRIS_STRIPE_*` and never reaches Stripe;
-  its positive control is a forged Checkout refused for a live subscription (after the
+  its positive control is a forged Checkout refused for an operator suspension (after the
   permission check).
 - **Tests**: the webhook and route run real verification with payloads signed by
   `generateTestHeaderString` against real Postgres, with the in-test reader playing Stripe's
