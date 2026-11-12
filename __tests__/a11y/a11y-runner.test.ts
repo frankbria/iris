@@ -87,8 +87,22 @@ describe('AccessibilityRunner', () => {
     mockContext = {
       newPage: jest.fn().mockResolvedValue(mockPage),
       newCDPSession: jest.fn().mockResolvedValue({
-        // The guard asks each page for its target id (#668).
-        send: jest.fn().mockResolvedValue({ targetInfo: { targetId: 'page-target' } }),
+        // The guard asks each page for its target id (#668) and, when the page holds an
+        // error page, the browser for the navigation that left it (#677).
+        send: jest.fn(async (method: string) =>
+          method === 'Page.getFrameTree'
+            ? {
+                frameTree: {
+                  frame: {
+                    id: 'page-target',
+                    loaderId: 'failed-navigation',
+                    url: 'chrome-error://chromewebdata/',
+                    unreachableUrl: 'https://unreachable.example/',
+                  },
+                },
+              }
+            : { targetInfo: { targetId: 'page-target' } },
+        ),
         on: jest.fn(),
       }),
       route: jest.fn().mockResolvedValue(undefined),

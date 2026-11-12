@@ -381,7 +381,9 @@ describe('URL policy guard', () => {
 
         // The control: what the a11y runner used to report as the page it scanned.
         expect(responded).toBe(`${origin}${first}`);
-        expect(guardedDocumentUrl(p, `${origin}${first}`)).toBe(`${origin}/final?moved=1`);
+        await expect(guardedDocumentUrl(p, `${origin}${first}`)).resolves.toBe(
+          `${origin}/final?moved=1`,
+        );
         await expect(p.title()).resolves.toBe('Final');
       },
       60_000,
@@ -392,16 +394,20 @@ describe('URL policy guard', () => {
 
       await guardedGoto(p, `${origin}/router-moves`, { waitUntil: 'networkidle' });
 
-      expect(guardedDocumentUrl(p, `${origin}/router-moves`)).toBe(`${origin}/routed`);
+      await expect(guardedDocumentUrl(p, `${origin}/router-moves`)).resolves.toBe(
+        `${origin}/routed`,
+      );
     }, 60_000);
 
     it('a page that stayed: its own URL, on an unguarded page too', async () => {
       await guardedGoto(p, `${origin}/final`);
-      expect(guardedDocumentUrl(p, `${origin}/final`)).toBe(`${origin}/final`);
+      await expect(guardedDocumentUrl(p, `${origin}/final`)).resolves.toBe(`${origin}/final`);
 
       await installUrlPolicyGuard(p, {});
       await guardedGoto(p, `${origin}/final#part`);
-      expect(guardedDocumentUrl(p, `${origin}/final#part`)).toBe(`${origin}/final#part`);
+      await expect(guardedDocumentUrl(p, `${origin}/final#part`)).resolves.toBe(
+        `${origin}/final#part`,
+      );
     }, 60_000);
 
     it('refuses the error page a refused move leaves behind, and says why', async () => {
@@ -410,7 +416,7 @@ describe('URL policy guard', () => {
 
       await guardedGoto(p, first, { waitUntil: 'networkidle' });
 
-      expect(() => guardedDocumentUrl(p, first)).toThrow(
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
         /script-to-metadata redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy: .*link-local\/metadata/,
       );
     }, 60_000);
@@ -421,7 +427,7 @@ describe('URL policy guard', () => {
 
       await guardedGoto(p, first, { waitUntil: 'networkidle' });
 
-      expect(() => guardedDocumentUrl(p, first)).toThrow(
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
         `${first} moved on to a page that could not be loaded`,
       );
     }, 60_000);
@@ -432,7 +438,7 @@ describe('URL policy guard', () => {
 
       await guardedGoto(p, first, { waitUntil: 'networkidle' });
 
-      expect(() => guardedDocumentUrl(p, first)).toThrow(
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
         new Error(`${first} moved on to a page that could not be loaded`),
       );
     }, 60_000);
@@ -443,8 +449,6 @@ describe('URL policy guard', () => {
       const committed = p.waitForEvent('framenavigated', (frame) => frame === p.mainFrame());
       await p.evaluate(`location.replace(${JSON.stringify(target)})`).catch(() => undefined);
       await committed;
-      // Playwright hears of the commit before the guard's own session does.
-      await p.evaluate('1');
     };
 
     it('does not give an earlier refusal for a later move that failed for another reason (#673)', async () => {
@@ -452,11 +456,11 @@ describe('URL policy guard', () => {
       const first = `${origin}/script-to-metadata`;
       await guardedGoto(p, first, { waitUntil: 'networkidle' });
       // The control: the refusal is the reason while its own error page is the document.
-      expect(() => guardedDocumentUrl(p, first)).toThrow(/blocked by navigation policy/);
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(/blocked by navigation policy/);
 
       await thenMovesTo('http://localhost:1/');
 
-      expect(() => guardedDocumentUrl(p, first)).toThrow(
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
         new Error(`${first} moved on to a page that could not be loaded`),
       );
     }, 60_000);
@@ -465,13 +469,13 @@ describe('URL policy guard', () => {
       await installUrlPolicyGuard(p, {});
       const first = `${origin}/script-to-nowhere`;
       await guardedGoto(p, first, { waitUntil: 'networkidle' });
-      expect(() => guardedDocumentUrl(p, first)).toThrow(
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
         new Error(`${first} moved on to a page that could not be loaded`),
       );
 
       await thenMovesTo(`${METADATA}?q=1#part`);
 
-      expect(() => guardedDocumentUrl(p, first)).toThrow(
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
         /script-to-nowhere redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy: .*link-local\/metadata/,
       );
     }, 60_000);
@@ -483,7 +487,7 @@ describe('URL policy guard', () => {
 
       await thenMovesTo(`${origin}/to-metadata`);
 
-      expect(() => guardedDocumentUrl(p, first)).toThrow(
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
         /script-to-nowhere redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy: .*link-local\/metadata/,
       );
     }, 60_000);
@@ -495,11 +499,11 @@ describe('URL policy guard', () => {
       await installUrlPolicyGuard(p, { blockPrivateHosts: true });
 
       // Named as itself, as guardedGoto names a URL refused outright.
-      expect(() => guardedDocumentUrl(p, `${origin}/final`)).toThrow(
+      await expect(guardedDocumentUrl(p, `${origin}/final`)).rejects.toThrow(
         /\/final blocked by navigation policy: .*private\/loopback/,
       );
       // Reached from elsewhere, it is where that page went.
-      expect(() => guardedDocumentUrl(p, `${origin}/account`)).toThrow(
+      await expect(guardedDocumentUrl(p, `${origin}/account`)).rejects.toThrow(
         /\/account redirects to http:\/\/localhost:\d+\/final, which is blocked by navigation policy: .*private\/loopback/,
       );
     }, 60_000);
