@@ -2,8 +2,9 @@
  * Whose refusal the guard quotes as the reason a navigation failed (#668).
  *
  * On a stand-in CDP session, so the events can be given a frame id directly. That a
- * top-level frame's id is the page's target id, which this takes for granted, is what the
- * real-Chromium case in `url-policy-guard.test.ts` shows.
+ * top-level frame's id is the page's target id and a subframe's is not, which this takes
+ * for granted, is what the two real-Chromium cases marked #668 in
+ * `url-policy-guard.test.ts` show.
  */
 
 import type { Page } from 'playwright';

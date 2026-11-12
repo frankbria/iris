@@ -288,6 +288,17 @@ describe('URL policy guard', () => {
       );
     }, 60_000);
 
+    it('says why from the page session alone, where no browser net records it (#668)', async () => {
+      // As on a persistent context. With the browser net on, it records the same refusal,
+      // and this would pass even if the page session took the main frame for a subframe.
+      jest.spyOn(context, 'browser').mockReturnValue(null);
+      await installUrlPolicyGuard(p, {});
+
+      await expect(guardedGoto(p, `${origin}/to-metadata`)).rejects.toThrow(
+        /redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
+      );
+    }, 60_000);
+
     it('blocks a directly-supplied blocked URL', async () => {
       await installUrlPolicyGuard(p, {});
 
