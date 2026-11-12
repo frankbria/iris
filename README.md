@@ -814,7 +814,11 @@ exits `3` (or `4` when another page has violations). Scan the page it ends on in
   The keyboard checks run last for that reason, after axe and the screen-reader checks.
   An arrow key that leaves the page is the key's doing too (#675), and is reported as a
   failed keyboard check, `The page navigated`: an arrow key in a menu, listbox, tree, grid
-  or tab list is for moving focus.
+  or tab list is for moving focus. Tabs that keep the selected one in the fragment, the
+  query string or, through their router, the path stay on their document and are judged
+  by where focus went, as before.
+- The keyboard checks load the page again themselves before they press Escape on its
+  dialogs; that reload is theirs, and the page is held to the document it produced.
 - A handler that leaves the page some time after the key (a dialog that closes on Escape
   and navigates when its animation ends) cannot be told from the page's own timer, and
   fails the page as navigated during the scan.

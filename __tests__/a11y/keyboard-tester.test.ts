@@ -248,6 +248,34 @@ describe('KeyboardTester', () => {
       ]);
     });
 
+    // #675: the check after the key answered, on the document the key loaded under the same
+    // URL. Only the held document says the page was replaced.
+    it('takes a document an arrow key replaced under the same URL for the key leaving the page', async () => {
+      keyboardTester = new KeyboardTester({
+        testFocusOrder: false,
+        testTrapDetection: false,
+        testArrowKeyNavigation: true,
+        testEscapeHandling: false,
+        customSequences: [],
+      });
+      mockPage.evaluateHandle.mockResolvedValue({
+        evaluate: jest.fn().mockRejectedValue(new Error('Execution context was destroyed')),
+        dispose: jest.fn().mockResolvedValue(undefined),
+      });
+      mockPage.evaluate
+        .mockResolvedValueOnce([{ selector: 'DIV.menu', label: 'DIV.menu', role: 'menu' }] as never)
+        .mockResolvedValueOnce(undefined as never) // focus fallback
+        .mockResolvedValueOnce('UL:0>LI:0' as never)
+        .mockResolvedValue('UL:0>LI:1' as never); // answered by the document it loaded
+
+      const result = await keyboardTester.run(mockPage, 'arrow-test');
+
+      expect(keyboardTester.navigatedByKey).toBe(true);
+      expect(result.interactions.filter((i) => i.key === 'ArrowDown')).toEqual([
+        expect.objectContaining({ actualBehavior: 'The page navigated', success: false }),
+      ]);
+    });
+
     it('should fail arrow navigation when focus does not move', async () => {
       const configWithArrowTest = {
         testFocusOrder: false,
