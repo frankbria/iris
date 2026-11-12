@@ -176,6 +176,7 @@ async function answerStripeWebhook(
   const signature = req.headers['stripe-signature'];
   const outcome = await handle(body, Array.isArray(signature) ? undefined : signature);
   if (outcome === 'invalid_signature') return send(res, 400, { error: 'Invalid signature' });
+  if (outcome === 'busy') return send(res, 503, { error: 'Server busy' }, { 'retry-after': '1' });
   return send(res, 200, { received: true });
 }
 

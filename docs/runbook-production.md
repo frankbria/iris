@@ -701,7 +701,10 @@ the portal's `/org` fail. Check from the Stripe dashboard that a test event is a
 localhost:4000/v1/stripe/webhook` prints a secret to use as `IRIS_STRIPE_WEBHOOK_SECRET`.
 Each event makes `iris connect` read the customer's subscriptions from the Stripe API (10 s
 timeout, no retries); when Stripe is unreachable it answers 500 and Stripe redelivers, so
-the API key needs read access to subscriptions. The grace period and suspension on failed payments are #266; until then `invoice.payment_failed`
+the API key needs read access to subscriptions. At most two deliveries are applied at
+once (they share the database pool with tenant traffic); more are answered 503 and Stripe
+redelivers them, so a burst of `503` in the endpoint's delivery log is the cap working, not
+an outage. The grace period and suspension on failed payments are #266; until then `invoice.payment_failed`
 only shows `past due` and keeps the plan. Purging an org does not cancel its Stripe
 subscription: cancel it in the dashboard first.
 

@@ -239,6 +239,16 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   An unknown customer or an unhandled type is a 200 that records nothing and reads nothing.
   The reader is injectable (`stripeWebhookHandler(db, config, { readSubscriptions })`); tests
   pass one over in-test fixtures. It follows every page (`has_more`).
+- **At most `MAX_CONCURRENT_DELIVERIES` (2) deliveries hold a transaction at once**
+  (#636 review). The webhook shares the one hosted pool (pg default `max` 10) with key
+  verification, jobs and usage, and each delivery holds a connection across the Stripe read
+  (up to 10 s), so a Stripe outage's redelivery waves could take every connection and 503
+  tenants. Past the cap the handler returns `busy` before touching the database (nothing
+  recorded) and the route answers **503 + `Retry-After: 1`**; Stripe retries any non-2xx.
+  An in-process counter, not a second pool: one process serves the route, and a dedicated
+  pool would be more connections and config for the same bound. Checked after the
+  signature and the type, so ignored events never wait. `db/stripe-webhook.test.ts` holds
+  two reads open on a default-sized pool and shows eight tenant queries still run.
 - **Plan from the price**: `active`, `trialing` and `past_due` keep the price's plan (the
   grace period is #266); any other status, or a price IRIS does not sell, is free.
   `setPlan` is called only when the plan changes, because it replaces the overrides (a

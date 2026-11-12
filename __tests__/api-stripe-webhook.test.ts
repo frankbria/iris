@@ -149,6 +149,29 @@ const jobs = { forOrg: () => ({ enqueue: async () => null, get: async () => null
     expect((await post(retried, signatureOf(retried))).status).toBe(200);
   });
 
+  it('answers 503 with Retry-After past the delivery cap, so Stripe delivers it again', async () => {
+    let releaseRead = () => {};
+    let readStarted = () => {};
+    const reading = new Promise<void>((resolve) => (readStarted = resolve));
+    const hanging: ReadSubscriptions = () =>
+      new Promise((resolve) => {
+        releaseRead = () => resolve([]);
+        readStarted();
+      });
+    await serve(
+      stripeWebhookHandler(db, CONFIG, { readSubscriptions: hanging, maxConcurrentDeliveries: 1 }),
+    );
+    const first = payload('evt_route_held');
+    const held = post(first, signatureOf(first));
+    await reading;
+    const second = payload('evt_route_busy');
+    const response = await post(second, signatureOf(second));
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('1');
+    releaseRead();
+    expect((await held).status).toBe(200);
+  });
+
   it('is not served when billing is off', async () => {
     await serve();
     expect((await post(body, signature())).status).toBe(404);
