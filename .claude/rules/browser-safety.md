@@ -128,6 +128,17 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
     take that move for a custom sequence's either (`keysMayNavigate && !movedByItself`;
     the sequences run after the Escape check). A query string or fragment the page rewrote
     is still `same`, and the tester goes back.
+    **The tester names that move itself** (#683): it throws `NavigatedDuringScanError`
+    (under the URL of the document it was given; "loaded again" when the page is at the
+    same origin and path) and `run` lets that one error through without its "Keyboard
+    testing failed:" prefix. It used to throw a plain error and leave the naming to the
+    runner's hold, which reads the page a moment later: a router that pushed another path
+    and then the first one back in between left the plain error, and the MCP tools' fixed
+    reason did not apply. When the hold still sees the move it names it as before, with the
+    tester's error as `cause`.
+    **`reloadedInto` is released** (#683): by the runner once the held keyboard check has
+    settled (the hold has asked it by then), and by the tester when its next `run` begins,
+    for a caller that keeps one page across runs and never asks.
     The real-Chromium tests move the page from a zero-delay timer once the Tab walk has
     reached a link (150 links). They show the outcome, not the branch: a navigation often
     kills the walk's own page call first, which fails the page by name on main as well

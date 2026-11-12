@@ -1,24 +1,20 @@
-# #681 URL guard: a popup's refused opening navigation leaves an error page with no reason
+# #683 a11y: the keyboard tester never releases the document it reloaded into, and a move pushed away and back keeps a plain error
 
 Plan (self-authored; the issue has none). No architectural fork.
 
-Decision (the issue's first criterion): **not done, the limit is documented.** Nothing reads
-a popup with `guardedDocumentUrl` (the a11y runner scans the page it opened), so carrying an
-opener-judged refusal over to the popup's guard would be code no caller can observe. The
-read is fail-safe as it is: it throws "could not be loaded", it never returns the error page
-as a document. Reopen when a caller reads popups; refusals are kept by navigation id since
-#680, so the browser net could hold an inherited target's and hand them over on attach.
-
-Shown first in real Chromium on this host (3 runs of 3): a `target=_blank` link that
-redirects to the metadata host leaves the popup on Chromium's error page,
-`guardedDocumentUrl(popup, …)` rejects with the generic reason, and the opener still reads
-as its own URL.
-
-1. `__tests__/url-policy-guard.test.ts`: one real-Chromium case pinning exactly that.
-2. Docs: JSDoc on `guardedDocumentUrl`, `.claude/rules/browser-safety.md` (the limit),
-   `plans/README.md` (P3.48 closed as not done, P3.49 row for #683).
-
-Acceptance criteria:
-- [x] Decide: closed as won't-do while no caller reads popups.
-- [ ] "If done" test: not applicable; the pin test above stands in, and it also shows the
-      opener's own read is untouched.
+1. **Release `reloadedInto`.** The a11y runner releases it once the held keyboard check has
+   settled (the hold has asked it by then), and `KeyboardTester.run` releases the one a
+   previous run left before it starts, for a caller that keeps one page and never asks.
+   Fake-page tests in `keyboard-tester.test.ts` and `a11y-runner.test.ts`.
+2. **Decision (the issue's second criterion): the move is named.** The tester is the one
+   that saw the page move, so it throws `NavigatedDuringScanError` itself (under the URL of
+   the document it was given, "loaded again" when the page is at the same origin and path)
+   and `run` passes that error through without its "Keyboard testing failed:" prefix. A
+   router that pushed back before the runner's read no longer turns it into a plain error;
+   when the runner still sees the move it names it as before, with the tester's error as
+   the cause. `movedByItself` stays (the runner uses it for custom sequences).
+   Red first in real Chromium (`scan-navigation.test.ts`: the path is pushed back between
+   the tester's throw and the hold's read) and on the fake page.
+   Three existing fake-page assertions change with it: they quoted the plain error's text.
+3. Docs: `.claude/rules/browser-safety.md`, JSDoc, `plans/README.md` (P3.49 done, the P3.50
+   row for #685).

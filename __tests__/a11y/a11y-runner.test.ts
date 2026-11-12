@@ -9,6 +9,7 @@ import { AccessibilityRunner } from '../../src/a11y/a11y-runner';
 import { AxeRunner } from '../../src/a11y/axe-integration';
 import { KeyboardTester } from '../../src/a11y/keyboard-tester';
 import type { KeyboardTestConfig } from '../../src/a11y/keyboard-tester';
+import { NavigatedDuringScanError } from '../../src/a11y/scan-navigation';
 
 // Mock Playwright
 jest.mock('playwright');
@@ -616,6 +617,60 @@ describe('AccessibilityRunner', () => {
           expect.any(String),
           expect.objectContaining({ url: first }),
         );
+      });
+
+      // The page was back at the scanned path when the hold read it: the tester's own
+      // error names the move (#683).
+      it('fails by name a page the tester saw move, though it is back where it was', async () => {
+        mockKeyboardTester.run.mockImplementation(() => {
+          mockKeyboardTester.movedByItself = true;
+          return Promise.reject(new NavigatedDuringScanError(first, false));
+        });
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBe(
+          `The page navigated during the scan: it was at ${first} when the scan began and ` +
+            'moved to another page before its checks finished',
+        );
+      });
+
+      describe('the document the keyboard checks loaded again (#683)', () => {
+        const reloadedInto = () => ({
+          url: first,
+          replaced: jest.fn().mockResolvedValue(false),
+          release: jest.fn().mockResolvedValue(undefined),
+        });
+
+        it('is let go of once the hold has asked it', async () => {
+          const reloaded = reloadedInto();
+          const walked = await mockKeyboardTester.run(mockPage, 'test');
+          mockKeyboardTester.run.mockImplementation(async () => {
+            mockKeyboardTester.reloadedInto = reloaded;
+            return walked;
+          });
+
+          const result = await scanOf();
+
+          expect(result.results[0].error).toBeUndefined();
+          expect(reloaded.release).toHaveBeenCalledTimes(1);
+          expect(reloaded.replaced.mock.invocationCallOrder[0]).toBeLessThan(
+            reloaded.release.mock.invocationCallOrder[0],
+          );
+        });
+
+        it('is let go of when the keyboard checks failed too', async () => {
+          const reloaded = reloadedInto();
+          mockKeyboardTester.run.mockImplementation(async () => {
+            mockKeyboardTester.reloadedInto = reloaded;
+            throw new Error('Keyboard testing failed: no');
+          });
+
+          const result = await scanOf();
+
+          expect(result.results[0].error).toBe('Keyboard testing failed: no');
+          expect(reloaded.release).toHaveBeenCalledTimes(1);
+        });
       });
 
       it('fails a page that moved on by itself during the keyboard checks', async () => {

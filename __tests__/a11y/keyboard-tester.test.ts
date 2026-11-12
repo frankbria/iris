@@ -6,6 +6,7 @@
 
 import { Page } from 'playwright';
 import { KeyboardTester } from '../../src/a11y/keyboard-tester';
+import { NavigatedDuringScanError } from '../../src/a11y/scan-navigation';
 
 describe('KeyboardTester', () => {
   let mockPage: jest.Mocked<Page>;
@@ -580,8 +581,12 @@ describe('KeyboardTester', () => {
     it("stops when the caller's document was replaced with no key to blame", async () => {
       const scanned = heldDocument(true);
 
-      await expect(keyboardTester.run(mockPage, 'test', scanned)).rejects.toThrow(
-        'Keyboard testing failed: The page moved on by itself before the Escape check',
+      // The move by its name, as the tester saw it: a router may have pushed the path back
+      // by the time the caller reads the page (#683).
+      const outcome = keyboardTester.run(mockPage, 'test', scanned);
+      await expect(outcome).rejects.toBeInstanceOf(NavigatedDuringScanError);
+      await expect(outcome).rejects.toThrow(
+        new RegExp(`^The page navigated during the scan: it was at ${start} .* and loaded again `),
       );
 
       expect(keyboardTester.movedByItself).toBe(true);
@@ -593,8 +598,12 @@ describe('KeyboardTester', () => {
     it("stops when the caller's document is under another path", async () => {
       mockPage.url.mockReturnValue('https://example.test/route');
 
-      await expect(keyboardTester.run(mockPage, 'test', heldDocument(false))).rejects.toThrow(
-        'moved on by itself',
+      const outcome = keyboardTester.run(mockPage, 'test', heldDocument(false));
+      await expect(outcome).rejects.toBeInstanceOf(NavigatedDuringScanError);
+      await expect(outcome).rejects.toThrow(
+        new RegExp(
+          `^The page navigated during the scan: it was at ${start} .* moved to another page`,
+        ),
       );
 
       expect(keyboardTester.movedByItself).toBe(true);
@@ -608,7 +617,9 @@ describe('KeyboardTester', () => {
         dispose,
       } as never);
 
-      await expect(keyboardTester.run(mockPage, 'test')).rejects.toThrow('moved on by itself');
+      await expect(keyboardTester.run(mockPage, 'test')).rejects.toThrow(
+        'loaded again before its checks finished',
+      );
 
       expect(keyboardTester.movedByItself).toBe(true);
       expect(wentBack()).toBe(0);
@@ -623,6 +634,30 @@ describe('KeyboardTester', () => {
       await keyboardTester.run(mockPage, 'test', heldDocument(false)).catch(() => undefined);
 
       expect(keyboardTester.movedByItself).toBe(false);
+    });
+
+    it('lets go of the document it loaded again, when the next run begins (#683)', async () => {
+      const handles: { dispose: jest.Mock }[] = [];
+      mockPage.evaluateHandle.mockImplementation((async () => {
+        const handle = {
+          evaluate: jest.fn().mockResolvedValue(0),
+          dispose: jest.fn().mockResolvedValue(undefined),
+        };
+        handles.push(handle);
+        return handle;
+      }) as never);
+      const kept = () => handles.filter((handle) => handle.dispose.mock.calls.length === 0);
+
+      await keyboardTester.run(mockPage, 'test', heldDocument(false));
+      // Still held: the caller asks it once the run has settled.
+      expect(keyboardTester.reloadedInto).toBeDefined();
+      const [reloaded, ...others] = kept();
+      expect(others).toEqual([]);
+
+      const next = keyboardTester.run(mockPage, 'test', heldDocument(false)).catch(() => undefined);
+      await next;
+
+      expect(reloaded.dispose).toHaveBeenCalledTimes(1);
     });
 
     it('goes back when the page is where it was, under a rewritten query string too', async () => {
