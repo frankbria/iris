@@ -167,6 +167,11 @@ describe('URL policy guard', () => {
         '/script-to-metadata': `<script>location.replace('${METADATA}')</script>`,
         // Port 1 is one Chromium refuses to dial itself, so this fails the same everywhere.
         '/script-to-nowhere': `<script>location.replace('http://localhost:1/')</script>`,
+        // A refused frame, then a move of the top frame that fails for another reason (#668).
+        // On `load`, which waits for the frame, so the frame's refusal comes first.
+        '/frame-refused-then-nowhere':
+          `<iframe title="refused" src="${METADATA}"></iframe>` +
+          `<script>addEventListener('load', () => location.replace('http://localhost:1/'))</script>`,
       };
       if (moves[url]) {
         res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -276,6 +281,17 @@ describe('URL policy guard', () => {
     }, 60_000);
 
     it('blocks a redirect to a metadata host and says why', async () => {
+      await installUrlPolicyGuard(p, {});
+
+      await expect(guardedGoto(p, `${origin}/to-metadata`)).rejects.toThrow(
+        /redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
+      );
+    }, 60_000);
+
+    it('says why from the page session alone, where no browser net records it (#668)', async () => {
+      // As on a persistent context. With the browser net on, it records the same refusal,
+      // and this would pass even if the page session took the main frame for a subframe.
+      jest.spyOn(context, 'browser').mockReturnValue(null);
       await installUrlPolicyGuard(p, {});
 
       await expect(guardedGoto(p, `${origin}/to-metadata`)).rejects.toThrow(
@@ -407,6 +423,17 @@ describe('URL policy guard', () => {
 
       expect(() => guardedDocumentUrl(p, first)).toThrow(
         `${first} moved on to a page that could not be loaded`,
+      );
+    }, 60_000);
+
+    it("does not give a refused frame's reason for a move that failed for another (#668)", async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/frame-refused-then-nowhere`;
+
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+
+      expect(() => guardedDocumentUrl(p, first)).toThrow(
+        new Error(`${first} moved on to a page that could not be loaded`),
       );
     }, 60_000);
 

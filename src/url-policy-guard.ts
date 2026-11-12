@@ -185,10 +185,15 @@ async function installWebSocketGuard(page: Page, state: GuardState): Promise<voi
 /**
  * Attach the Fetch handler that vets every request before it is sent.
  *
- * @returns the page's CDP session, reused to find its target id for the browser net.
+ * @returns the page's CDP target id, which the browser net registers it under.
  */
-async function installFetchGuard(page: Page, state: GuardState): Promise<CDPSession> {
+async function installFetchGuard(page: Page, state: GuardState): Promise<string> {
   const cdp: CDPSession = await page.context().newCDPSession(page);
+
+  // A top-level frame's id is its target id. Asked before Fetch is enabled, so no request
+  // can be paused while the main frame is still unknown.
+  const { targetInfo } = await cdp.send('Target.getTargetInfo');
+  const mainFrameId = targetInfo.targetId;
 
   // Request stage only. It is sufficient *because* CDP re-pauses the target of
   // a redirect as a fresh request — which `page.route` does not — so a 30x is
@@ -205,9 +210,10 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<CDPSess
         return;
       }
 
-      // Recorded only for the main document: a blocked image must not overwrite
-      // the reason a navigation failed, which is what the caller will be shown.
-      if (event.resourceType === 'Document') {
+      // Recorded only for the main frame's document: a blocked image or a refused
+      // iframe (#668) must not become the reason a navigation failed, which is what
+      // the caller will be shown.
+      if (event.resourceType === 'Document' && event.frameId === mainFrameId) {
         state.refusal = { url, detail: reason };
       }
       await cdp.send('Fetch.failRequest', {
@@ -220,7 +226,7 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<CDPSess
     }
   });
 
-  return cdp;
+  return mainFrameId;
 }
 
 /** One guarded target as the browser net sees it. */
@@ -346,7 +352,7 @@ async function startBrowserNet(browser: Browser): Promise<BrowserNet> {
  *
  * @returns false for a popup over the cap, which the caller closes instead of guarding.
  */
-async function joinBrowserNet(page: Page, state: GuardState, cdp: CDPSession): Promise<boolean> {
+async function joinBrowserNet(page: Page, state: GuardState, targetId: string): Promise<boolean> {
   const browser = page.context().browser();
   if (!browser) return true; // a persistent context; IRIS never launches one (#331)
 
@@ -357,10 +363,9 @@ async function joinBrowserNet(page: Page, state: GuardState, cdp: CDPSession): P
     // A failed start must not poison every later install on this browser.
     net.catch(() => browserNets.delete(browser));
   }
-  const { targetInfo } = await cdp.send('Target.getTargetInfo');
   const joined = await net;
-  if (joined.overCap.has(targetInfo.targetId)) return false;
-  joined.targets.set(targetInfo.targetId, { state, inherited: false });
+  if (joined.overCap.has(targetId)) return false;
+  joined.targets.set(targetId, { state, inherited: false });
   return true;
 }
 
@@ -533,8 +538,8 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
   const entryRef = contextEntry;
   page.once('close', () => entryRef.guards.delete(state));
 
-  const cdp = await installFetchGuard(page, state);
-  if (!(await joinBrowserNet(page, state, cdp))) {
+  const targetId = await installFetchGuard(page, state);
+  if (!(await joinBrowserNet(page, state, targetId))) {
     await page.close();
     return;
   }
@@ -604,9 +609,7 @@ const ERROR_DOCUMENT = 'chrome-error:';
  *
  * The guard has already vetted every request such a move made, so a refused one leaves
  * Chromium's error page behind. Measuring that would report an empty page as a clean one.
- * shortcut: the reason quoted is the page's last refused document, which may be a frame's
- * when the main document failed for another reason; upgrade by recording the frame id if a
- * caller comes to depend on the reason.
+ * The reason quoted is the main frame's last refused document, never a subframe's (#668).
  *
  * @param requested the URL the caller navigated to, named in the error.
  * @throws in the words of a refused redirect when the document is the error page of a

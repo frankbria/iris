@@ -59,6 +59,16 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   response's URL had none. Read once: a page that navigates while axe runs fails the scan as before,
   and nothing compares the URL afterwards (a single-page app may rewrite it at any time).
   `guardedGoto` itself is unchanged for the executor, watcher and visual runner.
+- **The refusal a failed navigation is explained by is the main frame's** (#668): the page
+  session records a refused `Document` only when the request's `frameId` is the page's
+  target id (a top-level frame's id is its target id, read with `Target.getTargetInfo`
+  before `Fetch.enable`). A refused `<iframe>` is still refused, but it is no longer quoted
+  by `guardedGoto` or `guardedDocumentUrl` when the main document then fails for another
+  reason. A fake CDP session in a test must answer `Target.getTargetInfo` with a
+  `targetInfo.targetId`, on a context without a browser too.
+  `__tests__/url-policy-guard-refusal.test.ts` drives the handler on a stand-in session;
+  `url-policy-guard.test.ts` launches Chromium through Playwright itself, not through
+  `launchBrowser()`, which is why it runs where sandboxed Chromium cannot start.
 - Hostnames that *resolve* to private addresses are the egress proxy's job, below.
 
 ### URL Guard: Popups, Pins, Opaque Starts (issue #337)

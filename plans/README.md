@@ -285,6 +285,9 @@ production.
 | `P3.39` | [#662](https://github.com/frankbria/iris/issues/662) | a11y: a client-side navigation is not reported as a redirect; portal run detail does not show landedUrl | P3.36 (#648) | DONE: the runner reports the document's URL at the time axe runs (`guardedDocumentUrl`), a refused or failed move fails the scan, and run detail shows `(landed on …)` |
 | `P3.40` | [#664](https://github.com/frankbria/iris/issues/664) | Fine-tuned OpenAI ids: the vision table refuses them and the price table charges the dearest rate | P3.37 (#652) | DONE (#670): four fine-tuned rows from OpenAI's pricing page (they go with their bases on 2027-01-14); a fine-tuned id is never a vision model and the refusal says so |
 | `P3.41` | [#666](https://github.com/frankbria/iris/issues/666) | Tests: freePort() releases the port before iris connect listens, so a parallel suite can take it (address already in use) | — | DONE: `iris connect` is spawned on port 0 and its port read back; nginx, the portal image and `--metrics-port` are started again on fresh ports when they report theirs taken (`__tests__/utils/ports.ts`) |
+| `P3.42` | [#668](https://github.com/frankbria/iris/issues/668) | URL guard: record only main-frame refusals, so a refused move's reason cannot be a frame's | P3.39 (#662) | DONE: the page session records a refused document only for the main frame (its frame id is the page's target id), so a refused iframe is not quoted when the main document fails for another reason |
+| `P3.43` | [#669](https://github.com/frankbria/iris/issues/669) | a11y: a page that moves on after the network went idle is reported at its first page, or fails mid-scan | P3.39 (#662) | Open |
+| `P3.44` | [#673](https://github.com/frankbria/iris/issues/673) | URL guard: a main frame's earlier refusal is quoted for a later move that failed for another reason | P3.42 (#668) | Open |
 
 ---
 
