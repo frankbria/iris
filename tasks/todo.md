@@ -1,32 +1,39 @@
-# #664 [P3.40] Fine-tuned OpenAI ids: the vision table refuses them and the price table charges the dearest rate
+# #666 [P3.41] Tests: freePort() releases the port before iris connect listens
 
 ## Plan (self-authored; no plan on the issue)
 
-1. Read OpenAI's pages (pricing, deprecations, model optimization, vision fine-tuning,
-   the model pages), 2026-11-11.
-2. Tests first: `__tests__/ai-fine-tuned-ids.test.ts` (the four fine-tuned rows, a fine-tune
-   with no row stays an estimate, ids without `ft:` unchanged, `isVisionModel` is false for
-   every fine-tuned id, the refusal says why).
-3. `fineTunedBase()` exported from `src/ai-client/models.ts`; `ModelNotForImagesError` names
-   a fine-tuned id as such; `CostTracker.resolveKey` prices `ft:<base>:<org>:<suffix>:<id>`
-   by the row `ft:<base>`; four rows in `DEFAULT_PRICING`.
-4. Docs: `.claude/rules/ai-and-visual.md`, `plans/README.md`.
+Four test files define a `freePort` (the issue says three; `portal-image.test.ts` is the fourth).
+What each one hands the port to decides the fix:
 
-## What the pages say
-
-- Fine-tuning is closed to new users; no new jobs after 2027-01-06. Inference on a
-  fine-tune lasts until its base model is shut down.
-- Priced fine-tunes (inference, per 1M tokens, standard): `gpt-4.1-2025-04-14` $3/$12,
-  `gpt-4.1-mini-2025-04-14` $0.80/$3.20, `gpt-4o-2024-08-06` $3.75/$15,
-  `gpt-4o-mini-2024-07-18` $0.30/$1.20. All four bases shut down 2027-01-14.
-- Every model in IRIS's vision table (`gpt-6*`, `gpt-5.6`, `gpt-5.5`, `gpt-5.4`, `gpt-5.2`)
-  lists fine-tuning as "Not supported".
+1. `__tests__/utils/ports.ts` (new, with `ports.test.ts` written first):
+   - `connectPort(output)`: the port `iris connect 0` printed on its `listening` line.
+   - `onFreePorts(count, host, start)`: for a process that cannot be told "port 0". Probes
+     `count` distinct ports, runs `start(ports)`, and tries fresh ports when `start` throws
+     `PortTaken` (at most 5 attempts; any other error is thrown at once).
+   - `closedPort(host)`: for a test that wants a refused connection, never a listener.
+   - A guard test: no test file defines its own `freePort`.
+2. `api-key-auth.test.ts`: every spawn is `iris connect 0`; the shared `beforeAll` reads the
+   port from the `listening` line. `freePort` deleted.
+3. `observability.test.ts`: `iris connect 0`; `--metrics-port` refuses 0 (`min: 1`), so the
+   metrics port goes through `onFreePorts`, and a child that exits with
+   `Cannot serve metrics ... EADDRINUSE` is `PortTaken`. Same for the worker case.
+4. `ingress.test.ts`: nginx cannot report a port it chose, so both listen ports go through
+   `onFreePorts`; a container that exited with `bind() ... failed (98: Address in use)` is
+   `PortTaken`.
+5. `portal-image.test.ts`: the server's `PORT` goes through `onFreePorts` (`EADDRINUSE` in the
+   exited container's log); the closed-port SMTP case uses `closedPort`.
+6. Docs: `.claude/rules/testing.md`, `plans/README.md` (P3.41), `tasks/lessons.md`.
 
 ## Decisions
 
-- `isVisionModel` stays false for every fine-tuned id: the only bases that can be
-  fine-tuned are the deprecated ones IRIS stopped offering for images in #523. The refusal
-  says so instead of "text-only, deprecated or unknown".
-- A fine-tune is priced only when the page lists its base snapshot; any other stays an
-  estimate at the dearest rate.
-- The four rows go with their bases on 2027-01-14 (#652's schedule).
+- No change under `src/`: `--metrics-port 0` stays refused (letting it through would need
+  the bound port printed, a product change the issue does not ask for).
+- No timeout raised, no Jest concurrency cut.
+
+## Acceptance criteria
+
+- [ ] A test that spawns `iris connect` no longer depends on a port staying free between a
+      probe and the child's `listen`
+- [ ] The same for the other test files that define `freePort`
+- [ ] No timeout raised and no Jest concurrency cut (CLAUDE.md, #142)
+- [ ] A note in `.claude/rules/testing.md`

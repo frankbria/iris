@@ -27,6 +27,7 @@ import { resolveKeyring } from '../src/byok/crypto';
 import { providerKeyStore } from '../src/byok/store';
 import { orgEntitlements } from '../src/billing/plans';
 import { orgSuspensions } from '../src/org-suspension';
+import { connectPort } from './utils/ports';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -48,24 +49,20 @@ if (!ADMIN_URL) {
   );
 }
 
-async function freePort(): Promise<number> {
-  const srv = net.createServer().listen(0, '127.0.0.1');
-  await once(srv, 'listening');
-  const { port } = srv.address() as net.AddressInfo;
-  await new Promise((r) => srv.close(r));
-  return port;
-}
-
 interface Connect {
   proc: ChildProcess;
   out: string;
   exit: Promise<number | null>;
 }
 
-function spawnConnect(port: number, env: NodeJS.ProcessEnv): Connect {
+/**
+ * `iris connect 0`: the OS picks the port and the server prints it (#364). A port probed
+ * here and handed over could be taken by another suite before the child listened (#666).
+ */
+function spawnConnect(env: NodeJS.ProcessEnv): Connect {
   const proc = spawn(
     process.execPath,
-    ['-r', 'ts-node/register', path.join(REPO_ROOT, 'src/cli.ts'), 'connect', String(port)],
+    ['-r', 'ts-node/register', path.join(REPO_ROOT, 'src/cli.ts'), 'connect', '0'],
     { cwd: REPO_ROOT, env: { ...process.env, ...env } },
   );
   const c: Connect = {
@@ -95,7 +92,7 @@ async function exitCode(c: Connect, ms = 30_000): Promise<number | null | 'still
 
 describe('hosted iris connect refuses to start without key authentication', () => {
   test('a shared token in hosted mode is refused, not silently ignored', async () => {
-    const c = spawnConnect(await freePort(), {
+    const c = spawnConnect({
       ...HOSTED_ENV,
       DATABASE_URL: 'postgres://unused',
       IRIS_CONNECT_TOKEN: 'shared',
@@ -114,7 +111,7 @@ describe('hosted iris connect refuses to start without key authentication', () =
     async (name, message) => {
       const env: NodeJS.ProcessEnv = { ...HOSTED_ENV, DATABASE_URL: 'postgres://unused' };
       delete env[name];
-      const c = spawnConnect(await freePort(), env);
+      const c = spawnConnect(env);
       expect(await exitCode(c)).toBe(3);
       expect(c.out).toMatch(message);
       expect(c.out).not.toMatch(/listening/);
@@ -129,7 +126,7 @@ test('a database that never answers exits 3 instead of serving 503s', async () =
   await once(silent, 'listening');
   const { port: dbPort } = silent.address() as net.AddressInfo;
   try {
-    const c = spawnConnect(await freePort(), {
+    const c = spawnConnect({
       ...HOSTED_ENV,
       DATABASE_URL: `postgres://iris:iris@127.0.0.1:${dbPort}/iris`,
     });
@@ -317,8 +314,7 @@ const PASSWORD = 'correct-horse-battery-staple';
       );
     });
     await new Promise<void>((res) => vendor.listen(0, '127.0.0.1', res));
-    port = await freePort();
-    server = spawnConnect(port, {
+    server = spawnConnect({
       ...HOSTED_ENV,
       DATABASE_URL: dbUrl,
       IRIS_MODEL_PROBE: '0',
@@ -327,10 +323,12 @@ const PASSWORD = 'correct-horse-battery-staple';
       OPENAI_BASE_URL: `http://127.0.0.1:${(vendor.address() as net.AddressInfo).port}/v1`,
     });
     const deadline = Date.now() + 30_000;
-    while (!server.out.includes('listening')) {
+    let bound: number | undefined;
+    while ((bound = connectPort(server.out)) === undefined) {
       if (Date.now() > deadline) throw new Error(`connect never listened:\n${server.out}`);
       await new Promise((res) => setTimeout(res, 50));
     }
+    port = bound;
   }, 90_000);
 
   afterAll(async () => {

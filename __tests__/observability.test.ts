@@ -10,6 +10,7 @@
 import * as http from 'http';
 import type { AddressInfo } from 'net';
 import { Registry, serveMetrics, isLoopbackHost } from '../src/metrics';
+import { onFreePorts, PortTaken } from './utils/ports';
 
 type LogModule = typeof import('../src/log') & {
   metrics: (typeof import('../src/metrics'))['metrics'];
@@ -298,14 +299,6 @@ describe('--metrics-port', () => {
   const path = require('path') as typeof import('path');
   const net = require('net') as typeof import('net');
 
-  const freePort = () =>
-    new Promise<number>((resolve) => {
-      const srv = net.createServer().listen(0, '127.0.0.1', () => {
-        const { port } = srv.address() as AddressInfo;
-        srv.close(() => resolve(port));
-      });
-    });
-
   function start(args: string[], env: NodeJS.ProcessEnv) {
     const proc = spawn(
       process.execPath,
@@ -322,51 +315,89 @@ describe('--metrics-port', () => {
     return { proc, exit, out: () => out };
   }
 
-  async function scrapeWhenUp(port: number): Promise<string> {
+  const METRICS_PORT_TAKEN = /Cannot serve metrics on 127\.0\.0\.1:\d+: .*EADDRINUSE/;
+
+  /**
+   * Starts a command with `--metrics-port` and resolves with its first scrape. The flag
+   * refuses 0, so the port is probed first and can be taken before the child binds it
+   * (#666): the child then exits 3 saying so, which is `PortTaken` here. Whoever took the
+   * port may accept a connection and never answer, so the child's exit cuts the scrape.
+   */
+  async function metricsOn(args: string[], env: NodeJS.ProcessEnv, metricsPort: number) {
+    const child = start([...args, '--metrics-port', String(metricsPort)], env);
+    const exited = new AbortController();
+    void child.exit.then(() => exited.abort());
     for (let i = 0; ; i++) {
-      try {
-        return await (await fetch(`http://127.0.0.1:${port}/metrics`)).text();
-      } catch (err) {
-        if (i > 300) throw err;
-        await new Promise((r) => setTimeout(r, 100));
+      const text = await fetch(`http://127.0.0.1:${metricsPort}/metrics`, {
+        signal: exited.signal,
+      }).then(
+        (res) => res.text(),
+        () => undefined,
+      );
+      if (exited.signal.aborted) {
+        if (METRICS_PORT_TAKEN.test(child.out())) throw new PortTaken(child.out());
+        throw new Error(`exited before serving metrics:\n${child.out()}`);
       }
+      // Whoever took the port may answer HTTP too: only the child's own page counts.
+      if (text?.includes('iris_up')) return { child, metricsPort, text };
+      if (i > 300) {
+        child.proc.kill('SIGKILL');
+        throw new Error(`no metrics on ${metricsPort}:\n${child.out()}`);
+      }
+      await new Promise((r) => setTimeout(r, 100));
     }
   }
 
-  it('iris connect serves metrics on loopback and exits 3 when the port is taken', async () => {
-    const [port, metricsPort] = [await freePort(), await freePort()];
-    const env = { IRIS_CONNECT_TOKEN: 'metrics-test-token' };
-    const c = start(['connect', String(port), '--metrics-port', String(metricsPort)], env);
+  const startWithMetrics = (args: string[], env: NodeJS.ProcessEnv) =>
+    onFreePorts(1, '127.0.0.1', ([metricsPort]) => metricsOn(args, env, metricsPort));
+
+  it('a metrics port something else took is recognised, even one that accepts and stays silent (#666)', async () => {
+    const accepted: import('net').Socket[] = [];
+    const holder = net.createServer((socket) => accepted.push(socket)).listen(0, '127.0.0.1');
+    await new Promise((resolve) => holder.once('listening', resolve));
+    const { port } = holder.address() as AddressInfo;
     try {
-      const text = await scrapeWhenUp(metricsPort);
+      const started = metricsOn(
+        ['connect', '0'],
+        { IRIS_CONNECT_TOKEN: 'metrics-test-token' },
+        port,
+      );
+      await expect(started).rejects.toThrow(PortTaken);
+      // The scrape reached the holder: without the exit watch it would still wait.
+      expect(accepted.length).toBeGreaterThan(0);
+    } finally {
+      for (const socket of accepted) socket.destroy();
+      await new Promise((resolve) => holder.close(resolve));
+    }
+  }, 60_000);
+
+  it('iris connect serves metrics on loopback and exits 3 when the port is taken', async () => {
+    const env = { IRIS_CONNECT_TOKEN: 'metrics-test-token' };
+    const { child, metricsPort, text } = await startWithMetrics(['connect', '0'], env);
+    try {
       expect(text).toMatch(/^iris_up 1$/m);
       expect(text).toMatch(/^iris_sessions_active 0$/m);
       // A second server on the same metrics port refuses to start.
-      const taken = start(
-        ['connect', String(await freePort()), '--metrics-port', String(metricsPort)],
-        env,
-      );
+      const taken = start(['connect', '0', '--metrics-port', String(metricsPort)], env);
       expect(await taken.exit).toBe(3);
-      expect(taken.out()).toMatch(/Cannot serve metrics on 127\.0\.0\.1:\d+: .*EADDRINUSE/);
+      expect(taken.out()).toMatch(METRICS_PORT_TAKEN);
     } finally {
-      c.proc.kill('SIGKILL');
+      child.proc.kill('SIGKILL');
     }
   }, 60_000);
 
   (process.env.IRIS_TEST_DATABASE_URL ? it : it.skip)(
     'iris worker serves metrics on its own port',
     async () => {
-      const metricsPort = await freePort();
-      const w = start(['worker', '--metrics-port', String(metricsPort)], {
+      const { child, text } = await startWithMetrics(['worker'], {
         IRIS_HOSTED: '1',
         DATABASE_URL: process.env.IRIS_TEST_DATABASE_URL,
       });
       try {
-        const text = await scrapeWhenUp(metricsPort);
         expect(text).toMatch(/^iris_up 1$/m);
         expect(text).toMatch(/^# TYPE iris_job_queue_depth gauge$/m);
       } finally {
-        w.proc.kill('SIGKILL');
+        child.proc.kill('SIGKILL');
       }
     },
     60_000,
