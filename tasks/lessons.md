@@ -660,3 +660,8 @@ Write/Edit, not as a pre-push afterthought.
 ## 2026-11-12 — #681 a popup's refused opening navigation
 - **Commit before a mutation check.** The mutation was undone with `git checkout <file>`, which also dropped an uncommitted JSDoc edit in the same file; it was noticed in `git status` and redone. Mutate committed files only.
 - **A mutation that does not compile proves nothing.** `if (false && …)` was rejected by the TypeScript transform and Jest reported `Tests: 0 total`, which reads like "nothing failed"; check the tally says `1 failed`.
+
+## 2026-11-12 — #683 the keyboard tester's held document
+- **A ts-node script in `/tmp` resolves packages from its own directory.** Besides `TS_NODE_PROJECT`, it needs `node_modules` linked next to the script (`ln -s <repo>/node_modules /tmp/<dir>/node_modules`), or `import … from 'playwright'` is `MODULE_NOT_FOUND`. To compare with main, `git archive main src | tar -x -C /tmp/<dir>/main` and pass the tree's root to the script.
+- **A JS handle that no longer answers was not necessarily released.** A reload destroys every handle into the old document, so "how many handles still answer" after several reloading runs counts one, on main too. Show a release on a run that reloads nothing.
+- **`gh pr create` with a long heredoc body in a compound command was refused by the permission layer.** Push in one call, write the body with the Write tool, and pass `--body-file`.
