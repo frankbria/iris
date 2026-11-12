@@ -287,6 +287,7 @@ production.
 | `P3.41` | [#666](https://github.com/frankbria/iris/issues/666) | Tests: freePort() releases the port before iris connect listens, so a parallel suite can take it (address already in use) | — | DONE: `iris connect` is spawned on port 0 and its port read back; nginx, the portal image and `--metrics-port` are started again on fresh ports when they report theirs taken (`__tests__/utils/ports.ts`) |
 | `P3.42` | [#668](https://github.com/frankbria/iris/issues/668) | URL guard: record only main-frame refusals, so a refused move's reason cannot be a frame's | P3.39 (#662) | DONE: the page session records a refused document only for the main frame (its frame id is the page's target id), so a refused iframe is not quoted when the main document fails for another reason |
 | `P3.43` | [#669](https://github.com/frankbria/iris/issues/669) | a11y: a page that moves on after the network went idle is reported at its first page, or fails mid-scan | P3.39 (#662) | Open |
+| `P3.44` | [#673](https://github.com/frankbria/iris/issues/673) | URL guard: a main frame's earlier refusal is quoted for a later move that failed for another reason | P3.42 (#668) | Open |
 
 ---
 
