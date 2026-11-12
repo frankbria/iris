@@ -44,6 +44,9 @@ import type { UrlPolicyOptions } from './url-policy';
  */
 export const MAX_POPUPS_PER_CONTEXT = 5;
 
+/** What Chromium commits in place of a document it could not load. */
+const ERROR_DOCUMENT = 'chrome-error:';
+
 const popupCap = (policy: UrlPolicyOptions): number => policy.maxPopups ?? MAX_POPUPS_PER_CONTEXT;
 
 /** Why the guard turned a navigation away. */
@@ -64,10 +67,11 @@ interface GuardState {
   /** The main frame's latest refused document. Reset by `guardedGoto`, which reads it. */
   refusal: NavigationRefusal;
   /**
-   * Why the document the main frame holds is an error page: the refusal of the navigation
-   * that committed it, empty when that navigation was not refused (#673).
+   * Why the error page the main frame last committed is one: the refusal of the navigation
+   * that committed it, empty when that navigation was not refused (#673). Unset while the
+   * last commit heard was not an error page.
    */
-  documentRefusal: NavigationRefusal;
+  documentRefusal?: NavigationRefusal;
   /** Live, so a later install can tighten the policy without a second session. */
   policy: UrlPolicyOptions;
 }
@@ -212,7 +216,8 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<string>
   // unexplained until the second commits.
   cdp.on('Page.frameNavigated', ({ frame }) => {
     if (frame.id !== mainFrameId) return;
-    state.documentRefusal = state.refusal.navigationId === frame.loaderId ? state.refusal : {};
+    if (!frame.url.startsWith(ERROR_DOCUMENT)) state.documentRefusal = undefined;
+    else state.documentRefusal = state.refusal.navigationId === frame.loaderId ? state.refusal : {};
   });
   // Before Fetch, so no navigation a request was refused for can commit unheard.
   await cdp.send('Page.enable');
@@ -543,7 +548,7 @@ export async function installUrlPolicyGuard(page: Page, policy: UrlPolicyOptions
     return;
   }
 
-  const state: GuardState = { refusal: {}, documentRefusal: {}, policy };
+  const state: GuardState = { refusal: {}, policy };
   guards.set(page, state);
 
   const context = page.context();
@@ -620,9 +625,6 @@ export async function guardedGoto(
   }
 }
 
-/** What Chromium commits in place of a document it could not load. */
-const ERROR_DOCUMENT = 'chrome-error:';
-
 /**
  * The URL of the document the page holds now, for a caller that reports what it measured
  * (#662). Not {@link guardedGoto}'s return value: that is the last HTTP response of the
@@ -632,9 +634,9 @@ const ERROR_DOCUMENT = 'chrome-error:';
  * The guard has already vetted every request such a move made, so a refused one leaves
  * Chromium's error page behind. Measuring that would report an empty page as a clean one.
  * The reason quoted is the refusal of the navigation that left that error page (#673), and
- * a main-frame one, never a subframe's (#668). It follows the commit as this module's own
- * CDP session hears of it, a moment after `page.url()` changes: a caller that reads in the
- * same tick as the commit gets the generic reason.
+ * a main-frame one, never a subframe's (#668). Read in the moment between `page.url()`
+ * showing an error page and this module's own CDP session hearing of its commit, it is the
+ * latest refusal, as before #673.
  *
  * @param requested the URL the caller navigated to, named in the error.
  * @throws in the words of a refused redirect when the document is the error page of a
@@ -649,7 +651,9 @@ export function guardedDocumentUrl(page: Page, requested: string): string {
     );
 
   if (url.startsWith(ERROR_DOCUMENT)) {
-    const { url: refusedUrl, detail } = state?.documentRefusal ?? {};
+    // An error page whose commit the guard's session has not heard yet (Playwright's own
+    // hears it first) is the pending navigation's, and so is the latest refusal.
+    const { url: refusedUrl, detail } = state?.documentRefusal ?? state?.refusal ?? {};
     throw refusedUrl && detail
       ? refusedRedirect(refusedUrl, detail)
       : new Error(`${requested} moved on to a page that could not be loaded`);

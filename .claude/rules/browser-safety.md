@@ -112,10 +112,13 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   gets "moved on to a page that could not be loaded", and the reverse order the refusal.
   `guardedGoto` still reads the latest refusal, which it resets itself. Not a URL
   comparison: the error page's `unreachableUrl` has the fragment, the paused request's URL
-  does not. Limits: only the latest refused navigation is remembered, and the guard's
-  session hears of a commit a moment after Playwright's `page.url()` shows it (a test that
-  waits for `framenavigated` makes one page call before it asks). A stand-in CDP session
-  must deliver `Page.frameNavigated` for an error page to be explained by a refusal.
+  does not. The guard's session hears of a commit a moment after Playwright's `page.url()`
+  shows it, so while the last commit heard is not an error page (`documentRefusal` unset)
+  the latest refusal is quoted, as before: reading right at a first error page's commit
+  still gives its refusal (the internal review measured 0 of 15 without that). Limits:
+  only the latest refused navigation is remembered, and in that same moment after a
+  *second* error page's commit the first one's reason is still quoted (a test that waits
+  for `framenavigated` makes one page call before it asks).
 - Hostnames that *resolve* to private addresses are the egress proxy's job, below.
 
 ### URL Guard: Popups, Pins, Opaque Starts (issue #337)

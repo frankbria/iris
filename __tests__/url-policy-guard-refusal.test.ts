@@ -275,6 +275,26 @@ describe('the navigation an error page is explained by (#673)', () => {
     expect(() => guardedDocumentUrl(guarded.page, REQUESTED)).toThrow(GENERIC);
   });
 
+  it('an error page whose commit has not been heard yet: the pending refusal', async () => {
+    const guarded = await afterMoves(async ({ pause }) => {
+      await pause(refusedDocument(MAIN_FRAME));
+    });
+
+    expect(() => guardedDocumentUrl(guarded.page, REQUESTED)).toThrow(REFUSED);
+  });
+
+  it('a document committed after an error page forgets why that one was', async () => {
+    const guarded = await afterMoves(async ({ page, pause, commit }) => {
+      await pause(refusedDocument(MAIN_FRAME));
+      commit(errorPage('refused-navigation'));
+      // A new navigation asked for and committed; its own later failure is not heard yet.
+      await guardedGoto(page, REQUESTED);
+      commit({ frame: { id: MAIN_FRAME, loaderId: 'second-document', url: REQUESTED } });
+    });
+
+    expect(() => guardedDocumentUrl(guarded.page, REQUESTED)).toThrow(GENERIC);
+  });
+
   it('listens for commits before any request can be paused', async () => {
     const guarded = await guardedStandIn();
 
