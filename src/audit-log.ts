@@ -11,6 +11,13 @@
 
 import { sql, type Kysely } from 'kysely';
 
+/**
+ * How long an entry is kept (owner decision on #541, 2026-11-08); the daily retention pass
+ * deletes older ones (`runRetention`, src/offboarding.ts). Here, not there, so the portal
+ * can say it: this module is Kysely only.
+ */
+export const AUDIT_RETENTION_DAYS = 90;
+
 /** Who acted: a portal user, an org API key, or neither (an operator, the system). */
 export interface AuditActor {
   userId?: string | null;

@@ -96,18 +96,81 @@ describe('AI Client', () => {
       expect(mockCreate.mock.calls[0][0].temperature).toBe(0.1);
     });
 
-    // #520: the o-series refuses any temperature but the default; the rest keep 0.1.
-    it.each(['o1', 'o3-mini', 'o4-mini-2025-04-16'])(
-      'sends no temperature to %s',
+    // #523: gpt-5.x and gpt-6 are told not to reason (`low` where `none` is refused) and
+    // are sent no temperature, which they refuse unless effort is `none`.
+    it.each([
+      ['gpt-6-luna', 'none'],
+      ['gpt-6-sol', 'none'],
+      ['gpt-6.1-terra', 'none'],
+      ['gpt-5.6-sol', 'none'],
+      ['gpt-5.4-mini-2026-03-17', 'none'],
+      ['gpt-6-astra', 'low'],
+      ['gpt-6.1-sol', 'low'],
+    ])('sends %s reasoning_effort %s and no temperature', async (model, effort) => {
+      mockCreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
+      });
+      const client = createAIClient({ ...config, ai: { ...config.ai, model } });
+      await client.translateInstruction({ instruction: 'click the submit button' });
+      expect(mockCreate.mock.calls[0][0].reasoning_effort).toBe(effort);
+      expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+    });
+
+    // gpt-4o and gpt-4.1 do not reason: they keep 0.1.
+    it.each(['gpt-4o-mini', 'gpt-4.1'])(
+      'sends %s a temperature and no reasoning_effort',
       async (model) => {
         mockCreate.mockResolvedValue({
           choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
         });
         const client = createAIClient({ ...config, ai: { ...config.ai, model } });
         await client.translateInstruction({ instruction: 'click the submit button' });
-        expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+        expect(mockCreate.mock.calls[0][0].temperature).toBe(0.1);
+        expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('reasoning_effort');
       },
     );
+
+    // #520: the o-series refuses any temperature but the default.
+    // #523: nor does the first gpt-5, which also has no `none` effort to ask for.
+    it.each([
+      'o1',
+      'o3-mini',
+      'o4-mini-2025-04-16',
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-5-nano-2025-08-07',
+    ])('sends no temperature to %s', async (model) => {
+      mockCreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
+      });
+      const client = createAIClient({ ...config, ai: { ...config.ai, model } });
+      await client.translateInstruction({ instruction: 'click the submit button' });
+      expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+      expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('reasoning_effort');
+    });
+
+    // #652: a fine-tuned id is `ft:<base model>:<org>:<suffix>:<id>`, and the family
+    // patterns anchor at the start, so it used to fall through to `temperature: 0.1`,
+    // which a gpt-6 or o-series base refuses with a 400.
+    it.each([
+      ['ft:gpt-6-luna:acme::Abc123', { reasoning_effort: 'none' }],
+      ['ft:gpt-6-astra:acme:support:Abc123', { reasoning_effort: 'low' }],
+      ['ft:gpt-5.4-mini-2026-03-17:acme::Abc123', { reasoning_effort: 'none' }],
+      ['ft:o4-mini-2025-04-16:acme::Abc123', {}],
+      ['ft:gpt-5-mini:acme::Abc123', {}],
+      ['ft:gpt-4.1-mini-2025-04-14:acme::Abc123', { temperature: 0.1 }],
+      // Not a fine-tuned id: `ft:` only counts at the start.
+      ['my-ft:gpt-6-luna', { temperature: 0.1 }],
+    ])("sends the fine-tuned %s its base model's sampling options", async (model, sampling) => {
+      mockCreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify({ actions: [], confidence: 0 }) } }],
+      });
+      const client = createAIClient({ ...config, ai: { ...config.ai, model } });
+      await client.translateInstruction({ instruction: 'click the submit button' });
+      const { temperature, reasoning_effort } = mockCreate.mock.calls[0][0];
+      expect(JSON.parse(JSON.stringify({ temperature, reasoning_effort }))).toEqual(sampling);
+      expect(mockCreate.mock.calls[0][0].model).toBe(model);
+    });
 
     it('should handle API errors gracefully', async () => {
       mockCreate.mockRejectedValue(new Error('API Error'));

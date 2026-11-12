@@ -15,6 +15,7 @@ import { BudgetExceededError } from './ai-client/cost-tracker';
 // the schema without creating an import cycle (translator -> ai-client -> here).
 // Re-exported so existing `from './translator'` imports keep working.
 import type { Action, AssertKind } from './actions';
+import { MAX_SELECTOR_LENGTH } from './actions';
 import { hostedLog } from './log';
 export type { Action, AssertKind } from './actions';
 export { ActionSchema, parseActions, describeAction } from './actions';
@@ -135,6 +136,8 @@ const isElementName = (word: string) =>
  * `the #name field` or a bare `submit` (even a tag name) is prose for the AI.
  */
 function looksLikeSelector(target: string): boolean {
+  // Over the schema's bound it is not a selector (#658); the AI path validates its own plan.
+  if (target.length > MAX_SELECTOR_LENGTH) return false;
   if (ENGINE_OR_XPATH.test(target)) return true;
   // Quoted strings and bracket/paren contents may hold anything, spaces included.
   const tokens = target
@@ -181,6 +184,7 @@ const navigateAction = (m: RegExpExecArray): Action | null =>
 /** An element_absent target is a selector (page.locator); the others are text or a URL part. */
 function assertAction(kind: AssertKind): PatternRule['build'] {
   return function build(m: RegExpExecArray, instruction: string): Action | null {
+    if (m[1].length > MAX_SELECTOR_LENGTH) return null;
     if (kind === 'element_absent' && !looksLikeSelector(m[1])) return null;
     return { type: 'assert', kind, target: m[1], description: instruction };
   };

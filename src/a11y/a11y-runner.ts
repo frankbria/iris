@@ -17,8 +17,14 @@ import { AxeRunner } from './axe-integration';
 import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
-import { installUrlPolicyGuard, guardedGoto } from '../url-policy-guard';
-import { escapeHtml, escapeXml, safeHref, stripAnsi, stripUserinfo } from '../report-encoding';
+import { installUrlPolicyGuard, guardedGoto, guardedDocumentUrl } from '../url-policy-guard';
+import {
+  HeldDocument,
+  holdDocument,
+  NavigatedDuringScanError,
+  onScannedDocument,
+} from './scan-navigation';
+import { escapeHtml, escapeXml, safeHref, strippedError } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 import { withPageTimeout } from '../page-timeout';
 
@@ -174,14 +180,35 @@ async function openContext(browser: Browser, slot: PageContextSlot): Promise<Bro
   return context;
 }
 
-function erroredPage(page: string, error: unknown): AccessibilityTestResult['results'][0] {
+/**
+ * A document's URL as a report names it: an http(s) URL without its fragment or credentials,
+ * which the response's URL never had either (#662). A fragment is where an implicit-flow
+ * token travels, and reports are files. Other schemes (`data:`, `file:`) are left as they are.
+ */
+function reportedUrl(documentUrl: string): string {
+  if (!/^https?:/i.test(documentUrl) || !URL.canParse(documentUrl)) return documentUrl;
+  const url = new URL(documentUrl);
+  url.hash = '';
+  url.username = '';
+  url.password = '';
+  return url.href;
+}
+
+function erroredPage(
+  page: string,
+  error: unknown,
+  navigatedUrl = page,
+): AccessibilityTestResult['results'][0] {
   const empty = { total: 0, violations: 0, passes: 0, incomplete: 0, inapplicable: 0 };
   return {
     page,
-    // Stripped here, once: the CLI prints it and every report and store carries it.
+    // Stripped here, once: the CLI prints it and every report and store carries it. The
+    // guard's messages repeat the URL it was asked for (the base URL included), so its
+    // credentials are cut by parsing it: a password may hold a space, which the pattern
+    // cannot follow (#645). Bounded before the patterns run: a page words its own errors (#658).
     // Never empty: an empty reason must not read as no error anywhere it is shown.
     error:
-      stripUserinfo(stripAnsi(error instanceof Error ? error.message : String(error ?? ''))) ||
+      strippedError(error instanceof Error ? error.message : String(error ?? ''), navigatedUrl) ||
       'Unknown error',
     passed: false,
     failureReasons: ['could not be scanned'],
@@ -269,7 +296,7 @@ export class AccessibilityRunner {
           this.testPage(pagePattern, slot),
           TIMED_OUT,
           pageTimeoutMs,
-        ).catch((error: unknown) => erroredPage(pagePattern, error));
+        ).catch((error: unknown) => erroredPage(pagePattern, error, this.pageUrl(pagePattern)));
         const result =
           outcome === TIMED_OUT ? await timedOutPage(pagePattern, slot, pageTimeoutMs) : outcome;
         results.push(result);
@@ -338,6 +365,17 @@ export class AccessibilityRunner {
   }
 
   /**
+   * The URL a page pattern is navigated to. Any scheme-prefixed value (http:, https:,
+   * about:, data:, file:) is a complete URL; only bare paths get the dev-server base.
+   */
+  private pageUrl(pagePattern: string): string {
+    if (/^[a-z]+:/i.test(pagePattern)) return pagePattern;
+    // Trim a trailing slash off the base so `https://host/` + `/about` doesn't double up.
+    const base = (this.config.baseURL ?? 'http://localhost:3000').replace(/\/$/, '');
+    return `${base}${pagePattern}`;
+  }
+
+  /**
    * Test a single page for accessibility issues
    */
   private async testPage(
@@ -358,12 +396,7 @@ export class AccessibilityRunner {
         this.config.urlPolicy ?? { allowFile: true, allowData: true },
       );
 
-      // Navigate to page. Treat any scheme-prefixed value (http:, https:, about:,
-      // data:, file:) as a complete URL; only bare paths get the dev-server base.
-      const isFullUrl = /^[a-z]+:/i.test(pagePattern);
-      // Trim a trailing slash off the base so `https://host/` + `/about` doesn't double up.
-      const base = (this.config.baseURL ?? 'http://localhost:3000').replace(/\/$/, '');
-      const url = isFullUrl ? pagePattern : `${base}${pagePattern}`;
+      const url = this.pageUrl(pagePattern);
       // guardedGoto walks any redirect chain one vetted hop at a time, as real
       // navigations, so the scanned document's URL and asset base stay correct.
       //
@@ -378,26 +411,60 @@ export class AccessibilityRunner {
           }
         });
       }
-      const scannedUrl = await guardedGoto(page, url, { waitUntil: 'networkidle' });
+      await guardedGoto(page, url, { waitUntil: 'networkidle' });
       if (this.config.failOnHttpError && status >= 400) {
         throw new Error(`${pagePattern} answered HTTP ${status}`);
       }
+      // The document as it is now, not the response the navigation ended on: a page can
+      // move on by script, meta refresh or its router before the network went idle (#662).
+      const scannedUrl = reportedUrl(await guardedDocumentUrl(page, url));
+      const scanned = await holdDocument(page, scannedUrl);
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
 
-      // Run axe-core tests
-      const axeResult = await this.axeRunner.run(page, testName, scannedUrl);
+      // Every check is held to the document read above: a page that moves on or loads again
+      // by timer after the network went idle fails the scan, by name, instead of mixing two
+      // documents (#669, #675).
+      // A move the policy refused keeps the guard's words for it (#662).
+      const held = async <T>(
+        check: () => Promise<T>,
+        ownMove?: () => boolean,
+        reloadedInto?: () => HeldDocument | undefined,
+      ): Promise<T> => {
+        try {
+          return await onScannedDocument(page, scanned, check, ownMove, reloadedInto);
+        } catch (error) {
+          if (error instanceof NavigatedDuringScanError) await guardedDocumentUrl(page, url);
+          throw error;
+        }
+      };
+      const axeResult = await held(() => this.axeRunner.run(page, testName, scannedUrl));
 
-      // Run keyboard navigation tests if enabled
-      let keyboardResult: KeyboardTestResult | undefined;
-      if (this.shouldRunKeyboardTests()) {
-        keyboardResult = await this.keyboardTester.run(page, testName);
-      }
-
-      // Run screen reader simulation if enabled
       let screenReaderResult: ScreenReaderTestResult | undefined;
       if (this.shouldRunScreenReaderTests()) {
-        screenReaderResult = await this.runScreenReaderTests(page, testName);
+        screenReaderResult = await held(() => this.runScreenReaderTests(page, testName));
+      }
+
+      // Last: these press keys, and a key may leave the page on purpose (a dialog whose
+      // Escape handler navigates passes its check, #286; a custom sequence may press Enter
+      // on a link). Such a move is the check's own.
+      let keyboardResult: KeyboardTestResult | undefined;
+      if (this.shouldRunKeyboardTests()) {
+        const keysMayNavigate = this.config.keyboard.customSequences.length > 0;
+        try {
+          keyboardResult = await held(
+            () => this.keyboardTester.run(page, testName, scanned),
+            // A move the tester saw the page make by itself is no custom sequence's (#679).
+            () =>
+              this.keyboardTester.navigatedByKey ||
+              (keysMayNavigate && !this.keyboardTester.movedByItself),
+            // The Escape check loads the page again itself (#286): the scanned document is
+            // then gone by the tester's doing, and the page is held to the one it loaded (#675).
+            () => this.keyboardTester.reloadedInto,
+          );
+        } finally {
+          await this.keyboardTester.reloadedInto?.release();
+        }
       }
 
       return this.withVerdict({

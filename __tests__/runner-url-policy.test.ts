@@ -141,7 +141,33 @@ describe('runner URL policy', () => {
         return;
       }
       res.setHeader('Content-Type', 'text/html');
-      res.end('<html lang="en"><head><title>ok</title></head><body><h1>ok</h1></body></html>');
+      // Pages that move on by script once their own response has arrived (#662).
+      const moves: Record<string, string> = {
+        '/script-moves': '/landed?token=s3cret#access_token=s3cret2',
+        '/script-to-metadata': METADATA_URL,
+      };
+      const target = moves[req.url ?? ''];
+      const script = target ? `<script>location.replace('${target}')</script>` : '';
+      // Pages that move on by timer after their network went idle (#669), and large enough
+      // that axe is still scanning them then: measured at 2.9 s for a third of this size,
+      // against moves 1.5 s after the idle point.
+      const timed: Record<string, string> = {
+        '/replace-after-2s': `<script>setTimeout(() => location.replace('/landed?token=s3cret'), 2000)</script>`,
+        '/meta-refresh-2s': '<meta http-equiv="refresh" content="2;url=/landed?token=s3cret">',
+        // Loads itself again, once, under the same URL (#675).
+        '/reloads-after-2s': `<script>if (!sessionStorage.reloaded) { sessionStorage.reloaded = '1'; setTimeout(() => location.reload(), 2000); }</script>`,
+      };
+      const timedMove = timed[req.url ?? ''];
+      if (timedMove) {
+        const paragraphs = '<p>some text <a href="/landed">a link</a></p>'.repeat(3000);
+        res.end(
+          `<html lang="en"><head><title>ok</title>${timedMove}</head><body><main><h1>ok</h1>${paragraphs}</main></body></html>`,
+        );
+        return;
+      }
+      res.end(
+        `<html lang="en"><head><title>ok</title></head><body>${script}<h1>ok</h1></body></html>`,
+      );
     });
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
@@ -176,6 +202,45 @@ describe('runner URL policy', () => {
       expect(await a11yError(a11y, a11yConfig(`${origin}/to-metadata`))).toMatch(
         /redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
       );
+    });
+
+    // #662: the response the navigation ended on is the first page; the scan is of the second.
+    it('a11y reports the page a script moved on to as the one it scanned', async () => {
+      const result = await new a11y.AccessibilityRunner(a11yConfig(`${origin}/script-moves`)).run();
+      expect(result.results[0].error).toBeUndefined();
+      // The query string as the response's URL always had it; never the fragment.
+      expect(result.results[0].axeResult.url).toBe(`${origin}/landed?token=s3cret`);
+      expect(hits).toEqual(['/script-moves', '/landed?token=s3cret']);
+    });
+
+    it('a11y fails the scan of a page whose script moves on to the metadata host', async () => {
+      expect(await a11yError(a11y, a11yConfig(`${origin}/script-to-metadata`))).toMatch(
+        /script-to-metadata redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
+      );
+    });
+
+    // #669: the URL was read on the first page, and the scan was still running when it left.
+    it.each(['/replace-after-2s', '/meta-refresh-2s'])(
+      'a11y fails the scan of %s, which moves on while it is scanned, by name',
+      async (path) => {
+        const error = await a11yError(a11y, a11yConfig(`${origin}${path}`));
+        expect(error).toBe(
+          `The page navigated during the scan: it was at ${origin}${path} when the scan began ` +
+            'and moved to another page before its checks finished',
+        );
+        // The page had moved, so the error is not a guess about a scan that died otherwise.
+        expect(hits).toEqual([path, '/landed?token=s3cret']);
+      },
+    );
+
+    // #675: the same URL, so only the document can tell that the scan lost its page.
+    it('a11y fails the scan of a page that reloads while it is scanned, by name', async () => {
+      const error = await a11yError(a11y, a11yConfig(`${origin}/reloads-after-2s`));
+      expect(error).toBe(
+        `The page navigated during the scan: it was at ${origin}/reloads-after-2s when the scan ` +
+          'began and loaded again before its checks finished',
+      );
+      expect(hits).toEqual(['/reloads-after-2s', '/reloads-after-2s']);
     });
 
     it('visual refuses the metadata host', async () => {

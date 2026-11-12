@@ -245,10 +245,15 @@ describe('iris admin refusals', () => {
     });
     expect((await iris(['admin', 'delete-user', 'u-gone'], env)).code).toBe(1);
 
+    // #541: an audit entry past its 90 days goes with the pass.
+    await sql`insert into audit_log (org_id, action, created_at)
+      values ('org-d', 'plan.set', now() - interval '91 days'),
+             ('org-d', 'plan.set', now() - interval '89 days')`.execute(db);
     const r = await iris(['admin', 'retention'], env);
     expect(r.code).toBe(0);
     expect(JSON.parse(r.stdout)).toMatchObject({
       orgsPurged: [],
+      auditEntriesDeleted: 1,
       aiLedgerRows: 0,
       aiCacheRows: 0,
     });

@@ -414,7 +414,7 @@ docker compose logs --no-log-prefix iris | jq -c 'select(.requestId == "<id>")'
 | Line (`msg`)                | Fields                                                              |
 | --------------------------- | ------------------------------------------------------------------- |
 | `rpc request`               | `requestId`, `orgId`, `keyId`, `method`, `latencyMs`, `outcome`, `code`; `actions` (types only) and `success` for `executeBrowserAction` |
-| `rest request`              | `requestId` (also the `X-Request-Id` response header), `clientRequestId` (the client's own `X-Request-Id`, if it sent a plain one), `method` (`POST /v1/a11y/jobs`, `GET /v1/jobs/:id`), `status`, `latencyMs`, `outcome`, `orgId`, `keyId` |
+| `rest request`              | `requestId` (also the `X-Request-Id` response header), `clientRequestId` (the client's own `X-Request-Id`, if it sent a plain one), `method` (`POST /v1/a11y/jobs`, `GET /v1/jobs/:id`, `POST /v1/mcp`), `status`, `latencyMs`, `outcome`, `orgId`, `keyId` |
 | `connection refused`        | `reason` (`origin`, `invalid_key`, `connection_limit`, `org_connection_limit`, `auth_unavailable`), `status` |
 | `session started` / `ended` | `sessionId`, `orgId`, `keyId`; `reason` (`closed`, `replaced`, `timeout`, `revoked`, `disconnect`, `socket_error`, `shutdown`) |
 | `job claimed` / `job finished`, `job error`, `job lost` | `jobId`, `orgId`, `kind`, `attempts`, `latencyMs` |
@@ -709,7 +709,8 @@ subscription: cancel it in the dashboard first.
 
 Periods (owner decisions, 2026-10-03; the 7 years await counsel's confirmation, #450):
 deleted orgs are kept 30 days before purge; their billing records 7 years; finished runs
-90 days; expired sessions and tokens are purged daily; terms evidence is kept 7 years
+90 days; audit entries 90 days (decided 2026-11-08, #541; the entry for an API key's
+creation stays while the key exists, since it is how a departing member's keys are found); expired sessions and tokens are purged daily; terms evidence is kept 7 years
 after the user is deleted. `docs/data-flows.md` has the per-store detail.
 
 ### Delete or restore an org, delete a user
@@ -750,13 +751,41 @@ systemctl start iris-retention.service && journalctl -t iris-retention -n 5
 ```
 
 It runs at 04:30 UTC, after the backup, so a purge never precedes that day's backup.
-Each container's report is a journal line (`orgsPurged`, `runsDeleted`, …). A missing
+Each container's report is a journal line (`orgsPurged`, `runsDeleted`,
+`auditEntriesDeleted`, …). A missing
 container or a failed run alerts through `/etc/iris/alert-hook retention-<service> …`
 and fails the unit; the next day's run picks up whatever was left. Settings
 (`RETENTION_COMPOSE_PROJECT`, `RETENTION_SERVICES`) go in `/etc/iris/retention.env`.
 
 A purged org's data stays in backups until they age out (14 days on the host; the
 off-box copy follows its remote's policy, #445).
+
+## When the dependency audit fails (issue #363)
+
+The last step of CI's `build` job is `npm audit --omit=dev --audit-level=high`. It fails
+the build, and so holds back both deploys, when a production dependency of the root
+package or of the portal has a known high or critical advisory. It can start failing on
+an unchanged `main`: the advisory is new, the code is not. The log names the package, the
+advisory and the path to it.
+
+1. **"audit endpoint returned an error"** is the registry not answering, not a finding.
+   Re-run the job.
+2. **A fixed release exists inside the declared range**: `npm audit fix --omit=dev`
+   (never `--force`), commit `package-lock.json`, open a PR. Dependabot usually opens the
+   same PR on its own (the `security-updates` group).
+3. **A fixed release exists, but a package in between pins the vulnerable one**: add the
+   fixed version under `overrides` in the root `package.json`, run `npm install`, and say
+   in the PR which package holds it back, so the override can be removed later.
+4. **No fixed release exists**: read the advisory against how IRIS uses the package, then
+   replace or drop the dependency, or wait for the fix. Deploys stay held meanwhile; that
+   is the gate working. Do not raise `--audit-level` to `critical`, add `|| true` or
+   mark the step `continue-on-error` (a test fails on each): an exception to the gate is
+   the owner's decision, made in a PR that says which advisory and until when.
+
+Advisories in development dependencies do not fail the build. They show under the
+repository's Dependabot alerts, and Dependabot's security updates fix them. For some,
+`npm audit` proposes a major downgrade of the test tooling as the "fix": ignore that and
+wait for the upstream release.
 
 ## Troubleshooting
 

@@ -14,6 +14,7 @@ import { Client } from 'pg';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
 import { InvalidCursorError, postgresHistory, RunInput } from '../../src/history-store';
+import type { Action } from '../../src/actions';
 import type { VisualTestResult } from '../../src/visual/visual-runner';
 import type { AccessibilityTestResult } from '../../src/a11y/a11y-runner';
 
@@ -78,7 +79,12 @@ const a11yRun = {
     results: [
       {
         page: '/checkout',
-        axeResult: { violations: [{ impact: 'critical' }, { impact: 'minor' }] },
+        axeResult: {
+          violations: [
+            { id: 'image-alt', impact: 'critical', nodes: [{}] },
+            { id: 'region', impact: 'minor', nodes: [{}, {}, {}] },
+          ],
+        },
         keyboardResult: { passed: true },
         // The runner's verdict (#288): what the stores record.
         passed: false,
@@ -188,6 +194,11 @@ const a11yRun = {
         passed: false,
         result: {
           violations: { critical: 1, serious: 0, moderate: 0, minor: 1 },
+          // Which rules, in axe's vocabulary (#314): never a selector or page text.
+          violationRules: [
+            { id: 'image-alt', impact: 'critical', nodes: 1 },
+            { id: 'region', impact: 'minor', nodes: 3 },
+          ],
           keyboardPassed: true,
           needsReview: 0,
           screenReaderPassed: true,
@@ -195,6 +206,57 @@ const a11yRun = {
         },
       },
     ]);
+  });
+
+  describe('where an a11y scan landed (#648)', () => {
+    /** The a11y run above, with its one page requested as `page` and scanned at `scanned`. */
+    const landedOf = async (page: string, scanned: string, error?: string) => {
+      const run = structuredClone(a11yRun);
+      Object.assign(run.result.results[0], { page, ...(error !== undefined && { error }) });
+      Object.assign(run.result.results[0].axeResult, { url: scanned });
+      const store = history().forOrg(A);
+      const stored = await store.get(await store.record(run));
+      return stored!.results[0];
+    };
+
+    it('records the landing page of a redirect: origin and path, long segments cut', async () => {
+      const token = 'a'.repeat(40);
+      const stored = await landedOf(
+        'https://shop.example/account?next=1',
+        `https://login.example/reset/${token}/confirm?token=s3cret#frag`,
+      );
+      // The request stays what the row is listed under; the landing page sits beside it.
+      expect(stored.url).toBe('https://shop.example/account?next=1');
+      expect(stored.result.landedUrl).toBe('https://login.example/reset/…/confirm');
+      expect(JSON.stringify(stored)).not.toContain('s3cret');
+      expect(JSON.stringify(stored)).not.toContain(token);
+    });
+
+    it('records nothing when the scan stayed on the requested page', async () => {
+      // The runner reports the document's URL without its fragment.
+      const stored = await landedOf('https://shop.example/#/cart', 'https://shop.example/');
+      expect(stored.result).not.toHaveProperty('landedUrl');
+    });
+
+    it('records nothing for a move within the page: a fragment is never reported (#662)', async () => {
+      // A fragment is where tokens travel too, so it is neither compared nor stored.
+      const stored = await landedOf('https://shop.example/', 'https://shop.example/#/login');
+      expect(stored.result).not.toHaveProperty('landedUrl');
+    });
+
+    it('records nothing for a page that could not be scanned', async () => {
+      const stored = await landedOf(
+        'https://shop.example/a',
+        'https://other.example/b',
+        'net::ERR_FAILED',
+      );
+      expect(stored.result).not.toHaveProperty('landedUrl');
+    });
+
+    it('records nothing for a relative page pattern: its base URL is not known here', async () => {
+      const stored = await landedOf('/checkout', 'http://localhost:3000/login');
+      expect(stored.result).not.toHaveProperty('landedUrl');
+    });
   });
 
   it('lists only the caller org runs, newest first, and cannot read across orgs', async () => {
@@ -263,6 +325,43 @@ const a11yRun = {
     const stored = (await history().forOrg(A).get(id))!.results[0].result.error as string;
     expect([...stored]).toHaveLength(500);
     expect(stored.endsWith('😀')).toBe(true);
+  });
+
+  // #658: the patterns see a bounded start of the text, and a URL the bound lands in goes
+  // whole, so the part of its password before the cut is not stored as ordinary text.
+  it('strips a megabyte of error from its first 16,384 characters only', async () => {
+    const url = `https://${['tester', 'not a-secret'].join(':')}@site.example/x`;
+    const record = (error: string, action: Action) =>
+      history()
+        .forOrg(A)
+        .record({
+          kind: 'rpc',
+          success: false,
+          startedAt: started,
+          finishedAt: finished,
+          results: [{ success: false, action, error }],
+        });
+    const stored = async (id: string) =>
+      (await history().forOrg(A).get(id))!.results[0].result.error as string;
+
+    const long = await record(`ftp://${USERINFO}@h/ ${'a'.repeat(1_000_000)}`, {
+      type: 'click',
+      selector: '#a',
+    });
+    expect(await stored(long)).toBe(`ftp://h/ ${'a'.repeat(491)}`);
+
+    // Colour codes fill the text almost to the bound, so the cut lands inside the password.
+    const colour = (count: number) => '\x1b[2m'.repeat(count);
+    const cutInQuoted = await record(`${colour(4090)}to ${url} ${'b'.repeat(1_000_000)}`, {
+      type: 'navigate',
+      url,
+    });
+    expect(await stored(cutInQuoted)).toBe('to ');
+    const cutInAuthority = await record(`${colour(4091)}see ftp://${USERINFO}@h/`, {
+      type: 'click',
+      selector: '#a',
+    });
+    expect(await stored(cutInAuthority)).toBe('see ftp');
   });
 
   it('records a run whose strings hold a lone surrogate instead of losing it', async () => {
@@ -357,6 +456,37 @@ const a11yRun = {
     expect(run!.results[0].result.error).toBe(
       'Navigation to https://site.example/x refused; see ftp://h/',
     );
+  });
+
+  // #645: a parser takes the last @ as the separator and accepts a space in a password.
+  it.each([
+    ['an @', ['tester', 'half@not-a-secret'].join(':')],
+    ['a space', ['tester', 'not a-secret'].join(':')],
+  ])('strips a password that holds %s from a navigation and its error', async (_what, userinfo) => {
+    const url = `https://${userinfo}@site.example/x?to=a@b.example`;
+    const id = await history()
+      .forOrg(A)
+      .record({
+        kind: 'rpc',
+        success: false,
+        startedAt: started,
+        finishedAt: finished,
+        results: [
+          {
+            success: false,
+            action: { type: 'navigate', url },
+            error: `Navigation to ${url} refused`,
+          },
+        ],
+      });
+    const run = await history().forOrg(A).get(id);
+    expect(run!.results[0]).toMatchObject({
+      url: 'https://site.example/x?to=a@b.example',
+      result: {
+        action: 'navigate https://site.example/x?to=a@b.example',
+        error: 'Navigation to https://site.example/x?to=a@b.example refused',
+      },
+    });
   });
 
   // #420: Playwright colours its call log; stored text is read in the portal and the API.

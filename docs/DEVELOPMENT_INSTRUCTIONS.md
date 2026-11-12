@@ -607,7 +607,7 @@ visual and accessibility options are CLI flags:
 
 ```json
 {
-  "ai": { "provider": "openai", "model": "gpt-4o-mini" },
+  "ai": { "provider": "openai", "model": "gpt-6-luna" },
   "watch": { "patterns": ["**/*.{ts,tsx,js,jsx}"], "debounceMs": 1000 },
   "budget": { "dailyLimit": 10, "monthlyLimit": 200 }
 }

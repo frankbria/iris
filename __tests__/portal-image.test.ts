@@ -14,6 +14,7 @@
 
 import { execFileSync, spawnSync } from 'child_process';
 import { randomBytes } from 'crypto';
+import { once } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -22,6 +23,7 @@ import { Client } from 'pg';
 import { migrateToLatest } from '../src/db/migrate';
 import { createPostgresDb } from '../src/db/postgres';
 import { ACCEPTED_TERMS } from '../src/legal/versions';
+import { closedPort, containerExit, onFreePorts, PortTaken } from './utils/ports';
 
 const IMAGE = process.env.IRIS_TEST_PORTAL_IMAGE;
 if (!IMAGE) {
@@ -41,15 +43,6 @@ async function admin(query: string): Promise<void> {
   } finally {
     await client.end();
   }
-}
-
-/** A port nothing listens on, on the given loopback. */
-async function freePort(host: string): Promise<number> {
-  const s = net.createServer();
-  await new Promise<void>((resolve) => s.listen(0, host, resolve));
-  const { port } = s.address() as net.AddressInfo;
-  await new Promise((resolve) => s.close(resolve));
-  return port;
 }
 
 (IMAGE ? describe : describe.skip)('portal image', () => {
@@ -100,7 +93,7 @@ async function freePort(host: string): Promise<number> {
   });
 
   afterAll(async () => {
-    spawnSync('docker', ['rm', '-f', name, `${name}-bad`]);
+    spawnSync('docker', ['rm', '-f', name, `${name}-bad`, `${name}-taken`]);
     fs.rmSync(dir, { recursive: true, force: true });
     await admin(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
   });
@@ -113,21 +106,27 @@ async function freePort(host: string): Promise<number> {
   });
 
   it('SMTP check: fails with exit 1 against a closed port', async () => {
-    secret('smtp_closed', `smtp://[::1]:${await freePort('::1')}`);
+    secret('smtp_closed', `smtp://[::1]:${await closedPort('::1')}`);
     const r = run({ SMTP_URL_FILE: '/run/secrets/smtp_closed' }, ...verify);
     expect(r.stderr).toMatch(/smtp: .*ECONNREFUSED/);
     expect(r.status).toBe(1);
   });
 
-  /** Starts the server as production runs it; resolves once /login answers 200. */
-  async function serve(container: string, masterKeyFile: string): Promise<string> {
-    const port = await freePort('127.0.0.1');
+  /**
+   * Starts the server as production runs it on `port`; resolves with its origin once
+   * /login answers 200. Next takes its port from PORT and cannot report one it chose, so
+   * the port is probed and can be taken before the server binds it (#666): the container
+   * then exits with EADDRINUSE, which is `PortTaken` here. Whoever took the port may
+   * accept a connection and never answer, so the container's exit cuts the poll.
+   */
+  async function serveOn(container: string, masterKeyFile: string, port: number): Promise<string> {
     const base = `http://127.0.0.1:${port}`;
     secret('smtp_url', SMTP_URL);
     secret('auth_secret', 'x'.repeat(64));
     secret('database_url', databaseUrl);
     secret('master_key', `k1:${randomBytes(32).toString('base64')}`);
     secret('master_key_bad', 'not-a-key');
+    spawnSync('docker', ['rm', '-f', container]);
     execFileSync('docker', [
       'run',
       '-d',
@@ -160,17 +159,45 @@ async function freePort(host: string): Promise<number> {
       `IRIS_KEY_ENCRYPTION_KEY_FILE=/run/secrets/${masterKeyFile}`,
       IMAGE!,
     ]);
-    let login = 0;
-    for (let i = 0; i < 60 && login !== 200; i++) {
-      login = await fetch(`${base}/login`).then(
-        (r) => r.status,
-        () => 0,
-      );
-      if (login !== 200) await new Promise((resolve) => setTimeout(resolve, 500));
+    const exit = containerExit(container);
+    try {
+      let login = 0;
+      for (let i = 0; i < 60 && login !== 200; i++) {
+        login = await fetch(`${base}/login`, { signal: exit.signal }).then(
+          (r) => r.status,
+          () => 0,
+        );
+        if (exit.signal.aborted) {
+          const said = exit.output();
+          if (said.includes('EADDRINUSE')) throw new PortTaken(said);
+          throw new Error(`the portal container exited:\n${said}`);
+        }
+        if (login !== 200) await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      expect(login).toBe(200);
+      return base;
+    } finally {
+      exit.stop();
     }
-    expect(login).toBe(200);
-    return base;
   }
+
+  const serve = (container: string, masterKeyFile: string) =>
+    onFreePorts(1, '127.0.0.1', ([port]) => serveOn(container, masterKeyFile, port));
+
+  it('recognises a port something else took, even one that accepts and stays silent (#666)', async () => {
+    const accepted: net.Socket[] = [];
+    const holder = net.createServer((socket) => accepted.push(socket)).listen(0, '127.0.0.1');
+    await once(holder, 'listening');
+    const { port } = holder.address() as net.AddressInfo;
+    try {
+      await expect(serveOn(`${name}-taken`, 'master_key', port)).rejects.toThrow(PortTaken);
+      // The poll reached the holder: without the exit watch it would still wait.
+      expect(accepted.length).toBeGreaterThan(0);
+    } finally {
+      for (const socket of accepted) socket.destroy();
+      await new Promise((resolve) => holder.close(resolve));
+    }
+  }, 60_000);
 
   it('is ready (/api/health), and signs up through the secret files (database, auth, SMTP)', async () => {
     const base = await serve(name, 'master_key');

@@ -21,7 +21,11 @@ import { getAuth, getDb } from "@/lib/auth"
  * Cached per request (React `cache`): a layout can run it as an auth gate before a
  * streaming boundary (so a redirect is a real 307, not a 200 with a meta refresh, #270)
  * and the page below reuses the answer instead of asking BetterAuth again.
-
+ *
+ * The session can end between two of the reads (#685): a concurrent request signed it
+ * out (a second tab, a `<Link>` prefetch that found the user in no org), or it was
+ * revoked. Every read after `getSession` then throws BetterAuth's bare UNAUTHORIZED,
+ * which is "not signed in" like a missing session: log in, not the error page.
  *
  * `org.members` is `getFullOrganization`'s first 100 only: `/org` pages members itself
  * (#409), so read the list from there, never from here.
@@ -29,6 +33,28 @@ import { getAuth, getDb } from "@/lib/auth"
 export const requireOrg = cache(async function requireOrg() {
   // headers() first: it makes the page dynamic before getAuth() needs its secrets.
   const requestHeaders = await headers()
+  return sessionOrg(requestHeaders).catch(logInIfSignedOut)
+})
+
+/**
+ * For a BetterAuth read made with the session's headers after `getSession` answered: a
+ * session that ended meanwhile is sent to log in, any other failure is thrown on (#685).
+ * A page that reads from BetterAuth after `requireOrg()` puts it in that read's `catch`.
+ *
+ * Told by the code of BetterAuth's session middleware, not the 401 alone: a plugin's
+ * own refusals (a banned user, a key that is not the caller's) are 401s with other codes.
+ */
+export function logInIfSignedOut(error: unknown): never {
+  if (isAPIError(error) && error.body?.code === "UNAUTHORIZED") {
+    // BetterAuth answers the same way when its session lookup itself failed (a database
+    // error becomes "no session"), so leave a trace of every one.
+    console.warn("[portal] session ended during the request: sent to log in")
+    redirect("/login")
+  }
+  throw error
+}
+
+async function sessionOrg(requestHeaders: Headers) {
   const auth = getAuth()
   const session = await auth.api.getSession({ headers: requestHeaders })
   if (!session) redirect("/login")
@@ -71,7 +97,7 @@ export const requireOrg = cache(async function requireOrg() {
   // An operator suspension (#348): pages show a banner, key writes are refused.
   const suspended = await orgIsSuspended(org.id)
   return { session, org, orgs, role, suspended }
-})
+}
 
 /** Whether an operator has suspended the org (#348). One indexed query. */
 /** Owner or admin: BetterAuth keeps several roles as one comma string (`admin,owner`). */
