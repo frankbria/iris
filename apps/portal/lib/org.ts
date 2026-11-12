@@ -45,8 +45,12 @@ export const requireOrg = cache(async function requireOrg() {
  * own refusals (a banned user, a key that is not the caller's) are 401s with other codes.
  */
 export function logInIfSignedOut(error: unknown): never {
-  if (isAPIError(error) && error.body?.code === "UNAUTHORIZED")
+  if (isAPIError(error) && error.body?.code === "UNAUTHORIZED") {
+    // BetterAuth answers the same way when its session lookup itself failed (a database
+    // error becomes "no session"), so leave a trace of every one.
+    console.warn("[portal] session ended during the request: sent to log in")
     redirect("/login")
+  }
   throw error
 }
 

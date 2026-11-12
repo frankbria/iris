@@ -1,14 +1,14 @@
 ---
 paths:
-  - "apps/portal/**"
-  - "src/auth/**"
-  - "src/legal/**"
-  - "src/byok/**"
-  - "src/org-suspension.ts"
-  - "src/member-keys.ts"
-  - "src/api-key-auth.ts"
-  - "package.json"
-  - "__tests__/{auth-,byok,admin-cli}*"
+  - 'apps/portal/**'
+  - 'src/auth/**'
+  - 'src/legal/**'
+  - 'src/byok/**'
+  - 'src/org-suspension.ts'
+  - 'src/member-keys.ts'
+  - 'src/api-key-auth.ts'
+  - 'package.json'
+  - '__tests__/{auth-,byok,admin-cli}*'
 ---
 
 ### Workspaces and the Portal (issue #247)
@@ -62,10 +62,10 @@ Sign-up, verification, login and password reset run through BetterAuth in
   - Sessions are revoked on reset.
   - Rate limits are on in every environment (BetterAuth's defaults turn them on only in
     production).
-  - `sendEmail` is required. Secure/httpOnly/SameSite=Lax cookies are BetterAuth's defaults *given* an
-  https `baseURL`. The policy pins `advanced.ipAddress.ipAddressHeaders` only (#347),
-  merged two levels deep: spreading a whole `advanced` would replace a caller's
-  (e.g. `trustedProxies`, cookie options).
+  - `sendEmail` is required. Secure/httpOnly/SameSite=Lax cookies are BetterAuth's defaults _given_ an
+    https `baseURL`. The policy pins `advanced.ipAddress.ipAddressHeaders` only (#347),
+    merged two levels deep: spreading a whole `advanced` would replace a caller's
+    (e.g. `trustedProxies`, cookie options).
 - **The portal imports `../../../src/...` directly.** Turbopack finds the workspace
   root from the root lockfile, and `pg` is on Next's default server-external list. No
   `transpilePackages` or workspace package is needed.
@@ -218,7 +218,9 @@ The org is the tenant (ADR 0001 §4). The organization plugin's options live in
   (`lib/org.ts`): that one code redirects to `/login`, everything else is thrown on (a
   plugin's own 401s, such as `USER_BANNED`, carry other codes). A new page that calls
   `auth.api.*` after `requireOrg()` adds `.catch(logInIfSignedOut)`. Server actions do
-  not: they read the session themselves and answer with a message.
+  not: they read the session themselves and answer with a message. BetterAuth also turns
+  a failed session lookup (a database error) into "no session", so the helper logs a
+  `[portal] session ended during the request` warning for each redirect it makes.
 - **A refused org read clears the session's active org** (BetterAuth,
   `crud-org.mjs`). A request that names another tenant's org id therefore leaves the
   session with none, and `requireOrg()` moves it back to an org the user belongs to.

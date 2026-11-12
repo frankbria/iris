@@ -48,8 +48,9 @@ jest.mock("../lib/auth", () => ({
   getAuth: () => ({ api }),
   getDb: () => ({}),
 }))
+const hasAcceptedCurrent = jest.fn()
 jest.mock("../../../src/legal/acceptance", () => ({
-  hasAcceptedCurrent: async () => true,
+  hasAcceptedCurrent: () => hasAcceptedCurrent(),
 }))
 jest.mock("../../../src/org-suspension", () => ({
   orgSuspensions: () => ({ isSuspended: async () => false }),
@@ -63,6 +64,8 @@ const org = { id: "o1", name: "Nora's organization" }
 
 beforeEach(() => {
   jest.resetAllMocks()
+  jest.spyOn(console, "warn").mockImplementation(() => {})
+  hasAcceptedCurrent.mockResolvedValue(true)
   api.getSession.mockResolvedValue(session)
   api.listOrganizations.mockResolvedValue([org])
   api.getFullOrganization.mockResolvedValue(org)
@@ -86,6 +89,12 @@ test("a user left in no org is signed out and sent to log in", async () => {
   expect(api.signOut).toHaveBeenCalledTimes(1)
 })
 
+test("a redirect made on the way is not rewritten: new terms go to accept them", async () => {
+  hasAcceptedCurrent.mockResolvedValue(false)
+  await expect(requireOrg()).rejects.toEqual(new Redirected("/accept-terms"))
+  expect(console.warn).not.toHaveBeenCalled()
+})
+
 // #685: another request (a second tab, a link prefetch) ended the session after this
 // one had read it. Each later read then throws BetterAuth's bare "Unauthorized".
 test.each([
@@ -100,6 +109,9 @@ test.each([
       api.getFullOrganization.mockResolvedValue(null)
     api[call].mockRejectedValue(sessionGone())
     await expect(requireOrg()).rejects.toEqual(new Redirected("/login"))
+    expect(console.warn).toHaveBeenCalledWith(
+      "[portal] session ended during the request: sent to log in"
+    )
   }
 )
 
