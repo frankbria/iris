@@ -112,6 +112,21 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
     is unchanged. The first version of #675 failed every such page as "loaded again"
     (default `iris a11y` and every hosted a11y job): a fixture with a dialog that stays
     and both checks on is the test that was missing.
+  - **The return to the start page does not cover a move the page made itself** (#679): the
+    Escape check goes back only when a dialog was examined or a key left the page, and it
+    used to go back whatever had happened to the page. A page that moved by itself during
+    the Tab walk to a page with a dialog (or one with a dialog that loaded again, or whose
+    router pushed a path) was put back under the start URL, the runner saw no move, and
+    the second page's focus order and trap result were reported under the first (shown in
+    Chromium on main). `KeyboardTester.run` now holds the document it started on and, when
+    no key of its own left the page, asks `documentSince` before going back: anything but
+    `same` sets `movedByItself` and throws without going back, so the runner's hold names
+    the move. The runner does not take that move for a custom sequence's either
+    (`keysMayNavigate && !movedByItself`; the sequences run after the Escape check). A
+    query string or fragment the page rewrote is still `same`, and the tester goes back.
+    The tests move the page from a zero-delay timer once the Tab walk has reached a link
+    (150 links), so the move lands in the walk on any machine; on main the two navigating
+    cases pass when the walk happens to die on the commit, the router case never does.
   - `holdDocument` tries once more when a navigation commits as it takes the handle; a
     move away from the URL read is then seen by the URL.
   - **A handler that navigates after a delay is the page's move, by decision** (#675):

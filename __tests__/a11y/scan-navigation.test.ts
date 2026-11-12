@@ -117,6 +117,19 @@ const PAGES: Record<string, string> = {
       ),
     ]),
   ),
+  // Enough links that the Tab walk is still under way when a test moves the page (#679).
+  '/many-links': page('', '').replace(
+    '<h1>first</h1>',
+    `<h1>first</h1>${'<a href="/second">a link</a> '.repeat(150)}`,
+  ),
+  '/many-links-and-a-dialog': page('', '').replace(
+    '<h1>first</h1>',
+    `<h1>first</h1>${'<a href="/second">a link</a> '.repeat(150)}` +
+      '<div role="dialog" aria-label="Notice"><button>OK</button></div>',
+  ),
+  '/second-with-a-dialog':
+    '<html lang="en"><head><title>second</title></head><body><h1>second</h1>' +
+    '<div role="dialog" aria-label="Notice"><button>OK</button></div></body></html>',
   // Large enough that axe is still scanning it two seconds after its response: measured at
   // 2.9 s for a third of this size, and the move comes 1.5 s after the network went idle.
   '/large-and-replaces-after-1s': page(
@@ -349,6 +362,68 @@ describe('onScannedDocument', () => {
       );
 
       await expect(outcome).rejects.toThrow('moved to another page before its checks finished');
+    });
+
+    describe('whose Escape check goes back to the start page (#679)', () => {
+      /** What a page's own timer would do, once the Tab walk has reached its links. */
+      const duringTheTabWalk = async (script: string): Promise<void> => {
+        await tab.waitForFunction("document.activeElement?.tagName === 'A'");
+        await tab.evaluate(`setTimeout(() => { ${script} }, 0)`);
+      };
+
+      const heldKeyboardChecks = (held: HeldDocument, tester: KeyboardTester) =>
+        onScannedDocument(
+          tab,
+          held,
+          () => tester.run(tab, 'test'),
+          () => tester.navigatedByKey,
+          () => tester.reloadedInto,
+        );
+
+      it('fail a page that moved by itself to a page with a dialog', async () => {
+        const held = await scanned('/many-links');
+        const tester = keyboard(both);
+
+        const outcome = heldKeyboardChecks(held, tester);
+        outcome.catch(() => undefined);
+        await duringTheTabWalk("location.replace('/second-with-a-dialog')");
+
+        await expect(outcome).rejects.toThrow('moved to another page before its checks finished');
+        expect(tester.navigatedByKey).toBe(false);
+      });
+
+      it('fail a page with a dialog that loaded itself again', async () => {
+        const held = await scanned('/many-links-and-a-dialog');
+        const tester = keyboard(both);
+
+        const outcome = heldKeyboardChecks(held, tester);
+        outcome.catch(() => undefined);
+        await duringTheTabWalk('location.reload()');
+
+        await expect(outcome).rejects.toThrow('loaded again before its checks finished');
+      });
+
+      it('fail a page with a dialog whose router pushed another path', async () => {
+        const held = await scanned('/many-links-and-a-dialog');
+        const tester = keyboard(both);
+
+        const outcome = heldKeyboardChecks(held, tester);
+        outcome.catch(() => undefined);
+        await duringTheTabWalk("history.pushState(null, '', '/route')");
+
+        await expect(outcome).rejects.toThrow('moved to another page before its checks finished');
+      });
+
+      it('still go back when the page only rewrote its query string', async () => {
+        const held = await scanned('/many-links-and-a-dialog');
+        const tester = keyboard(both);
+
+        const outcome = heldKeyboardChecks(held, tester);
+        await duringTheTabWalk("history.replaceState(null, '', '?tab=2')");
+
+        expect((await outcome).trapTests).toHaveLength(1);
+        expect(tab.url()).toBe(`${origin}/many-links-and-a-dialog`);
+      });
     });
 
     it('pass over a page their own Escape press loaded again (#675)', async () => {

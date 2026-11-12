@@ -589,6 +589,29 @@ describe('AccessibilityRunner', () => {
         expect(result.results[0].error).toBeUndefined();
       });
 
+      // The tester stops before its Escape check goes back to the start page (#679).
+      it('fails a page the tester saw move by itself, though custom key sequences are set', async () => {
+        mockKeyboardTester.run.mockImplementation(
+          movingTo(second, () => {
+            mockKeyboardTester.movedByItself = true;
+            return Promise.reject(
+              new Error(
+                'Keyboard testing failed: The page moved on by itself before the Escape check',
+              ),
+            );
+          }),
+        );
+
+        const result = await scanOf({
+          customSequences: [{ name: 'open', keys: ['Enter'], expectedBehavior: 'opens' }],
+        });
+
+        expect(result.results[0].error).toBe(
+          `The page navigated during the scan: it was at ${first} when the scan began and ` +
+            'moved to another page before its checks finished',
+        );
+      });
+
       it('fails a page that moved on by itself during the keyboard checks', async () => {
         const walked = await mockKeyboardTester.run(mockPage, 'test');
         mockKeyboardTester.run.mockImplementation(movingTo(second, () => Promise.resolve(walked)));
