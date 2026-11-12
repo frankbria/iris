@@ -191,6 +191,8 @@ async function admin(query: string): Promise<void> {
     const { port } = holder.address() as net.AddressInfo;
     try {
       await expect(serveOn(`${name}-taken`, 'master_key', port)).rejects.toThrow(PortTaken);
+      // The poll reached the holder: without the exit watch it would still wait.
+      expect(accepted.length).toBeGreaterThan(0);
     } finally {
       for (const socket of accepted) socket.destroy();
       await new Promise((resolve) => holder.close(resolve));

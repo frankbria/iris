@@ -36,8 +36,9 @@ async function freePorts(count: number, host: string): Promise<number[]> {
 
 /**
  * Runs `start` with `count` ports nothing listened on a moment ago. `start` throws
- * `PortTaken` when its process reports one was taken in the meantime (and has cleaned up
- * after that process); it is then run again with fresh ports, five times at most.
+ * `PortTaken` when its process reports one was taken in the meantime; it is then run again
+ * with fresh ports, five times at most, so it must be able to start over (remove the
+ * exited container of the attempt before).
  */
 export async function onFreePorts<T>(
   count: number,
@@ -54,8 +55,8 @@ export async function onFreePorts<T>(
 }
 
 /**
- * A port on `host` that refuses connections. For a test of a refused connection only:
- * never start a listener on it (that is `onFreePorts`).
+ * A port on `host` nothing listens on. For a test of a refused connection, or a port a
+ * process is expected not to reach: never one a process must come up on (`onFreePorts`).
  */
 export async function closedPort(host: string): Promise<number> {
   return (await freePorts(1, host))[0];

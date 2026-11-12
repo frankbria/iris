@@ -43,8 +43,9 @@ Jest runs suites in parallel and many of them listen on port 0, so a port that w
 when a test probed it can be bound by another worker before the test's child process
 listens. CI failed that way once: `Cannot listen on 127.0.0.1:41865: address already in
 use` in `api-key-auth.test.ts`, green on a re-run. It is not #142: no deadline is involved,
-and the error names the port. `__tests__/utils/ports.ts` is the only place a port is probed
-(`ports.test.ts` fails on a `freePort` anywhere else):
+and the error names the port. Ports are probed in `__tests__/utils/ports.ts` only.
+`ports.test.ts` fails on a `free…Port` helper defined anywhere else under `__tests__`; it
+matches the name, so an inline listen-close-reuse is still yours to not write:
 
 - **`iris connect` is spawned on port 0** and the port read from its `listening` line with
   `connectPort(output)` (#364 made the line print the bound port). A spawn that must exit
@@ -61,6 +62,8 @@ and the error names the port. `__tests__/utils/ports.ts` is the only place a por
   promise otherwise). Each of the three suites has a test that holds a port with a silent
   listener and expects `PortTaken`; a stand-in listener must destroy the sockets it
   accepted, or its own `close()` never calls back.
-- **`closedPort(host)`** is for a test of a refused connection only. Never start a listener
-  on it.
+- **`closedPort(host)`** is for a refused connection, or a port a process is expected not
+  to reach. Never one a process must come up on.
+- **Read a child's output after `'close'`, not `'exit'`**, when the output decides
+  something (here: retry or fail). At `'exit'` its last lines may still be in the pipe.
 - Not a fix: a longer wait or fewer workers (CLAUDE.md, #142).

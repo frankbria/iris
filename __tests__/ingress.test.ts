@@ -21,7 +21,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as tls from 'tls';
 import WebSocket, { WebSocketServer } from 'ws';
-import { containerExit, onFreePorts, PortTaken } from './utils/ports';
+import { closedPort, containerExit, onFreePorts, PortTaken } from './utils/ports';
 
 const IMAGE = 'nginx:1.29-alpine';
 const HOST = 'iris.example.com';
@@ -203,10 +203,11 @@ interface Reply {
   });
 
   it('recognises a listen port something else took, even one that accepts and stays silent (#666)', async () => {
-    const [free, held] = await onFreePorts(2, '::', async (ports) => ports);
     const accepted: net.Socket[] = [];
-    const holder = net.createServer((socket) => accepted.push(socket)).listen(held, '::');
+    const holder = net.createServer((socket) => accepted.push(socket)).listen(0, '::');
     await once(holder, 'listening');
+    const { port: held } = holder.address() as net.AddressInfo;
+    const free = await closedPort('::');
     try {
       await expect(startNginx(`${name}-taken`, [free, held])).rejects.toThrow(PortTaken);
       // The poll reached the holder, not nginx: without the exit watch it would still wait.

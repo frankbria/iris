@@ -311,7 +311,9 @@ describe('--metrics-port', () => {
     let out = '';
     proc.stdout!.on('data', (d) => (out += d));
     proc.stderr!.on('data', (d) => (out += d));
-    const exit = new Promise<number | null>((r) => proc.on('exit', r));
+    // 'close', not 'exit': the output is read once this resolves, and at 'exit' the last
+    // lines may still be in the pipe.
+    const exit = new Promise<number | null>((r) => proc.on('close', r));
     return { proc, exit, out: () => out };
   }
 
