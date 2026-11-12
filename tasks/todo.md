@@ -1,42 +1,18 @@
-# #668 [P3.42] URL guard: record only main-frame refusals, so a refused move's reason cannot be a frame's
+# #669 [P3.43] a11y: a page that moves on after the network went idle
 
 ## Plan (self-authored; no plan on the issue)
 
-The page's CDP Fetch handler (`installFetchGuard`, src/url-policy-guard.ts) records
-`state.refusal` for every refused request of resource type `Document`, a subframe's included.
-`guardedGoto` and `guardedDocumentUrl` quote that record as the reason a navigation failed.
-
-1. Tests first.
-   - `__tests__/url-policy-guard-refusal.test.ts` (new, runs on this host): the guard on a
-     stand-in CDP session. A refused frame document followed by a navigation that fails for
-     another reason: `guardedGoto` rethrows the navigation's own error and
-     `guardedDocumentUrl` gives the generic reason. A refused main-frame document: both still
-     name it. The frame's request is failed either way.
-   - `__tests__/url-policy-guard.test.ts` (real Chromium, CI only on this host): a page with
-     a refused iframe whose script moves the top frame to an address that fails for another
-     reason gets the generic reason. It is what shows that Chromium's frame ids are what the
-     stand-in assumes.
-2. `installFetchGuard` reads the page's target id (`Target.getTargetInfo`) before
-   `Fetch.enable` and records a refusal only when `event.frameId` is that id (a top-level
-   frame's id is its target id, which the browser net already relies on). `joinBrowserNet`
-   takes the id instead of asking again.
-3. The mocked CDP sessions of `executor.test.ts`, `a11y-runner.test.ts` and
-   `visual-runner.test.ts` answer `Target.getTargetInfo` (the guard now asks every page, not
-   only one with a browser).
-4. Docs: drop the `shortcut:` note on `guardedDocumentUrl`; `.claude/rules/browser-safety.md`;
-   `plans/README.md` (P3.42 done, P3.43 row for #669); `tasks/lessons.md` (two lines
-   iteration 17 asked for).
-
-## Decisions (no architectural fork)
-
-- Recorded for the main frame only (the issue's first option), not cleared on commit: a
-  refusal cleared on commit would also need a `Page.frameNavigated` subscription.
-- The target id is read on every guarded page, persistent contexts included (the browser net
-  is skipped there, the page session is not).
+1. `src/a11y/scan-navigation.ts`: `onScannedDocument(page, scannedUrl, check)` turns a check's
+   result or error into `NavigatedDuringScanError` when the page's scheme, host or path changed.
+2. `src/a11y/a11y-runner.ts`: hold the axe scan and the screen-reader checks; run the keyboard
+   checks last, not held (their key presses may navigate on purpose, #286).
+3. `src/mcp/scan-errors.ts`: fixed reason "the page navigated to another page during the scan".
+4. Tests: real Chromium (`__tests__/a11y/scan-navigation.test.ts`, delayed `location.replace`,
+   meta refresh 2 s), mocked runner, runner cases for CI, MCP reason.
+5. Docs: README, `.claude/rules/browser-safety.md`, `plans/README.md`.
 
 ## Acceptance criteria
 
-- [ ] A refusal is recorded for the main frame's document only.
-- [ ] A real-Chromium test: a page with a refused iframe whose script moves the top frame to
-      an address that fails for another reason gets the generic reason, not the frame's.
-- [ ] The existing "blocks a redirect to a metadata host and says why" tests still pass.
+- [x] Behaviour decided: a clear per-page error; query/fragment rewrites do not trip it.
+- [x] Real-Chromium test with a delayed `location.replace` and a 2 s meta refresh.
+- [x] README says what a caller sees.

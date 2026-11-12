@@ -793,6 +793,20 @@ iris a11y --pages / --base-url https://example.com \
 The report contains axe-core violations with impact level, WCAG tags, and the
 offending selectors. Outcome is signalled by the exit code (`4` = violations found).
 
+**A page that navigates while it is scanned (#669).** IRIS loads the page, waits until its
+network has been idle for half a second, and scans the document it holds then. A page
+that moves to another origin or path after that (a `setTimeout` that calls
+`location.replace`, a meta refresh of a few seconds, a sign-in check that redirects after
+a slow call) while the axe scan or the screen-reader checks are still running is not
+scanned: the page is listed as one that could not be scanned, with the error
+`The page navigated during the scan: it was at <URL> when the scan began and moved to
+another page before its checks finished`, and the command exits `3` (or `4` when another
+page has violations). Scan the page it ends on instead. A page that only rewrites its
+query string or fragment is scanned as before. A move that comes after those checks have
+finished is not seen: the results are the first page's, which is the page that was
+scanned. The keyboard checks run last and press keys, which may navigate on purpose, so a
+move during them is not an error.
+
 ### Exit codes
 
 Every command signals its outcome through the exit code:
@@ -892,7 +906,8 @@ and the page under test chooses much of what an error or a redirect contains. So
 - A failure is `Accessibility scan failed for <your URL>: <reason>`, with the reason
   from a fixed list: the kind of address the navigation policy blocked (never the
   redirect target itself), a `net::ERR_*` code, a timeout, "the browser could not
-  be started on the server", or "the scan could not be completed". The error's own text (local paths, addresses) goes to the
+  be started on the server", "the page navigated to another page during the scan" (#669:
+  it moved on by timer after it had loaded, so scan the page it ends on), or "the scan could not be completed". The error's own text (local paths, addresses) goes to the
   server's stderr.
 - A redirected scan reports `redirected: true` and the landing page's origin and
   path, at most 200 characters. A page that moves on by itself (a script, a meta

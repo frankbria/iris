@@ -148,6 +148,21 @@ describe('runner URL policy', () => {
       };
       const target = moves[req.url ?? ''];
       const script = target ? `<script>location.replace('${target}')</script>` : '';
+      // Pages that move on by timer after their network went idle (#669), and large enough
+      // that axe is still scanning them then: measured at 2.9 s for a third of this size,
+      // against moves 0.5 s and 1.5 s after the idle point.
+      const timed: Record<string, string> = {
+        '/replace-after-1s': `<script>setTimeout(() => location.replace('/landed?token=s3cret'), 1000)</script>`,
+        '/meta-refresh-2s': '<meta http-equiv="refresh" content="2;url=/landed?token=s3cret">',
+      };
+      const timedMove = timed[req.url ?? ''];
+      if (timedMove) {
+        const paragraphs = '<p>some text <a href="/landed">a link</a></p>'.repeat(3000);
+        res.end(
+          `<html lang="en"><head><title>ok</title>${timedMove}</head><body><main><h1>ok</h1>${paragraphs}</main></body></html>`,
+        );
+        return;
+      }
       res.end(
         `<html lang="en"><head><title>ok</title></head><body>${script}<h1>ok</h1></body></html>`,
       );
@@ -201,6 +216,20 @@ describe('runner URL policy', () => {
         /script-to-metadata redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
       );
     });
+
+    // #669: the URL was read on the first page, and the scan was still running when it left.
+    it.each(['/replace-after-1s', '/meta-refresh-2s'])(
+      'a11y fails the scan of %s, which moves on while it is scanned, by name',
+      async (path) => {
+        const error = await a11yError(a11y, a11yConfig(`${origin}${path}`));
+        expect(error).toBe(
+          `The page navigated during the scan: it was at ${origin}${path} when the scan began ` +
+            'and moved to another page before its checks finished',
+        );
+        // The page had moved, so the error is not a guess about a scan that died otherwise.
+        expect(hits).toEqual([path, '/landed?token=s3cret']);
+      },
+    );
 
     it('visual refuses the metadata host', async () => {
       expect(await visualError(visual, METADATA_URL)).toMatch(

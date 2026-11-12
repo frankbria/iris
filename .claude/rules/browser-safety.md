@@ -56,9 +56,29 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   a name the egress proxy refuses is the proxy's 403 document over http, which
   `failOnHttpError` fails first, and a refused CONNECT (the error page) over https. The
   runner drops the fragment and any credentials before reporting (`reportedUrl`), as the
-  response's URL had none. Read once: a page that navigates while axe runs fails the scan as before,
-  and nothing compares the URL afterwards (a single-page app may rewrite it at any time).
+  response's URL had none. Read once, and the checks that only read the page are held to it
+  (next item).
   `guardedGoto` itself is unchanged for the executor, watcher and visual runner.
+- **The axe scan and the screen-reader checks are held to the scanned document** (#669):
+  `onScannedDocument(page, scannedUrl, check)` (src/a11y/scan-navigation.ts) turns a check's
+  result *or* error into `NavigatedDuringScanError` ("The page navigated during the scan:
+  it was at <scanned URL> …", never the destination) when the page's scheme, host or path
+  differs once the check has settled. A page that moves on by timer after `networkidle`
+  used to die on "Execution context was destroyed" or report the second document under the
+  first URL. Query-only and fragment-only changes are not moves (as in #662); a reload is
+  not seen, and a check that fails on one keeps its own error; a router that pushes another
+  path is a move. Before reading `page.url()` it makes a page call until one answers (five
+  at most): the failed check can reach its `catch` before Playwright has processed the
+  navigation's commit, and without that the URL read is the old one (the tests fail
+  without it). The keyboard checks run **last** and are not held: they press keys, and a
+  key may navigate on purpose (an Escape handler that leaves the page passes, #286; a
+  custom sequence may press Enter). The screen-reader checks therefore now run before
+  them, on the page as loaded. A move after the held checks finished is not seen: the
+  results are the first page's. The MCP tools' fixed reason is "the page navigated to
+  another page during the scan", matched first and anchored, since the message quotes a URL
+  the page chose. `__tests__/a11y/scan-navigation.test.ts` launches Chromium through
+  Playwright itself, so it runs where sandboxed Chromium cannot start; the runner cases in
+  `runner-url-policy.test.ts` use a page large enough that axe outlasts the timer.
 - **The refusal a failed navigation is explained by is the main frame's** (#668): the page
   session records a refused `Document` only when the request's `frameId` is the page's
   target id (a top-level frame's id is its target id, read with `Target.getTargetInfo`

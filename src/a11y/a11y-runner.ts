@@ -18,6 +18,7 @@ import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
 import { installUrlPolicyGuard, guardedGoto, guardedDocumentUrl } from '../url-policy-guard';
+import { onScannedDocument } from './scan-navigation';
 import { escapeHtml, escapeXml, safeHref, strippedError } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 import { withPageTimeout } from '../page-timeout';
@@ -415,19 +416,24 @@ export class AccessibilityRunner {
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
 
-      // Run axe-core tests
-      const axeResult = await this.axeRunner.run(page, testName, scannedUrl);
+      // The checks that only read the page are held to the document read above: a page that
+      // moves on by timer after the network went idle fails the scan, by name, instead of
+      // mixing two documents (#669).
+      const held = <T>(check: () => Promise<T>): Promise<T> =>
+        onScannedDocument(page, scannedUrl, check);
+      const axeResult = await held(() => this.axeRunner.run(page, testName, scannedUrl));
 
-      // Run keyboard navigation tests if enabled
+      let screenReaderResult: ScreenReaderTestResult | undefined;
+      if (this.shouldRunScreenReaderTests()) {
+        screenReaderResult = await held(() => this.runScreenReaderTests(page, testName));
+      }
+
+      // Last and not held: these press keys, and a key may navigate on purpose (a dialog
+      // whose Escape handler leaves the page passes its check, #286; a custom sequence may
+      // press Enter on a link).
       let keyboardResult: KeyboardTestResult | undefined;
       if (this.shouldRunKeyboardTests()) {
         keyboardResult = await this.keyboardTester.run(page, testName);
-      }
-
-      // Run screen reader simulation if enabled
-      let screenReaderResult: ScreenReaderTestResult | undefined;
-      if (this.shouldRunScreenReaderTests()) {
-        screenReaderResult = await this.runScreenReaderTests(page, testName);
       }
 
       return this.withVerdict({
