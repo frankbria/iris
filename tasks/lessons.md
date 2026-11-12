@@ -682,3 +682,5 @@ Write/Edit, not as a pre-push afterthought.
 - **`pkill -f <pattern>` also matches the shell running it** when the pattern is on its own command line (exit 144, the tool call dies). Write the pattern as `[j]est …`.
 - **Jest's `--testPathIgnorePatterns` with hand-escaped paths silently ignored nothing.** To leave files out, pass the wanted ones: `jest --runTestsByPath $(git ls-files … | grep -vxFf excluded.txt)`.
 - On the loop host, `~/.claude/skills/delegating-to-opencode/review-chain.sh` does not exist (only `ask-opencode.sh`), so the pre-PR cross-family pass falls back to Claude internal; the PR's own CI review job (Codex) is then the only cross-family review.
+
+- **Commit before a mutation check.** Reverting a mutation with `git checkout <file>` also discards every uncommitted edit in that file (#271: a review fix in `lib/usage.ts` went with it and had to be redone). Commit first, or revert the mutation with the inverse edit.

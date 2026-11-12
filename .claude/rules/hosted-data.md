@@ -135,7 +135,8 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - **`runsPerMonth` on job submits**: `enqueue({ monthlyRunLimit })` counts, under the same
   per-org advisory lock as the outstanding cap, this UTC month's `a11y_job` + `visual_job`
   usage (`sum(quantity)`) plus queued and running jobs (a11y 1, visual urls x devices), so
-  parallel submits cannot overshoot. Over it, `RunQuotaExceededError` and the API answers
+  parallel submits cannot overshoot (the count is `runsUsedThisMonth()` in
+  src/billing/usage.ts, which the portal's `/usage` shows too, #271). Over it, `RunQuotaExceededError` and the API answers
   **402** `{ error: 'Monthly run limit reached', limit, used }`. `startServer({
   entitlements })` supplies the limit; hosted `iris connect` passes `orgEntitlements(db)`.
 - **Sessions**: the hosted authenticator puts the plan's `maxConcurrentSessions` on the

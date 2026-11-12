@@ -81,6 +81,26 @@ export async function insertUsage(
   }
 }
 
+/**
+ * What the org has used of its plan's `runsPerMonth` (#346): this UTC month's billed
+ * a11y and visual jobs, plus the jobs queued or running (a visual job counts one per
+ * url x device). The submit check and the portal's usage page (#271) both read it here.
+ */
+export async function runsUsedThisMonth(db: Kysely<unknown>, orgId: string): Promise<number> {
+  const { rows } = await sql<{ used: string }>`
+    select
+      (select coalesce(sum(quantity), 0) from usage_events
+         where org_id = ${orgId} and kind in ('a11y_job', 'visual_job')
+           and created_at >= date_trunc('month', now() at time zone 'UTC') at time zone 'UTC')
+      + (select coalesce(sum(case when kind = 'visual'
+           then greatest(jsonb_array_length(params->'urls') * jsonb_array_length(params->'devices'), 1)
+           else 1 end), 0)
+         from runs where org_id = ${orgId} and status in ('queued', 'running')) as used`.execute(
+    db,
+  );
+  return Number(rows[0].used);
+}
+
 export function usageLedger(db: Kysely<unknown>) {
   return {
     record: (orgId: string, events: UsageEvent[]) => insertUsage(db, orgId, events),

@@ -7,6 +7,33 @@ paths:
   - "docs/legal/**"
 ---
 
+### Usage and Billing Page (issue #271)
+
+`/usage`, linked from the dashboard and from `/org`'s Billing section. Every member reads
+it; the billing controls are for owners and admins.
+
+- **The period is the current UTC calendar month** (`utcMonth()` in `lib/usage.ts`): the
+  window the limits are enforced on (#346) and the managed credit is counted on (#479),
+  whatever day Stripe bills. Do not switch it to the Stripe billing period without moving
+  enforcement too.
+- **"Runs" is `runsUsedThisMonth()`** (src/billing/usage.ts), the query the job submit
+  check runs: billed jobs plus queued and running ones. The other lines come from
+  `usageLedger().summary()`. Storage is `storageUsage()`, a level, not a monthly total.
+  "(limit reached)" shows on runs and storage only: the agent-turn and vision-call limits
+  are not enforced yet (hosted-data.md, #346), so `planUsage` never marks them reached.
+  Drop `notEnforced` there when enforcement lands.
+- **Credit left is plan credit minus `managedSpendThisMonth()`**, as on `/provider-keys`.
+  A `held` reservation (#482) is not subtracted on either page, so the resolver can refuse
+  a call slightly before the page reaches zero.
+- **`lib/usage.ts` is pure** (type-only imports from `src/`), so the portal's jsdom Jest
+  can test it; importing `src/billing/plans.ts` there loads Kysely (ESM) and fails.
+- **`components/billing-section.tsx`** (`PlanLine`, `BillingControls`) is what `/org` and
+  `/usage` both render. `/org` hides its Billing section without Stripe; `/usage` always
+  shows the plan and adds the controls only when `getBilling()` is set. Stripe returns the
+  user to `/org` from either page (`billingReturnUrl`).
+- BYOK cost is IRIS's own computation from its price list (`unit_cost_usd`), not the
+  vendor's invoice; the page says so.
+
 ### Audit Log Page (issue #541)
 
 `/audit` in the portal shows the org's `audit_log` (#361) to owners and admins (`isManager(role)`

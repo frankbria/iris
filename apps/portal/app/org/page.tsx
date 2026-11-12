@@ -3,9 +3,8 @@ import { headers } from "next/headers"
 import Link from "next/link"
 
 import { liveKeysByCreator } from "../../../../src/audit-log"
-import { hasLiveSubscription } from "../../../../src/billing/stripe"
 import { orgEntitlements } from "../../../../src/billing/plans"
-import { ManageBillingForm, UpgradeForm } from "@/components/billing-forms"
+import { BillingControls, PlanLine } from "@/components/billing-section"
 import {
   InviteForm,
   LeaveOrgButton,
@@ -37,12 +36,9 @@ async function ownerCount(orgId: string): Promise<number> {
   return rows[0].n
 }
 
-const PLAN_NAMES = { free: "Free", pro: "Pro", team: "Team" } as const
-
 /**
- * The org's plan and subscription (#261); hidden when Stripe is not configured. The state
- * is what the verified webhook wrote (#345), never the Checkout redirect. Managers start
- * Checkout when no subscription is live, and use the Customer Portal once a customer exists.
+ * The org's plan and subscription (#261); hidden when Stripe is not configured. Usage
+ * against the plan is on `/usage` (#271), which shows the same controls.
  */
 async function BillingSection({
   organizationId,
@@ -62,37 +58,15 @@ async function BillingSection({
       <h2 id="billing" className="font-medium">
         Billing
       </h2>
-      <p className="text-sm">
-        Plan: {PLAN_NAMES[plan]}
-        {account?.subscriptionStatus && (
-          <span className="text-muted-foreground">
-            {" "}
-            (subscription {account.subscriptionStatus.replace("_", " ")})
-          </span>
-        )}
-      </p>
-      {!manages && (
-        <p className="text-sm text-muted-foreground">
-          Only owners and admins can change billing.
-        </p>
-      )}
-      {manages && !hasLiveSubscription(account) && (
-        <div className="flex flex-wrap gap-2">
-          <UpgradeForm
-            organizationId={organizationId}
-            plan="pro"
-            label="Upgrade to Pro"
-          />
-          <UpgradeForm
-            organizationId={organizationId}
-            plan="team"
-            label="Upgrade to Team"
-          />
-        </div>
-      )}
-      {manages && account && (
-        <ManageBillingForm organizationId={organizationId} />
-      )}
+      <PlanLine plan={plan} account={account} />
+      <BillingControls
+        organizationId={organizationId}
+        manages={manages}
+        account={account}
+      />
+      <Link href="/usage" className="text-sm underline">
+        Usage this month
+      </Link>
     </section>
   )
 }

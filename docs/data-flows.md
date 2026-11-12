@@ -98,7 +98,7 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `usage_events`: org, run, kind (`browser_minutes`, `text_call`, `vision_call`, `agent_turn`, `a11y_job`, `visual_job`, `observation`), quantity, unit cost, billing mode, estimated flag, idempotency key, and when a managed row was sent to the Stripe meter (`stripe_reported_at`, #264). No content. |
 | Purpose | Metering and billing (#263). |
 | Where | Postgres, `0001`, `0003`, `0021`; `src/billing/usage.ts`, `src/billing/stripe-meter.ts`. |
-| Access | Operators; the org's own usage view (#271, pending). |
+| Access | Operators; the org's members on the portal's `/usage` page (#271): this month's totals per kind and billing mode, never single events. |
 | Retention | While the org exists, and **7 years** after it is purged, on a tombstone org with no name, members or keys (pseudonymised); then deleted. The 7 years is the owner's decision pending counsel's confirmation for the jurisdiction (#450). |
 
 ### Org plans
@@ -108,7 +108,7 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `org_plans`: org, plan id (`free`/`pro`/`team`), per-org overrides of plan limits, last update. No personal data. An org with no row is on free. |
 | Purpose | Entitlements (#260): which limits apply to the org, enforced at the API (#346). |
 | Where | Postgres, `0009`; `src/billing/plans.ts`. |
-| Access | Operators; the verified Stripe webhook sets the plan from the current subscription's price as read from Stripe (#345), only when it changes, so a support grant survives other events. Shown on `/org` (#261). |
+| Access | Operators; the verified Stripe webhook sets the plan from the current subscription's price as read from Stripe (#345), only when it changes, so a support grant survives other events. Shown on `/org` (#261) and `/usage` (#271). |
 | Retention | Deleted when the org is purged. |
 
 ### Org billing (Stripe)
@@ -118,7 +118,7 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `org_billing`: org, Stripe customer id, the current subscription's id and status as last read from Stripe, last update, and for a failed payment when its grace period ends and when the org was suspended for it (#266). `stripe_events`: Stripe event id, org, event type, time processed. No card data (it stays at Stripe) and no personal data. |
 | Purpose | One Stripe customer per org, and the subscription state taken only from signature-verified webhooks (#261, #345); `stripe_events` makes each event apply once. |
 | Where | Postgres, `0020_org_billing.ts`; `src/billing/stripe.ts`, `src/billing/stripe-webhook.ts`; `0022_billing_grace.ts`, `src/billing/payment-grace.ts`. |
-| Access | Operators; the org's members see the plan and status on `/org`, owners and admins open Checkout and the Customer Portal. |
+| Access | Operators; the org's members see the plan and status on `/org` and `/usage`, where owners and admins open Checkout and the Customer Portal. |
 | Retention | Kept on the purged org's tombstone as a billing record, and deleted with it after **7 years** (cascade). |
 
 ### Terms acceptances
