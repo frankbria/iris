@@ -538,4 +538,114 @@ describe('KeyboardTester', () => {
       expect(result.passed).toBe(false);
     });
   });
+  // The page calls of a run that examines one dialog and reaches the Escape check's return
+  // to the start page (#679): only the trap and Escape checks are on.
+  describe('before the Escape check goes back to the start page (#679)', () => {
+    const start = 'https://example.test/';
+    const heldDocument = (replaced: boolean) => ({
+      url: start,
+      replaced: jest.fn().mockResolvedValue(replaced),
+      release: jest.fn().mockResolvedValue(undefined),
+    });
+
+    beforeEach(() => {
+      keyboardTester = new KeyboardTester({
+        testFocusOrder: false,
+        testTrapDetection: true,
+        testArrowKeyNavigation: false,
+        testEscapeHandling: true,
+        customSequences: [],
+      });
+      const dialog = {
+        index: 0,
+        container: 'DIV',
+        focusableCount: 1,
+        firstElement: 'BUTTON',
+        lastElement: 'BUTTON',
+      };
+      mockPage.evaluate
+        .mockResolvedValueOnce(1 as never) // dialogs showing on the page as loaded
+        .mockResolvedValueOnce([dialog] as never)
+        .mockResolvedValueOnce(undefined as never) // focus its last control
+        .mockResolvedValueOnce(false as never) // not trapped
+        .mockResolvedValueOnce(true as never) // Escape closed it
+        .mockResolvedValue(0 as never);
+      (mockPage as unknown as { goto: jest.Mock }).goto = jest.fn();
+    });
+
+    const wentBack = () =>
+      mockPage.reload.mock.calls.length +
+      (mockPage as unknown as { goto: jest.Mock }).goto.mock.calls.length;
+
+    it("stops when the caller's document was replaced with no key to blame", async () => {
+      const scanned = heldDocument(true);
+
+      await expect(keyboardTester.run(mockPage, 'test', scanned)).rejects.toThrow(
+        'Keyboard testing failed: The page moved on by itself before the Escape check',
+      );
+
+      expect(keyboardTester.movedByItself).toBe(true);
+      expect(wentBack()).toBe(0);
+      // The caller goes on asking it.
+      expect(scanned.release).not.toHaveBeenCalled();
+    });
+
+    it("stops when the caller's document is under another path", async () => {
+      mockPage.url.mockReturnValue('https://example.test/route');
+
+      await expect(keyboardTester.run(mockPage, 'test', heldDocument(false))).rejects.toThrow(
+        'moved on by itself',
+      );
+
+      expect(keyboardTester.movedByItself).toBe(true);
+      expect(wentBack()).toBe(0);
+    });
+
+    it('stops when the document the run began on was replaced, with no caller holding one', async () => {
+      const dispose = jest.fn().mockResolvedValue(undefined);
+      mockPage.evaluateHandle.mockResolvedValueOnce({
+        evaluate: jest.fn().mockRejectedValue(new Error('Execution context was destroyed')),
+        dispose,
+      } as never);
+
+      await expect(keyboardTester.run(mockPage, 'test')).rejects.toThrow('moved on by itself');
+
+      expect(keyboardTester.movedByItself).toBe(true);
+      expect(wentBack()).toBe(0);
+      expect(dispose).toHaveBeenCalled();
+    });
+
+    it('forgets an earlier page that moved by itself', async () => {
+      await keyboardTester.run(mockPage, 'test', heldDocument(true)).catch(() => undefined);
+      expect(keyboardTester.movedByItself).toBe(true);
+
+      // Whatever the next run makes of this page, it begins with no move seen.
+      await keyboardTester.run(mockPage, 'test', heldDocument(false)).catch(() => undefined);
+
+      expect(keyboardTester.movedByItself).toBe(false);
+    });
+
+    it('goes back when the page is where it was, under a rewritten query string too', async () => {
+      mockPage.url.mockReturnValue(`${start}?tab=2`);
+
+      await keyboardTester.run(mockPage, 'test', heldDocument(false));
+
+      expect(keyboardTester.movedByItself).toBe(false);
+      expect(wentBack()).toBe(1);
+    });
+
+    it('goes back over a move its own key made', async () => {
+      // The document held across the trap check's Escape press is gone: the key left the page.
+      mockPage.evaluateHandle.mockResolvedValueOnce({
+        evaluate: jest.fn().mockRejectedValue(new Error('Execution context was destroyed')),
+        dispose: jest.fn().mockResolvedValue(undefined),
+      } as never);
+
+      await keyboardTester.run(mockPage, 'test', heldDocument(true));
+
+      expect(keyboardTester.navigatedByKey).toBe(true);
+      expect(keyboardTester.movedByItself).toBe(false);
+      expect(wentBack()).toBe(1);
+    });
+  });
 });

@@ -375,7 +375,7 @@ describe('onScannedDocument', () => {
         onScannedDocument(
           tab,
           held,
-          () => tester.run(tab, 'test'),
+          () => tester.run(tab, 'test', held),
           () => tester.navigatedByKey,
           () => tester.reloadedInto,
         );
@@ -419,6 +419,7 @@ describe('onScannedDocument', () => {
         const tester = keyboard(both);
 
         const outcome = heldKeyboardChecks(held, tester);
+        outcome.catch(() => undefined);
         await duringTheTabWalk("history.replaceState(null, '', '?tab=2')");
 
         expect((await outcome).trapTests).toHaveLength(1);

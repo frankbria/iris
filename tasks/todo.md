@@ -10,9 +10,9 @@ path (red on main every run).
 
 1. Tests, red first: three real-Chromium cases (move to a page with a dialog, reload,
    router push) and one that pins the unchanged case (a query-string rewrite still goes back).
-2. `src/a11y/keyboard-tester.ts`: `run` holds the document it started on (only when the
-   Escape check is on). Before the Escape check goes back, and when no key of its own left
-   the page, it asks `documentSince(page, started)`; anything but `same` sets
+2. `src/a11y/keyboard-tester.ts`: `run` takes the document the runner holds (after the
+   internal review; without one it holds the document it began on). Before the Escape check goes back, and when no key of its own left
+   the page, it asks `documentNow(page, started)`; anything but `same` sets
    `movedByItself` and throws instead of going back.
 3. `src/a11y/a11y-runner.ts`: the keyboard hold does not take that move for a custom
    sequence's (`keysMayNavigate && !movedByItself`), so it fails by name with custom
@@ -28,7 +28,7 @@ Decisions
   the "origin or path differs" case the issue names.
 
 Acceptance criteria
-- [ ] Real-Chromium test that shows it.
-- [ ] Before the Escape check goes back, a move without `navigatedByKey` fails the page as
+- [x] Real-Chromium test that shows it.
+- [x] Before the Escape check goes back, a move without `navigatedByKey` fails the page as
       "navigated during the scan"; the runner does not lose it.
-- [ ] `.claude/rules/browser-safety.md` updated.
+- [x] `.claude/rules/browser-safety.md` updated.

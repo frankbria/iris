@@ -118,15 +118,22 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
     the Tab walk to a page with a dialog (or one with a dialog that loaded again, or whose
     router pushed a path) was put back under the start URL, the runner saw no move, and
     the second page's focus order and trap result were reported under the first (shown in
-    Chromium on main). `KeyboardTester.run` now holds the document it started on and, when
-    no key of its own left the page, asks `documentSince` before going back: anything but
-    `same` sets `movedByItself` and throws without going back, so the runner's hold names
-    the move. The runner does not take that move for a custom sequence's either
-    (`keysMayNavigate && !movedByItself`; the sequences run after the Escape check). A
-    query string or fragment the page rewrote is still `same`, and the tester goes back.
-    The tests move the page from a zero-delay timer once the Tab walk has reached a link
-    (150 links), so the move lands in the walk on any machine; on main the two navigating
-    cases pass when the walk happens to die on the commit, the router case never does.
+    Chromium on main). `KeyboardTester.run(page, name, scanned?)` takes the document the
+    runner holds (without one it holds the document it began on) and, when no key of its
+    own left the page, asks before going back whether the page still has that document
+    under that origin and path (`documentNow`, which does not release the caller's handle):
+    anything but `same` sets `movedByItself` and throws without going back, so the runner's
+    hold names the move. The runner's document and not one taken when the keyboard checks
+    begin: a reload between two checks would otherwise be the start. The runner does not
+    take that move for a custom sequence's either (`keysMayNavigate && !movedByItself`;
+    the sequences run after the Escape check). A query string or fragment the page rewrote
+    is still `same`, and the tester goes back.
+    The real-Chromium tests move the page from a zero-delay timer once the Tab walk has
+    reached a link (150 links). They show the outcome, not the branch: a navigation often
+    kills the walk's own page call first, which fails the page by name on main as well
+    (measured: the reload case nearly always, the move to another page about half the
+    time; only the router case is red on main every run). The branch itself is pinned in
+    `keyboard-tester.test.ts` on a fake page, where every mutation of it fails a test.
   - `holdDocument` tries once more when a navigation commits as it takes the handle; a
     move away from the URL read is then seen by the URL.
   - **A handler that navigates after a delay is the page's move, by decision** (#675):

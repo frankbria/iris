@@ -452,7 +452,7 @@ export class AccessibilityRunner {
       if (this.shouldRunKeyboardTests()) {
         const keysMayNavigate = this.config.keyboard.customSequences.length > 0;
         keyboardResult = await held(
-          () => this.keyboardTester.run(page, testName),
+          () => this.keyboardTester.run(page, testName, scanned),
           // A move the tester saw the page make by itself is no custom sequence's (#679).
           () =>
             this.keyboardTester.navigatedByKey ||
