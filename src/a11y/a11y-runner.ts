@@ -18,7 +18,7 @@ import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
 import { installUrlPolicyGuard, guardedGoto, guardedDocumentUrl } from '../url-policy-guard';
-import { onScannedDocument } from './scan-navigation';
+import { NavigatedDuringScanError, onScannedDocument } from './scan-navigation';
 import { escapeHtml, escapeXml, safeHref, strippedError } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 import { withPageTimeout } from '../page-timeout';
@@ -416,11 +416,17 @@ export class AccessibilityRunner {
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
 
-      // The checks that only read the page are held to the document read above: a page that
-      // moves on by timer after the network went idle fails the scan, by name, instead of
-      // mixing two documents (#669).
-      const held = <T>(check: () => Promise<T>): Promise<T> =>
-        onScannedDocument(page, scannedUrl, check);
+      // Every check is held to the document read above: a page that moves on by timer after
+      // the network went idle fails the scan, by name, instead of mixing two documents (#669).
+      // A move the policy refused keeps the guard's words for it (#662).
+      const held = async <T>(check: () => Promise<T>, ownMove?: () => boolean): Promise<T> => {
+        try {
+          return await onScannedDocument(page, scannedUrl, check, ownMove);
+        } catch (error) {
+          if (error instanceof NavigatedDuringScanError) guardedDocumentUrl(page, url);
+          throw error;
+        }
+      };
       const axeResult = await held(() => this.axeRunner.run(page, testName, scannedUrl));
 
       let screenReaderResult: ScreenReaderTestResult | undefined;
@@ -428,12 +434,16 @@ export class AccessibilityRunner {
         screenReaderResult = await held(() => this.runScreenReaderTests(page, testName));
       }
 
-      // Last and not held: these press keys, and a key may navigate on purpose (a dialog
-      // whose Escape handler leaves the page passes its check, #286; a custom sequence may
-      // press Enter on a link).
+      // Last: these press keys, and a key may leave the page on purpose (a dialog whose
+      // Escape handler navigates passes its check, #286; a custom sequence may press Enter
+      // on a link). Such a move is the check's own.
       let keyboardResult: KeyboardTestResult | undefined;
       if (this.shouldRunKeyboardTests()) {
-        keyboardResult = await this.keyboardTester.run(page, testName);
+        const keysMayNavigate = this.config.keyboard.customSequences.length > 0;
+        keyboardResult = await held(
+          () => this.keyboardTester.run(page, testName),
+          () => keysMayNavigate || this.keyboardTester.navigatedByKey,
+        );
       }
 
       return this.withVerdict({

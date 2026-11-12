@@ -795,17 +795,23 @@ offending selectors. Outcome is signalled by the exit code (`4` = violations fou
 
 **A page that navigates while it is scanned (#669).** IRIS loads the page, waits until its
 network has been idle for half a second, and scans the document it holds then. A page
-that moves to another origin or path after that (a `setTimeout` that calls
-`location.replace`, a meta refresh of a few seconds, a sign-in check that redirects after
-a slow call) while the axe scan or the screen-reader checks are still running is not
-scanned: the page is listed as one that could not be scanned, with the error
-`The page navigated during the scan: it was at <URL> when the scan began and moved to
-another page before its checks finished`, and the command exits `3` (or `4` when another
-page has violations). Scan the page it ends on instead. A page that only rewrites its
-query string or fragment is scanned as before. A move that comes after those checks have
-finished is not seen: the results are the first page's, which is the page that was
-scanned. The keyboard checks run last and press keys, which may navigate on purpose, so a
-move during them is not an error.
+that moves to another origin or path after that, while its checks are still running (a
+`setTimeout` that calls `location.replace`, a meta refresh of a few seconds, a sign-in
+check that redirects after a slow call), is not scanned: it is listed as a page that
+could not be scanned, with the error `The page navigated during the scan: it was at <URL>
+when the scan began and moved to another page before its checks finished`, and the command
+exits `3` (or `4` when another page has violations). Scan the page it ends on instead.
+
+- A change of the query string or the fragment alone is not a move, whether a router
+  rewrote it or the page loaded itself again under it; neither is a reload.
+- A router that pushes another path counts as a move, although the document is the same.
+- A key the keyboard checks press may leave the page on purpose (a dialog that navigates
+  on Escape passes its check), and so may a custom key sequence; that is not an error.
+  The keyboard checks run last for that reason, after axe and the screen-reader checks.
+- A move that comes after the last check has finished is not seen: the results are the
+  first page's, which is the page that was scanned.
+- A move to an address the navigation policy refuses, or to a page that cannot be loaded,
+  is reported as that.
 
 ### Exit codes
 

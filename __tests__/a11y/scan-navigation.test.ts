@@ -13,6 +13,7 @@ import { createServer, Server } from 'http';
 import { AddressInfo } from 'net';
 import { chromium, Browser, Page } from 'playwright';
 import { AxeRunner } from '../../src/a11y/axe-integration';
+import { KeyboardTester } from '../../src/a11y/keyboard-tester';
 import { NavigatedDuringScanError, onScannedDocument } from '../../src/a11y/scan-navigation';
 
 const page = (head: string, script: string): string =>
@@ -20,23 +21,41 @@ const page = (head: string, script: string): string =>
   `<script>${script}</script></body></html>`;
 
 const PAGES: Record<string, string> = {
-  '/replace-after-1s': page('', "setTimeout(() => location.replace('/second?token=s3cret'), 1000)"),
+  '/replace-after-2s': page('', "setTimeout(() => location.replace('/second?token=s3cret'), 2000)"),
   '/meta-refresh-2s': page('<meta http-equiv="refresh" content="2;url=/second">', ''),
   '/rewrites-query-and-fragment': page(
     '',
-    "setTimeout(() => history.replaceState(null, '', '?tab=2#section'), 1000)",
+    "setTimeout(() => history.replaceState(null, '', '?tab=2#section'), 2000)",
   ),
   '/router-pushes-a-path': page(
     '',
-    "setTimeout(() => history.pushState(null, '', '/route'), 1000)",
+    "setTimeout(() => history.pushState(null, '', '/route'), 2000)",
   ),
-  '/reloads-after-1s': page('', 'setTimeout(() => location.reload(), 1000)'),
+  '/reloads-after-2s': page('', 'setTimeout(() => location.reload(), 2000)'),
   '/stays': page('', ''),
-  // Large enough that axe is still scanning it a second after its response: measured at
-  // 2.9 s for a third of this size, and the move comes 0.5 s after the network went idle.
+  // The same path on another host: this server under its other loopback name.
+  '/other-host-after-2s': page(
+    '',
+    "setTimeout(() => location.replace('http://localhost:' + location.port + '/other-host-after-2s?moved'), 2000)",
+  ),
+  // What the keyboard checks meet: links to walk, and a move no key made.
+  '/links-and-replaces-after-2s': page(
+    '',
+    "setTimeout(() => location.replace('/second'), 2000)",
+  ).replace('<h1>first</h1>', `<h1>first</h1>${'<a href="/second">a link</a> '.repeat(40)}`),
+  // A dialog whose Escape handler leaves the page: a pass of the Escape check (#286).
+  '/escape-leaves': page(
+    '',
+    "addEventListener('keydown', (e) => { if (e.key === 'Escape') location.assign('/second'); })",
+  ).replace(
+    '<h1>first</h1>',
+    '<h1>first</h1><div role="dialog" aria-label="Notice"><button>OK</button></div>',
+  ),
+  // Large enough that axe is still scanning it two seconds after its response: measured at
+  // 2.9 s for a third of this size, and the move comes 1.5 s after the network went idle.
   '/large-and-replaces-after-1s': page(
     '',
-    "setTimeout(() => location.replace('/second'), 1000)",
+    "setTimeout(() => location.replace('/second'), 2000)",
   ).replace(
     '<h1>first</h1>',
     `<h1>first</h1>${'<p>some text <a href="/second">a link</a></p>'.repeat(3000)}`,
@@ -54,9 +73,9 @@ describe('onScannedDocument', () => {
   beforeAll(async () => {
     browser = await chromium.launch();
     server = createServer((req, res) => {
-      const path = (req.url ?? '').split('?')[0];
+      const [path, query] = (req.url ?? '').split('?');
       res.setHeader('Content-Type', 'text/html');
-      res.end(PAGES[path] ?? PAGES['/second']);
+      res.end((query === 'moved' ? undefined : PAGES[path]) ?? PAGES['/second']);
     });
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
@@ -78,7 +97,7 @@ describe('onScannedDocument', () => {
 
   /**
    * The page as the runner has it when its checks begin: loaded, idle, its URL read. Every
-   * fixture moves a second or more after its response, the network is idle after half a
+   * fixture moves two seconds after its response, the network is idle after half a
    * second, and the URL read here is checked to be the first page's: a move that came
    * first would make the test about nothing.
    */
@@ -103,13 +122,13 @@ describe('onScannedDocument', () => {
     }).run(tab, 'test', url);
 
   it('names the move when a delayed location.replace destroys a running check', async () => {
-    const scannedUrl = await scanned('/replace-after-1s');
+    const scannedUrl = await scanned('/replace-after-2s');
 
     const outcome = onScannedDocument(tab, scannedUrl, neverSettlesHere);
 
     await expect(outcome).rejects.toBeInstanceOf(NavigatedDuringScanError);
     await expect(outcome).rejects.toThrow(
-      `The page navigated during the scan: it was at ${origin}/replace-after-1s when the scan began`,
+      `The page navigated during the scan: it was at ${origin}/replace-after-2s when the scan began`,
     );
     // Where it went is the page's text, and its query string may hold a token.
     await expect(outcome).rejects.not.toThrow(/second|s3cret/);
@@ -131,6 +150,107 @@ describe('onScannedDocument', () => {
       NavigatedDuringScanError,
     );
     expect(tab.url()).toBe(`${origin}/second`);
+  });
+
+  it('keeps the error of the check the move destroyed as the cause', async () => {
+    const scannedUrl = await scanned('/replace-after-2s');
+
+    const error: unknown = await onScannedDocument(tab, scannedUrl, neverSettlesHere).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(NavigatedDuringScanError);
+    expect(String((error as Error).cause)).toMatch(/context was destroyed|navigat/i);
+  });
+
+  it('counts a move to the same path on another host', async () => {
+    const scannedUrl = await scanned('/other-host-after-2s');
+
+    await expect(onScannedDocument(tab, scannedUrl, neverSettlesHere)).rejects.toBeInstanceOf(
+      NavigatedDuringScanError,
+    );
+    expect(new URL(tab.url()).hostname).toBe('localhost');
+    expect(new URL(tab.url()).pathname).toBe('/other-host-after-2s');
+  });
+
+  describe('the keyboard checks, whose own keys may leave the page', () => {
+    const keyboard = (checks: { testTrapDetection: boolean; testEscapeHandling: boolean }) =>
+      new KeyboardTester({
+        testFocusOrder: true,
+        testArrowKeyNavigation: true,
+        customSequences: [],
+        ...checks,
+      });
+    const both = { testTrapDetection: true, testEscapeHandling: true };
+
+    it('fail a page that moved on by itself while they walked it', async () => {
+      const scannedUrl = await scanned('/links-and-replaces-after-2s');
+      const tester = keyboard(both);
+
+      const outcome = onScannedDocument(
+        tab,
+        scannedUrl,
+        async () => {
+          const result = await tester.run(tab, 'test');
+          // However fast the walk was, the page has left before this check is judged.
+          await tab.waitForURL(`${origin}/second`);
+          return result;
+        },
+        () => tester.navigatedByKey,
+      );
+
+      await expect(outcome).rejects.toBeInstanceOf(NavigatedDuringScanError);
+      expect(tester.navigatedByKey).toBe(false);
+    });
+
+    // Each of the two checks that press Escape on a dialog, alone and together.
+    it.each([
+      both,
+      { testTrapDetection: true, testEscapeHandling: false },
+      { testTrapDetection: false, testEscapeHandling: true },
+    ])('pass a page their own Escape press left (%o)', async (checks) => {
+      const scannedUrl = await scanned('/escape-leaves');
+      const tester = keyboard(checks);
+
+      const result = await onScannedDocument(
+        tab,
+        scannedUrl,
+        () => tester.run(tab, 'test'),
+        () => tester.navigatedByKey,
+      );
+
+      expect(tester.navigatedByKey).toBe(true);
+      expect(result.passed).toBe(true);
+    });
+
+    it('forget an earlier page whose Escape press left it', async () => {
+      const tester = keyboard(both);
+      await scanned('/escape-leaves');
+      await tester.run(tab, 'test');
+      expect(tester.navigatedByKey).toBe(true);
+
+      await scanned('/stays');
+      await tester.run(tab, 'test');
+
+      expect(tester.navigatedByKey).toBe(false);
+    });
+  });
+
+  it("keeps a check's own error when the move was the check's own", async () => {
+    const scannedUrl = await scanned('/stays');
+    const failure = new Error('the validator failed');
+
+    await expect(
+      onScannedDocument(
+        tab,
+        scannedUrl,
+        async () => {
+          await tab.goto(`${origin}/second`);
+          throw failure;
+        },
+        () => true,
+      ),
+    ).rejects.toBe(failure);
   });
 
   it('refuses a result that was measured after the move, on the second document', async () => {
@@ -191,7 +311,7 @@ describe('onScannedDocument', () => {
 
   // The limit the module documents: the same path is the same page to this comparison.
   it("keeps a check's own error when the page reloaded under it", async () => {
-    const scannedUrl = await scanned('/reloads-after-1s');
+    const scannedUrl = await scanned('/reloads-after-2s');
 
     const outcome = onScannedDocument(tab, scannedUrl, neverSettlesHere);
 

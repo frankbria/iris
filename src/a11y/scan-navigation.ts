@@ -13,11 +13,13 @@ import { withPageTimeout } from '../page-timeout';
 
 /** Thrown in place of a check's result, or its error, when the page moved on under it. */
 export class NavigatedDuringScanError extends Error {
-  constructor(scannedUrl: string) {
+  /** @param cause the error of the check the move destroyed, when it destroyed one. */
+  constructor(scannedUrl: string, cause?: unknown) {
     // The scanned URL only: where the page went is text the page chose, with its query string.
     super(
       `The page navigated during the scan: it was at ${scannedUrl} when the scan began and ` +
         'moved to another page before its checks finished',
+      { cause },
     );
     this.name = 'NavigatedDuringScanError';
   }
@@ -68,18 +70,26 @@ async function movedOn(page: Page, scannedUrl: string): Promise<boolean> {
  * a check that fails on one keeps its own error.
  *
  * @param scannedUrl the document URL the runner read before its checks.
+ * @param moveIsTheChecksOwn asked once the check has settled: true when the check moved the
+ * page itself (a key it pressed), which is then no fault of the page's.
  */
 export async function onScannedDocument<T>(
   page: Page,
   scannedUrl: string,
   check: () => Promise<T>,
+  moveIsTheChecksOwn: () => boolean = () => false,
 ): Promise<T> {
   let result: T;
   try {
     result = await check();
   } catch (error) {
-    throw (await movedOn(page, scannedUrl)) ? new NavigatedDuringScanError(scannedUrl) : error;
+    if (moveIsTheChecksOwn()) throw error;
+    throw (await movedOn(page, scannedUrl))
+      ? new NavigatedDuringScanError(scannedUrl, error)
+      : error;
   }
-  if (await movedOn(page, scannedUrl)) throw new NavigatedDuringScanError(scannedUrl);
+  if (!moveIsTheChecksOwn() && (await movedOn(page, scannedUrl))) {
+    throw new NavigatedDuringScanError(scannedUrl);
+  }
   return result;
 }

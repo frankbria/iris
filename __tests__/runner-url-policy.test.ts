@@ -150,9 +150,9 @@ describe('runner URL policy', () => {
       const script = target ? `<script>location.replace('${target}')</script>` : '';
       // Pages that move on by timer after their network went idle (#669), and large enough
       // that axe is still scanning them then: measured at 2.9 s for a third of this size,
-      // against moves 0.5 s and 1.5 s after the idle point.
+      // against moves 1.5 s after the idle point.
       const timed: Record<string, string> = {
-        '/replace-after-1s': `<script>setTimeout(() => location.replace('/landed?token=s3cret'), 1000)</script>`,
+        '/replace-after-2s': `<script>setTimeout(() => location.replace('/landed?token=s3cret'), 2000)</script>`,
         '/meta-refresh-2s': '<meta http-equiv="refresh" content="2;url=/landed?token=s3cret">',
       };
       const timedMove = timed[req.url ?? ''];
@@ -218,7 +218,7 @@ describe('runner URL policy', () => {
     });
 
     // #669: the URL was read on the first page, and the scan was still running when it left.
-    it.each(['/replace-after-1s', '/meta-refresh-2s'])(
+    it.each(['/replace-after-2s', '/meta-refresh-2s'])(
       'a11y fails the scan of %s, which moves on while it is scanned, by name',
       async (path) => {
         const error = await a11yError(a11y, a11yConfig(`${origin}${path}`));
