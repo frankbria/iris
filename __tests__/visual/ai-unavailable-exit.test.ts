@@ -126,4 +126,28 @@ describe('visual-diff when AI analysis is unavailable (#281)', () => {
     expect(run.out).toMatch(/AI: unavailable for 1 comparison/);
     expect(run.code).toBe(5);
   }, 60_000);
+
+  // #652: gpt-4o is served but no longer one IRIS sends images to (#523). The same chain
+  // says so on the AI line; it is refused before the budget is asked or a request leaves.
+  it('names a model IRIS does not use for images as the reason', async () => {
+    if (baselines.size === 0) await visualDiff(['--pages', '/']);
+    colour = 'rgb(20, 160, 60)';
+    const run = await visualDiff([
+      '--pages',
+      '/',
+      '--semantic',
+      '--ai-model',
+      'gpt-4o',
+      '--fail-on',
+      'breaking',
+    ]);
+
+    expect(run.out).toContain(
+      'AI: unavailable for 1 comparison(s): openai model "gpt-4o" is not one IRIS uses for ' +
+        'images (text-only, deprecated or unknown); choose another with --ai-model',
+    );
+    // Still graded by its pixels: the whole page changed.
+    expect(run.out).toMatch(/Breaking: 1/);
+    expect(run.code).toBe(5);
+  }, 60_000);
 });

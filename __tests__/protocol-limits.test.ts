@@ -103,6 +103,7 @@ describe('defaults', () => {
       maxSessionsPerOrg: 2,
       maxConnectionsPerOrg: 8,
       maxQueuedJobsPerOrg: 10,
+      mcpScanWaitMs: 45_000, // below the ingress read timeout (75 s) for /v1/ (#314)
     });
   });
 });
@@ -226,6 +227,29 @@ describe('maxActionsPerRequest', () => {
     // No session, so a valid request fails later, on the session check.
     const atCap = await call(ws, 'executeBrowserAction', { actions: [click, click] });
     expect(atCap.error?.code).toBe(-32000);
+  });
+});
+
+// #658: a selector is repeated into history and every error about it.
+describe('selector length', () => {
+  test('a selector or target over 4,096 characters is -32602; one at the bound passes validation', async () => {
+    const ws = await open(await serve({}));
+    const atBound = '#' + 'a'.repeat(4095);
+    const actions = (selector: string) => [
+      [{ type: 'click', selector }],
+      [{ type: 'fill', selector, text: 'x' }],
+      [{ type: 'assert', kind: 'element_visible', target: selector }],
+    ];
+
+    for (const over of actions(atBound + 'a')) {
+      const answer = await call(ws, 'executeBrowserAction', { actions: over });
+      expect(answer.error?.code).toBe(-32602);
+    }
+    // No session, so a valid request fails later, on the session check.
+    for (const valid of actions(atBound)) {
+      const answer = await call(ws, 'executeBrowserAction', { actions: valid });
+      expect(answer.error?.code).toBe(-32000);
+    }
   });
 });
 

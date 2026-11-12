@@ -15,7 +15,11 @@ import Stripe from 'stripe';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
 import { orgEntitlements } from '../../src/billing/plans';
-import { stripeWebhookHandler, type SubscriptionSnapshot } from '../../src/billing/stripe-webhook';
+import {
+  MAX_CONCURRENT_DELIVERIES,
+  stripeWebhookHandler,
+  type SubscriptionSnapshot,
+} from '../../src/billing/stripe-webhook';
 import type { StripeConfig } from '../../src/billing/stripe';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
@@ -312,6 +316,43 @@ function signed(payload: object, secret = CONFIG.webhookSecret) {
     await orgEntitlements(db).setPlan('org-grant', 'pro', { runsPerMonth: 5000 });
     await deliver(event('invoice.paid', 'cus_grant'));
     expect((await orgEntitlements(db).get('org-grant')).runsPerMonth).toBe(5000);
+  });
+
+  it('answers busy past the delivery cap, so a slow Stripe cannot take the pool from tenants', async () => {
+    // The pool is the hosted one's size (pg's default 10). Without the cap, a wave of
+    // deliveries whose Stripe read hangs would hold all ten connections.
+    const releaseReads: Array<() => void> = [];
+    const hangingRead = async (): Promise<SubscriptionSnapshot[]> => {
+      await new Promise<void>((resolve) => releaseReads.push(resolve));
+      return [];
+    };
+    const slow = stripeWebhookHandler(db, CONFIG, { readSubscriptions: hangingRead });
+    const orgs = Array.from({ length: 12 }, (_, index) => `org-wave-${index}`);
+    for (const org of orgs) await newOrg(org, `cus_${org}`);
+    const deliveries = orgs.map((org) => {
+      const { body, signature } = signed(event('invoice.payment_failed', `cus_${org}`));
+      return slow(body, signature);
+    });
+    const busy = await Promise.all(deliveries.slice(MAX_CONCURRENT_DELIVERIES));
+    expect(busy.every((outcome) => outcome === 'busy')).toBe(true);
+    while (releaseReads.length < MAX_CONCURRENT_DELIVERIES) await new Promise(setImmediate);
+
+    // Tenant traffic on the same pool, while the admitted deliveries still hold theirs.
+    const tenantQueries = Array.from({ length: 10 - MAX_CONCURRENT_DELIVERIES }, () =>
+      sql<{ ok: number }>`select 1 as ok from pg_sleep(0.05)`.execute(db),
+    );
+    expect((await Promise.all(tenantQueries)).map(({ rows }) => rows[0].ok)).toEqual(
+      new Array(10 - MAX_CONCURRENT_DELIVERIES).fill(1),
+    );
+
+    releaseReads.forEach((release) => release());
+    expect(await Promise.all(deliveries.slice(0, MAX_CONCURRENT_DELIVERIES))).toEqual(
+      new Array(MAX_CONCURRENT_DELIVERIES).fill('applied'),
+    );
+    // A delivery answered busy recorded nothing, so Stripe's redelivery is applied.
+    const turnedAway = orgs[MAX_CONCURRENT_DELIVERIES];
+    expect(await recordedEvents(turnedAway)).toBe(0);
+    expect(await deliver(event('invoice.payment_failed', `cus_${turnedAway}`))).toBe('applied');
   });
 
   it('ignores an unknown customer and an event type it does not act on, without asking Stripe', async () => {

@@ -254,6 +254,7 @@ describe('MCP stdio server', () => {
     expect(Object.keys(result.structuredContent!).sort()).toEqual([
       'needsReview',
       'passed',
+      'redirected',
       'url',
       'violationCount',
       'violations',

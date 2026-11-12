@@ -110,7 +110,7 @@ export interface VisualTestResult {
      * severity is the pixel estimate, not a verdict (#281). Absent when AI was not asked.
      */
     aiUnavailable?: number;
-    /** Why, when the configured model is not served by the provider (#484). */
+    /** Why, when the configured model is not served (#484) or not used for images (#652). */
     aiUnavailableReason?: string;
   };
   results: Array<{
@@ -200,7 +200,7 @@ export class VisualTestRunner {
         apiKey: config.diff.apiKey,
         // Deliberately pass through undefined when no override is configured:
         // AIVisualClassifier already resolves a current default per provider
-        // (gpt-4o / claude-sonnet-5 / llava). Pinning models here is what left
+        // (gpt-6.1-terra / claude-sonnet-5 / llava). Pinning models here is what left
         // the runner requesting retired ones (issue #111).
         model: config.diff.aiModel,
         baseURL: config.diff.aiEndpoint,

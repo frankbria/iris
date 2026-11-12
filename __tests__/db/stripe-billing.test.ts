@@ -92,14 +92,22 @@ if (!STRIPE_KEY) console.warn('Skipping Stripe test-mode calls: set IRIS_TEST_ST
 
     beforeAll(async () => {
       const stripe = stripeClient({ secretKey: STRIPE_KEY! });
-      const price = (unitAmount: number) =>
-        stripe.prices.create({
-          currency: 'usd',
-          unit_amount: unitAmount,
-          recurring: { interval: 'month' },
-          product_data: { name: `IRIS test ${unitAmount}` },
-        });
-      const [pro, team] = await Promise.all([price(4900), price(19900)]);
+      // The account's own prices when the environment names them, so a run adds no products.
+      const existing = (name: string, unitAmount: number) => {
+        const id = process.env[name];
+        return id
+          ? stripe.prices.retrieve(id)
+          : stripe.prices.create({
+              currency: 'usd',
+              unit_amount: unitAmount,
+              recurring: { interval: 'month' },
+              product_data: { name: `IRIS test ${unitAmount}` },
+            });
+      };
+      const [pro, team] = await Promise.all([
+        existing('IRIS_TEST_STRIPE_PRICE_PRO', 4900),
+        existing('IRIS_TEST_STRIPE_PRICE_TEAM', 19900),
+      ]);
       config = {
         secretKey: STRIPE_KEY!,
         webhookSecret: 'whsec_unused',

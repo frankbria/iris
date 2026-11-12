@@ -221,7 +221,7 @@ program
   )
   .option(
     '--ai-model <id>',
-    "Vision model for --feedback (e.g. gpt-4.1, claude-opus-5, llama3.2-vision). Default: the provider's vision default",
+    "Vision model for --feedback (e.g. gpt-6.1-sol, claude-opus-5-5, llama3.2-vision). Default: the provider's vision default",
   )
   .option(
     '--max-ai-calls <n>',
@@ -1400,7 +1400,7 @@ admin
 admin
   .command('retention')
   .description(
-    'Daily pass: purge orgs past their grace period, old runs, expired sessions and tokens, ' +
+    'Daily pass: purge orgs past their grace period, old runs and audit entries, expired sessions and tokens, ' +
       "expired records, and this container's AI ledger/cache rows of purged orgs",
   )
   .action(async () => {
@@ -1799,7 +1799,7 @@ program
   )
   .option(
     '--ai-model <id>',
-    "Vision model for --semantic (e.g. gpt-4.1, claude-opus-5, llama3.2-vision). Default: the provider's vision default",
+    "Vision model for --semantic (e.g. gpt-6.1-sol, claude-opus-5-5, llama3.2-vision). Default: the provider's vision default",
   )
   .option(
     '--threshold <value>',

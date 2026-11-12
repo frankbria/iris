@@ -8,6 +8,8 @@ import { Browser, Page, BrowserContext } from 'playwright';
 import { AccessibilityRunner } from '../../src/a11y/a11y-runner';
 import { AxeRunner } from '../../src/a11y/axe-integration';
 import { KeyboardTester } from '../../src/a11y/keyboard-tester';
+import type { KeyboardTestConfig } from '../../src/a11y/keyboard-tester';
+import { NavigatedDuringScanError } from '../../src/a11y/scan-navigation';
 
 // Mock Playwright
 jest.mock('playwright');
@@ -65,7 +67,16 @@ describe('AccessibilityRunner', () => {
     // Mock Playwright Page
     mockPage = {
       goto: jest.fn().mockResolvedValue(undefined),
+      // The document's URL, which the runner reports (#662): the page that was navigated
+      // to, unless a test says the page moved on.
+      url: jest.fn(() => mockPage.goto.mock.calls.at(-1)?.[0] ?? 'about:blank'),
       evaluate: jest.fn().mockResolvedValue([]),
+      // The handle the runner holds the scanned document by (#675): it answers while the
+      // page holds that document.
+      evaluateHandle: jest.fn().mockResolvedValue({
+        evaluate: jest.fn().mockResolvedValue(0),
+        dispose: jest.fn().mockResolvedValue(undefined),
+      }),
       close: jest.fn().mockResolvedValue(undefined),
       // What installUrlPolicyGuard touches: the runner always installs it (#335).
       context: () => mockContext,
@@ -76,7 +87,25 @@ describe('AccessibilityRunner', () => {
     // Mock Playwright BrowserContext
     mockContext = {
       newPage: jest.fn().mockResolvedValue(mockPage),
-      newCDPSession: jest.fn().mockResolvedValue({ send: jest.fn(), on: jest.fn() }),
+      newCDPSession: jest.fn().mockResolvedValue({
+        // The guard asks each page for its target id (#668) and, when the page holds an
+        // error page, the browser for the navigation that left it (#677).
+        send: jest.fn(async (method: string) =>
+          method === 'Page.getFrameTree'
+            ? {
+                frameTree: {
+                  frame: {
+                    id: 'page-target',
+                    loaderId: 'failed-navigation',
+                    url: 'chrome-error://chromewebdata/',
+                    unreachableUrl: 'https://unreachable.example/',
+                  },
+                },
+              }
+            : { targetInfo: { targetId: 'page-target' } },
+        ),
+        on: jest.fn(),
+      }),
       route: jest.fn().mockResolvedValue(undefined),
       on: jest.fn(),
       browser: jest.fn().mockReturnValue(null),
@@ -369,6 +398,344 @@ describe('AccessibilityRunner', () => {
       });
       expect(mockPage.goto).toHaveBeenCalledWith('http://localhost:3000/about', {
         waitUntil: 'networkidle',
+      });
+    });
+
+    // #662: the response of the navigation asked for is the first page; a page can move on.
+    it('hands axe the URL of the document it scans, without fragment or credentials', async () => {
+      mockPage.url.mockReturnValue('https://user:pw@example.com/login?next=1#access_token=s3cret');
+      accessibilityRunner = new AccessibilityRunner({
+        ...defaultConfig,
+        pages: ['https://example.com/account'],
+      });
+
+      await accessibilityRunner.run();
+
+      expect(mockAxeRunner.run).toHaveBeenCalledWith(
+        mockPage,
+        expect.any(String),
+        'https://example.com/login?next=1',
+      );
+    });
+
+    it('leaves a data: document URL as it is', async () => {
+      const page = 'data:text/html,<h1>hi</h1>#part';
+      accessibilityRunner = new AccessibilityRunner({ ...defaultConfig, pages: [page] });
+
+      await accessibilityRunner.run();
+
+      expect(mockAxeRunner.run).toHaveBeenCalledWith(mockPage, expect.any(String), page);
+    });
+
+    it('does not scan the error page a failed move leaves behind', async () => {
+      mockPage.url.mockReturnValue('chrome-error://chromewebdata/');
+      accessibilityRunner = new AccessibilityRunner({
+        ...defaultConfig,
+        pages: ['https://example.com/account'],
+      });
+
+      const result = await accessibilityRunner.run();
+
+      expect(mockAxeRunner.run).not.toHaveBeenCalled();
+      expect(result.results[0].error).toBe(
+        'https://example.com/account moved on to a page that could not be loaded',
+      );
+      expect(result.summary.passed).toBe(false);
+    });
+
+    describe('a page that moves on during its checks (#669)', () => {
+      const first = 'https://example.com/account';
+      const second = 'https://example.com/login?next=%2Faccount';
+      const scanOf = (keyboard: Partial<KeyboardTestConfig> = {}) =>
+        new AccessibilityRunner({
+          ...defaultConfig,
+          pages: [first],
+          keyboard: { ...defaultConfig.keyboard, ...keyboard },
+        }).run();
+      /** A check during which the page goes from `first` to `to`. */
+      const movingTo = <T>(to: string, outcome: () => Promise<T>): (() => Promise<T>) => {
+        let url = first;
+        mockPage.url.mockImplementation(() => url);
+        return () => {
+          url = to;
+          return outcome();
+        };
+      };
+
+      it('fails the page, by name, when the axe scan returned a result across the move', async () => {
+        const measured = await mockAxeRunner.run(mockPage, 'test', first);
+        mockAxeRunner.run.mockImplementation(movingTo(second, () => Promise.resolve(measured)));
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBe(
+          `The page navigated during the scan: it was at ${first} when the scan began and ` +
+            'moved to another page before its checks finished',
+        );
+        expect(result.results[0].passed).toBe(false);
+        expect(result.summary.pagesErrored).toBe(1);
+        // Nothing else was measured on the second page.
+        expect(mockKeyboardTester.run).not.toHaveBeenCalled();
+      });
+
+      it('fails the page, by name, when it loaded again under the same URL (#675)', async () => {
+        mockPage.url.mockReturnValue(first);
+        const scannedDocument = {
+          evaluate: jest.fn().mockResolvedValue(0),
+          dispose: jest.fn().mockResolvedValue(undefined),
+        };
+        mockPage.evaluateHandle.mockResolvedValue(scannedDocument);
+        mockAxeRunner.run.mockImplementation(() => {
+          scannedDocument.evaluate.mockRejectedValue(new Error('Execution context was destroyed'));
+          return Promise.reject(new Error('Execution context was destroyed'));
+        });
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBe(
+          `The page navigated during the scan: it was at ${first} when the scan began and ` +
+            'loaded again before its checks finished',
+        );
+        expect(mockKeyboardTester.run).not.toHaveBeenCalled();
+      });
+
+      it('holds the document a navigation left when one committed as it took hold (#675)', async () => {
+        mockPage.url.mockReturnValue(first);
+        const held = await mockPage.evaluateHandle('document');
+        mockPage.evaluateHandle
+          .mockReset()
+          .mockRejectedValueOnce(new Error('Execution context was destroyed'))
+          .mockResolvedValue(held);
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBeUndefined();
+        expect(mockPage.evaluateHandle).toHaveBeenCalledTimes(2);
+      });
+
+      it('fails the page, by name, when the move destroyed the axe scan', async () => {
+        mockAxeRunner.run.mockImplementation(
+          movingTo(second, () =>
+            Promise.reject(
+              new Error('Execution context was destroyed, most likely because of a navigation'),
+            ),
+          ),
+        );
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toMatch(/^The page navigated during the scan: /);
+        expect(result.results[0].error).not.toMatch(/login|Execution context/);
+      });
+
+      it('fails the page when it moves on during the screen-reader checks', async () => {
+        let url = first;
+        mockPage.url.mockImplementation(() => url);
+        mockPage.evaluate.mockImplementation(async (script: unknown) => {
+          // The screen-reader checks pass functions; the comparison's own call is a string.
+          if (typeof script === 'function') url = second;
+          return [];
+        });
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toMatch(/^The page navigated during the scan: /);
+        expect(mockKeyboardTester.run).not.toHaveBeenCalled();
+      });
+
+      it('scans a page that only rewrites its query string and fragment', async () => {
+        const measured = await mockAxeRunner.run(mockPage, 'test', first);
+        mockAxeRunner.run.mockImplementation(
+          movingTo(`${first}?tab=2#section`, () => Promise.resolve(measured)),
+        );
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBeUndefined();
+        expect(mockKeyboardTester.run).toHaveBeenCalledTimes(1);
+      });
+
+      it("keeps the scan's own error when the page did not move", async () => {
+        mockAxeRunner.run.mockRejectedValue(new Error('axe-core timed out after 30000 ms'));
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBe('axe-core timed out after 30000 ms');
+      });
+
+      // A dialog whose Escape handler leaves the page passes its keyboard check (#286).
+      it('does not fail a page that a key press of the keyboard checks moved on', async () => {
+        const walked = await mockKeyboardTester.run(mockPage, 'test');
+        mockKeyboardTester.run.mockImplementation(
+          movingTo(second, () => {
+            mockKeyboardTester.navigatedByKey = true;
+            return Promise.resolve(walked);
+          }),
+        );
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBeUndefined();
+        expect(result.results[0].keyboardResult).toBe(walked);
+      });
+
+      it('does not fail a page that moved while custom key sequences ran', async () => {
+        const walked = await mockKeyboardTester.run(mockPage, 'test');
+        mockKeyboardTester.run.mockImplementation(movingTo(second, () => Promise.resolve(walked)));
+
+        const result = await scanOf({
+          customSequences: [{ name: 'open', keys: ['Enter'], expectedBehavior: 'opens' }],
+        });
+
+        expect(result.results[0].error).toBeUndefined();
+      });
+
+      // The tester stops before its Escape check goes back to the start page (#679).
+      it('fails a page the tester saw move by itself, though custom key sequences are set (#679)', async () => {
+        mockKeyboardTester.run.mockImplementation(
+          movingTo(second, () => {
+            mockKeyboardTester.movedByItself = true;
+            return Promise.reject(
+              new Error(
+                'Keyboard testing failed: The page moved on by itself before the Escape check',
+              ),
+            );
+          }),
+        );
+
+        const result = await scanOf({
+          customSequences: [{ name: 'open', keys: ['Enter'], expectedBehavior: 'opens' }],
+        });
+
+        expect(result.results[0].error).toBe(
+          `The page navigated during the scan: it was at ${first} when the scan began and ` +
+            'moved to another page before its checks finished',
+        );
+        // The tester judges by the document the runner scanned, not one it took later.
+        expect(mockKeyboardTester.run).toHaveBeenCalledWith(
+          mockPage,
+          expect.any(String),
+          expect.objectContaining({ url: first }),
+        );
+      });
+
+      // The page was back at the scanned path when the hold read it: the tester's own
+      // error names the move (#683).
+      it('fails by name a page the tester saw move, though it is back where it was', async () => {
+        mockKeyboardTester.run.mockImplementation(() => {
+          mockKeyboardTester.movedByItself = true;
+          return Promise.reject(new NavigatedDuringScanError(first, false));
+        });
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBe(
+          `The page navigated during the scan: it was at ${first} when the scan began and ` +
+            'moved to another page before its checks finished',
+        );
+      });
+
+      describe('the document the keyboard checks loaded again (#683)', () => {
+        const reloadedInto = () => ({
+          url: first,
+          replaced: jest.fn().mockResolvedValue(false),
+          release: jest.fn().mockResolvedValue(undefined),
+        });
+
+        it('is let go of once the hold has asked it', async () => {
+          const reloaded = reloadedInto();
+          const walked = await mockKeyboardTester.run(mockPage, 'test');
+          mockKeyboardTester.run.mockImplementation(async () => {
+            mockKeyboardTester.reloadedInto = reloaded;
+            return walked;
+          });
+
+          const result = await scanOf();
+
+          expect(result.results[0].error).toBeUndefined();
+          expect(reloaded.release).toHaveBeenCalledTimes(1);
+          expect(reloaded.replaced.mock.invocationCallOrder[0]).toBeLessThan(
+            reloaded.release.mock.invocationCallOrder[0],
+          );
+        });
+
+        it('is let go of when the keyboard checks failed too', async () => {
+          const reloaded = reloadedInto();
+          mockKeyboardTester.run.mockImplementation(async () => {
+            mockKeyboardTester.reloadedInto = reloaded;
+            throw new Error('Keyboard testing failed: no');
+          });
+
+          const result = await scanOf();
+
+          expect(result.results[0].error).toBe('Keyboard testing failed: no');
+          expect(reloaded.release).toHaveBeenCalledTimes(1);
+        });
+      });
+
+      it('fails a page that moved on by itself during the keyboard checks', async () => {
+        const walked = await mockKeyboardTester.run(mockPage, 'test');
+        mockKeyboardTester.run.mockImplementation(movingTo(second, () => Promise.resolve(walked)));
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toMatch(/^The page navigated during the scan: /);
+        expect(result.results[0].keyboardResult).toBeUndefined();
+      });
+
+      it('fails the page, by name, when such a move destroyed the keyboard checks', async () => {
+        mockKeyboardTester.run.mockImplementation(
+          movingTo(second, () =>
+            Promise.reject(new Error('Keyboard testing failed: Execution context was destroyed')),
+          ),
+        );
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toMatch(/^The page navigated during the scan: /);
+      });
+
+      // #662's words for it: what a refused or failed move leaves is Chromium's error page.
+      it('says a move that could not be loaded was one, not just that the page navigated', async () => {
+        const measured = await mockAxeRunner.run(mockPage, 'test', first);
+        mockAxeRunner.run.mockImplementation(
+          movingTo('chrome-error://chromewebdata/', () => Promise.resolve(measured)),
+        );
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBe(
+          `${first} moved on to a page that could not be loaded`,
+        );
+      });
+
+      it('runs the checks that only read the page before the ones that press keys', async () => {
+        const order: string[] = [];
+        const measured = await mockAxeRunner.run(mockPage, 'test', first);
+        mockAxeRunner.run.mockImplementation(async () => {
+          order.push('axe');
+          return measured;
+        });
+        mockPage.evaluate.mockImplementation(async (script: unknown) => {
+          if (typeof script === 'function' && order.at(-1) !== 'screen reader') {
+            order.push('screen reader');
+          }
+          return [];
+        });
+        mockKeyboardTester.run.mockImplementation(async () => {
+          order.push('keyboard');
+          return {
+            testName: 'keyboard-test',
+            passed: true,
+            interactions: [],
+            focusOrder: [],
+            trapTests: [],
+          };
+        });
+
+        await scanOf();
+
+        expect(order).toEqual(['axe', 'screen reader', 'keyboard']);
       });
     });
 

@@ -118,8 +118,8 @@ production.
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
 | `P0.32` | [#260](https://github.com/frankbria/iris/issues/260) | Plan catalog and org entitlements | P0.20 (#248) | DONE (PR #468; owner-approved limits, one free org per user) |
-| `P0.33` | [#261](https://github.com/frankbria/iris/issues/261) | Stripe customer and subscription lifecycle | P0.22 (#250), P0.32 (#260) | IN REVIEW (#636, with #345; the test-mode subscribe/upgrade/cancel run waits for the owner's Stripe test account) |
-| `P0.34` | [#345](https://github.com/frankbria/iris/issues/345) | Stripe webhook endpoint | P0.33 (#261) | IN REVIEW (#636, with #261) |
+| `P0.33` | [#261](https://github.com/frankbria/iris/issues/261) | Stripe customer and subscription lifecycle | P0.22 (#250), P0.32 (#260) | DONE (PR #636, with #345): subscribe, upgrade (Pro to Team in the Customer Portal) and cancel were run against Stripe test mode on 2026-11-12, through `stripe listen` and a hosted `iris connect` |
+| `P0.34` | [#345](https://github.com/frankbria/iris/issues/345) | Stripe webhook endpoint | P0.33 (#261) | DONE (PR #636, with #261) |
 | `P0.35` | [#263](https://github.com/frankbria/iris/issues/263) | Billable usage ledger: browser-minutes, text calls, vision calls, agent turns | P0.27 (#255) | DONE ([#432](https://github.com/frankbria/iris/pull/432)) |
 | `P0.36` | [#264](https://github.com/frankbria/iris/issues/264) | Report managed-credit usage to Stripe meters | P0.34 (#345), P0.35 (#263) | IN REVIEW (draft #637, stacked on #636; the test-mode meter run waits for the owner's Stripe test account) |
 | `P0.37` | [#346](https://github.com/frankbria/iris/issues/346) | Entitlement enforcement at the API boundary | P0.25 (#342), P0.32 (#260), P0.35 (#263) | DONE (PR #480; managed credits split to #479) |
@@ -157,7 +157,7 @@ production.
 | `P0.51` | [#349](https://github.com/frankbria/iris/issues/349) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | DONE (PR #470) |
 | `P0.52` | [#435](https://github.com/frankbria/iris/issues/435) | Reap jobs stuck in running after a worker crash | P0.39 (#267) | DONE (PR #443) |
 | `P0.53` | [#445](https://github.com/frankbria/iris/issues/445) | Object storage backups: bucket versioning/replication and a restore drill | P0.60 (#514) | BLOCKED (on #514; closes on a staging bucket) |
-| `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | BLOCKED (needs-owner: wording approved 2026-11-10; only the placeholder values remain) |
+| `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | BLOCKED (needs-owner): wording approved 2026-11-10, only the placeholder values remain |
 | `P0.55` | [#460](https://github.com/frankbria/iris/issues/460) | Signed artifact URLs in run detail | P0.29 (#257) | DONE (PR #471) |
 | `P0.56` | [#463](https://github.com/frankbria/iris/issues/463) | Portal: visual diff images and baseline approval | P0.40 (#268), P0.55 (#460) | DONE (PR #474) |
 | `P0.57` | [#472](https://github.com/frankbria/iris/issues/472) | Purge visual artifacts from object storage | P0.40 (#268) | DONE (PR #477) |
@@ -204,24 +204,25 @@ production.
 | `P1.35` | [#379](https://github.com/frankbria/iris/issues/379) | Egress proxy timeouts, configurable popup cap, per-session page cap | P0.11 (#338) | DONE (#542) |
 | `P1.36` | [#408](https://github.com/frankbria/iris/issues/408) | Portal: remove members, change roles, leave an org | P0.22 (#250) | DONE (#543) |
 | `P1.39` | [#442](https://github.com/frankbria/iris/issues/442) | Job-level deadline: a hung browser holds the worker forever | P0.52 (#435) | DONE (#545) |
+| `P1.43` | [#658](https://github.com/frankbria/iris/issues/658) | Credential-stripping patterns take quadratic time on long input: one request can block the hosted RPC server | P3.34 (#645) | DONE: the userinfo and query-parameter patterns are linear with the same match set; error text is cut to 16,384 units before the patterns; selectors and assertion targets are bounded at 4,096 characters |
 
 ### P2 — Post-launch fast-follow
 
 | `[PX.Y]` | Issue | Title | Depends on | Status |
 |----------|-------|-------|-----------|--------|
 | `P2.1` | [#312](https://github.com/frankbria/iris/issues/312) | RPC observation method: screenshots and page snapshots ("eyes") | P0.24 (#341) | DONE (#548) |
-| `P2.2` | [#362](https://github.com/frankbria/iris/issues/362) | MCP tool: follow-up items | P0.7 (#334) | TODO |
-| `P2.3` | [#314](https://github.com/frankbria/iris/issues/314) | Hosted MCP over HTTP with tenant auth and metering | P0.24 (#341), P0.35 (#263), P2.2 (#362) | TODO |
+| `P2.2` | [#362](https://github.com/frankbria/iris/issues/362) | MCP tool: follow-up items | P0.7 (#334) | DONE (#643) |
+| `P2.3` | [#314](https://github.com/frankbria/iris/issues/314) | Hosted MCP over HTTP with tenant auth and metering | P0.24 (#341), P0.35 (#263), P2.2 (#362) | DONE (#647) |
 | `P2.4` | [#315](https://github.com/frankbria/iris/issues/315) | Per-plan artifact storage quota | P0.29 (#257), P0.37 (#346) | DONE (#551) |
 | `P2.5` | [#316](https://github.com/frankbria/iris/issues/316) | Zero-downtime deploys | P0.45 (#273), P1.30 (#309), P0.59 (#440) | TODO |
-| `P2.6` | [#317](https://github.com/frankbria/iris/issues/317) | Public status page | P0.47 (#275) | TODO |
+| `P2.6` | [#317](https://github.com/frankbria/iris/issues/317) | Public status page | P0.47 (#275), P0.59 (#440) | BLOCKED (needs-owner: where the page is hosted) |
 | `P2.7` | [#318](https://github.com/frankbria/iris/issues/318) | Store money as integer micro-units | P0.35 (#263) | DONE (#552) |
 | `P2.8` | [#319](https://github.com/frankbria/iris/issues/319) | Watcher: `--execute` targets and nested ignore globs | — | DONE (#553) |
 | `P2.9` | [#320](https://github.com/frankbria/iris/issues/320) | npm package publish-readiness | — | DONE (#554) |
 | `P2.10` | [#321](https://github.com/frankbria/iris/issues/321) | Local SQLite: real migration runner or delete dead migrations | P0.20 (#248) | DONE (#555) |
 | `P2.11` | [#322](https://github.com/frankbria/iris/issues/322) | Accessibility of IRIS own reports | P0.18 (#339) | DONE (#556) |
 | `P2.12` | [#323](https://github.com/frankbria/iris/issues/323) | Capture engine: do not force `transform: none` on every element | — | DONE (#557) |
-| `P2.13` | [#363](https://github.com/frankbria/iris/issues/363) | Dependency audit gate | — | TODO |
+| `P2.13` | [#363](https://github.com/frankbria/iris/issues/363) | Dependency audit gate | — | DONE (#649) |
 | `P2.14` | [#378](https://github.com/frankbria/iris/issues/378) | Agent mode: per-origin asset allowlist under a pinned origin | — | DONE (#558) |
 | `P2.15` | [#412](https://github.com/frankbria/iris/issues/412) | Portal: rename and disable API keys | P0.23 (#340) | DONE (#559) |
 | `P2.19` | [#457](https://github.com/frankbria/iris/issues/457) | Account-level bans (user suspension) | P1 (#348) | DONE (#560) |
@@ -233,7 +234,12 @@ production.
 | `P2.25` | [#504](https://github.com/frankbria/iris/issues/504) | Assertions that pass before the page settles (element_absent, url_matches) | — | DONE (#568) |
 | `P2.27` | [#520](https://github.com/frankbria/iris/issues/520) | OpenAI o-series: omit temperature | — | DONE (#572) |
 | `P2.28` | [#522](https://github.com/frankbria/iris/issues/522) | fetchWithTimeout covers the response body | — | DONE (#574) |
+| `P2.29` | [#523](https://github.com/frankbria/iris/issues/523) | Cost tracker: price the current models, discontinue the deprecated ones | P1 (#298) | DONE (#650) |
 | `P2.30` | [#528](https://github.com/frankbria/iris/issues/528) | RPC server: JSON-RPC batch requests (decided: not supported) | — | DONE (#575) |
+| `P2.31` | [#541](https://github.com/frankbria/iris/issues/541) | Audit log: a read surface for org admins, and a retention period (90 days) | P1 (#361) | DONE (#577, #653) |
+| `P2.32` | [#639](https://github.com/frankbria/iris/issues/639) | Deploy job: pass IRIS_BILLING_GRACE_DAYS to settings.env so the payment grace period is configurable in production | P0.38 (#266) | BLOCKED (needs-owner) |
+| `P2.33` | [#651](https://github.com/frankbria/iris/issues/651) | Live-check the gpt-6 request shape with a real OpenAI key, and confirm the model decisions of #650 | P2.29 (#523) | BLOCKED (needs-owner) |
+| `P2.34` | [#654](https://github.com/frankbria/iris/issues/654) | Privacy policy: say how long audit log entries are kept (90 days, #541) | P2.31 (#541) | BLOCKED (needs-owner) |
 | `P2.26` | [#513](https://github.com/frankbria/iris/issues/513) | Credential references hardening: origin binding and transformed values | P1.16 (#352) | DONE (#571) |
 
 ### P3 — Polish / test trust / hygiene
@@ -259,6 +265,7 @@ production.
 | `P3.18` | [#510](https://github.com/frankbria/iris/issues/510) | iris run: a distinct exit code for a provider outage, in one-shot and --agent mode | — | DONE (#598) |
 | `P3.19` | [#511](https://github.com/frankbria/iris/issues/511) | iris watch: report a provider outage as a failure with its reason | — | DONE (#599) |
 | `P3.22` | [#564](https://github.com/frankbria/iris/issues/564) | worker-cli heartbeat test counts wall-clock beats: flaky on a loaded runner | — | DONE (#602) |
+| `P3.23` | [#565](https://github.com/frankbria/iris/issues/565) | GLM review job passes when its model call errors: PRs get a 1-second non-review | — | CLOSED: fixed upstream (frankbria/glm-review#15 to #17); the notice and real reviews verified 2026-11-11, the provider-side cause on the owner's word |
 | `P3.21` | [#519](https://github.com/frankbria/iris/issues/519) | Pattern translator: reject prose with a selector token glued in | — | DONE (#600) |
 | `P3.25` | [#570](https://github.com/frankbria/iris/issues/570) | backup.sh: a container that stops between discovery and exec fails with Docker's message | — | DONE (#605) |
 | `P3.26` | [#573](https://github.com/frankbria/iris/issues/573) | AI client request builders are CC 16: split translateInstruction / analyzeVisualDiff | — | DONE (#606) |
@@ -268,6 +275,25 @@ production.
 | `P3.30` | [#603](https://github.com/frankbria/iris/issues/603) | iris run: a malformed budget variable exits 3 instead of a config error | P3.18 (#510) | DONE (#607) |
 | `P3.20` | [#518](https://github.com/frankbria/iris/issues/518) | CRAP tech debt: changed functions over the ceiling | — | DONE (#608, #610) |
 | `P3.31` | [#609](https://github.com/frankbria/iris/issues/609) | Lizard misreads src/watcher.ts, so changed lines there fail the CRAP gate | P3.20 (#518) | DONE (#611) |
+| `P3.32` | [#641](https://github.com/frankbria/iris/issues/641) | Portal: credit left ignores held managed-AI reservations, so it can show credit the resolver refuses | P0.43 (#271) | BLOCKED (#271, draft PR #640) |
+| `P3.33` | [#644](https://github.com/frankbria/iris/issues/644) | CI review job fails at "Fetch the PR diff" when the diff holds a raw ESC byte | — | TODO |
+| `P3.34` | [#645](https://github.com/frankbria/iris/issues/645) | stripUserinfo and redactString leave part of a password that contains an @ or a space | — | DONE: both cut to the authority's last `@`; a URL held whole is parsed (`urlWithoutUserinfo`, `stripUserinfo(text, quotedUrl)`); a raw space in free text stays a documented limit |
+| `P3.35` | [#646](https://github.com/frankbria/iris/issues/646) | MCP tool: offer the keyboard checks, and decide what `passed` means against `--fail-on` | P2.2 (#362) | BLOCKED (needs-owner) |
+| `P3.36` | [#648](https://github.com/frankbria/iris/issues/648) | Hosted MCP: report where a redirect landed, and axe's help URL for each violated rule | P2.3 (#314) | DONE: a redirected page's result stores `landedUrl` (origin and path, cut); the tool reports it as `url` with `redirected` and `redirectedFrom`; each rule's `helpUrl` is derived from the installed axe version, not stored |
+| `P3.37` | [#652](https://github.com/frankbria/iris/issues/652) | Price table: delete deprecated rows after their shutdown dates; sampling options for fine-tuned ids | P2.29 (#523) | PARTIAL: fine-tuned sampling and the visual-diff reason are done; the price rows wait for their dates (first 2026-11-30), the reply cap for #651 |
+| `P3.38` | [#660](https://github.com/frankbria/iris/issues/660) | redactString: a run of bare separators costs a callback each (1 MB of & takes about 360 ms) | P1.43 (#658) | DONE: the pattern needs a value again and a `?` begins a match only as the first of its name; 1 MB of separators about 9 ms, match set unchanged |
+| `P3.39` | [#662](https://github.com/frankbria/iris/issues/662) | a11y: a client-side navigation is not reported as a redirect; portal run detail does not show landedUrl | P3.36 (#648) | DONE: the runner reports the document's URL at the time axe runs (`guardedDocumentUrl`), a refused or failed move fails the scan, and run detail shows `(landed on …)` |
+| `P3.40` | [#664](https://github.com/frankbria/iris/issues/664) | Fine-tuned OpenAI ids: the vision table refuses them and the price table charges the dearest rate | P3.37 (#652) | DONE (#670): four fine-tuned rows from OpenAI's pricing page (they go with their bases on 2027-01-14); a fine-tuned id is never a vision model and the refusal says so |
+| `P3.41` | [#666](https://github.com/frankbria/iris/issues/666) | Tests: freePort() releases the port before iris connect listens, so a parallel suite can take it (address already in use) | — | DONE: `iris connect` is spawned on port 0 and its port read back; nginx, the portal image and `--metrics-port` are started again on fresh ports when they report theirs taken (`__tests__/utils/ports.ts`) |
+| `P3.42` | [#668](https://github.com/frankbria/iris/issues/668) | URL guard: record only main-frame refusals, so a refused move's reason cannot be a frame's | P3.39 (#662) | DONE: the page session records a refused document only for the main frame (its frame id is the page's target id), so a refused iframe is not quoted when the main document fails for another reason |
+| `P3.43` | [#669](https://github.com/frankbria/iris/issues/669) | a11y: a page that moves on after the network went idle is reported at its first page, or fails mid-scan | P3.39 (#662) | DONE: every check is held to the document read before it; a page whose origin or path changes under one fails with "The page navigated during the scan" (a query-only or fragment-only change does not); the keyboard checks run last, and a move one of their own key presses made is not an error |
+| `P3.44` | [#673](https://github.com/frankbria/iris/issues/673) | URL guard: a main frame's earlier refusal is quoted for a later move that failed for another reason | P3.42 (#668) | DONE: the guard remembers which navigation a refused main-frame document belonged to and, when the main frame commits, keeps that refusal as the error page's reason only if the commit is that navigation's; `guardedDocumentUrl` quotes that. Follow-up: #677 (P3.46) |
+| `P3.45` | [#675](https://github.com/frankbria/iris/issues/675) | a11y: a page that reloads itself, or a key other than Escape that navigates, is not told apart during the scan | P3.43 (#669) | DONE: the runner holds the scanned document itself, so a reload (or the same path under another query string) during a check fails the page as "navigated during the scan … and loaded again", while a query or fragment rewrite within the document still does not; an arrow key that leaves the page is the keyboard check's own move and a failed interaction; a handler that navigates after a delay stays the page's move (decision, pinned by a test). Follow-up: none |
+| `P3.46` | [#677](https://github.com/frankbria/iris/issues/677) | URL guard: the error page's reason depends on event order, and only the latest refused navigation is remembered | P3.44 (#673) | DONE: `guardedDocumentUrl` is async and asks the browser which navigation left the error page (`Page.getFrameTree` on the guard's session), instead of reading state set from commit events; refused navigations are kept by id, the newest 16. The reason no longer depends on event order, and a refused move a second one overtook keeps its own reason. Follow-up: none |
+| `P3.47` | [#679](https://github.com/frankbria/iris/issues/679) | a11y: the keyboard checks' return to the start page can hide a move the page made by itself | P3.45 (#675) | DONE: shown in Chromium (a page that moved by itself to a page with a dialog was taken back to the start URL and reported with the second page's results); the keyboard tester now holds the document it started on and, before its Escape check goes back, stops when the page moved, loaded again or pushed another path with no key of the tester's to blame, so the runner fails the page as "navigated during the scan", with custom sequences configured too. Follow-up: none |
+| `P3.48` | [#681](https://github.com/frankbria/iris/issues/681) | URL guard: a popup's refused opening navigation leaves an error page with no reason | P3.46 (#677) | CLOSED, not done on purpose: nothing reads a popup with `guardedDocumentUrl`, so the code to carry an opener-judged refusal over to the popup's guard would serve no caller. The read still fails ("could not be loaded"), only without the policy's reason; pinned by a real-Chromium test and written into `.claude/rules/browser-safety.md`. Reopen when a caller reads popups. Follow-up: none |
+| `P3.49` | [#683](https://github.com/frankbria/iris/issues/683) | a11y: the keyboard tester never releases the document it reloaded into, and a move pushed away and back keeps a plain error | P3.47 (#679) | DONE: the a11y runner releases the document the keyboard checks loaded again once its hold has asked it, and the tester releases a leftover one when its next run begins; the tester now throws `NavigatedDuringScanError` itself for a move it saw the page make, so a router that pushed the first path back before the runner's read no longer leaves a plain "Keyboard testing failed" error (shown in Chromium). Follow-up: none |
+| `P3.50` | [#685](https://github.com/frankbria/iris/issues/685) | Portal E2E: "a user left in no org is sent to log in again" sometimes gets Next's error page on /dashboard | — | DONE: not test timing. The dashboard's link prefetches found the user in no org and signed the session out while the test's own `/dashboard` request was between two BetterAuth reads, which then threw the session middleware's 401. `requireOrg()` and the reads `/org` and `/api-keys` make after it now send a session that ended meanwhile to `/login` (`logInIfSignedOut`); the test is unchanged. A user can hit it by logging out in a second tab. Follow-up: none |
 
 ---
 
