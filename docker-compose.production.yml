@@ -54,6 +54,8 @@ services:
       IRIS_STRIPE_WEBHOOK_SECRET_FILE: ${IRIS_STRIPE_WEBHOOK_SECRET_FILE:-}
       IRIS_STRIPE_PRICE_PRO: ${IRIS_STRIPE_PRICE_PRO:-}
       IRIS_STRIPE_PRICE_TEAM: ${IRIS_STRIPE_PRICE_TEAM:-}
+      # Days from a failed payment to suspension (#266); empty is the default, 7.
+      IRIS_BILLING_GRACE_DAYS: ${IRIS_BILLING_GRACE_DAYS:-}
     secrets:
       - database_url
       - better_auth_secret

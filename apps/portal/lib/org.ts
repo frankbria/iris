@@ -3,6 +3,7 @@ import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 import { cache } from "react"
 
+import { paymentState } from "../../../src/billing/payment-grace"
 import { hasAcceptedCurrent } from "../../../src/legal/acceptance"
 import { orgSuspensions } from "../../../src/org-suspension"
 import { getAuth, getDb } from "@/lib/auth"
@@ -95,8 +96,12 @@ async function sessionOrg(requestHeaders: Headers) {
     query: { organizationId: org.id },
   })
   // An operator suspension (#348): pages show a banner, key writes are refused.
-  const suspended = await orgIsSuspended(org.id)
-  return { session, org, orgs, role, suspended }
+  // A failed payment (#266): its own banner, during the grace period and after.
+  const [suspended, payment] = await Promise.all([
+    orgIsSuspended(org.id),
+    paymentState(getDb(), org.id),
+  ])
+  return { session, org, orgs, role, suspended, payment }
 }
 
 /** Whether an operator has suspended the org (#348). One indexed query. */

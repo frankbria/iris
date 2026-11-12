@@ -55,6 +55,9 @@ jest.mock("../../../src/legal/acceptance", () => ({
 jest.mock("../../../src/org-suspension", () => ({
   orgSuspensions: () => ({ isSuspended: async () => false }),
 }))
+jest.mock("../../../src/billing/payment-grace", () => ({
+  paymentState: async () => null,
+}))
 
 /** What BetterAuth's session middleware throws when the session is no longer there. */
 const sessionGone = () => new APIError("UNAUTHORIZED", { code: "UNAUTHORIZED" })
@@ -79,6 +82,7 @@ test("a signed-in member gets their session, org and role", async () => {
     orgs: [org],
     role: "owner",
     suspended: false,
+    payment: null,
   })
 })
 

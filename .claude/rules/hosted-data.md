@@ -249,8 +249,9 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   pool would be more connections and config for the same bound. Checked after the
   signature and the type, so ignored events never wait. `db/stripe-webhook.test.ts` holds
   two reads open on a default-sized pool and shows eight tenant queries still run.
-- **Plan from the price**: `active`, `trialing` and `past_due` keep the price's plan (the
-  grace period is #266); any other status, or a price IRIS does not sell, is free.
+- **Plan from the price**: `active`, `trialing` and `past_due` keep the price's plan (a
+  failed payment suspends, it does not downgrade: #266 below); any other status, or a price
+  IRIS does not sell, is free.
   `setPlan` is called only when the plan changes, because it replaces the overrides (a
   support grant). `setPlan` joins a caller's transaction (`db.isTransaction`): Kysely
   cannot nest one.
@@ -261,7 +262,8 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   changes and cancelling go through the Customer Portal, which must allow switching prices.
 - **Portal**: `createAuth()` roles carry `billing: ['manage']` (owners, admins). Server
   actions `startCheckout` / `openBillingPortal` (`app/org/actions.ts`) check that
-  permission for the form's org, then suspension, then redirect to Stripe. `lib/billing.ts`
+  permission for the form's org, then suspension (the Portal passes a billing one, #266),
+  then redirect to Stripe. `lib/billing.ts`
   is `server-only`. Portal E2E sets placeholder `IRIS_STRIPE_*` and never reaches Stripe;
   its positive control is a forged Checkout refused for a live subscription (after the
   permission check).
@@ -275,6 +277,58 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   `IRIS_TEST_STRIPE_PRICE_PRO` / `_TEAM` set they use those prices; without, each run
   creates two test products. The default
   reader is covered there too (an unpaid test-mode subscription stored as `incomplete`).
+
+### Payment Failure (issue #266)
+
+`src/billing/payment-grace.ts`, migration 0022 (`org_billing.payment_grace_ends_at`,
+`payment_suspended_at`). Ops: runbook "Failed payments".
+
+- **Stripe's state decides, not the event type** (the #636 rule). After every handled event
+  the webhook calls `trackPayment(tx, orgId, { failing })`, `failing` being a current
+  subscription that is `past_due` or `unpaid`. Failing with no deadline starts the grace
+  period; not failing with one ends it. Anything else writes nothing, so retries and a late
+  `invoice.payment_failed` after `invoice.paid` change nothing.
+- **The deadline is stored when the failure is first seen** (`now() + IRIS_BILLING_GRACE_DAYS`,
+  whole days 0-90, default 7, read by `hostedServices()`; malformed exits 3). The sweep and
+  the portal need no setting, and changing it never moves a running deadline. It has
+  microseconds: a JS `Date` read back from it is up to 1 ms earlier, so a test sweeps at
+  the deadline plus a second.
+- **Suspension is an `org_suspensions` row with actor `billing`** (`BILLING_ACTOR`), so
+  every #348 enforcement point applies unchanged. `suspendOverdueOrgs(db, now)` writes it;
+  `startGraceSweep(db)` runs it every minute in the API server, only when Stripe is
+  configured (unref'd timer, a failed pass is logged). Each org is re-read `for update`
+  on its `org_billing` row, the lock the webhook holds, so a payment settling at that
+  moment is either seen or lifts the suspension afterwards.
+- **Once per failure** (`payment_suspended_at`): an operator's `unsuspend-org` after it is an
+  extension that lasts until the payment settles (a failure after that is a new one). An org an operator
+  already suspended is skipped while suspended, and suspended for billing if that is lifted.
+- **Restore lifts only billing's own suspension** (the latest row is `suspend` by
+  `billing`, checked under the suspension lock: `unsuspend(…, { onlyIfBy })`, codex review). An operator's survives a paid invoice, and `suspend` by anyone else is
+  recorded **over** a billing suspension (`act()` in org-suspension.ts, the one case where
+  an already-suspended org gets a row). `requestOrgDeletion` stamps over it too (a card
+  retry during the 30 days must not reopen an org waiting to be purged) and clears
+  `payment_suspended_at`, so a `restoreOrg` while still unpaid is suspended again.
+  `BILLING_ACTOR` lives in org-suspension.ts (payment-grace imports that module).
+- **One org's failure does not stop a pass**: logged (`payment suspension failed`), retried
+  next minute.
+- **A cancelled subscription ends the failure** like a paid one: the plan is free (#345) and
+  the suspension lifts.
+- **`orgSuspensions(tx)` joins a caller's transaction** (`db.isTransaction`, as `setPlan`);
+  its log line is then written before that transaction commits.
+- **Audit**: `billing.grace_start` (`graceEndsAt`), `billing.suspend` (`graceEndedAt`),
+  `billing.restore` (`suspensionLifted`), no actor, in the transaction of the change.
+- **Portal**: `requireOrg()` returns `payment` (`paymentState`: the deadline, and whether the
+  org's suspension is billing's). `OrgBanner` replaces the bare `SuspendedBanner` on every
+  org page: grace warning, payment suspension (both link to `/org#billing`), or the
+  operator banner. Tenants are told a suspension is for payment; an operator's reason is
+  still never shown. `openBillingPortal` passes a billing suspension (`authorise(…, { toPay
+  })`): paying is the way out. Checkout and key writes stay refused.
+- **Tests**: `db/stripe-webhook.test.ts` drives it with signed fixtures and an injected
+  `now` for the sweep; the database is shared by the file, so its `sweep()` helper drops
+  orgs earlier tests left overdue. Portal E2E writes the rows as the webhook and sweep do,
+  and matches a server action's refusal in the form state (`{"error":…}`), because the
+  operator banner contains the same sentence. No E2E opens the Customer Portal for a
+  billing-suspended org: that call reaches Stripe.
 
 ### Managed AI Credits (issue #479)
 

@@ -352,6 +352,14 @@ describe('docker-compose.production.yml (issue #273)', () => {
     expect(s).not.toMatch(/stripe_webhook_secret/);
   });
 
+  // The webhook and the sweep run in iris only (#266); the portal reads the stored deadline.
+  it('passes the payment grace period to iris alone, empty when unset', () => {
+    const setting = /^\s+IRIS_BILLING_GRACE_DAYS: \$\{IRIS_BILLING_GRACE_DAYS:-\}$/m;
+    expect(service('iris')).toMatch(setting);
+    expect(service('portal')).not.toMatch(/GRACE/);
+    expect(service('worker')).not.toMatch(/GRACE/);
+  });
+
   it('has the deploy job write the Stripe secrets, and point at them only when set', () => {
     const ci = read('.github/workflows/ci.yml');
     const job = ci.slice(ci.indexOf('\n  deploy-production:'));

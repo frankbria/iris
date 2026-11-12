@@ -574,7 +574,8 @@ What a suspension does:
 - Live RPC connections close (1008) at the next re-check, within `authRecheckMs`
   (60 s by default), and their browsers are reclaimed.
 - Queued jobs are failed unrun ("Organization suspended", no usage); new jobs are refused.
-- The portal shows a banner with the support contact; creating, changing or revoking API
+- The portal shows a banner with the support contact (for a failed payment, #266, one that
+  says so and points to Billing instead); creating, changing or revoking API
   keys and saving or removing provider keys is refused.
 
 Not instant, and not everything:
@@ -713,8 +714,8 @@ the API key needs read access to subscriptions, and for the meter: write access 
 events and read access to meters and their event summaries. At most two deliveries are
 applied at once (they share the database pool with tenant traffic); more are answered 503
 and Stripe redelivers them, so a burst of `503` in the endpoint's delivery log is the cap
-working, not an outage. The grace period and suspension on failed payments are #266; until then `invoice.payment_failed`
-only shows `past due` and keeps the plan. Purging an org does not cancel its Stripe
+working, not an outage.
+Purging an org does not cancel its Stripe
 subscription: cancel it in the dashboard first.
 
 ### Usage reporting and reconciliation (issue #264)
@@ -766,6 +767,37 @@ where billing_mode = 'managed' and stripe_reported_at is null
 ```
 
 Then run `billing-reconcile` for the period and start the worker.
+
+### Failed payments (issue #266)
+
+When a renewal fails, Stripe marks the subscription `past_due` and IRIS starts a grace
+period: `IRIS_BILLING_GRACE_DAYS` whole days (0-90, default 7), counted from the first
+event that shows the failure. The deadline is stored then, so changing the setting affects
+later failures only. The org keeps its plan and its members see a warning with the date on
+every portal page.
+
+- **Past the deadline** `iris connect` suspends the org within a minute, as an
+  `org_suspensions` row by actor `billing` (`org-status` shows it). The effect is the one
+  described under "Abuse handling": keys 403, live connections closed within 60 s, jobs
+  refused. The portal says the suspension is for a failed payment, and owners and admins can
+  still open **Manage billing** to pay.
+- **When the payment is settled** (`invoice.paid`, or any event after which Stripe shows the
+  subscription paid) the suspension is lifted in the same transaction. If Stripe gives up
+  and cancels the subscription, the org drops to Free and the suspension is lifted too.
+- **To give a customer more time**: `admin unsuspend-org <orgId> --reason "…"`. IRIS
+  suspends once per failed payment, so your unsuspend stays until the payment is settled
+  (a later failure, after that, starts a new grace period).
+- **An abuse suspension is separate.** A paid invoice lifts only a suspension by `billing`.
+  `suspend-org` on a billing-suspended org records yours over it, so the org stays
+  suspended when the invoice is paid. `delete-org` does the same; if you `restore-org`
+  while the payment is still failing, the org is suspended for it again within a minute.
+- Each step is in the org's audit log: `billing.grace_start`, `billing.suspend`,
+  `billing.restore`.
+- Align Stripe's own retry schedule (Settings → Billing → Subscriptions and emails →
+  Manage failed payments) with the grace period: if Stripe cancels the subscription before
+  the deadline, the org simply becomes Free and is never suspended.
+- The compose file passes `IRIS_BILLING_GRACE_DAYS` to `iris`, but the deploy job does not
+  write it to `settings.env` yet, so production runs the default until that is added.
 
 ## Retention and offboarding (issue #349)
 

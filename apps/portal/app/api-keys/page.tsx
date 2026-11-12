@@ -7,7 +7,7 @@ import {
   RevokeApiKeyButton,
 } from "@/components/api-key-forms"
 import { getAuth } from "@/lib/auth"
-import { SuspendedBanner } from "@/components/contact-link"
+import { OrgBanner } from "@/components/contact-link"
 import { isManager, logInIfSignedOut, requireOrg } from "@/lib/org"
 
 const when = (date: Date | string | null) =>
@@ -23,7 +23,7 @@ const when = (date: Date | string | null) =>
  * ponytail: the list is BetterAuth's first page. Page it when an org outgrows that.
  */
 export default async function ApiKeysPage() {
-  const { org, role, suspended } = await requireOrg()
+  const { org, role, suspended, payment } = await requireOrg()
   const { apiKeys } = await getAuth()
     .api.listApiKeys({
       headers: await headers(),
@@ -34,7 +34,7 @@ export default async function ApiKeysPage() {
   const manager = isManager(role)
   return (
     <main className="flex min-h-svh flex-col gap-6 p-6">
-      {suspended && <SuspendedBanner />}
+      <OrgBanner suspended={suspended} payment={payment} />
       <div className="flex flex-col gap-1">
         <h1 className="font-heading text-lg font-medium">
           API keys for {org.name}
