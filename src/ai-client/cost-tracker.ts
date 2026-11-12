@@ -3,6 +3,7 @@ import { ensureDatabaseDir } from '../db';
 import { DEFAULT_BUDGET_LIMITS, resolveBudget } from '../config';
 import { hostedLog } from '../log';
 import { dropLegacyIndexes } from './cache';
+import { fineTunedBase } from './models';
 
 /**
  * AI provider pricing configuration
@@ -24,6 +25,18 @@ export interface ProviderPricing {
    * Cost per output (completion) token in USD.
    */
   costPerOutputToken?: number;
+  /** The rates of a call whose input is over a vendor threshold (#523). */
+  longContext?: LongContextPricing;
+}
+
+/**
+ * A vendor's dearer tier for long prompts (#523): a call with more than `aboveInputTokens`
+ * input tokens pays these rates for all of its tokens, not only those past the threshold.
+ */
+export interface LongContextPricing {
+  aboveInputTokens: number;
+  costPerInputToken: number;
+  costPerOutputToken: number;
 }
 
 /**
@@ -32,6 +45,7 @@ export interface ProviderPricing {
 interface TokenRates {
   input: number;
   output: number;
+  longContext?: { aboveInputTokens: number; input: number; output: number };
 }
 
 /**
@@ -126,79 +140,151 @@ export interface BudgetStatus {
   circuitBreakerTriggered: boolean;
 }
 
+/** OpenAI charges this tier for the whole request above 272K input tokens (#523). */
+const OPENAI_LONG_CONTEXT_TOKENS = 272_000;
+
 /**
- * Default pricing for common providers (as of 2025)
+ * A token-priced row from the vendor's "per 1M tokens" figures. `costPerImage`, the flat
+ * charge for a call recorded without usage, defaults to 800 input tokens' worth.
+ */
+function tokenPriced(
+  provider: 'openai' | 'anthropic',
+  model: string,
+  inputUsdPerMillion: number,
+  outputUsdPerMillion: number,
+  options: {
+    costPerImage?: number;
+    longContext?: {
+      aboveInputTokens: number;
+      inputUsdPerMillion: number;
+      outputUsdPerMillion: number;
+    };
+  } = {},
+): ProviderPricing {
+  // Divided, not multiplied by 1e-6: the quotient is the double nearest the decimal rate.
+  const costPerInputToken = inputUsdPerMillion / 1_000_000;
+  const { longContext } = options;
+  return {
+    provider,
+    model,
+    costPerImage: options.costPerImage ?? 800 * costPerInputToken,
+    costPerInputToken,
+    costPerOutputToken: outputUsdPerMillion / 1_000_000,
+    ...(longContext && {
+      longContext: {
+        aboveInputTokens: longContext.aboveInputTokens,
+        costPerInputToken: longContext.inputUsdPerMillion / 1_000_000,
+        costPerOutputToken: longContext.outputUsdPerMillion / 1_000_000,
+      },
+    }),
+  };
+}
+
+/** An OpenAI row whose long-context tier is the page's "long context" columns. */
+function openAITiered(
+  model: string,
+  short: [inputUsdPerMillion: number, outputUsdPerMillion: number],
+  long: [inputUsdPerMillion: number, outputUsdPerMillion: number],
+): ProviderPricing {
+  return tokenPriced('openai', model, short[0], short[1], {
+    longContext: {
+      aboveInputTokens: OPENAI_LONG_CONTEXT_TOKENS,
+      inputUsdPerMillion: long[0],
+      outputUsdPerMillion: long[1],
+    },
+  });
+}
+
+/**
+ * Default pricing, USD per 1M tokens at each vendor's standard rate: not batch, flex or
+ * fast, never a promotion, and cached input charged as plain input. The table gates a
+ * budget breaker, so where there is a choice it over-reports.
+ *
+ * Checked 2026-11-11 (#523) against https://developers.openai.com/api/docs/pricing,
+ * https://developers.openai.com/api/docs/deprecations and
+ * https://platform.claude.com/docs/en/about-claude/pricing. Re-check all three when a
+ * vendor ships or retires a model; prices are never written from memory.
+ *
+ * A deprecated model keeps its row until the vendor stops serving it: spend on it is
+ * still billed, and without a row it is charged the dearest rate here. Such rows carry
+ * their shutdown date; delete them after it.
  */
 export const DEFAULT_PRICING: readonly ProviderPricing[] = [
-  // OpenAI GPT-4o: $2.50/1M input tokens, $10/1M output tokens (2025 published
-  // rates). costPerImage retained as the fallback when usage is unavailable.
-  {
-    provider: 'openai',
-    model: 'gpt-4o',
-    costPerImage: 0.002,
-    costPerInputToken: 2.5e-6,
-    costPerOutputToken: 1e-5,
-  },
-  // gpt-4o-mini is what config.ts defaults `ai.model` to, so the out-of-the-box
-  // model was the one going unpriced and ungated (issue #126).
-  // $0.15/1M input, $0.60/1M output (2025 published rates).
-  {
-    provider: 'openai',
-    model: 'gpt-4o-mini',
-    costPerImage: 0.0002,
-    costPerInputToken: 1.5e-7,
-    costPerOutputToken: 6e-7,
-  },
-  // The gpt-4o launch snapshot kept its launch price ($5/1M in, $15/1M out)
-  // after gpt-4o itself dropped, so the family fallback (#243) must not give it
-  // the cheaper gpt-4o rate.
-  {
-    provider: 'openai',
-    model: 'gpt-4o-2024-05-13',
-    costPerImage: 0.004,
-    costPerInputToken: 5e-6,
-    costPerOutputToken: 1.5e-5,
-  },
+  // OpenAI, current. Short-context rates, then the rates of a request over 272K input tokens.
+  openAITiered('gpt-6-astra', [10, 50], [20, 75]),
+  openAITiered('gpt-6.1-sol', [2, 10], [4, 15]),
+  // The OpenAI vision default.
+  openAITiered('gpt-6.1-terra', [1, 5], [2, 7.5]),
+  openAITiered('gpt-6-sol', [2, 10], [4, 15]),
+  // The OpenAI text default: what config.ts gives `ai.model` out of the box (#126).
+  openAITiered('gpt-6-luna', [0.1, 0.5], [0.2, 0.75]),
+  // $4/$20 until 2026-11-30 is a promotion ("a 20% reduction in input pricing and a 33%
+  // reduction in output pricing"); this is the price it returns to.
+  openAITiered('gpt-5.6-sol', [5, 30], [10, 45]),
+  openAITiered('gpt-5.6-terra', [2, 12], [4, 18]),
+  openAITiered('gpt-5.6-luna', [0.2, 1.2], [0.4, 1.8]),
+  openAITiered('gpt-5.5', [5, 30], [10, 45]),
+  openAITiered('gpt-5.4', [2.5, 15], [5, 22.5]),
+  // One rate each on the pricing page: gpt-5.4-mini takes at most 272,000 input tokens, and
+  // gpt-5.2 (400K window) is listed without long-context columns.
+  tokenPriced('openai', 'gpt-5.4-mini', 0.75, 4.5),
+  tokenPriced('openai', 'gpt-5.2', 1.75, 14),
+  // The -pro variants ($21 to $30 in, $168 to $180 out) have no row on purpose: they are
+  // served by the Responses API only, which IRIS does not call, and a row that dear would
+  // become every unpriced model's estimate (#388).
 
-  // Anthropic Claude Sonnet 5: $3/1M input tokens, $15/1M output tokens — the
-  // same per-token rates Claude 3.5 Sonnet carried, so issue #183's retirement
-  // renamed this row without re-rating it.
-  //
-  // Deliberately the standard rate, not the $2/$10 introductory rate running to
-  // 2026-08-31: this table gates a budget circuit breaker, and the safe error
-  // direction is over-reporting (the breaker trips early) rather than under-
-  // reporting (real spend outruns the tracked total once the intro rate lapses).
-  {
-    provider: 'anthropic',
-    model: 'claude-sonnet-5',
-    costPerImage: 0.0015,
-    costPerInputToken: 3e-6,
-    costPerOutputToken: 1.5e-5,
-  },
-  // Claude Haiku 4.5: $1/1M input, $5/1M output. This is what config.ts:176
-  // selects on the ANTHROPIC_API_KEY env path, and `resolveModel` prefers the
-  // configured model over the per-provider default — so it is the model the
-  // out-of-the-box Anthropic user actually requests. Left unpriced it computes
-  // a $0 cost and never accrues against the budget, which is the #126 failure
-  // mode on the highest-traffic path (the call is still *gated* — unregistered
-  // models fall through to `return true` in isBudgetGated — but spend on it
-  // could never trip the breaker in the first place).
-  {
-    provider: 'anthropic',
-    model: 'claude-haiku-4-5',
-    costPerImage: 0.0005,
-    costPerInputToken: 1e-6,
-    costPerOutputToken: 5e-6,
-  },
-  // Claude Opus 5: $5/1M input, $25/1M output. Not a default anywhere — priced
-  // so a user who configures it is gated rather than treated as free (#126).
-  {
-    provider: 'anthropic',
-    model: 'claude-opus-5',
-    costPerImage: 0.004,
-    costPerInputToken: 5e-6,
-    costPerOutputToken: 2.5e-5,
-  },
+  // OpenAI, deprecated but served until the date given.
+  // Shutdown 2027-04-01:
+  tokenPriced('openai', 'gpt-5.1', 1.25, 10),
+  tokenPriced('openai', 'gpt-5.4-nano', 0.2, 1.25),
+  // Shutdown 2027-01-14 (their last snapshots; the aliases go with them):
+  tokenPriced('openai', 'gpt-4o', 2.5, 10),
+  tokenPriced('openai', 'gpt-4o-mini', 0.15, 0.6, { costPerImage: 0.0002 }),
+  tokenPriced('openai', 'gpt-4.1', 2, 8),
+  tokenPriced('openai', 'gpt-4.1-mini', 0.4, 1.6),
+  // Fine-tunes of those four, `ft:<base>:<org>:<suffix>:<id>`, priced by the page's
+  // "Fine-tuning" table (#664). They are served until their base is shut down, on the same
+  // date. A fine-tune of any other base has no rate there and stays an estimate.
+  tokenPriced('openai', 'ft:gpt-4o-2024-08-06', 3.75, 15),
+  tokenPriced('openai', 'ft:gpt-4o-mini-2024-07-18', 0.3, 1.2),
+  tokenPriced('openai', 'ft:gpt-4.1-2025-04-14', 3, 12),
+  tokenPriced('openai', 'ft:gpt-4.1-mini-2025-04-14', 0.8, 3.2),
+  // Shutdown 2026-12-11:
+  tokenPriced('openai', 'gpt-5', 1.25, 10),
+  tokenPriced('openai', 'gpt-5-mini', 0.25, 2),
+  tokenPriced('openai', 'gpt-5-nano', 0.05, 0.4),
+  tokenPriced('openai', 'o3', 2, 8),
+
+  // Anthropic, current.
+  tokenPriced('anthropic', 'claude-fable-5-2', 8, 40),
+  tokenPriced('anthropic', 'claude-fable-5-1', 10, 50),
+  tokenPriced('anthropic', 'claude-fable-5', 10, 50),
+  tokenPriced('anthropic', 'claude-opus-5-5', 4, 20),
+  // Not a default anywhere: priced so a user who configures it is gated, not free (#126).
+  tokenPriced('anthropic', 'claude-opus-5', 5, 25),
+  tokenPriced('anthropic', 'claude-opus-4-8', 5, 25),
+  tokenPriced('anthropic', 'claude-opus-4-7', 5, 25),
+  tokenPriced('anthropic', 'claude-opus-4-6', 5, 25),
+  tokenPriced('anthropic', 'claude-opus-4-5', 5, 25),
+  tokenPriced('anthropic', 'claude-sonnet-5-5', 2, 10),
+  // The Anthropic vision default. $2/$10 began as an introductory price to 2026-08-31,
+  // which is why this row used to say $3/$15; Anthropic has since made it the standard
+  // price ("the previously scheduled increase ... will not occur"). The flat fallback
+  // keeps its old, higher value.
+  tokenPriced('anthropic', 'claude-sonnet-5', 2, 10, { costPerImage: 0.0015 }),
+  tokenPriced('anthropic', 'claude-sonnet-4-6', 3, 15),
+  // Priced by prompt length: over 100,000 prompt tokens the whole request pays 5x.
+  tokenPriced('anthropic', 'claude-haiku-5-5', 0.1, 0.5, {
+    longContext: { aboveInputTokens: 100_000, inputUsdPerMillion: 0.5, outputUsdPerMillion: 2.5 },
+  }),
+  // The Anthropic text default: what the ANTHROPIC_API_KEY env path selects, so the model
+  // an out-of-the-box Anthropic user actually requests (#126).
+  tokenPriced('anthropic', 'claude-haiku-4-5', 1, 5, { costPerImage: 0.0005 }),
+  // Claude Mythos has no rows: limited availability, and priced like Fable, which is the
+  // dearest rate here and so what an unpriced Mythos call is charged anyway.
+
+  // Anthropic, deprecated: retired 2026-11-30.
+  tokenPriced('anthropic', 'claude-sonnet-4-5', 3, 15),
 
   // Ollama (local) - no cost (no token rates needed; fallback is zero)
   { provider: 'ollama', model: 'llava', costPerImage: 0 },
@@ -245,17 +331,20 @@ const STALE_RESERVATION_MS = 60 * 60 * 1000;
 
 /**
  * The most one managed AI call can cost (#482): the reservation ceiling (#244) plus one input
- * token per request character, at the provider's dearest registered rates. Not the default
+ * token per request character, on whichever of the provider's rows makes that call dearest
+ * (a long request may cross a row's long-context threshold, #523). Not the default
  * model's: a retired default is replaced by a successor at call time (#184), which may cost
  * more (codex review). Over-reserving only trims concurrency at the edge of the credit.
  */
 export function managedCallEstimateUsd(provider: 'openai' | 'anthropic', inputChars = 0): number {
-  const rows = DEFAULT_PRICING.filter((p) => p.provider === provider);
-  const input = Math.max(...rows.map((p) => p.costPerInputToken ?? 0));
-  const output = Math.max(...rows.map((p) => p.costPerOutputToken ?? 0));
-  return (
-    (RESERVATION_CEILING.inputTokens + Math.max(0, inputChars)) * input +
-    RESERVATION_CEILING.outputTokens * output
+  const usage: TokenUsage = {
+    inputTokens: RESERVATION_CEILING.inputTokens + Math.max(0, inputChars),
+    outputTokens: RESERVATION_CEILING.outputTokens,
+  };
+  return Math.max(
+    ...DEFAULT_PRICING.filter((p) => p.provider === provider).map(
+      (p) => tokenCost(tokenRates(p) ?? {}, usage) ?? 0,
+    ),
   );
 }
 
@@ -283,7 +372,33 @@ const noUsageWarned = new Set<string>();
 /** The token-priced cost of `usage`, or undefined when `rates` has no token prices. */
 function tokenCost(rates: Partial<TokenRates>, usage: TokenUsage): number | undefined {
   if (rates.input === undefined || rates.output === undefined) return undefined;
-  return usage.inputTokens * rates.input + usage.outputTokens * rates.output;
+  const long = rates.longContext;
+  const tier =
+    long && usage.inputTokens > long.aboveInputTokens
+      ? long
+      : { input: rates.input, output: rates.output };
+  return usage.inputTokens * tier.input + usage.outputTokens * tier.output;
+}
+
+/** A row's token rates, or undefined for a flat-only row. */
+function tokenRates(
+  price: Pick<ProviderPricing, 'costPerInputToken' | 'costPerOutputToken' | 'longContext'>,
+): TokenRates | undefined {
+  if (price.costPerInputToken === undefined || price.costPerOutputToken === undefined) {
+    return undefined;
+  }
+  const long = price.longContext;
+  return {
+    input: price.costPerInputToken,
+    output: price.costPerOutputToken,
+    ...(long && {
+      longContext: {
+        aboveInputTokens: long.aboveInputTokens,
+        input: long.costPerInputToken,
+        output: long.costPerOutputToken,
+      },
+    }),
+  };
 }
 
 /**
@@ -375,6 +490,7 @@ export class CostTracker {
         price.costPerImage,
         price.costPerInputToken,
         price.costPerOutputToken,
+        price.longContext,
       );
     }
 
@@ -469,6 +585,7 @@ export class CostTracker {
    * @param costPerImage - Cost per image in USD (fallback when usage is absent)
    * @param costPerInputToken - Optional per-input-token cost in USD
    * @param costPerOutputToken - Optional per-output-token cost in USD
+   * @param longContext - Optional rates for a call over the vendor's input threshold (#523)
    */
   setPricing(
     provider: string,
@@ -476,11 +593,13 @@ export class CostTracker {
     costPerImage: number,
     costPerInputToken?: number,
     costPerOutputToken?: number,
+    longContext?: LongContextPricing,
   ): void {
     const key = `${provider}:${model}`;
     this.pricing.set(key, costPerImage);
-    if (costPerInputToken !== undefined && costPerOutputToken !== undefined) {
-      this.tokenPricing.set(key, { input: costPerInputToken, output: costPerOutputToken });
+    const rates = tokenRates({ costPerInputToken, costPerOutputToken, longContext });
+    if (rates) {
+      this.tokenPricing.set(key, rates);
     } else {
       // Overriding with flat-only pricing must clear any prior token rates,
       // otherwise a stale rate would silently win over the new per-image price.
@@ -539,10 +658,15 @@ export class CostTracker {
    * extends by one snapshot suffix (issue #243, SNAPSHOT_SUFFIX). That is how
    * dated and rescued IDs are named — `resolveModel` swaps a retired
    * `claude-sonnet-5` pin for `claude-sonnet-5-20260514` — while `gpt-4oz` and
-   * `gpt-4o-realtime-preview` are not gpt-4o. Undefined when nothing matches.
+   * `gpt-4o-realtime-preview` are not gpt-4o. A fine-tuned OpenAI id is looked up as
+   * `ft:<base model>` (#664). Undefined when nothing matches.
    */
   private resolveKey(provider: string, model: string): string | undefined {
-    const exact = `${provider}:${model}`;
+    const whole = `${provider}:${model}`;
+    if (this.pricing.has(whole)) return whole;
+    // A fine-tune is billed by its base's fine-tuning rate, whoever trained it (#664).
+    const base = fineTunedBase(model);
+    const exact = base === undefined ? whole : `${provider}:ft:${base}`;
     if (this.pricing.has(exact)) return exact;
     // At most one key can match: the remainder must be a single snapshot token,
     // so a shorter key would leave two. No "longest" comparison is needed.
@@ -560,6 +684,8 @@ export class CostTracker {
    * ponytail: capped at the dearest *known* rate; a model priced above every
    * registered one (o1-pro class) still under-reports until it gets a row. Kept on
    * purpose (#388): a floor above the table would trip a default budget in a few calls.
+   * Short-context rates only, for the same reason: an unpriced model's long prompt is
+   * not charged a long-context tier (#523).
    */
   private estimatedRates(): TokenRates & { costPerImage: number } {
     const tokens = [...this.tokenPricing.values()];

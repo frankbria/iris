@@ -161,6 +161,10 @@ jobs:
         env:
           IRIS_TEST_DATABASE_URL: postgres://iris:iris@localhost:5432/postgres
           NEXT_TELEMETRY_DISABLED: '1'
+      # The dependency audit gate (#363): a high or critical advisory in a production
+      # dependency of the root package or the portal (one lockfile) fails the build, and
+      # with it both deploys. Last, so an advisory published overnight does not hide the
+      # test results. What to do when it fails: docs/runbook-production.md.
       - run: npm audit --omit=dev --audit-level=high
 
   # Build and deploy the container to staging (issue #192).

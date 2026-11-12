@@ -2,10 +2,14 @@
  * MCP tool definitions for IRIS (plan 012 — spike scope: one tool).
  *
  * `run_accessibility_test` wraps the same `AccessibilityRunner` the `iris a11y`
- * CLI command drives, so the two transports share one engine. It deliberately
- * exposes ONLY the axe-core violations: the keyboard and screen-reader
- * sub-checks currently hardcode success (issues #73 and #72), and reporting a
- * fabricated "keyboard: passed" to an assistant would be worse than silence.
+ * CLI command drives, so the two transports share one engine. It exposes ONLY
+ * the axe-core results: the spike was scoped when the keyboard and screen-reader
+ * checks still hardcoded success (#73, #72), and offering them here is not done yet.
+ *
+ * What a call may do and what its result may say is bounded (#362): the hints do
+ * not promise a read-only tool, failures carry a reason from a fixed vocabulary
+ * (`./scan-errors`), a redirect's landing URL is cut to origin and path, and at
+ * most {@link MAX_CONCURRENT_SCANS} browsers run at once.
  */
 
 import { z } from 'zod';
@@ -13,8 +17,20 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AccessibilityRunner } from '../a11y/a11y-runner';
 import { assertNavigationAllowed } from '../url-policy';
 import { wcagTags } from '../a11y/wcag';
+import { log } from '../log';
+import { loggedDetail, scanFailureReason, scannedPage, withoutCredentials } from './scan-errors';
+import { ScanLimiter, ScanQueueFullError } from './scan-limiter';
 
 export const RUN_ACCESSIBILITY_TEST = 'run_accessibility_test';
+
+/** Scans running at once, each one a Chromium. */
+export const MAX_CONCURRENT_SCANS = 2;
+/** Calls that may wait for a slot; one more is refused at once. */
+export const MAX_WAITING_SCANS = 8;
+
+// One per process, not per server: the bound is on this machine's browsers.
+// Local only: hosted MCP (./hosted.ts) queues jobs and is capped per org instead.
+const scans = new ScanLimiter(MAX_CONCURRENT_SCANS, MAX_WAITING_SCANS);
 
 const inputSchema = {
   url: z
@@ -31,7 +47,11 @@ const inputSchema = {
 const outputSchema = {
   url: z
     .string()
-    .describe('The URL actually scanned. Differs from the request when it redirected.'),
+    .describe(
+      'The page actually scanned. When the scan was redirected this is the landing ' +
+        "page's origin and path only: its query string and fragment are left out.",
+    ),
+  redirected: z.boolean().describe('True when the scan landed on another URL than the request.'),
   passed: z.boolean().describe('True when axe-core reported no violations at all.'),
   violationCount: z.number().describe('Total number of distinct axe rules violated.'),
   violations: z
@@ -75,6 +95,22 @@ function toolError(message: string) {
 function describeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.split('\n')[0].trim();
+}
+
+/**
+ * A failed scan as the caller sees it: the request URL and a reason from the fixed
+ * vocabulary. The error's own text goes to stderr, where the person running the server
+ * can read it and the model cannot.
+ */
+function scanFailure(url: string, error: unknown) {
+  const detail = describeError(error);
+  log('warn', 'mcp scan failed', {
+    url: withoutCredentials(url),
+    detail: loggedDetail(detail, url),
+  });
+  return toolError(
+    `Accessibility scan failed for ${withoutCredentials(url)}: ${scanFailureReason(detail)}.`,
+  );
 }
 
 /**
@@ -127,10 +163,19 @@ export function registerTools(server: McpServer): void {
         'Scan a web page with axe-core and report WCAG violations. Runs a real headless browser, ' +
         'so the URL must be reachable from this machine. Returns axe-core violations, plus the ' +
         'rules axe could not decide (needsReview) — it does not test keyboard navigation or ' +
-        'screen-reader behaviour.',
+        'screen-reader behaviour. Not read-only: loading the page runs its scripts and sends ' +
+        `the requests a browser visit would. At most ${MAX_CONCURRENT_SCANS} scans run at once; ` +
+        `up to ${MAX_WAITING_SCANS} more calls wait their turn and further ones are refused.`,
       inputSchema,
       outputSchema,
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      // Not read-only (#362): the tool navigates a real browser to a URL the model chose,
+      // and cannot promise that the visit changes nothing on the site behind it.
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
     async ({ url, wcagLevel }) => {
       // The URL arrives from an assistant and may be model-generated from
@@ -139,29 +184,40 @@ export function registerTools(server: McpServer): void {
       try {
         assertNavigationAllowed(url);
       } catch (error) {
-        return toolError(describeError(error));
+        // The policy's reason names a scheme or a host, except for a URL it could not
+        // parse, which it quotes whole: credentials included, and nothing can find them
+        // in text that is not a URL.
+        const reason = describeError(error);
+        return toolError(
+          reason.includes('malformed URL') ? 'Navigation blocked: malformed URL.' : reason,
+        );
       }
 
       let result;
       try {
-        const runner = new AccessibilityRunner(scanConfig(url, wcagLevel ?? 'AA'));
-        result = await runner.run();
+        result = await scans.run(() =>
+          new AccessibilityRunner(scanConfig(url, wcagLevel ?? 'AA')).run(),
+        );
       } catch (error) {
-        return toolError(`Accessibility scan failed for ${url}: ${describeError(error)}`);
+        if (error instanceof ScanQueueFullError) {
+          return toolError(
+            `Too many accessibility scans at once: ${MAX_CONCURRENT_SCANS} are running and ` +
+              `${MAX_WAITING_SCANS} are waiting. Call again when one has finished.`,
+          );
+        }
+        return scanFailure(url, error);
       }
 
       // The runner reports a page it could not scan instead of throwing (#287): that is a
       // failed scan, never "no violations".
       const pageError = result.results[0]?.error;
       if (pageError !== undefined) {
-        return toolError(
-          `Accessibility scan failed for ${url}: ${describeError(new Error(pageError))}`,
-        );
+        return scanFailure(url, pageError);
       }
 
       const axeResult = result.results[0]?.axeResult;
       if (!axeResult) {
-        return toolError(`Accessibility scan returned no result for ${url}.`);
+        return toolError(`Accessibility scan returned no result for ${withoutCredentials(url)}.`);
       }
 
       const violations = axeResult.violations.map((violation) => ({
@@ -172,11 +228,11 @@ export function registerTools(server: McpServer): void {
         nodes: violation.nodes.length,
       }));
 
-      // The URL that was actually measured, which differs from the requested one
+      // The page that was actually measured, which differs from the requested one
       // when it redirected. Reporting the request URL would misattribute every
       // violation on the page the scan really landed on.
-      const scannedUrl = axeResult.url || url;
-      const redirectNote = scannedUrl === url ? '' : ` (redirected from ${url})`;
+      const { url: scannedUrl, redirected } = scannedPage(url, axeResult.url);
+      const redirectNote = redirected ? ` (redirected from ${withoutCredentials(url)})` : '';
 
       // axe's `incomplete`: rules it could not decide (contrast over an image, ...). Dropping
       // them made such a page read as clean (#290).
@@ -188,6 +244,7 @@ export function registerTools(server: McpServer): void {
 
       const structuredContent = {
         url: scannedUrl,
+        redirected,
         passed: violations.length === 0,
         violationCount: violations.length,
         violations,

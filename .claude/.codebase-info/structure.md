@@ -35,9 +35,13 @@ src/
 │   └── baseline.ts        # Git-integrated baseline management
 ├── a11y/                  # a11y-runner, axe-integration (isolated world, #350), keyboard-tester, wcag (#290)
 ├── byok/                  # crypto.ts envelope encryption, store.ts, rewrap.ts (#344)
-├── mcp/                   # MCP stdio server (experimental, spike scope)
+├── mcp/                   # MCP: stdio server (local, experimental) and the hosted HTTP endpoint
 │   ├── server.ts          # `iris-mcp` bin — McpServer over StdioServerTransport
-│   └── tools.ts           # run_accessibility_test (axe violations + needsReview)
+│   ├── tools.ts           # run_accessibility_test (axe violations + needsReview)
+│   ├── scan-errors.ts     # what a result may say: failure reasons, landing URL (#362)
+│   ├── scan-limiter.ts    # at most 2 scans at once, 8 waiting (#362)
+│   ├── hosted.ts          # POST /v1/mcp: Streamable HTTP behind the API key; a tool call is an a11y job (#314)
+│   └── version.ts         # packageVersion(): what both servers report
 ├── auth/config.ts         # createAuth(): the BetterAuth config portal + API share (ADR 0001 §4, #247)
 ├── legal/                 # versions.ts: current ToS/AUP versions + ACCEPTED_TERMS; acceptance.ts: record/check (#276)
 ├── api-key-auth.ts        # Hosted `iris connect`: Bearer org API key -> { orgId, keyId } (#341)
@@ -59,6 +63,7 @@ src/
 ├── jobs-api.ts            # Hosted REST on the RPC listener: jobs (#267), runs + run detail (#269)
 ├── worker.ts              # `iris worker`: claims queued a11y and visual jobs, runs them hardened, stores the result (#267, #268)
 ├── billing/plans.ts       # Plan catalog (free/pro/team), resolveEntitlements, orgEntitlements(db), one-free-org cap (#260)
+├── billing/stripe-meter.ts # Managed usage → Stripe meter events, the periodic report, reconciliation (#264)
 ├── offboarding.ts         # Org soft delete/restore/purge to tombstone, user deletion, daily retention, AI-state purge (#349)
 ├── org-suspension.ts      # Operator suspension of an org: history table, state, suspendedSql (#348)
 ├── artifact-store.ts      # ArtifactStore: filesystem (local) + S3 (hosted, SeaweedFS in dev/CI/staging); tenant-first keys, signed URLs (#257)
@@ -122,7 +127,9 @@ __tests__/
 │   ├── capture.test.ts
 │   ├── diff.test.ts
 │   └── baseline.test.ts
+├── hosted-mcp-job.test.ts         # Real Postgres + Chromium + worker: MCP tool call over HTTP -> history row + usage row (#314)
 └── mcp/
+    ├── hosted-http.test.ts        # /v1/mcp over real sockets with the SDK client: auth, limits, wait, withdraw, org isolation (#314)
     └── server.test.ts             # Protocol-level: spawns the built server over real stdio
 
 apps/

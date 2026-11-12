@@ -277,7 +277,7 @@ export class OpenAIVisionClient extends BaseAIVisionClient {
               ],
             },
           ],
-          // The o-series refuses anything but the default temperature (#520).
+          // Per family: a temperature, a reasoning effort, or neither (#520, #523).
           ...openAISampling(model),
           // max_tokens is deprecated for OpenAI chat completions and refused by the
           // o-series (#298).
@@ -292,7 +292,7 @@ export class OpenAIVisionClient extends BaseAIVisionClient {
   }
 
   supportsVision(): boolean {
-    // OpenAI still serves models that cannot see (gpt-3.5-turbo, o1-mini), and its
+    // OpenAI serves models IRIS cannot send images to (audio, Responses-only -pro), and its
     // model list says nothing about capability, so this is the table in models.ts (#298).
     return isVisionModel('openai', this.config.model || DEFAULT_MODELS.vision.openai);
   }

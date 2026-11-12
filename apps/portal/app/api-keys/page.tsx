@@ -8,7 +8,7 @@ import {
 } from "@/components/api-key-forms"
 import { getAuth } from "@/lib/auth"
 import { OrgBanner } from "@/components/contact-link"
-import { isManager, requireOrg } from "@/lib/org"
+import { isManager, logInIfSignedOut, requireOrg } from "@/lib/org"
 
 const when = (date: Date | string | null) =>
   date
@@ -24,10 +24,12 @@ const when = (date: Date | string | null) =>
  */
 export default async function ApiKeysPage() {
   const { org, role, suspended, payment } = await requireOrg()
-  const { apiKeys } = await getAuth().api.listApiKeys({
-    headers: await headers(),
-    query: { organizationId: org.id },
-  })
+  const { apiKeys } = await getAuth()
+    .api.listApiKeys({
+      headers: await headers(),
+      query: { organizationId: org.id },
+    })
+    .catch(logInIfSignedOut)
   // A member may hold several roles, stored comma-separated.
   const manager = isManager(role)
   return (

@@ -20,7 +20,9 @@ export type WebhookOutcome =
   | 'ignored'
   /** Seen before: answer 200, nothing read or changed. */
   | 'duplicate'
-  | 'applied';
+  | 'applied'
+  /** Too many deliveries in flight: answer 503, and Stripe delivers it again later. */
+  | 'busy';
 
 /** What IRIS needs of one of the customer's subscriptions. */
 export interface SubscriptionSnapshot {
@@ -147,6 +149,13 @@ function stripeSubscriptionReader(config: StripeConfig): ReadSubscriptions {
 }
 
 /**
+ * Deliveries applied at once. Each holds a connection of the pool tenant traffic shares for
+ * up to the Stripe read's 10 s timeout, so a Stripe outage's redelivery waves must not take
+ * every connection: the rest are answered `busy` and Stripe redelivers them.
+ */
+export const MAX_CONCURRENT_DELIVERIES = 2;
+
+/**
  * Answers one delivery, given the exact body bytes Stripe signed and its signature header.
  * Rejects when Stripe cannot be read: nothing is recorded, the route answers 500, and
  * Stripe delivers the event again.
@@ -156,13 +165,16 @@ export function stripeWebhookHandler(
   config: StripeConfig,
   {
     readSubscriptions = stripeSubscriptionReader(config),
+    maxConcurrentDeliveries = MAX_CONCURRENT_DELIVERIES,
     graceDays,
   }: {
     readSubscriptions?: ReadSubscriptions;
+    maxConcurrentDeliveries?: number;
     /** Days from a failed payment to suspension (#266); `resolveGraceDays()` in production. */
     graceDays?: number;
   } = {},
 ) {
+  let deliveriesInFlight = 0;
   const stripe = stripeClient(config);
   const verify = (rawBody: string, signature: string): Stripe.Event | null => {
     try {
@@ -176,8 +188,16 @@ export function stripeWebhookHandler(
     if (!event) return 'invalid_signature';
     const customerId = customerOf(event);
     if (!customerId) return 'ignored';
-    return db
-      .transaction()
-      .execute((tx) => applyEvent(tx, event, customerId, { config, readSubscriptions, graceDays }));
+    if (deliveriesInFlight >= maxConcurrentDeliveries) return 'busy';
+    deliveriesInFlight++;
+    try {
+      return await db
+        .transaction()
+        .execute((tx) =>
+          applyEvent(tx, event, customerId, { config, readSubscriptions, graceDays }),
+        );
+    } finally {
+      deliveriesInFlight--;
+    }
   };
 }

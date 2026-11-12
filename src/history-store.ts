@@ -1,6 +1,7 @@
 import { recordAudit } from './audit-log';
 import { StorageQuotaExceededError, storageUsage } from './storage-quota';
-import { stripAnsi, stripUserinfo } from './report-encoding';
+import { strippedError, stripUserinfo, urlWithoutUserinfo } from './report-encoding';
+import { scannedPage } from './mcp/scan-errors';
 import type Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
 import { describeAction } from './actions';
@@ -128,12 +129,13 @@ function violationCounts(page: AccessibilityTestResult['results'][number]) {
 }
 
 /**
- * An error as stored: terminal colour codes (#420) and URL userinfo stripped, at most `max`
- * characters, cut by code point (a cut inside a surrogate pair leaves a lone half, which
- * Postgres's json input rejects, losing the whole run).
+ * An error as stored: terminal colour codes (#420) and URL userinfo stripped (from a bounded
+ * start of the text, #658), at most `max` characters, cut by code point (a cut inside a surrogate pair leaves a lone half, which
+ * Postgres's json input rejects, losing the whole run). `quotedUrl` is the URL the error is
+ * known to repeat (a navigation's target), whose credentials are cut by parsing it (#645).
  */
-const boundedError = (error: string, max = 500): string =>
-  [...stripUserinfo(stripAnsi(error))].slice(0, max).join('');
+const boundedError = (error: string, max = 500, quotedUrl?: string): string =>
+  [...strippedError(error, quotedUrl)].slice(0, max).join('');
 
 /**
  * One result per page, comparison or action. An RPC action is stored as
@@ -149,6 +151,35 @@ function needsReviewOf(page: { axeResult: { incomplete?: { id: string }[] } }) {
     needsReview: rules.length,
     ...(rules.length > 0 && { needsReviewRules: rules.slice(0, MAX_REVIEW_RULES) }),
   };
+}
+
+/** At most this many violated rules are stored per page; the counts beside them stay whole. */
+const MAX_VIOLATION_RULES = 50;
+
+/**
+ * Which rules a page violated (#314), in axe's own vocabulary: rule id, impact, and how many
+ * elements. No selector, markup or page text, so every member of the org may read it.
+ */
+function violationRulesOf(page: AccessibilityTestResult['results'][number]) {
+  const rules = page.axeResult.violations.slice(0, MAX_VIOLATION_RULES).map((violation) => ({
+    id: violation.id,
+    impact: violation.impact ?? null,
+    nodes: violation.nodes?.length ?? 0,
+  }));
+  return rules.length > 0 ? { violationRules: rules } : {};
+}
+
+/**
+ * Where a scan landed when it was redirected (#648), cut as the MCP tool cuts it: origin
+ * and path, long segments dropped, so no token a redirect carried is stored.
+ * shortcut: a relative page pattern (`iris a11y` with a `baseURL`) records nothing, because
+ * the base it was resolved against is not known here; upgrade by having the runner report
+ * the URL it navigated if local history should show redirects too.
+ */
+function landedUrlOf(page: AccessibilityTestResult['results'][number]) {
+  if (!URL.canParse(page.page)) return {};
+  const scanned = scannedPage(page.page, page.axeResult.url);
+  return scanned.redirected ? { landedUrl: scanned.url } : {};
 }
 
 function resultsOf(run: RunInput): StoredRunResult[] {
@@ -185,6 +216,8 @@ function resultsOf(run: RunInput): StoredRunResult[] {
           result: {
             ...(page.error !== undefined && { error: boundedError(page.error) }),
             violations: counts,
+            ...(page.error === undefined && violationRulesOf(page)),
+            ...(page.error === undefined && landedUrlOf(page)),
             // Absent sub-tests mean "not run", which is not a failure to record.
             keyboardPassed: page.keyboardResult?.passed ?? true,
             screenReaderPassed: page.screenReaderResult?.passed ?? true,
@@ -198,9 +231,11 @@ function resultsOf(run: RunInput): StoredRunResult[] {
       });
     case 'rpc':
       return run.results.map((r) => {
+        // History is readable by everyone in the org, so a navigation loses its credentials.
+        // ponytail: query-string tokens are kept; they are often what the page under test is.
         const action =
           r.action.type === 'navigate'
-            ? { ...r.action, url: withoutCredentials(r.action.url) }
+            ? { ...r.action, url: urlWithoutUserinfo(r.action.url) }
             : r.action;
         return {
           url: action.type === 'navigate' ? action.url : null,
@@ -211,7 +246,13 @@ function resultsOf(run: RunInput): StoredRunResult[] {
             // also quotes URLs (guardedGoto, Playwright's goto), credentials and all.
             // Cut by code point: a cut inside a surrogate pair leaves a lone half,
             // which Postgres's json input rejects, losing the whole run.
-            ...(r.error && { error: boundedError(r.error) }),
+            ...(r.error && {
+              error: boundedError(
+                r.error,
+                undefined,
+                r.action.type === 'navigate' ? r.action.url : undefined,
+              ),
+            }),
           },
         };
       });
@@ -233,22 +274,6 @@ const toJsonb = (value: unknown) =>
  */
 const wellFormed = (text: string) => text.replace(UNSTORABLE, '\uFFFD');
 const UNSTORABLE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]|\u0000/g;
-
-/**
- * A URL without its `user:password@`: history is readable by everyone in the org.
- * ponytail: query-string tokens are kept; they are often what the page under test is.
- */
-function withoutCredentials(url: string): string {
-  try {
-    const parsed = new URL(url);
-    if (!parsed.username && !parsed.password) return url;
-    parsed.username = '';
-    parsed.password = '';
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
 
 /**
  * The hosted history (#254). The only way to a store is `forOrg(scope)`, and every
@@ -384,6 +409,13 @@ export interface OrgJobs {
   ): Promise<string | null>;
   /** `null` for an id that is not this org's, or not a uuid. */
   get(id: string): Promise<StoredJob | null>;
+  /**
+   * Withdraws a job nobody waits for any more (#314): a job still `queued` is removed, so it
+   * never runs and is never billed, and the removal is audited beside its submit.
+   * @returns `false`, having changed nothing, for a job a worker already claimed, a finished
+   *   one, another org's, or an unknown id
+   */
+  cancel(id: string): Promise<boolean>;
   /**
    * Makes one visual result's screenshot its project's baseline (#268): the image is
    * copied to the baseline key and the row replaced, recording who approved it.
@@ -560,6 +592,24 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
           error: row.error,
           results: results.rows,
         };
+      },
+
+      async cancel(id) {
+        if (!UUID.test(id)) return false;
+        return db.transaction().execute(async (tx) => {
+          const removed = await sql`
+            delete from runs where org_id = ${orgId} and id = ${id} and status = 'queued'`.execute(
+            tx,
+          );
+          if (!removed.numAffectedRows) return false;
+          await recordAudit(tx, {
+            orgId,
+            actor: { apiKeyId: apiKeyId ?? null },
+            action: 'job.cancel',
+            target: `run:${id}`,
+          });
+          return true;
+        });
       },
     }),
 

@@ -724,7 +724,7 @@ import { AIVisualClassifier } from '@iris/visual';
 const classifier = new AIVisualClassifier({
   provider: 'openai',
   apiKey: process.env.OPENAI_API_KEY,
-  model: 'gpt-4o',
+  model: 'gpt-6.1-terra',
   maxTokens: 2048,
   temperature: 0.1
 });

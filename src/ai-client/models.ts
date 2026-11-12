@@ -45,12 +45,12 @@ export interface ModelProbeCredentials {
  */
 export const DEFAULT_MODELS: Record<ModelKind, Record<ModelProvider, string>> = {
   text: {
-    openai: 'gpt-4o-mini',
+    openai: 'gpt-6-luna',
     anthropic: 'claude-haiku-4-5',
     ollama: 'llama2',
   },
   vision: {
-    openai: 'gpt-4o',
+    openai: 'gpt-6.1-terra',
     anthropic: 'claude-sonnet-5',
     ollama: 'llava',
   },
@@ -58,25 +58,20 @@ export const DEFAULT_MODELS: Record<ModelKind, Record<ModelProvider, string>> = 
 
 /**
  * Model families that accept images, by id prefix (#298). Capability used to be a
- * name guess (`gpt-4` for OpenAI, `llava`/`bakllava` for Ollama), which skipped
- * `gpt-4.1`, `gpt-5`, `o3`, `llama3.2-vision`, `gemma3` and kept the text-only `gpt-4`.
- * OpenAI's model list carries no capability field, so this table is the source there;
- * Ollama reports `capabilities` from `/api/show`, which wins when present
- * ({@link ollamaModelCapabilities}). Every Claude model sees, so Anthropic has no entry.
+ * name guess (`gpt-4` for OpenAI, `llava`/`bakllava` for Ollama), which skipped every
+ * newer vision model and kept the text-only `gpt-4`. OpenAI's model list carries no
+ * capability field, so this table is the source there; Ollama reports `capabilities`
+ * from `/api/show`, which wins when present ({@link ollamaModelCapabilities}). Every
+ * Claude model sees, so Anthropic has no entry.
+ *
+ * OpenAI's entry lists what it serves and has not deprecated (#523, checked 2026-11-11
+ * against https://developers.openai.com/api/docs/deprecations): the `gpt-4o`, `gpt-4.1`,
+ * `gpt-5` (no minor version) and o-series families are shut down or have a shutdown
+ * date, so IRIS no longer offers them. `gpt-5.` would also admit the deprecated
+ * `gpt-5.1` and the Codex-only `gpt-5.3`, hence one prefix per minor version.
  */
 const VISION_MODEL_PREFIXES: Record<'openai' | 'ollama', string[]> = {
-  openai: [
-    'gpt-4o',
-    'chatgpt-4o',
-    'gpt-4.1',
-    'gpt-4.5',
-    'gpt-4-turbo',
-    'gpt-4-vision',
-    'gpt-5',
-    'o1',
-    'o3',
-    'o4',
-  ],
+  openai: ['gpt-6', 'gpt-5.6', 'gpt-5.5', 'gpt-5.4', 'gpt-5.2'],
   ollama: [
     'llava',
     'bakllava',
@@ -92,23 +87,73 @@ const VISION_MODEL_PREFIXES: Record<'openai' | 'ollama', string[]> = {
   ],
 };
 
-/** Variants inside a vision family that take no images (`o1-mini`, `gpt-4o-audio-preview`). */
-const NOT_VISION = /^o[13]-mini|-(?:audio|realtime|transcribe|tts|search)/;
+/**
+ * Variants inside a vision family that IRIS cannot use for images: audio and the like
+ * take none, `-pro` and `-codex` are served by the Responses API only (IRIS calls Chat
+ * Completions), and `gpt-5.4-nano` is deprecated (#523).
+ */
+const NOT_VISION = /^gpt-5\.4-nano|-(?:audio|realtime|transcribe|tts|search|pro|codex)/;
 
 /**
- * OpenAI's reasoning models (`o1`, `o3`, `o4`, their `-mini` and dated snapshots) refuse any
- * `temperature` but the default with a 400 (#520): requests to them omit it.
+ * OpenAI's o-series (`o1`, `o3`, `o4`, their `-mini` and dated snapshots) refuses any
+ * `temperature` but the default with a 400 (#520): requests to it omit it. So do requests
+ * to the first `gpt-5` (`gpt-5`, `-mini`, `-nano`; #523): a reasoning model with no `none`
+ * effort, and leaving the field out is accepted by every model.
  */
 export function isReasoningModel(model: string): boolean {
-  return /^o\d(?:$|-)/i.test(model);
+  return /^(?:o\d|gpt-5)(?:$|-)/i.test(model);
 }
 
-/** The sampling options an OpenAI request may carry for `model` (#520). */
-export function openAISampling(model: string): { temperature?: number } {
-  return isReasoningModel(model) ? {} : { temperature: 0.1 };
+/**
+ * `gpt-5.x` and `gpt-6`: reasoning models that take `reasoning_effort: 'none'` (#523). The
+ * first `gpt-5` (no minor version) has no `none`; {@link isReasoningModel} covers it.
+ */
+const TAKES_REASONING_EFFORT = /^gpt-(?:5\.\d|6)/i;
+
+/** The two that refuse `reasoning_effort: 'none'`; `low` is their least. */
+const NO_EFFORT_NONE = /^gpt-6(?:-astra|\.1-sol)(?:$|-)/i;
+
+/**
+ * The base model of a fine-tuned OpenAI id, `ft:<base model>:<org>:<suffix>:<id>`;
+ * undefined for any other id. A fine-tune takes the sampling options its base takes
+ * (#652: the family patterns above anchor at the start of an id) and is priced by its own
+ * row, `ft:<base model>` (#664).
+ */
+export const fineTunedBase = (model: string): string | undefined => /^ft:([^:]+)/.exec(model)?.[1];
+
+/**
+ * The sampling options an OpenAI Chat Completions request may carry for `model`.
+ *
+ * `gpt-5.x` and `gpt-6` (#523) reason before they answer unless told not to, and the
+ * reasoning is billed as output inside the 1000-token reply cap, so IRIS asks for none.
+ * They refuse `temperature` whenever effort is not `none`; it is left out for all of them,
+ * which every one accepts. The o-series and the first `gpt-5` take neither (#520).
+ * Anything else keeps 0.1. A fine-tuned model gets what its base model gets (#652).
+ *
+ * shortcut: `gpt-6-astra` and `gpt-6.1-sol` reason at `low` inside the same 1000-token
+ * cap, so a long deliberation can leave no room for the answer (a billed, rejected
+ * reply). Raise the cap, and RESERVATION_CEILING with it, if either becomes a default.
+ */
+export function openAISampling(model: string): {
+  temperature?: number;
+  reasoning_effort?: 'none' | 'low';
+} {
+  const family = fineTunedBase(model) ?? model;
+  if (isReasoningModel(family)) return {};
+  if (TAKES_REASONING_EFFORT.test(family)) {
+    return { reasoning_effort: NO_EFFORT_NONE.test(family) ? 'low' : 'none' };
+  }
+  return { temperature: 0.1 };
 }
 
-/** Whether a model accepts images, by the table above (#298). */
+/**
+ * Whether a model accepts images, by the table above (#298).
+ *
+ * Never a fine-tuned OpenAI id (#664, checked 2026-11-11 against
+ * https://developers.openai.com/api/docs/pricing and the model pages): the only models
+ * OpenAI fine-tunes are `gpt-4o` and `gpt-4.1` snapshots, deprecated and no longer offered
+ * here, and every family in the table lists fine-tuning as not supported.
+ */
 export function isVisionModel(provider: ModelProvider, model: string): boolean {
   if (provider === 'anthropic') return true;
   // Ollama names may carry a namespace (`library/llava:13b`); the family is the last part.
@@ -201,6 +246,31 @@ export class ModelUnavailableError extends Error {
           : ''),
     );
     this.name = 'ModelUnavailableError';
+  }
+}
+
+/**
+ * A configured model the provider may well serve, but that IRIS does not send images to:
+ * outside the vision table (text-only, deprecated or unknown, #523).
+ *
+ * The user's to change, like {@link ModelUnavailableError}, but not thrown past the
+ * fallback chain: another vendor may still answer. When none does, the classifier names
+ * it as the reason AI was unavailable (#652) instead of an anonymous outage.
+ */
+export class ModelNotForImagesError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly model: string,
+  ) {
+    const why =
+      provider === 'openai' && fineTunedBase(model) !== undefined
+        ? 'fine-tuned: OpenAI fine-tunes only models it has deprecated'
+        : 'text-only, deprecated or unknown';
+    super(
+      `${provider} model "${model}" is not one IRIS uses for images ` +
+        `(${why}); choose another with --ai-model`,
+    );
+    this.name = 'ModelNotForImagesError';
   }
 }
 

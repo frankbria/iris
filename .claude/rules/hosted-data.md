@@ -173,7 +173,17 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   it), best effort: a failed write is logged and the session goes on.
 - `rewrapAll()` writes one `provider_key.rewrap` per key, in that key's update transaction,
   with no actor (an operator ran it) and the sealing master key id.
-- There is no read surface yet (portal page or API): only the table.
+- **Read surface (#541)**: `auditPage()` (src/audit-reads.ts), the portal's `/audit` for
+  owners and admins, newest first, cursor-paged, strings through `redactStrings`.
+- **Kept 90 days (#541, owner decision 2026-11-08)**: `AUDIT_RETENTION_DAYS` lives in
+  `src/audit-log.ts` (Kysely only, so the portal page can state it); the retention pass's
+  `audit` step deletes older entries (`auditEntriesDeleted` in the report). **The log is
+  also data the product reads**: `api_key.create` is the only record of a key's creator,
+  and `revokeKeysCreatedBy` / `liveKeysByCreator` (#408, #457) depend on it, so that entry
+  is exempt while its key exists (same org, `substr(target, 5)`) and it still names its
+  creator, and goes on the first pass after the key is revoked or the creator's account
+  is deleted. Before making anything else read the audit log, decide
+  whether it must survive 90 days.
 
 ### Artifact Storage Quota (issue #315)
 
@@ -229,6 +239,16 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   An unknown customer or an unhandled type is a 200 that records nothing and reads nothing.
   The reader is injectable (`stripeWebhookHandler(db, config, { readSubscriptions })`); tests
   pass one over in-test fixtures. It follows every page (`has_more`).
+- **At most `MAX_CONCURRENT_DELIVERIES` (2) deliveries hold a transaction at once**
+  (#636 review). The webhook shares the one hosted pool (pg default `max` 10) with key
+  verification, jobs and usage, and each delivery holds a connection across the Stripe read
+  (up to 10 s), so a Stripe outage's redelivery waves could take every connection and 503
+  tenants. Past the cap the handler returns `busy` before touching the database (nothing
+  recorded) and the route answers **503 + `Retry-After: 1`**; Stripe retries any non-2xx.
+  An in-process counter, not a second pool: one process serves the route, and a dedicated
+  pool would be more connections and config for the same bound. Checked after the
+  signature and the type, so ignored events never wait. `db/stripe-webhook.test.ts` holds
+  two reads open on a default-sized pool and shows eight tenant queries still run.
 - **Plan from the price**: `active`, `trialing` and `past_due` keep the price's plan (a
   failed payment suspends, it does not downgrade: #266 below); any other status, or a price
   IRIS does not sell, is free.
@@ -252,8 +272,10 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   current state (each former out-of-order case is now "any delivery order ends in that
   state"). Calls to Stripe itself
   (`db/stripe-billing.test.ts`) need `IRIS_TEST_STRIPE_SECRET_KEY` (a test-mode key) and
-  are skipped without it, **CI included**, until the owner's test account exists; the
-  Portal case also needs the account's Customer Portal configuration saved. The default
+  are skipped without it, **CI included** (CI has no Stripe key); the
+  Portal case also needs the account's Customer Portal configuration saved. With
+  `IRIS_TEST_STRIPE_PRICE_PRO` / `_TEAM` set they use those prices; without, each run
+  creates two test products. The default
   reader is covered there too (an unpaid test-mode subscription stored as `incomplete`).
 
 ### Payment Failure (issue #266)
@@ -346,7 +368,49 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   A live row ends only with its TTL, so a call started before midnight UTC still counts
   after it. The estimate is a
   resolver parameter, computed in `hostedServices()`: the portal imports `managed-ai.ts`,
-  and the cost tracker would bring SQLite into its bundle. Stripe reporting is #264.
+  and the cost tracker would bring SQLite into its bundle. Stripe reporting: next section.
+
+### Stripe Meter Reporting (issue #264)
+
+`src/billing/stripe-meter.ts`, migration 0021 (`usage_events.stripe_reported_at`, a partial
+index of unreported managed rows, one of managed rows by time for the reconciliation; it
+sets `lock_timeout` like 0005), `iris worker`, `iris admin billing-reconcile`.
+Ops: runbook "Usage reporting and reconciliation".
+
+- **One meter event per `managed` usage row**, never BYOK or platform rows: value =
+  `round(quantity * unit_cost_usd * 1e6)` micro-USD (integers, so totals compare exactly),
+  timestamp = the row's `created_at` (usage lands in the billing period it happened in),
+  identifier **and** idempotency key `usage-<row id>`. The meter's event name is the
+  constant `METER_EVENT_NAME`; there is no setting for it.
+- **`reportManagedUsage(db, meters, { signal })`** is one pass under
+  `pg_try_advisory_xact_lock(hashtext('stripe-meter-report'))`: a transaction that holds
+  only the lock, so the lock ends with the pass however it ends (a session lock left on a
+  pooled connection would silently stop every later pass). Reads and marks go through `db`
+  on other connections, so each mark commits on its own. `null` (and a warn log) when
+  another pass holds the lock. It pages by `id` (keyset), sends, and marks each row as
+  Stripe accepts it; `signal` stops it between two rows. `MeterEventRejected` (Stripe's
+  invalid-request and idempotency errors; a 401 is `StripeAuthenticationError`, not this)
+  leaves the row unreported and goes on; any other error ends the pass and
+  `runMeterReports` (every 5 min in the worker) logs it and retries. A crash between send
+  and mark resends the same identifier: Stripe counts it once, for 24 hours.
+- **Not sent**: rows of an org with no `org_billing` row (sent once it has one, if still
+  inside the window; their timestamps precede any subscription), rows older than 34 days
+  (Stripe's window is 35), a row that cost 0 (marked without a call). **Estimated rows
+  (#243) are sent as they are**: the credit gate charged the org's credit that amount.
+- **The worker gets `IRIS_STRIPE_SECRET_KEY(_FILE)` only** (compose): it runs tenant
+  pages, so no webhook secret and no prices; unset means no report. `stripeClient()` takes
+  just the key. No price is attached to the meter by this code.
+- **`meterReconciliation(db, meters, { from, to })`**: per org with managed usage in the
+  period, ledger, estimated and unreported totals, the meter's total (`listEventSummaries`,
+  which needs whole minutes; `null` without a customer) and ledger minus Stripe. A Stripe
+  failure for one org is that row's `stripeError`; the others are still reported. The CLI
+  prints it as JSON and exits 3 on any difference or error.
+- **Tests**: `db/stripe-meter.test.ts` (real Postgres; an in-test meter that keeps events
+  by identifier, as Stripe does) and `billing/stripe-meter-gateway.test.ts` (the real SDK
+  against a local HTTP server: `new Stripe(key, { host, port, protocol: 'http' })`). The
+  one call to a real test-mode meter needs `IRIS_TEST_STRIPE_SECRET_KEY`, skipped without
+  it, CI included. Under Claude Code the Stripe SDK prints a `<claude-code-hint>` line to
+  stderr: do not assert an empty stderr on a CLI path that loads it.
 
 ### Hosted Job API (issue #267)
 
@@ -548,6 +612,8 @@ owner's decisions (2026-10-03). Ops side: runbook "Retention and offboarding".
   per org: a failure is logged and retried by the next pass.
 - **Runs after 90 days**: usage rows are detached first, since `usage_events -> runs` has
   no delete rule and would block the delete.
+- **Audit entries after 90 days (#541)**, except a live key's creation entry: see "Tenant
+  Audit Log" above.
 - **Terms evidence is pseudonymised by the database**, not by code: whatever deletes a user
   (BetterAuth, `delete-user`, SQL) fires the trigger. `deleteUser` refuses while the user
   is the only owner (comma roles, as #260) of an org with no pending deletion.
@@ -600,8 +666,9 @@ tables.
 - **Hosted RPC records each `executeBrowserAction`** (`startServer({ history })`,
   wired by `hostedServices()` over the auth pool). An action is stored as
   `describeAction()`, which never includes what a `fill` typed, and a navigate URL
-  loses its `user:password@`. Errors are cut to 500 characters and lose terminal colour
-  codes (`stripAnsi`, src/report-encoding.ts, #420: Playwright colours its call log). The write is awaited
+  loses its `user:password@` (`urlWithoutUserinfo`, parsed; the same URL quoted in the
+  action's error is cut the same way, #645). Errors are cut to 500 characters and lose terminal colour
+  codes (`strippedError`, src/report-encoding.ts, #420: Playwright colours its call log; only the first 16,384 units reach the patterns, #658). The write is awaited
   before the reply, so a reply means the run is recorded (#269 reads it). A failed write is logged, and the request still succeeds. Local
   (token) connections record nothing.
 - **Local: `sqliteHistoryStore(path)`** over the #77 tables. `test_results` has no kind

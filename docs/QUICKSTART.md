@@ -178,7 +178,7 @@ export IRIS_DB_PATH=~/.iris/iris.db
 {
   "ai": {
     "provider": "openai",
-    "model": "gpt-4o-mini"
+    "model": "gpt-6-luna"
   },
   "budget": {
     "dailyLimit": 10,

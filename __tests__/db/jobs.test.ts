@@ -32,7 +32,9 @@ const result = {
   results: [
     {
       page: 'https://a.example/',
-      axeResult: { violations: [{ impact: 'critical' }] },
+      axeResult: {
+        violations: [{ id: 'image-alt', impact: 'critical', nodes: [{}, {}] }],
+      },
       keyboardResult: { passed: true },
       // The runner's verdict (#288): what the stores record.
       passed: false,
@@ -148,7 +150,14 @@ const result = {
       status: 'failed', // the run's verdict: a critical violation breaches the threshold
       summary: 'a11y: 1 page(s), 1 violation(s)',
       error: null,
-      results: [{ url: 'https://a.example/', passed: false }],
+      results: [
+        {
+          url: 'https://a.example/',
+          passed: false,
+          // What failed, in axe's own vocabulary (#314): a caller can act on a rule id.
+          result: { violationRules: [{ id: 'image-alt', impact: 'critical', nodes: 2 }] },
+        },
+      ],
     });
     const usage = await sql<{
       org_id: string;
@@ -187,6 +196,64 @@ const result = {
     expect(stored).toMatchObject({ status: 'failed', finishedAt: expect.any(Date) });
     expect(stored!.error).toHaveLength(500);
     expect((await sql`select 1 from usage_events`.execute(db)).rows).toEqual([]);
+  });
+
+  it('stores at most 50 violated rules per page (#314)', async () => {
+    const id = await enqueue();
+    const many = structuredClone(result);
+    many.results[0].axeResult.violations = Array.from({ length: 60 }, (_, i) => ({
+      id: `rule-${i}`,
+      impact: 'minor',
+      nodes: [{}],
+    })) as unknown as (typeof many.results)[0]['axeResult']['violations'];
+    await jobs().finish((await jobs().claim('a11y'))!, many);
+    const stored = (await jobs().forOrg(A).get(id))!.results[0].result;
+    expect(stored.violationRules).toHaveLength(50);
+    expect(stored.violations).toMatchObject({ minor: 60 }); // the counts stay whole
+  });
+
+  describe('cancel (#314)', () => {
+    const audit = async () =>
+      (
+        await sql<{ action: string; target: string; actor_api_key_id: string | null }>`
+          select action, target, actor_api_key_id from audit_log order by id`.execute(db)
+      ).rows;
+
+    it('removes a queued job, frees the cap and audits it', async () => {
+      await sql`delete from audit_log`.execute(db);
+      // With the key that asked: both entries name it.
+      await sql`insert into apikey (id, "configId", "referenceId", key, "createdAt", "updatedAt")
+        values ('key-cancel', 'default', 'org-a', 'hash-cancel', now(), now())
+        on conflict do nothing`.execute(db);
+      const keyed = { orgId: 'org-a', apiKeyId: 'key-cancel' };
+      const id = await enqueue(keyed);
+      expect(await jobs().forOrg(keyed).cancel(id)).toBe(true);
+      expect(await jobs().forOrg(A).get(id)).toBeNull();
+      expect(await jobs().claim('a11y')).toBeNull();
+      expect(
+        await jobs().forOrg(A).enqueue({ kind: 'a11y', params }, { maxOutstanding: 1 }),
+      ).not.toBeNull();
+      expect((await audit()).slice(0, 2)).toEqual([
+        { action: 'job.submit', target: `run:${id}`, actor_api_key_id: 'key-cancel' },
+        { action: 'job.cancel', target: `run:${id}`, actor_api_key_id: 'key-cancel' },
+      ]);
+    });
+
+    it('leaves a running or finished job alone', async () => {
+      const id = await enqueue();
+      const job = (await jobs().claim('a11y'))!;
+      expect(await jobs().forOrg(A).cancel(id)).toBe(false);
+      expect(await jobs().finish(job, result)).toBe(true);
+      expect(await jobs().forOrg(A).cancel(id)).toBe(false);
+      expect(await jobs().forOrg(A).get(id)).toMatchObject({ status: 'failed' });
+    });
+
+    it("cannot cancel another org's job, or an id that is not a uuid", async () => {
+      const id = await enqueue();
+      expect(await jobs().forOrg(B).cancel(id)).toBe(false);
+      expect(await jobs().forOrg(A).cancel("x' or 1=1 --")).toBe(false);
+      expect(await jobs().forOrg(A).get(id)).toMatchObject({ status: 'queued' });
+    });
   });
 
   it('keeps jobs from the other org, and unfinished jobs out of history', async () => {
