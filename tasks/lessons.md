@@ -665,3 +665,9 @@ Write/Edit, not as a pre-push afterthought.
 - **A ts-node script in `/tmp` resolves packages from its own directory.** Besides `TS_NODE_PROJECT`, it needs `node_modules` linked next to the script (`ln -s <repo>/node_modules /tmp/<dir>/node_modules`), or `import … from 'playwright'` is `MODULE_NOT_FOUND`. To compare with main, `git archive main src | tar -x -C /tmp/<dir>/main` and pass the tree's root to the script.
 - **A JS handle that no longer answers was not necessarily released.** A reload destroys every handle into the old document, so "how many handles still answer" after several reloading runs counts one, on main too. Show a release on a run that reloads nothing.
 - **`gh pr create` with a long heredoc body in a compound command was refused by the permission layer.** Push in one call, write the body with the Write tool, and pass `--body-file`.
+
+## 2026-11-12 — #685 the dashboard's error page for a session with no org
+- **The portal E2E runs on this host.** `npm run e2e -w @iris/portal` uses Playwright Test's own Chromium launch, not IRIS's sandboxed launcher, so the root-suite host limit does not apply (47 passed in 1.6 min after `npm run build -w @iris/portal`).
+- **A race between requests can be shown without a browser.** N `fetch` calls with the session cookie, started a few ms apart, against `next start` on a scratch database: main answered 500 in 15 of 15 fresh processes. Only a fresh process hit it (new connections spread the arrivals); later rounds in the same process did not.
+- **Read the failed attempt's job log before theorising.** `gh api repos/{owner}/{repo}/actions/runs/<id>/attempts/1/jobs`, then `/actions/jobs/<id>/logs`: the `[WebServer]` lines held the thrown error, which named the cause.
+- **Jest in `apps/portal` cannot load `better-auth` (ES modules only)** and `jest.mock("@/…")` does not resolve the alias: mock by relative path and stand in for `better-auth/api`.

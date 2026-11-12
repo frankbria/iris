@@ -10,7 +10,7 @@ import {
 } from "@/components/org-forms"
 import { SuspendedBanner } from "@/components/contact-link"
 import { getAuth, getDb } from "@/lib/auth"
-import { requireOrg } from "@/lib/org"
+import { logInIfSignedOut, requireOrg } from "@/lib/org"
 
 /** BetterAuth keeps several roles as one comma string (`admin,owner`). */
 const hasRole = (roles: string, role: string) =>
@@ -40,16 +40,18 @@ export default async function OrgPage({
 }) {
   const { session, org, role, suspended } = await requireOrg()
   const page = pageNumber((await searchParams).page)
-  const { members, total } = await getAuth().api.listMembers({
-    headers: await headers(),
-    query: {
-      organizationId: org.id,
-      limit: PAGE,
-      offset: (page - 1) * PAGE,
-      sortBy: "createdAt",
-      sortDirection: "asc",
-    },
-  })
+  const { members, total } = await getAuth()
+    .api.listMembers({
+      headers: await headers(),
+      query: {
+        organizationId: org.id,
+        limit: PAGE,
+        offset: (page - 1) * PAGE,
+        sortBy: "createdAt",
+        sortDirection: "asc",
+      },
+    })
+    .catch(logInIfSignedOut)
   const now = new Date()
   const pending = org.invitations.filter(
     (i) => i.status === "pending" && new Date(i.expiresAt) > now
