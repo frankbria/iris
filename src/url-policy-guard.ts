@@ -651,6 +651,10 @@ export async function guardedGoto(
  * now, because Playwright's `page.url()` and the guard's own session hear of a commit at
  * different moments.
  *
+ * Not explained, on purpose (#681): the error page of a popup whose opening navigation was
+ * refused while it still ran on its opener's guard. That refusal is not recorded, so the
+ * read fails with "could not be loaded" and no reason. Nothing reads a popup today.
+ *
  * @param requested the URL the caller navigated to, named in the error.
  * @throws in the words of a refused redirect when the document is the error page of a
  * refused navigation or has a URL the page's policy refuses.
