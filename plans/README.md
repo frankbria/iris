@@ -121,7 +121,7 @@ production.
 | `P0.33` | [#261](https://github.com/frankbria/iris/issues/261) | Stripe customer and subscription lifecycle | P0.22 (#250), P0.32 (#260) | DONE (PR #636, with #345): subscribe, upgrade (Pro to Team in the Customer Portal) and cancel were run against Stripe test mode on 2026-11-12, through `stripe listen` and a hosted `iris connect` |
 | `P0.34` | [#345](https://github.com/frankbria/iris/issues/345) | Stripe webhook endpoint | P0.33 (#261) | DONE (PR #636, with #261) |
 | `P0.35` | [#263](https://github.com/frankbria/iris/issues/263) | Billable usage ledger: browser-minutes, text calls, vision calls, agent turns | P0.27 (#255) | DONE ([#432](https://github.com/frankbria/iris/pull/432)) |
-| `P0.36` | [#264](https://github.com/frankbria/iris/issues/264) | Report managed-credit usage to Stripe meters | P0.34 (#345), P0.35 (#263) | IN REVIEW (draft #637, stacked on #636; the test-mode meter run waits for the owner's Stripe test account) |
+| `P0.36` | [#264](https://github.com/frankbria/iris/issues/264) | Report managed-credit usage to Stripe meters | P0.34 (#345), P0.35 (#263) | DONE (PR #637): run against the Stripe test-mode meter on 2026-11-12; each managed row arrived once (a forced resend counted once) and the reconciliation matched |
 | `P0.37` | [#346](https://github.com/frankbria/iris/issues/346) | Entitlement enforcement at the API boundary | P0.25 (#342), P0.32 (#260), P0.35 (#263) | DONE (PR #480; managed credits split to #479) |
 | `P0.38` | [#266](https://github.com/frankbria/iris/issues/266) | Payment failure: grace period, suspension and restore | P0.34 (#345), P0.37 (#346) | TODO |
 
