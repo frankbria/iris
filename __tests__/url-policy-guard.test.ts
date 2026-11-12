@@ -907,6 +907,28 @@ describe('URL policy guard', () => {
       expect(hop?.reason).toMatch(/metadata/);
     }, 60_000);
 
+    // #681, a limit kept on purpose: while a popup runs on its opener's guard a refusal is
+    // not recorded (it would overwrite the opener's), so the popup's error page is refused
+    // without the policy's reason. No caller reads a popup; this pins that such a read
+    // still fails rather than passing an error page off as a document.
+    it('refuses to read a popup left on the error page of a refused redirect, without the reason', async () => {
+      await installUrlPolicyGuard(p, {});
+      const source = `${origin}/popup-source`;
+      await guardedGoto(p, source);
+
+      const [popup] = await Promise.all([
+        p.context().waitForEvent('page', { timeout: 15_000 }),
+        p.click('#redir-meta'),
+      ]);
+      await popup.waitForURL(/^chrome-error:/, { timeout: 15_000 });
+
+      const opening = `${origin}/to-metadata`;
+      await expect(guardedDocumentUrl(popup, opening)).rejects.toThrow(
+        `${opening} moved on to a page that could not be loaded`,
+      );
+      await expect(guardedDocumentUrl(p, source)).resolves.toBe(source);
+    }, 60_000);
+
     it('still lands a popup whose redirect stays in policy', async () => {
       await installUrlPolicyGuard(p, { pinnedOrigin: origin });
       await guardedGoto(p, `${origin}/popup-source`);

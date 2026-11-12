@@ -1,34 +1,24 @@
-# #679 a11y: the keyboard checks' return to the start page can hide a move the page made by itself
+# #681 URL guard: a popup's refused opening navigation leaves an error page with no reason
 
 Plan (self-authored; the issue has none). No architectural fork.
 
-Shown first, in real Chromium (`__tests__/a11y/scan-navigation.test.ts`, test-first): on
-main a page that moves by itself during the Tab walk to a page with a dialog is taken back to
-the start URL by the Escape check and reported with the second page's trap result. The same
-happens on a page that has a dialog itself and loads again, or whose router pushes another
-path (red on main every run).
+Decision (the issue's first criterion): **not done, the limit is documented.** Nothing reads
+a popup with `guardedDocumentUrl` (the a11y runner scans the page it opened), so carrying an
+opener-judged refusal over to the popup's guard would be code no caller can observe. The
+read is fail-safe as it is: it throws "could not be loaded", it never returns the error page
+as a document. Reopen when a caller reads popups; refusals are kept by navigation id since
+#680, so the browser net could hold an inherited target's and hand them over on attach.
 
-1. Tests, red first: three real-Chromium cases (move to a page with a dialog, reload,
-   router push) and one that pins the unchanged case (a query-string rewrite still goes back).
-2. `src/a11y/keyboard-tester.ts`: `run` takes the document the runner holds (after the
-   internal review; without one it holds the document it began on). Before the Escape check goes back, and when no key of its own left
-   the page, it asks `documentNow(page, started)`; anything but `same` sets
-   `movedByItself` and throws instead of going back.
-3. `src/a11y/a11y-runner.ts`: the keyboard hold does not take that move for a custom
-   sequence's (`keysMayNavigate && !movedByItself`), so it fails by name with custom
-   sequences configured too. Mocked case in `__tests__/a11y/a11y-runner.test.ts`.
-4. Docs: `.claude/rules/browser-safety.md`, `plans/README.md` (P3.47 done, P3.48 row for
-   #681), `tasks/lessons.md`.
+Shown first in real Chromium on this host (3 runs of 3): a `target=_blank` link that
+redirects to the metadata host leaves the popup on Chromium's error page,
+`guardedDocumentUrl(popup, …)` rejects with the generic reason, and the opener still reads
+as its own URL.
 
-Decisions
-- The tester throws a plain error and the runner's existing judgement names the move
-  (`NavigatedDuringScanError` with the runner's reported URL), rather than the tester
-  building that error from its own raw `page.url()`.
-- The check is by document as well as URL, so a reload and a router push are caught, not only
-  the "origin or path differs" case the issue names.
+1. `__tests__/url-policy-guard.test.ts`: one real-Chromium case pinning exactly that.
+2. Docs: JSDoc on `guardedDocumentUrl`, `.claude/rules/browser-safety.md` (the limit),
+   `plans/README.md` (P3.48 closed as not done, P3.49 row for #683).
 
-Acceptance criteria
-- [x] Real-Chromium test that shows it.
-- [x] Before the Escape check goes back, a move without `navigatedByKey` fails the page as
-      "navigated during the scan"; the runner does not lose it.
-- [x] `.claude/rules/browser-safety.md` updated.
+Acceptance criteria:
+- [x] Decide: closed as won't-do while no caller reads popups.
+- [ ] "If done" test: not applicable; the pin test above stands in, and it also shows the
+      opener's own read is untouched.

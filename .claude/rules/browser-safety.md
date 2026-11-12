@@ -189,6 +189,15 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
     for an error page), as `a11y-runner.test.ts` does.
   - Limit: a refusal older than the newest 16 on its page explains nothing; its error page
     gets the generic reason.
+  - Limit, kept on purpose (#681): a popup's opening navigation refused while the popup
+    still runs on its opener's guard is not recorded (it would overwrite the opener's), so
+    `guardedDocumentUrl(popup, …)` on that error page gives the generic reason. Nothing
+    reads a popup today (the a11y runner scans the page it opened); the read still fails,
+    pinned in `url-policy-guard.test.ts`. If a caller starts reading popups, let the browser
+    net keep an inherited target's refusals by navigation id and hand them to the popup's
+    guard in `joinBrowserNet`. An opening request refused outright (no redirect) may be
+    answered by the context route instead, which records nothing either; measure which
+    layer answers first before building on one.
 - Hostnames that *resolve* to private addresses are the egress proxy's job, below.
 
 ### URL Guard: Popups, Pins, Opaque Starts (issue #337)

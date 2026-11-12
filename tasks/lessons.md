@@ -656,3 +656,7 @@ Write/Edit, not as a pre-push afterthought.
 - **`jest -t '<tag>'` in a mutation script only runs tests whose name holds the tag.** Three mutations "survived" because the runner case had `#679` in a comment, not in its name; the tally line (`69 skipped, 5 passed`) showed it.
 - **Give a check the caller's handle instead of taking a second one later.** The tester first held "the document when the keyboard checks began", which left a gap after the runner's last look; taking the runner's `HeldDocument` closed it and saved a page call. A helper that releases what it is given (`documentSince`) must not get a handle the caller still needs.
 - **`ts-node` run from `/tmp` needs `TS_NODE_PROJECT=<repo>/tsconfig.json`**, or it fails on `TS5109` before the script starts.
+
+## 2026-11-12 — #681 a popup's refused opening navigation
+- **Commit before a mutation check.** The mutation was undone with `git checkout <file>`, which also dropped an uncommitted JSDoc edit in the same file; it was noticed in `git status` and redone. Mutate committed files only.
+- **A mutation that does not compile proves nothing.** `if (false && …)` was rejected by the TypeScript transform and Jest reported `Tests: 0 total`, which reads like "nothing failed"; check the tally says `1 failed`.
