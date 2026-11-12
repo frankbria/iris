@@ -44,6 +44,9 @@ import type { UrlPolicyOptions } from './url-policy';
  */
 export const MAX_POPUPS_PER_CONTEXT = 5;
 
+/** What Chromium commits in place of a document it could not load. */
+const ERROR_DOCUMENT = 'chrome-error:';
+
 const popupCap = (policy: UrlPolicyOptions): number => policy.maxPopups ?? MAX_POPUPS_PER_CONTEXT;
 
 /** Why the guard turned a navigation away. */
@@ -52,11 +55,23 @@ interface NavigationRefusal {
   url?: string;
   /** The policy's own explanation, e.g. "link-local/metadata host …". */
   detail?: string;
+  /**
+   * The navigation the refused request belonged to: the paused request's `networkId`,
+   * which every redirect hop shares and the commit of its error page carries as `loaderId`.
+   */
+  navigationId?: string;
 }
 
 /** Everything the CDP handler and `guardedGoto` share for one page. */
 interface GuardState {
+  /** The main frame's latest refused document. Reset by `guardedGoto`, which reads it. */
   refusal: NavigationRefusal;
+  /**
+   * Why the error page the main frame last committed is one: the refusal of the navigation
+   * that committed it, empty when that navigation was not refused (#673). Unset while the
+   * last commit heard was not an error page.
+   */
+  documentRefusal?: NavigationRefusal;
   /** Live, so a later install can tighten the policy without a second session. */
   policy: UrlPolicyOptions;
 }
@@ -195,6 +210,18 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<string>
   const { targetInfo } = await cdp.send('Target.getTargetInfo');
   const mainFrameId = targetInfo.targetId;
 
+  // Not `state.refusal` read when the error page is: by then a later navigation that was
+  // not refused may be the one that left it (#673). Only the latest refused navigation is
+  // remembered, so the error page of one that a second refused move overtook goes
+  // unexplained until the second commits.
+  cdp.on('Page.frameNavigated', ({ frame }) => {
+    if (frame.id !== mainFrameId) return;
+    if (!frame.url.startsWith(ERROR_DOCUMENT)) state.documentRefusal = undefined;
+    else state.documentRefusal = state.refusal.navigationId === frame.loaderId ? state.refusal : {};
+  });
+  // Before Fetch, so no navigation a request was refused for can commit unheard.
+  await cdp.send('Page.enable');
+
   // Request stage only. It is sufficient *because* CDP re-pauses the target of
   // a redirect as a fresh request — which `page.route` does not — so a 30x is
   // caught by checking the target's own URL, before it is sent.
@@ -214,7 +241,7 @@ async function installFetchGuard(page: Page, state: GuardState): Promise<string>
       // iframe (#668) must not become the reason a navigation failed, which is what
       // the caller will be shown.
       if (event.resourceType === 'Document' && event.frameId === mainFrameId) {
-        state.refusal = { url, detail: reason };
+        state.refusal = { url, detail: reason, navigationId: event.networkId };
       }
       await cdp.send('Fetch.failRequest', {
         requestId: event.requestId,
@@ -318,7 +345,7 @@ async function startBrowserNet(browser: Browser): Promise<BrowserNet> {
       } else if (reason) {
         // Whichever layer answers first wins; record it so guardedGoto can
         // still say why. Never for a popup — that would overwrite its opener's.
-        target.state.refusal = { url, detail: reason };
+        target.state.refusal = { url, detail: reason, navigationId: event.networkId };
       }
     }
 
@@ -598,9 +625,6 @@ export async function guardedGoto(
   }
 }
 
-/** What Chromium commits in place of a document it could not load. */
-const ERROR_DOCUMENT = 'chrome-error:';
-
 /**
  * The URL of the document the page holds now, for a caller that reports what it measured
  * (#662). Not {@link guardedGoto}'s return value: that is the last HTTP response of the
@@ -609,7 +633,10 @@ const ERROR_DOCUMENT = 'chrome-error:';
  *
  * The guard has already vetted every request such a move made, so a refused one leaves
  * Chromium's error page behind. Measuring that would report an empty page as a clean one.
- * The reason quoted is the main frame's last refused document, never a subframe's (#668).
+ * The reason quoted is the refusal of the navigation that left that error page (#673), and
+ * a main-frame one, never a subframe's (#668). Read in the moment between `page.url()`
+ * showing an error page and this module's own CDP session hearing of its commit, it is the
+ * latest refusal, as before #673.
  *
  * @param requested the URL the caller navigated to, named in the error.
  * @throws in the words of a refused redirect when the document is the error page of a
@@ -624,7 +651,9 @@ export function guardedDocumentUrl(page: Page, requested: string): string {
     );
 
   if (url.startsWith(ERROR_DOCUMENT)) {
-    const { url: refusedUrl, detail } = state?.refusal ?? {};
+    // An error page whose commit the guard's session has not heard yet (Playwright's own
+    // hears it first) is the pending navigation's, and so is the latest refusal.
+    const { url: refusedUrl, detail } = state?.documentRefusal ?? state?.refusal ?? {};
     throw refusedUrl && detail
       ? refusedRedirect(refusedUrl, detail)
       : new Error(`${requested} moved on to a page that could not be loaded`);
