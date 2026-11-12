@@ -452,8 +452,11 @@ export class AccessibilityRunner {
       if (this.shouldRunKeyboardTests()) {
         const keysMayNavigate = this.config.keyboard.customSequences.length > 0;
         keyboardResult = await held(
-          () => this.keyboardTester.run(page, testName),
-          () => keysMayNavigate || this.keyboardTester.navigatedByKey,
+          () => this.keyboardTester.run(page, testName, scanned),
+          // A move the tester saw the page make by itself is no custom sequence's (#679).
+          () =>
+            this.keyboardTester.navigatedByKey ||
+            (keysMayNavigate && !this.keyboardTester.movedByItself),
           // The Escape check loads the page again itself (#286): the scanned document is
           // then gone by the tester's doing, and the page is held to the one it loaded (#675).
           () => this.keyboardTester.reloadedInto,

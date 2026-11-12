@@ -281,11 +281,16 @@ async function documentSince(
   held: HeldDocument,
 ): Promise<'same' | 'moved' | 'replaced'> {
   try {
-    if (await held.replaced()) return 'replaced';
-    return documentKey(page.url()) === documentKey(held.url) ? 'same' : 'moved';
+    return await documentNow(page, held);
   } finally {
     await held.release();
   }
+}
+
+/** {@link documentSince} for a document the caller goes on holding. */
+async function documentNow(page: Page, held: HeldDocument): Promise<'same' | 'moved' | 'replaced'> {
+  if (await held.replaced()) return 'replaced';
+  return documentKey(page.url()) === documentKey(held.url) ? 'same' : 'moved';
 }
 
 /**
@@ -313,6 +318,13 @@ export class KeyboardTester {
    */
   reloadedInto: HeldDocument | undefined;
 
+  /**
+   * Whether the last `run` stopped because the page had moved on by itself before the Escape
+   * check could go back to the start page (#679). No key was to blame, so the a11y runner
+   * does not take that move for a custom sequence's either.
+   */
+  movedByItself = false;
+
   constructor(config: KeyboardTestConfig) {
     this.config = config;
   }
@@ -324,14 +336,20 @@ export class KeyboardTester {
    * Escape check reloads it after the trap check (#286), which reproduces that state but
    * not one opened by script afterwards. A reload that brings back fewer dialogs than the
    * trap check saw is reported as a failed check, never a silent pass.
+   *
+   * @param scanned the document the caller holds the page to, when it holds one (the a11y
+   * runner's): the Escape check does not go back over a move away from it (#679). Without
+   * one, the document the page has when the run begins.
    */
-  async run(page: Page, testName: string): Promise<KeyboardTestResult> {
+  async run(page: Page, testName: string, scanned?: HeldDocument): Promise<KeyboardTestResult> {
     const interactions: KeyboardInteraction[] = [];
     let focusOrder: FocusableElement[] = [];
     let trapTests: FocusTrap[] = [];
     let passed = true;
     this.navigatedByKey = false;
     this.reloadedInto = undefined;
+    this.movedByItself = false;
+    let ownHold: HeldDocument | undefined;
 
     try {
       // Dialogs showing on the page as loaded, before any check presses a key (the Tab walk
@@ -340,6 +358,10 @@ export class KeyboardTester {
       // The page under test, so the Escape check returns to it even if a key sent it
       // elsewhere (a dialog whose Escape handler navigates).
       const startUrl = page.url();
+      if (!scanned && this.config.testEscapeHandling) {
+        ownHold = await holdDocument(page, startUrl);
+      }
+      const started = scanned ?? ownHold;
       const dialogsBefore =
         this.config.testTrapDetection && this.config.testEscapeHandling
           ? await page.evaluate(VISIBLE_DIALOGS, DIALOG_SELECTOR)
@@ -406,6 +428,12 @@ export class KeyboardTester {
         // from the page as loaded. The URL guard is per page, so the reload is guarded too.
         // Also when a key of an earlier check left the page (#675): its dialogs are not here.
         if (trapTests.length > 0 || this.navigatedByKey) {
+          // Going back would put the start URL under results measured on the page it moved
+          // to by itself, and the runner would see no move (#679).
+          if (!this.navigatedByKey && started && (await documentNow(page, started)) !== 'same') {
+            this.movedByItself = true;
+            throw new Error('The page moved on by itself before the Escape check');
+          }
           // 'load', not 'networkidle': a page with long-polling or a socket never goes idle.
           // A reload that fails leaves the page as it is: the check still runs, it does not
           // cost every result collected so far.
@@ -461,6 +489,8 @@ export class KeyboardTester {
       throw new Error(
         `Keyboard testing failed: ${error instanceof Error ? error.message : String(error)}`,
       );
+    } finally {
+      await ownHold?.release();
     }
   }
 
