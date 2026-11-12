@@ -1,32 +1,30 @@
-# #675 a11y: a reload, or a key other than Escape that navigates, during the scan
+# #677 URL guard: the error page's reason depends on event order
 
 Plan (self-authored; the issue has none).
 
-1. `src/a11y/scan-navigation.ts`: `holdDocument(page, url)` keeps a handle to the document
-   the page holds. A cross-document navigation destroys it whatever the URL (a reload, the
-   same path under another query string); `history.pushState` / `replaceState` and a
-   fragment change do not (measured in Chromium, /tmp/iris-675/probe.js).
-   `onScannedDocument` takes the held document: a move is "origin or path differs" (as
-   before) or "the held document is gone while the page answers".
-   A reload's error keeps the prefix and ends "... and loaded again before its checks finished".
-2. `src/a11y/a11y-runner.ts`: hold the document where the scanned URL is read.
-3. `src/a11y/keyboard-tester.ts`: `navigatedByKey` is also set by ArrowDown, and by a key
-   that reloads the page; an ArrowDown that left the page is a failed interaction saying
-   so, the other widgets were on the page it left, and the Escape check returns to the
-   start page.
-4. `src/mcp/scan-errors.ts`: fixed reason "the page reloaded during the scan".
-5. Docs: README, `.claude/rules/browser-safety.md`, `plans/README.md` (P3.45 done, P3.46 row
-   for #677, P3.44 follow-up), `tasks/lessons.md`.
+Decision (the issue's first criterion): `guardedDocumentUrl` becomes async and asks the
+browser. Measured in Chromium first (`/tmp/iris-677/probe.js`): `Page.getFrameTree` on the
+guard's own session, straight after Playwright's `framenavigated` and without `Page.enable`,
+returns the error page's frame with `unreachableUrl` and a `loaderId` equal to the paused
+request's `networkId`.
 
-Decisions (the issue asks for one):
-- An arrow key that navigates: the keyboard check's own move, seen by the check that
-  follows the key, like Escape.
-- A handler that navigates after a delay: NOT the check's own. Nothing outside the page
-  ties a later navigation to an earlier key, so it stays "navigated during the scan". A
-  real-Chromium test pins each.
+1. Red first: the three real-Chromium #673 cases in `__tests__/url-policy-guard.test.ts`
+   read straight after `framenavigated` (the `p.evaluate('1')` between is removed). On
+   main's guard all three fail.
+2. `src/url-policy-guard.ts`: refusals kept by navigation id in a bounded map
+   (`GuardState.refusals`); the `Page.frameNavigated` listener, `Page.enable` and
+   `documentRefusal` go; `guardedDocumentUrl` is async and, on an error page, asks
+   `Page.getFrameTree` and looks the frame's `loaderId` up. If the browser no longer holds an
+   error page by then, the URL the frame tree gives is the document's.
+3. `src/a11y/a11y-runner.ts`: both calls awaited.
+4. `__tests__/url-policy-guard-refusal.test.ts`: the stand-in answers `Page.getFrameTree`
+   instead of delivering commits; cases for an overtaken refusal, the bound, and a page that
+   moved on between the two reads.
+5. Docs: `.claude/rules/browser-safety.md`, `plans/README.md` (P3.46 done, P3.47 row for
+   #679), `tasks/lessons.md`.
 
 Acceptance criteria
-- [ ] Cross-document main-frame navigation during a held check detected whatever its URL;
-      same-document query/fragment change still not.
-- [ ] Decision on arrow key / delayed Escape, with a real-Chromium test.
-- [ ] README and `.claude/rules/browser-safety.md` updated.
+- [ ] Decision taken and recorded.
+- [ ] Refusals kept by navigation id (bounded); the read does not depend on event order; a
+      real-Chromium test reads straight after `framenavigated` with no page call between.
+- [ ] The #662, #668 and #673 cases still pass.

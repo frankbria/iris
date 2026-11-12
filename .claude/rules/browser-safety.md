@@ -138,23 +138,35 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   `url-policy-guard.test.ts` launches Chromium through Playwright itself, not through
   `launchBrowser()`, which is why it runs where sandboxed Chromium cannot start.
 - **The refusal an error page is explained by is that of the navigation that left it**
-  (#673): a refused main-frame document is recorded with its navigation's id (the paused
-  request's `networkId`, the same on every redirect hop, on the page session and on the
-  browser net), and the page session listens to `Page.frameNavigated` (`Page.enable` comes
-  before `Fetch.enable`). When the main frame commits, the recorded refusal becomes the
-  document's (`GuardState.documentRefusal`) only if the commit's `loaderId` is that id;
-  any other commit clears it. `guardedDocumentUrl` quotes that, so a refused move followed
-  by a move that failed for another reason (a refused port, a name that does not resolve)
-  gets "moved on to a page that could not be loaded", and the reverse order the refusal.
-  `guardedGoto` still reads the latest refusal, which it resets itself. Not a URL
-  comparison: the error page's `unreachableUrl` has the fragment, the paused request's URL
-  does not. The guard's session hears of a commit a moment after Playwright's `page.url()`
-  shows it, so while the last commit heard is not an error page (`documentRefusal` unset)
-  the latest refusal is quoted, as before: reading right at a first error page's commit
-  still gives its refusal (the internal review measured 0 of 15 without that). Limits:
-  only the latest refused navigation is remembered, and in that same moment after a
-  *second* error page's commit the first one's reason is still quoted (a test that waits
-  for `framenavigated` makes one page call before it asks).
+  (#673), **and which navigation that is, is asked of the browser** (#677): a refused
+  main-frame document is recorded by its navigation's id (the paused request's `networkId`,
+  the same on every redirect hop, on the page session and on the browser net) in
+  `GuardState.refusals`, the newest `MAX_REMEMBERED_REFUSALS` (16). `guardedDocumentUrl` is
+  **async**: when `page.url()` is an error page it sends `Page.getFrameTree` on the guard's
+  own session and looks the main frame's `loaderId` up. So a refused move followed by a
+  move that failed for another reason (a refused port, a name that does not resolve) gets
+  "moved on to a page that could not be loaded", the reverse order the refusal, and a
+  refused move a second refused move overtook its own reason. Things to know:
+  - Do not go back to state set from `Page.frameNavigated`: the guard's session hears of a
+    commit a moment after Playwright's `page.url()` shows it, and read in that moment a
+    second error page was explained by the first one's reason (#673 shipped that way; the
+    three real-Chromium #673 cases read straight after `framenavigated`, with no page call
+    in between, and fail on it). `Page.getFrameTree` needs no `Page.enable`; the session
+    enables only `Fetch`.
+  - Not a URL comparison: the error page's `unreachableUrl` has the fragment, the paused
+    request's URL does not.
+  - If the frame tree no longer shows an error page (no `unreachableUrl`: the page moved on
+    between the two reads), its `url` plus `urlFragment` is the document's URL and goes
+    through the policy check like any other.
+  - `guardedGoto` still reads the latest refusal, which it resets itself.
+  - A guard session that cannot answer (the page closed meanwhile) gives the generic
+    reason, not the protocol error, so the a11y runner's `NavigatedDuringScanError` path
+    never trades its error for one.
+  - A fake CDP session behind a test that reaches an error page must answer
+    `Page.getFrameTree` with `frameTree.frame` (`loaderId`, `url`, and `unreachableUrl`
+    for an error page), as `a11y-runner.test.ts` does.
+  - Limit: a refusal older than the newest 16 on its page explains nothing; its error page
+    gets the generic reason.
 - Hostnames that *resolve* to private addresses are the egress proxy's job, below.
 
 ### URL Guard: Popups, Pins, Opaque Starts (issue #337)

@@ -417,7 +417,7 @@ export class AccessibilityRunner {
       }
       // The document as it is now, not the response the navigation ended on: a page can
       // move on by script, meta refresh or its router before the network went idle (#662).
-      const scannedUrl = reportedUrl(guardedDocumentUrl(page, url));
+      const scannedUrl = reportedUrl(await guardedDocumentUrl(page, url));
       const scanned = await holdDocument(page, scannedUrl);
 
       const testName = pagePattern.replace(/\//g, '_') || 'index';
@@ -434,7 +434,7 @@ export class AccessibilityRunner {
         try {
           return await onScannedDocument(page, scanned, check, ownMove, reloadedInto);
         } catch (error) {
-          if (error instanceof NavigatedDuringScanError) guardedDocumentUrl(page, url);
+          if (error instanceof NavigatedDuringScanError) await guardedDocumentUrl(page, url);
           throw error;
         }
       };
