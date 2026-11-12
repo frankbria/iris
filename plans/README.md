@@ -284,7 +284,7 @@ production.
 | `P3.38` | [#660](https://github.com/frankbria/iris/issues/660) | redactString: a run of bare separators costs a callback each (1 MB of & takes about 360 ms) | P1.43 (#658) | DONE: the pattern needs a value again and a `?` begins a match only as the first of its name; 1 MB of separators about 9 ms, match set unchanged |
 | `P3.39` | [#662](https://github.com/frankbria/iris/issues/662) | a11y: a client-side navigation is not reported as a redirect; portal run detail does not show landedUrl | P3.36 (#648) | DONE: the runner reports the document's URL at the time axe runs (`guardedDocumentUrl`), a refused or failed move fails the scan, and run detail shows `(landed on …)` |
 | `P3.40` | [#664](https://github.com/frankbria/iris/issues/664) | Fine-tuned OpenAI ids: the vision table refuses them and the price table charges the dearest rate | P3.37 (#652) | DONE (#670): four fine-tuned rows from OpenAI's pricing page (they go with their bases on 2027-01-14); a fine-tuned id is never a vision model and the refusal says so |
-| `P3.41` | [#666](https://github.com/frankbria/iris/issues/666) | Tests: freePort() releases the port before iris connect listens, so a parallel suite can take it (address already in use) | — | TODO |
+| `P3.41` | [#666](https://github.com/frankbria/iris/issues/666) | Tests: freePort() releases the port before iris connect listens, so a parallel suite can take it (address already in use) | — | DONE: `iris connect` is spawned on port 0 and its port read back; nginx, the portal image and `--metrics-port` are started again on fresh ports when they report theirs taken (`__tests__/utils/ports.ts`) |
 
 ---
 
