@@ -209,6 +209,16 @@ The org is the tenant (ADR 0001 §4). The organization plugin's options live in
   the request. A form rendered for that org sends its id back (`InviteForm`), because
   another tab may switch the session's active org between render and submit.
   BetterAuth still checks the caller's role in that org.
+- **A session can end between two reads of one request (#685).** `requireOrg()` makes
+  several BetterAuth calls; when another request ends the session in between (logout in a
+  second tab, or a `<Link>` prefetch that found the user in no org and signed them out),
+  every read after `getSession` throws the session middleware's bare 401
+  (`body.code === "UNAUTHORIZED"`), which rendered Next's error page. `requireOrg()` and
+  the reads `/org` and `/api-keys` make after it go through `logInIfSignedOut`
+  (`lib/org.ts`): that one code redirects to `/login`, everything else is thrown on (a
+  plugin's own 401s, such as `USER_BANNED`, carry other codes). A new page that calls
+  `auth.api.*` after `requireOrg()` adds `.catch(logInIfSignedOut)`. Server actions do
+  not: they read the session themselves and answer with a message.
 - **A refused org read clears the session's active org** (BetterAuth,
   `crud-org.mjs`). A request that names another tenant's org id therefore leaves the
   session with none, and `requireOrg()` moves it back to an org the user belongs to.
