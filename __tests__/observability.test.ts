@@ -333,7 +333,8 @@ describe('--metrics-port', () => {
       const text = await fetch(`http://127.0.0.1:${metricsPort}/metrics`, {
         signal: exited.signal,
       }).then(
-        (res) => res.text(),
+        // A holder may send headers and stall the body: the cut then lands here.
+        (res) => res.text().catch(() => undefined),
         () => undefined,
       );
       if (exited.signal.aborted) {
