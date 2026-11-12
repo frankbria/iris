@@ -17,7 +17,7 @@
 
 import { randomBytes } from 'crypto';
 import { Page } from 'playwright';
-import { HeldDocument, holdDocument } from './scan-navigation';
+import { documentKey, HeldDocument, holdDocument } from './scan-navigation';
 import type { KeyboardTestResult } from './types';
 
 export interface KeyboardTestConfig {
@@ -270,12 +270,19 @@ const destroyedByNavigation = (error: unknown): boolean =>
   error instanceof Error && /Execution context was destroyed|navigat/i.test(error.message);
 
 /**
- * Whether the page left the document held before a key was pressed: by its URL, or by
- * loading a document again under the same one (#675). Lets go of the held document.
+ * What became of the document held before a key was pressed (#675): `replaced` when the
+ * page holds another document (the key navigated, or loaded the page again), `moved` when
+ * it is the same document under another origin or path (a router pushed one), else `same`.
+ * A query string or fragment the key rewrote is no move, as for the scan itself (#662).
+ * Lets go of the held document.
  */
-async function leftSince(page: Page, held: HeldDocument): Promise<boolean> {
+async function documentSince(
+  page: Page,
+  held: HeldDocument,
+): Promise<'same' | 'moved' | 'replaced'> {
   try {
-    return page.url() !== held.url || (await held.replaced());
+    if (await held.replaced()) return 'replaced';
+    return documentKey(page.url()) === documentKey(held.url) ? 'same' : 'moved';
   } finally {
     await held.release();
   }
@@ -298,6 +305,14 @@ export class KeyboardTester {
    */
   navigatedByKey = false;
 
+  /**
+   * The document this tester loaded itself during the last `run`, when it loaded the page
+   * again: the Escape check starts from the page as loaded (#286). The a11y runner holds the
+   * page to it from then on, since the document it scanned is gone by the tester's doing,
+   * not the page's (#675).
+   */
+  reloadedInto: HeldDocument | undefined;
+
   constructor(config: KeyboardTestConfig) {
     this.config = config;
   }
@@ -316,6 +331,7 @@ export class KeyboardTester {
     let trapTests: FocusTrap[] = [];
     let passed = true;
     this.navigatedByKey = false;
+    this.reloadedInto = undefined;
 
     try {
       // Dialogs showing on the page as loaded, before any check presses a key (the Tab walk
@@ -404,6 +420,7 @@ export class KeyboardTester {
           } catch {
             // Fall back to the current DOM.
           }
+          this.reloadedInto = await holdDocument(page, page.url());
           const dialogsNow = await page.evaluate(VISIBLE_DIALOGS, DIALOG_SELECTOR);
           if (dialogsNow < dialogsBefore) {
             passed = false;
@@ -806,7 +823,7 @@ export class KeyboardTester {
 
         // Also when the check above ran on the page Escape went to: it then answered
         // "gone", and only the URL or the document says why.
-        if (await leftSince(page, beforeEscape)) this.navigatedByKey = true;
+        if ((await documentSince(page, beforeEscape)) !== 'same') this.navigatedByKey = true;
 
         traps.push({
           container: candidate.container,
@@ -924,11 +941,13 @@ export class KeyboardTester {
             navigated = true;
             return null;
           });
-          // The key left the page instead of moving focus (a widget that routes on arrow
-          // keys): the key's own move, not the page's (#675), and not what an arrow key in
-          // a composite widget is for.
-          if ((await leftSince(page, beforeArrow)) || navigated) {
-            this.navigatedByKey = true;
+          const since = await documentSince(page, beforeArrow);
+          // A move the key made is the key's own, not the page's (#675).
+          if (since !== 'same' || navigated) this.navigatedByKey = true;
+          // The key left the document instead of moving focus (a widget that routes on
+          // arrow keys), which is not what an arrow key in a composite widget is for. A
+          // router that pushed a path kept the document, and focus is judged as usual.
+          if (since === 'replaced' || navigated) {
             interactions.push({
               key: 'ArrowDown',
               target: element.label,
@@ -1028,7 +1047,7 @@ export class KeyboardTester {
               this.navigatedByKey = true;
               return null; // Escape left the page: dismissed
             });
-          if (await leftSince(page, beforeEscape)) this.navigatedByKey = true;
+          if ((await documentSince(page, beforeEscape)) !== 'same') this.navigatedByKey = true;
           if (open === null) {
             outcome(picked.label, 'Closed (the page navigated)', true);
             break; // the remaining dialogs were on the page it left

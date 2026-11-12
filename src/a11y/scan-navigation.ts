@@ -39,7 +39,7 @@ export const saysReloaded = (message: string): boolean =>
  * rewrites its query string and fragment at any time, and the runner reports neither
  * change as a redirect (#662).
  */
-function documentKey(url: string): string {
+export function documentKey(url: string): string {
   if (!URL.canParse(url)) return url;
   const { protocol, host, pathname } = new URL(url);
   return `${protocol}//${host}${pathname}`;
@@ -96,7 +96,12 @@ export interface HeldDocument {
  * @param url the URL the caller read the document under.
  */
 export async function holdDocument(page: Page, url: string): Promise<HeldDocument> {
-  const document = await page.evaluateHandle('document');
+  // A navigation committing right now rejects the first call; the document it leaves is the
+  // one to hold, and a move away from `url` is then seen by its URL.
+  const document = await page.evaluateHandle('document').catch(async () => {
+    await settled(page);
+    return page.evaluateHandle('document');
+  });
   return {
     url,
     replaced: async () => !(await answers(document.evaluate('0'))) && (await settled(page)),
@@ -116,12 +121,16 @@ export async function holdDocument(page: Page, url: string): Promise<HeldDocumen
  * @param scanned the document the runner read before its checks.
  * @param moveIsTheChecksOwn asked once the check has settled: true when the check moved the
  * page itself (a key it pressed), which is then no fault of the page's.
+ * @param reloadedInto asked likewise: the document the check loaded itself, when it loaded
+ * the page again (the keyboard checks do, #286). The page is then held to that one, since
+ * the scanned one is gone by the check's doing.
  */
 export async function onScannedDocument<T>(
   page: Page,
   scanned: HeldDocument,
   check: () => Promise<T>,
   moveIsTheChecksOwn: () => boolean = () => false,
+  reloadedInto: () => HeldDocument | undefined = () => undefined,
 ): Promise<T> {
   /** The error for the move the page made under the check, when it made one. */
   const move = async (cause?: unknown): Promise<NavigatedDuringScanError | undefined> => {
@@ -130,7 +139,7 @@ export async function onScannedDocument<T>(
     if (documentKey(page.url()) !== documentKey(scanned.url)) {
       return new NavigatedDuringScanError(scanned.url, false, cause);
     }
-    return (await scanned.replaced())
+    return (await (reloadedInto() ?? scanned).replaced())
       ? new NavigatedDuringScanError(scanned.url, true, cause)
       : undefined;
   };

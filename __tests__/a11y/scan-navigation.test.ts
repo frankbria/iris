@@ -65,6 +65,14 @@ const PAGES: Record<string, string> = {
     '<h1>first</h1>',
     '<h1>first</h1><div role="dialog" aria-label="Notice"><button>OK</button></div>',
   ),
+  // An ordinary dialog: Escape closes it, and the page stays where it is.
+  '/dialog-closes-on-escape': page(
+    '',
+    "addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelector('[role=dialog]').hidden = true; })",
+  ).replace(
+    '<h1>first</h1>',
+    '<h1>first</h1><div role="dialog" aria-label="Notice"><button>OK</button></div>',
+  ),
   // A dialog whose Escape handler loads the page again, once.
   '/escape-reloads': page(
     '',
@@ -90,6 +98,24 @@ const PAGES: Record<string, string> = {
     '<h1>first</h1><ul role="menu" aria-label="Sections">' +
       '<li role="menuitem" tabindex="0">One</li><li role="menuitem" tabindex="-1">Two</li></ul>' +
       '<ul role="menu" aria-label="More"><li role="menuitem" tabindex="0">Three</li></ul>',
+  ),
+  // Tabs that keep the selected one in the fragment, or in the path through their router.
+  ...Object.fromEntries(
+    [
+      ['/tabs-rewrite-fragment', "history.replaceState(null, '', '#tab-b')"],
+      ['/tabs-push-path', "history.pushState(null, '', '/tabs-push-path/b')"],
+    ].map(([path, onArrow]) => [
+      path,
+      page(
+        '',
+        `addEventListener('keydown', (e) => { if (e.key !== 'ArrowDown') return; document.getElementById('b').focus(); ${onArrow}; })`,
+      ).replace(
+        '<h1>first</h1>',
+        '<h1>first</h1><div role="tablist" aria-orientation="vertical" aria-label="Views">' +
+          '<button role="tab" id="a" tabindex="0">A</button>' +
+          '<button role="tab" id="b" tabindex="-1">B</button></div>',
+      ),
+    ]),
   ),
   // Large enough that axe is still scanning it two seconds after its response: measured at
   // 2.9 s for a third of this size, and the move comes 1.5 s after the network went idle.
@@ -267,6 +293,64 @@ describe('onScannedDocument', () => {
       expect(result.passed).toBe(true);
     });
 
+    // The Escape check loads the page again itself after the trap check (#286).
+    it('are not failed for the reload they do themselves between two checks (#675)', async () => {
+      const held = await scanned('/dialog-closes-on-escape');
+      const tester = keyboard(both);
+
+      const result = await onScannedDocument(
+        tab,
+        held,
+        () => tester.run(tab, 'test'),
+        () => tester.navigatedByKey,
+        () => tester.reloadedInto,
+      );
+
+      expect(result.passed).toBe(true);
+      expect(tester.navigatedByKey).toBe(false);
+      expect(await held.replaced()).toBe(true);
+    });
+
+    it('fail a page that loads again after the reload they did themselves', async () => {
+      const held = await scanned('/dialog-closes-on-escape');
+      const tester = keyboard(both);
+
+      const outcome = onScannedDocument(
+        tab,
+        held,
+        async () => {
+          const result = await tester.run(tab, 'test');
+          // What a page's own timer would do, at a moment the test chooses.
+          await tab.evaluate('location.reload()');
+          await nextDocument();
+          return result;
+        },
+        () => tester.navigatedByKey,
+        () => tester.reloadedInto,
+      );
+
+      await expect(outcome).rejects.toThrow('loaded again before its checks finished');
+    });
+
+    it('still fail a page that left while they walked it, though they reloaded it', async () => {
+      const held = await scanned('/dialog-closes-on-escape');
+      const tester = keyboard(both);
+
+      const outcome = onScannedDocument(
+        tab,
+        held,
+        async () => {
+          const result = await tester.run(tab, 'test');
+          await tab.goto(`${origin}/second`);
+          return result;
+        },
+        () => tester.navigatedByKey,
+        () => tester.reloadedInto,
+      );
+
+      await expect(outcome).rejects.toThrow('moved to another page before its checks finished');
+    });
+
     it('pass over a page their own Escape press loaded again (#675)', async () => {
       const held = await scanned('/escape-reloads');
       const tester = keyboard({ testTrapDetection: true, testEscapeHandling: false });
@@ -305,6 +389,42 @@ describe('onScannedDocument', () => {
       ]);
       // The Escape check went back to the page under test instead of judging the other one.
       expect(tab.url()).toBe(`${origin}/arrow-leaves`);
+    });
+
+    it('judge focus as usual when an arrow key only rewrites the fragment', async () => {
+      const held = await scanned('/tabs-rewrite-fragment');
+      const tester = keyboard(both);
+
+      const result = await onScannedDocument(
+        tab,
+        held,
+        () => tester.run(tab, 'test'),
+        () => tester.navigatedByKey,
+      );
+
+      expect(tab.url()).toBe(`${origin}/tabs-rewrite-fragment#tab-b`);
+      expect(tester.navigatedByKey).toBe(false);
+      expect(result.interactions.filter((interaction) => interaction.key === 'ArrowDown')).toEqual([
+        expect.objectContaining({ success: true }),
+      ]);
+    });
+
+    it('take a path their arrow key pushed for their own move, and judge focus as usual', async () => {
+      const held = await scanned('/tabs-push-path');
+      const tester = keyboard({ testTrapDetection: false, testEscapeHandling: false });
+
+      const result = await onScannedDocument(
+        tab,
+        held,
+        () => tester.run(tab, 'test'),
+        () => tester.navigatedByKey,
+      );
+
+      expect(tab.url()).toBe(`${origin}/tabs-push-path/b`);
+      expect(tester.navigatedByKey).toBe(true);
+      expect(result.interactions.filter((interaction) => interaction.key === 'ArrowDown')).toEqual([
+        expect.objectContaining({ success: true }),
+      ]);
     });
 
     // The limit (#675): nothing outside the page ties a later move to an earlier key.

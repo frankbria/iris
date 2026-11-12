@@ -18,7 +18,12 @@ import type { AxeConfig } from './axe-integration';
 import { KeyboardTester } from './keyboard-tester';
 import type { UrlPolicyOptions } from '../url-policy';
 import { installUrlPolicyGuard, guardedGoto, guardedDocumentUrl } from '../url-policy-guard';
-import { holdDocument, NavigatedDuringScanError, onScannedDocument } from './scan-navigation';
+import {
+  HeldDocument,
+  holdDocument,
+  NavigatedDuringScanError,
+  onScannedDocument,
+} from './scan-navigation';
 import { escapeHtml, escapeXml, safeHref, strippedError } from '../report-encoding';
 import type { A11yResult, KeyboardTestResult, ScreenReaderTestResult } from './types';
 import { withPageTimeout } from '../page-timeout';
@@ -421,9 +426,13 @@ export class AccessibilityRunner {
       // by timer after the network went idle fails the scan, by name, instead of mixing two
       // documents (#669, #675).
       // A move the policy refused keeps the guard's words for it (#662).
-      const held = async <T>(check: () => Promise<T>, ownMove?: () => boolean): Promise<T> => {
+      const held = async <T>(
+        check: () => Promise<T>,
+        ownMove?: () => boolean,
+        reloadedInto?: () => HeldDocument | undefined,
+      ): Promise<T> => {
         try {
-          return await onScannedDocument(page, scanned, check, ownMove);
+          return await onScannedDocument(page, scanned, check, ownMove, reloadedInto);
         } catch (error) {
           if (error instanceof NavigatedDuringScanError) guardedDocumentUrl(page, url);
           throw error;
@@ -445,6 +454,9 @@ export class AccessibilityRunner {
         keyboardResult = await held(
           () => this.keyboardTester.run(page, testName),
           () => keysMayNavigate || this.keyboardTester.navigatedByKey,
+          // The Escape check loads the page again itself (#286): the scanned document is
+          // then gone by the tester's doing, and the page is held to the one it loaded (#675).
+          () => this.keyboardTester.reloadedInto,
         );
       }
 

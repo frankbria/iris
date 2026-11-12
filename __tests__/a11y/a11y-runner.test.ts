@@ -484,6 +484,20 @@ describe('AccessibilityRunner', () => {
         expect(mockKeyboardTester.run).not.toHaveBeenCalled();
       });
 
+      it('holds the document a navigation left when one committed as it took hold (#675)', async () => {
+        mockPage.url.mockReturnValue(first);
+        const held = await mockPage.evaluateHandle('document');
+        mockPage.evaluateHandle
+          .mockReset()
+          .mockRejectedValueOnce(new Error('Execution context was destroyed'))
+          .mockResolvedValue(held);
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBeUndefined();
+        expect(mockPage.evaluateHandle).toHaveBeenCalledTimes(2);
+      });
+
       it('fails the page, by name, when the move destroyed the axe scan', async () => {
         mockAxeRunner.run.mockImplementation(
           movingTo(second, () =>
