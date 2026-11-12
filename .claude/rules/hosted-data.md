@@ -314,7 +314,49 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   A live row ends only with its TTL, so a call started before midnight UTC still counts
   after it. The estimate is a
   resolver parameter, computed in `hostedServices()`: the portal imports `managed-ai.ts`,
-  and the cost tracker would bring SQLite into its bundle. Stripe reporting is #264.
+  and the cost tracker would bring SQLite into its bundle. Stripe reporting: next section.
+
+### Stripe Meter Reporting (issue #264)
+
+`src/billing/stripe-meter.ts`, migration 0021 (`usage_events.stripe_reported_at`, a partial
+index of unreported managed rows, one of managed rows by time for the reconciliation; it
+sets `lock_timeout` like 0005), `iris worker`, `iris admin billing-reconcile`.
+Ops: runbook "Usage reporting and reconciliation".
+
+- **One meter event per `managed` usage row**, never BYOK or platform rows: value =
+  `round(quantity * unit_cost_usd * 1e6)` micro-USD (integers, so totals compare exactly),
+  timestamp = the row's `created_at` (usage lands in the billing period it happened in),
+  identifier **and** idempotency key `usage-<row id>`. The meter's event name is the
+  constant `METER_EVENT_NAME`; there is no setting for it.
+- **`reportManagedUsage(db, meters, { signal })`** is one pass under
+  `pg_try_advisory_xact_lock(hashtext('stripe-meter-report'))`: a transaction that holds
+  only the lock, so the lock ends with the pass however it ends (a session lock left on a
+  pooled connection would silently stop every later pass). Reads and marks go through `db`
+  on other connections, so each mark commits on its own. `null` (and a warn log) when
+  another pass holds the lock. It pages by `id` (keyset), sends, and marks each row as
+  Stripe accepts it; `signal` stops it between two rows. `MeterEventRejected` (Stripe's
+  invalid-request and idempotency errors; a 401 is `StripeAuthenticationError`, not this)
+  leaves the row unreported and goes on; any other error ends the pass and
+  `runMeterReports` (every 5 min in the worker) logs it and retries. A crash between send
+  and mark resends the same identifier: Stripe counts it once, for 24 hours.
+- **Not sent**: rows of an org with no `org_billing` row (sent once it has one, if still
+  inside the window; their timestamps precede any subscription), rows older than 34 days
+  (Stripe's window is 35), a row that cost 0 (marked without a call). **Estimated rows
+  (#243) are sent as they are**: the credit gate charged the org's credit that amount.
+- **The worker gets `IRIS_STRIPE_SECRET_KEY(_FILE)` only** (compose): it runs tenant
+  pages, so no webhook secret and no prices; unset means no report. `stripeClient()` takes
+  just the key. No price is attached to the meter by this code.
+- **`meterReconciliation(db, meters, { from, to })`**: per org with managed usage in the
+  period, ledger, estimated and unreported totals, the meter's total (`listEventSummaries`,
+  which needs whole minutes; `null` without a customer) and ledger minus Stripe. A Stripe
+  failure for one org is that row's `stripeError`; the others are still reported. The CLI
+  prints it as JSON and exits 3 on any difference or error.
+- **Tests**: `db/stripe-meter.test.ts` (real Postgres; an in-test meter that keeps events
+  by identifier, as Stripe does) and `billing/stripe-meter-gateway.test.ts` (the real SDK
+  against a local HTTP server: `new Stripe(key, { host, port, protocol: 'http' })`). The
+  one call to a real test-mode meter needs `IRIS_TEST_STRIPE_SECRET_KEY`, skipped without
+  it, CI included. Under Claude Code the Stripe SDK prints a `<claude-code-hint>` line to
+  stderr: do not assert an empty stderr on a CLI path that loads it.
 
 ### Hosted Job API (issue #267)
 

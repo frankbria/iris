@@ -673,3 +673,12 @@ Write/Edit, not as a pre-push afterthought.
 - **A race between requests can be shown without a browser.** N `fetch` calls with the session cookie, started a few ms apart, against `next start` on a scratch database: main answered 500 in 15 of 15 fresh processes. Only a fresh process hit it (new connections spread the arrivals); later rounds in the same process did not.
 - **Read the failed attempt's job log before theorising.** `gh api repos/{owner}/{repo}/actions/runs/<id>/attempts/1/jobs`, then `/actions/jobs/<id>/logs`: the `[WebServer]` lines held the thrown error, which named the cause.
 - **Jest in `apps/portal` cannot load `better-auth` (ES modules only)** and `jest.mock("@/…")` does not resolve the alias: mock by relative path and stand in for `better-auth/api`.
+
+## 2026-11-11 — #264 Stripe meter report (draft PR #637)
+
+- **A lock-holding test that waits on a gate must open the gate in a `finally`.** When the concurrency test's assertion failed (a mutation run), the first pass stayed blocked on its gate, held a pooled connection, and `db.destroy()` in `afterAll` hung the whole file instead of failing it. `await second.finally(release)`.
+- **The Stripe SDK prints a `<claude-code-hint …>` line to stderr under Claude Code.** A spawned-CLI test that asserted an empty stderr failed only for an agent. Assert the exit code and stdout.
+- **A session advisory lock on a pooled connection can outlive its pass** (the unlock query times out, Kysely returns the client to the pool). Use `pg_try_advisory_xact_lock` in a transaction that holds only the lock, and do the work on other connections.
+- **`pkill -f <pattern>` also matches the shell running it** when the pattern is on its own command line (exit 144, the tool call dies). Write the pattern as `[j]est …`.
+- **Jest's `--testPathIgnorePatterns` with hand-escaped paths silently ignored nothing.** To leave files out, pass the wanted ones: `jest --runTestsByPath $(git ls-files … | grep -vxFf excluded.txt)`.
+- On the loop host, `~/.claude/skills/delegating-to-opencode/review-chain.sh` does not exist (only `ask-opencode.sh`), so the pre-PR cross-family pass falls back to Claude internal; the PR's own CI review job (Codex) is then the only cross-family review.

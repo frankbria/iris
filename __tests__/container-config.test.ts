@@ -336,11 +336,20 @@ describe('docker-compose.production.yml (issue #273)', () => {
     for (const v of STRIPE) expect(s).toMatch(new RegExp(`^\\s+${v}: \\$\\{${v}:-\\}$`, 'm'));
     expect(s).toMatch(/^\s+- stripe_secret_key$/m);
     expect(s).toMatch(/^\s+- stripe_webhook_secret$/m);
-    expect(service('worker')).not.toMatch(/STRIPE/);
     expect(file).toMatch(/^  stripe_secret_key:\n    file: \.\/secrets\/stripe_secret_key$/m);
     expect(file).toMatch(
       /^  stripe_webhook_secret:\n    file: \.\/secrets\/stripe_webhook_secret$/m,
     );
+  });
+
+  // The meter report runs in the worker (#264, ADR 0001 §1). It runs tenant pages, so it
+  // gets the API key alone: no webhook secret to forge events with, and no prices.
+  it('passes the worker the Stripe key and nothing else of Stripe', () => {
+    const s = service('worker');
+    expect(s).toMatch(/^\s+IRIS_STRIPE_SECRET_KEY_FILE: \$\{IRIS_STRIPE_SECRET_KEY_FILE:-\}$/m);
+    expect(s).toMatch(/^\s+- stripe_secret_key$/m);
+    expect(s.match(/STRIPE_\w+/g)).toEqual(['STRIPE_SECRET_KEY_FILE', 'STRIPE_SECRET_KEY_FILE']);
+    expect(s).not.toMatch(/stripe_webhook_secret/);
   });
 
   it('has the deploy job write the Stripe secrets, and point at them only when set', () => {

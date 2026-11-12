@@ -91,11 +91,7 @@ if (!STRIPE_KEY) console.warn('Skipping Stripe test-mode calls: set IRIS_TEST_ST
     let config: StripeConfig;
 
     beforeAll(async () => {
-      const stripe = stripeClient({
-        secretKey: STRIPE_KEY!,
-        webhookSecret: '',
-        prices: { pro: '', team: '' },
-      });
+      const stripe = stripeClient({ secretKey: STRIPE_KEY! });
       // The account's own prices when the environment names them, so a run adds no products.
       const existing = (name: string, unitAmount: number) => {
         const id = process.env[name];
