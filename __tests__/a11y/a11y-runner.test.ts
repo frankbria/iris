@@ -79,7 +79,11 @@ describe('AccessibilityRunner', () => {
     // Mock Playwright BrowserContext
     mockContext = {
       newPage: jest.fn().mockResolvedValue(mockPage),
-      newCDPSession: jest.fn().mockResolvedValue({ send: jest.fn(), on: jest.fn() }),
+      newCDPSession: jest.fn().mockResolvedValue({
+        // The guard asks each page for its target id (#668).
+        send: jest.fn().mockResolvedValue({ targetInfo: { targetId: 'page-target' } }),
+        on: jest.fn(),
+      }),
       route: jest.fn().mockResolvedValue(undefined),
       on: jest.fn(),
       browser: jest.fn().mockReturnValue(null),
