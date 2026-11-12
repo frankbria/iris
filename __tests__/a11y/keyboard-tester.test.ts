@@ -213,6 +213,41 @@ describe('KeyboardTester', () => {
       expect(result.interactions.find((i) => i.key === 'ArrowDown')?.success).toBe(true);
     });
 
+    // #675: the check after the key can die on the navigation the key started, with the
+    // document and the URL not yet showing it.
+    it('takes a check an arrow key destroyed by navigating for the key leaving the page', async () => {
+      keyboardTester = new KeyboardTester({
+        testFocusOrder: false,
+        testTrapDetection: false,
+        testArrowKeyNavigation: true,
+        testEscapeHandling: false,
+        customSequences: [],
+      });
+      mockPage.evaluate
+        .mockResolvedValueOnce([
+          { selector: 'DIV.menu', label: 'DIV.menu', role: 'menu' },
+          { selector: 'DIV.more', label: 'DIV.more', role: 'menu' },
+        ] as never)
+        .mockResolvedValueOnce(undefined as never) // focus fallback
+        .mockResolvedValueOnce('UL:0>LI:0' as never)
+        .mockRejectedValueOnce(
+          new Error(
+            'Execution context was destroyed, most likely because of a navigation',
+          ) as never,
+        );
+
+      const result = await keyboardTester.run(mockPage, 'arrow-test');
+
+      expect(keyboardTester.navigatedByKey).toBe(true);
+      expect(result.interactions.filter((i) => i.key === 'ArrowDown')).toEqual([
+        expect.objectContaining({
+          target: 'DIV.menu',
+          actualBehavior: 'The page navigated',
+          success: false,
+        }),
+      ]);
+    });
+
     it('should fail arrow navigation when focus does not move', async () => {
       const configWithArrowTest = {
         testFocusOrder: false,
