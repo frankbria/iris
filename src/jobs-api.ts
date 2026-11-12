@@ -14,6 +14,7 @@ import type { Authenticator, Principal } from './protocol';
 import { errMessage, log, redactStrings } from './log';
 import { signRunArtifacts, type ArtifactStore } from './artifact-store';
 import { StorageQuotaExceededError } from './storage-quota';
+import type { WebhookOutcome } from './billing/stripe-webhook';
 
 /**
  * The hosted job REST API (#267, ADR 0001 §1): `POST /v1/a11y/jobs` queues a scan,
@@ -113,7 +114,15 @@ export interface JobsApiDeps {
   admit(): (() => void) | null;
   /** Queued + running jobs one org may have; the next submit gets 429. */
   maxQueuedJobsPerOrg: number;
+  /** The Stripe webhook (#345); without it (billing off) `/v1/stripe/webhook` is a 404. */
+  stripeWebhook?: StripeWebhook;
 }
+
+/** Takes the exact body Stripe signed and its `Stripe-Signature` header. */
+export type StripeWebhook = (
+  rawBody: string,
+  signature: string | undefined,
+) => Promise<WebhookOutcome>;
 
 export function send(
   res: ServerResponse,
@@ -147,6 +156,28 @@ export function readBody(req: IncomingMessage): Promise<string | null> {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
+}
+
+export const STRIPE_WEBHOOK_PATH = '/v1/stripe/webhook';
+
+/**
+ * `POST /v1/stripe/webhook`: no API key, the signature is the authentication. The body
+ * stays the raw text: re-serialised JSON would no longer match the signature.
+ */
+async function answerStripeWebhook(
+  req: IncomingMessage,
+  res: ServerResponse,
+  handle: StripeWebhook,
+) {
+  if (req.method !== 'POST')
+    return send(res, 405, { error: 'Method not allowed' }, { allow: 'POST' });
+  const body = await readBody(req);
+  if (body === null) return send(res, 413, { error: 'Request body too large' });
+  const signature = req.headers['stripe-signature'];
+  const outcome = await handle(body, Array.isArray(signature) ? undefined : signature);
+  if (outcome === 'invalid_signature') return send(res, 400, { error: 'Invalid signature' });
+  if (outcome === 'busy') return send(res, 503, { error: 'Server busy' }, { 'retry-after': '1' });
+  return send(res, 200, { received: true });
 }
 
 /**
@@ -208,6 +239,8 @@ export async function handleJobsRequest(
 ): Promise<void> {
   try {
     const [path, search = ''] = (req.url ?? '').split('?');
+    if (path === STRIPE_WEBHOOK_PATH && deps.stripeWebhook)
+      return await answerStripeWebhook(req, res, deps.stripeWebhook);
     const submitKind =
       path === '/v1/a11y/jobs' ? 'a11y' : path === '/v1/visual/jobs' ? 'visual' : null;
     const isSubmit = submitKind !== null;

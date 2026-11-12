@@ -341,6 +341,17 @@ describe('REST request logs', () => {
     expect(rest[3].outcome).toBe('client_error');
   });
 
+  it('labels the visual job and approval routes, not "other"', async () => {
+    await serve();
+    await fetch(`${httpBase}/v1/visual/jobs`, { method: 'POST' });
+    await fetch(`${httpBase}/v1/runs/abc/results/3/approve`, { method: 'POST' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(requestLines('rest').map((l) => l.method)).toEqual([
+      'POST /v1/visual/jobs',
+      'POST /v1/runs/:id/results/:position/approve',
+    ]);
+  });
+
   it("a suspended org's 403 is client_error, never error (#348)", async () => {
     await serve();
     expect((await post({ authorization: 'Bearer key-suspended' })).status).toBe(403);

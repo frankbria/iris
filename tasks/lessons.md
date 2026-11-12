@@ -598,6 +598,8 @@ Write/Edit, not as a pre-push afterthought.
 - **In a demo script, `$!` of `npx …` is npx's pid**: SIGTERM killed the wrapper (exit 143) and never reached the CLI's handler. Use `node -r ts-node/register/transpile-only src/cli.ts`, and set `TS_NODE_PROJECT` when the cwd is outside the repo. Also, `python3 -m http.server` buffers stdout, so its port line needs `-u`.
 - **lizard also misreads an inline function-type annotation whose parameter type holds a method signature** (`(p: string, s?: { isDirectory(): boolean }) => boolean`): it took `isDirectory()` for a function and named the next method `if` (#609). A named type alias fixes it. Rows named `if@`, `for@` or `switch@` mean lizard lost a function boundary above them.
 
+- Tailscale `no peer found` with the runner `Running`: the runner joined a tailnet that does not contain HOST (an OAuth client in the wrong tailnet, or a stale HOST), not an ACL gap. Read the full policy, including a `*` → `*` grant, before blaming ACLs. (#535)
+
 ## 2026-11-11 — #362 MCP tool hardening (PR #643)
 
 - **A poll loop in a test needs its own bound.** `while (!condition()) await sleep(50)` kept running after Jest's test timeout fired and held the process for ten minutes on a host where the browser never started. Bound it by poll count and throw; and release whatever the test holds (fixture responses) in a `finally`, or the teardown waits out the failure.

@@ -49,12 +49,19 @@ services:
       # Managed AI credits (#479, #549): both or neither; empty is neither.
       IRIS_MANAGED_AI_PROVIDER: ${IRIS_MANAGED_AI_PROVIDER:-}
       IRIS_MANAGED_AI_KEY_FILE: ${IRIS_MANAGED_AI_KEY_FILE:-}
+      # Stripe billing (#261, #345): all four or none; empty is none (billing off).
+      IRIS_STRIPE_SECRET_KEY_FILE: ${IRIS_STRIPE_SECRET_KEY_FILE:-}
+      IRIS_STRIPE_WEBHOOK_SECRET_FILE: ${IRIS_STRIPE_WEBHOOK_SECRET_FILE:-}
+      IRIS_STRIPE_PRICE_PRO: ${IRIS_STRIPE_PRICE_PRO:-}
+      IRIS_STRIPE_PRICE_TEAM: ${IRIS_STRIPE_PRICE_TEAM:-}
     secrets:
       - database_url
       - better_auth_secret
       - master_key
       - s3_secret_access_key
       - managed_ai_key
+      - stripe_secret_key
+      - stripe_webhook_secret
     volumes:
       - iris-data:/data
     restart: unless-stopped
@@ -182,12 +189,19 @@ services:
       IRIS_S3_REGION: ${IRIS_S3_REGION:-}
       IRIS_S3_ACCESS_KEY_ID: ${IRIS_S3_ACCESS_KEY_ID:-}
       IRIS_S3_SECRET_ACCESS_KEY_FILE: ${IRIS_S3_SECRET_ACCESS_KEY_FILE:-}
+      # Stripe billing (#261, #345): all four or none; empty is none (billing off).
+      IRIS_STRIPE_SECRET_KEY_FILE: ${IRIS_STRIPE_SECRET_KEY_FILE:-}
+      IRIS_STRIPE_WEBHOOK_SECRET_FILE: ${IRIS_STRIPE_WEBHOOK_SECRET_FILE:-}
+      IRIS_STRIPE_PRICE_PRO: ${IRIS_STRIPE_PRICE_PRO:-}
+      IRIS_STRIPE_PRICE_TEAM: ${IRIS_STRIPE_PRICE_TEAM:-}
     secrets:
       - database_url
       - better_auth_secret
       - master_key
       - smtp_url
       - s3_secret_access_key
+      - stripe_secret_key
+      - stripe_webhook_secret
     depends_on:
       postgres:
         condition: service_healthy
@@ -258,6 +272,10 @@ secrets:
     file: ./secrets/s3_secret_access_key
   managed_ai_key:
     file: ./secrets/managed_ai_key
+  stripe_secret_key:
+    file: ./secrets/stripe_secret_key
+  stripe_webhook_secret:
+    file: ./secrets/stripe_webhook_secret
   # Shared: generated once on the box (password, master key); the URL is rebuilt.
   pg_password:
     file: ../../shared/secrets/pg_password

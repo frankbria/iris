@@ -324,6 +324,41 @@ describe('docker-compose.production.yml (issue #273)', () => {
     expect(file).toMatch(/^  managed_ai_key:\n    file: \.\/secrets\/managed_ai_key$/m);
   });
 
+  // Stripe billing (#261, #345): the webhook runs in iris, Checkout and the Portal in the portal.
+  const STRIPE = [
+    'IRIS_STRIPE_SECRET_KEY_FILE',
+    'IRIS_STRIPE_WEBHOOK_SECRET_FILE',
+    'IRIS_STRIPE_PRICE_PRO',
+    'IRIS_STRIPE_PRICE_TEAM',
+  ];
+  it.each(['iris', 'portal'])('passes Stripe billing to %s, empty when unset', (name) => {
+    const s = service(name);
+    for (const v of STRIPE) expect(s).toMatch(new RegExp(`^\\s+${v}: \\$\\{${v}:-\\}$`, 'm'));
+    expect(s).toMatch(/^\s+- stripe_secret_key$/m);
+    expect(s).toMatch(/^\s+- stripe_webhook_secret$/m);
+    expect(service('worker')).not.toMatch(/STRIPE/);
+    expect(file).toMatch(/^  stripe_secret_key:\n    file: \.\/secrets\/stripe_secret_key$/m);
+    expect(file).toMatch(
+      /^  stripe_webhook_secret:\n    file: \.\/secrets\/stripe_webhook_secret$/m,
+    );
+  });
+
+  it('has the deploy job write the Stripe secrets, and point at them only when set', () => {
+    const ci = read('.github/workflows/ci.yml');
+    const job = ci.slice(ci.indexOf('\n  deploy-production:'));
+    for (const [secret, name] of [
+      ['stripe_secret_key', 'IRIS_STRIPE_SECRET_KEY'],
+      ['stripe_webhook_secret', 'IRIS_STRIPE_WEBHOOK_SECRET'],
+    ]) {
+      expect(job).toContain(`put_secret ${secret} "$${name}"`);
+      expect(job).toContain(
+        `[ -z "$${name}" ] || printf "${name}_FILE='/run/secrets/${secret}'\\n"`,
+      );
+      expect(job).toContain(`${name}: \${{ secrets.${name} }}`);
+    }
+    expect(job).toMatch(/IRIS_STRIPE_PRICE_PRO IRIS_STRIPE_PRICE_TEAM; do/);
+  });
+
   it('reads the empty defaults as unset, not as a partial configuration (#549)', () => {
     const { resolveArtifactStore } = require('../src/artifact-store');
     const { resolveManagedKey } = require('../src/billing/managed-ai');
@@ -332,6 +367,8 @@ describe('docker-compose.production.yml (issue #273)', () => {
     );
     expect(resolveArtifactStore(empty)).toBeNull();
     expect(resolveManagedKey(empty)).toBeNull();
+    const { resolveStripeConfig } = require('../src/billing/stripe');
+    expect(resolveStripeConfig(Object.fromEntries(STRIPE.map((v) => [v, ''])))).toBeNull();
   });
 
   it('has the deploy job write both secret files, and point at them only when set (#549)', () => {
