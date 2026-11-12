@@ -69,7 +69,11 @@ describe('vision clients', () => {
   beforeEach(() => jest.clearAllMocks());
 
   describe('OpenAIVisionClient', () => {
-    const config: IrisConfig['ai'] = { provider: 'openai', apiKey: 'sk-test', model: 'gpt-4o' };
+    const config: IrisConfig['ai'] = {
+      provider: 'openai',
+      apiKey: 'sk-test',
+      model: 'gpt-6.1-terra',
+    };
 
     // #520: the o-series refuses any temperature but the default.
     it('sends no temperature to an o-series model', async () => {
@@ -78,10 +82,21 @@ describe('vision clients', () => {
       });
       await new OpenAIVisionClient({ ...config, model: 'o3' }).analyzeVisualDiff(request);
       expect(mockOpenAICreate.mock.calls[0][0]).not.toHaveProperty('temperature');
+      expect(mockOpenAICreate.mock.calls[0][0]).not.toHaveProperty('reasoning_effort');
+    });
+
+    // #523: the two gpt-6 models that refuse effort `none` reason at `low`.
+    it("asks gpt-6.1-sol for 'low' reasoning", async () => {
+      mockOpenAICreate.mockResolvedValue({
+        choices: [{ message: { content: JSON.stringify(parsed) } }],
+      });
+      await new OpenAIVisionClient({ ...config, model: 'gpt-6.1-sol' }).analyzeVisualDiff(request);
+      expect(mockOpenAICreate.mock.calls[0][0].reasoning_effort).toBe('low');
+      expect(mockOpenAICreate.mock.calls[0][0]).not.toHaveProperty('temperature');
     });
 
     it('throws when the apiKey is missing', async () => {
-      const client = new OpenAIVisionClient({ provider: 'openai', model: 'gpt-4o' });
+      const client = new OpenAIVisionClient({ provider: 'openai', model: 'gpt-6.1-terra' });
       await expect(client.analyzeVisualDiff(request)).rejects.toThrow(/OpenAI API key/i);
     });
 
@@ -102,11 +117,13 @@ describe('vision clients', () => {
       });
 
       const payload = mockOpenAICreate.mock.calls[0][0];
-      expect(payload.model).toBe('gpt-4o');
+      expect(payload.model).toBe('gpt-6.1-terra');
       // Not the deprecated max_tokens, which the o-series refuses (#298).
       expect(payload.max_completion_tokens).toBe(1000);
       expect(payload).not.toHaveProperty('max_tokens');
-      expect(payload.temperature).toBe(0.1);
+      // #523: gpt-5.x and gpt-6 answer without reasoning, and are sent no temperature.
+      expect(payload.reasoning_effort).toBe('none');
+      expect(payload).not.toHaveProperty('temperature');
       const userContent = payload.messages.find((m: { role: string }) => m.role === 'user').content;
       const imageParts = userContent.filter((p: { type: string }) => p.type === 'image_url');
       expect(imageParts).toHaveLength(2);
@@ -200,7 +217,7 @@ describe('vision clients', () => {
     it('reports availability and vision support from model + key', async () => {
       expect(await new OpenAIVisionClient(config).isAvailable()).toBe(true);
       expect(new OpenAIVisionClient(config).supportsVision()).toBe(true);
-      // o1-mini takes no images; o1 does, which the old `gpt-4` name match denied (#298).
+      // o1-mini takes no images (#298).
       expect(
         new OpenAIVisionClient({
           provider: 'openai',
@@ -209,7 +226,7 @@ describe('vision clients', () => {
         }).supportsVision(),
       ).toBe(false);
       expect(
-        await new OpenAIVisionClient({ provider: 'openai', model: 'gpt-4o' }).isAvailable(),
+        await new OpenAIVisionClient({ provider: 'openai', model: 'gpt-6.1-terra' }).isAvailable(),
       ).toBe(false);
     });
   });

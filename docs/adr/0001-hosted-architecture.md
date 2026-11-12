@@ -202,7 +202,8 @@ Each org runs AI calls in one of two modes, stored as an org setting:
 | **Results API** | **Yes** | Runs, run detail, signed artifact URLs (#269) |
 | **Stripe webhook** | **Yes** | #345 |
 | **Portal** | **Yes** | Account, org, keys, BYOK, runs, usage/billing (#249–#250, #340, #344, #270, #271) |
-| **MCP stdio server** (`iris-mcp`) | **No, stays local** | stdio is a local transport. Hosted MCP over HTTP is post-launch (#314). |
+| **MCP stdio server** (`iris-mcp`) | **No, stays local** | stdio is a local transport. |
+| **MCP over HTTP** (`POST /v1/mcp`) | **Yes** (added 2026-11-11, #314) | Streamable HTTP, stateless, behind the API key. A tool call is an a11y job (#267), so history, usage and plan limits are the job API's. |
 | **CLI** (`run`, `watch`, `visual-diff`, `a11y`, `connect`) | **No, stays local** | The CLI keeps working exactly as it does today, BYOK from the user's own environment. |
 | **Git-branch baselines, `watch`** | **No** | Local-mode features |
 

@@ -599,4 +599,88 @@ Write/Edit, not as a pre-push afterthought.
 - **lizard also misreads an inline function-type annotation whose parameter type holds a method signature** (`(p: string, s?: { isDirectory(): boolean }) => boolean`): it took `isDirectory()` for a function and named the next method `if` (#609). A named type alias fixes it. Rows named `if@`, `for@` or `switch@` mean lizard lost a function boundary above them.
 
 - Tailscale `no peer found` with the runner `Running`: the runner joined a tailnet that does not contain HOST (an OAuth client in the wrong tailnet, or a stale HOST), not an ACL gap. Read the full policy, including a `*` → `*` grant, before blaming ACLs. (#535)
+
+## 2026-11-11 — #362 MCP tool hardening (PR #643)
+
+- **A poll loop in a test needs its own bound.** `while (!condition()) await sleep(50)` kept running after Jest's test timeout fired and held the process for ten minutes on a host where the browser never started. Bound it by poll count and throw; and release whatever the test holds (fixture responses) in a `finally`, or the teardown waits out the failure.
+- **`response.url()` is the URL as sent: no fragment, no credentials.** Comparing it with the caller's URL to detect a redirect called every hash-routed page a redirect (internal review). Strip both sides first.
+- **Port 1 is on Chromium's restricted list** (`net::ERR_UNSAFE_PORT`, no socket opened). For "connection refused", listen on port 0, read the port, close.
+- **A pattern over free text cannot cut URL credentials**: a password may hold an `@` or a space (codex, two passes). When the whole string is a URL, parse it; when it does not parse, do not quote it.
+- **Run the demo against a failure the host really has.** The launch failure here showed that the new "fixed vocabulary" answered every scan with "could not be completed", which reads as the page's fault; it got its own reason.
+- **`gh pr diff` refuses a diff with a raw ESC byte in it**, and the CI Codex review job fails at "Fetch the PR diff" in 7 s (only the fallback reviewers ran). `__tests__/mcp/tools.test.ts` has one (`/<ESC>\[/`); a change within three lines of it puts it in the diff as context. Check with `git diff origin/main | grep -c $'\x1b'` before pushing, and keep new code away from such a line (or fix the workflow, #644).
+
+## 2026-11-11 — #314 hosted MCP (PR #647) and #363 audit gate
+
+- **Jest: test files go before `--coverageReporters`.** `npx jest --coverage --coverageReporters=lcov a.test.ts b.test.ts` reads the file names as more reporters and runs the whole suite. Write `npx jest a.test.ts b.test.ts --coverage --coverageReporters=lcov`.
+- **`npm audit`'s `fixAvailable` can be a downgrade.** For the dev-only advisories under jest it proposed `jest@25.1.0` (`isSemVerMajor: true`). Read the version before calling an advisory fixable.
+- **A CI gate that is one line needs a test that reads the workflow.** The audit step could be deleted, piped to `|| true` or raised to `critical` with every suite green. Pin the exact line, and break it seven ways to see the pin fail.
+- **To show an audit catches a workspace's dependency, plant one in a scratch copy**: `package.json`, `package-lock.json` and the workspace's `package.json` in a temp dir, `npm install --package-lock-only -w <workspace> lodash@4.17.20`, then the gate's command. No `node_modules`, nothing in the repo changes.
+- **When a review prompt summarises vendor facts, state the exceptions too.** "The 272K long-context tier applies to all models" in the #523 prompt produced a false Major about the models it does not apply to.
+- **Before putting a retention period on a table, grep for who reads it.** `audit_log` looked like a write-only trail, but `api_key.create` rows are how a departing member's keys are found (#408): a plain 90-day delete would have left old keys live (#541).
+- **Portal files are formatted by the portal's own prettier.** Run `npx prettier` from `apps/portal`; the root `format:check` does not cover them, and the root config wraps differently (#541).
+- **"Fixed upstream" is checked three ways (#565):** read the workflow at the ref this repo calls, run its deciding step on the failing input, and find a PR where the failure happened after the fix. The third showed what the first two could not: the check stays green and the PR comments carry the signal.
+- **A browser error quotes the URL percent-encoded; only our own messages repeat it raw (#645).** A test that a raw spelling (a space, a second `@`) is cut must fail the page with a policy refusal: the first version failed it with `net::ERR_*` and passed without the change it was written for (found by the internal review, not by a mutation check, because the browser suite cannot run on the build host).
+
+## 2026-11-11 — #658 linear credential patterns
+
+- **Time every pattern in the chain, not the one the issue names.** The issue named the two userinfo patterns; a ten-line script over every pattern in `redactString` and a dozen shapes found `QUERY_PARAM` quadratic on a run of `?` as well.
+- **A fast path can hide the slow path from its own test.** `replaceUserinfo` returns at once on text without `://`, so the "letters" shapes never reached the pattern and putting the old pattern back failed one test instead of five. Each shape now also runs behind a `://`. Put the old code back before trusting a performance test.
+- **A timing test climbs a ladder.** 1 kB, 10 kB, 100 kB, 1 MB with each step under forty-fold: the old pattern fails the first step within a second, where a single 1 MB against 100 kB comparison would have run for half an hour before failing.
+- **Cutting text before a redaction pattern needs a rule for the edge.** A cut inside `scheme://user:pass` leaves the password without the `@` the pattern looks for; drop the unterminated tail.
+- **Look at the first line of a review prompt before sending it.** In #660 the command that wrote the prompt was chained with `&&` behind a `git add tasks/todo.md`, which exits 1 (`tasks/` is ignored although the file is tracked; use `git add -u`), so the prompt file was never written; the retry built its prompt with `sed` over the missing file and sent the reviewer a bare diff with no criteria. It still answered APPROVE. The review was run again with the real prompt.
+- **For a pattern that runs on every log line, count callbacks, and time the fix against the code before the regression.** #658's linear pattern was thirty times slower on separators than the quadratic one it replaced, and its ladder test (each step under forty-fold) could not see a constant factor. A yardstick timed in the same test can.
+- **A reply without a verdict line is not a review.** Z.ai (through OpenCode) twice answered with no `APPROVE` / `REQUEST_CHANGES` line, which `review-chain.sh` does not count; with Codex and Kimi out of quota the CI reviewers were the only cross-family pass (#662, #664). Say so in the PR body instead of counting the reply.
+- **Force the failure a retry is for before trusting the retry.** #666's first version retried a spawn whose port was taken, and passed every suite; holding the port with a real listener showed the readiness poll waiting for good on a holder that accepts and never answers. A retry path gets a test that makes the real thing fail (a held port, a real nginx), and a poll that waits on a process is cut by that process's exit.
+
+## 2026-11-12 — #662 and #668 URL guard
+- **Run the unit suite of every module you changed before pushing, mocked ones included.** #662's first CI run failed on `__tests__/a11y/a11y-runner.test.ts`, a mocked suite that runs on any host in seconds; its fake page had no `url()`. `grep -rl` the test tree for the fakes of what you changed (for the guard: `newCDPSession`, `routeWebSocket`).
+- **When the local review chain has no reviewer, open the PR as a draft early**, so the CI reviewers are the cross-family pass while the work is still cheap to change.
+- **Check whether a "browser" suite really needs the sandbox before calling it CI-only.** `url-policy-guard.test.ts` and `agent-loop.test.ts` launch Chromium through Playwright directly and run on the root build host; only suites that go through `launchBrowser()` cannot. #668's real-Chromium case was shown red and green locally because of it.
+
+## 2026-11-12 — #669 a11y page that navigates during the scan
+- **A fixture that must move "after the page went idle" needs a timer well past Playwright's 500 ms idle window, and the test must assert the URL it read first.** Two #669 tests used a 100 ms timer: the move came before `networkidle`, one test failed for the wrong reason and one passed while testing nothing.
+- **Bound every throwaway probe with `timeout`, and write its output as it goes.** An axe timing probe on a 6,000-paragraph page ran past ten minutes with nothing on disk; the same probe at 0/300/1,000 paragraphs under `timeout 110` answered in 20 s.
+- **A failed check can reach its `catch` before Playwright has processed the navigation that killed it**, so `page.url()` read there may be the old URL. Make a page call that answers first (it waits for the new document's context), then read it.
+
+## 2026-11-12 — #675 a11y reload during the scan, and the tester's own keys
+- **To ask "is this still the same document", hold a JS handle to it instead of listening for navigation events.** A handle's execution context dies on every cross-document navigation (a reload included) and survives `pushState`, `replaceState` and a fragment change; asking it is a request with an answer, so it cannot lag behind `page.url()` the way a second CDP session's `Page.frameNavigated` does (#673). Ten minutes of probing in Chromium settled the design before any code.
+- **A second CDP session hears a commit after Playwright's own**, so state set from its events lags `page.url()`; measure the window before relying on it (#673, recorded late).
+- **A probe run under Jest prints through `console.log` with a header and indentation**: a `grep` for the line's start finds nothing. Write probe results with `process.stderr.write` and a fixed prefix, and keep the full log in a file.
+- **When a check gains a new way to notice a change, list everything the code under it does on purpose that looks like that change.** #675 began to see a reload, and the keyboard tester reloads the page itself before its Escape check: every page with a dialog failed as "reloaded". No fixture had a dialog that stays with both checks on. Found while writing the reviewer's brief, not by a test; the question to ask before coding is "who else does this, deliberately?".
+- **`tsc --noEmit` does not compile `__tests__`** (ts-jest does): a type error in a test makes the suite "fail to run" with 0 tests, and a `grep` for `Tests:` then shows a smaller, all-passing count. Grep `Test Suites:` as well.
+
+## 2026-11-12 — #677 the error page's reason, asked instead of heard
+- **When two observers of one browser disagree for a moment, stop reconciling their events and ask the browser once.** #673 kept a listener plus a fallback for the window in which the guard's session lags `page.url()`; #677 replaced both with one `Page.getFrameTree` at the time of the read, which is less code and has no window. Before designing around an event's timing, check whether a request with an answer exists.
+- **A test helper that "lets things settle" (a page call after `framenavigated`) can be the only thing between a test and the defect.** Removing that one line turned three passing real-Chromium cases red on main. When a helper carries a comment about ordering, try the test without it and see what it was hiding.
+
+## 2026-11-12 — #679 the keyboard checks' return to the start page
+- **A test that asserts only the outcome can pass without reaching the code it was written for.** #679's real-Chromium cases move the page during the Tab walk; a navigation often kills the walk's own page call first, and the page then fails by name on main too (the reload case nearly always). The internal reviewer counted it with a probe. When two paths give the same message, pin the new one where the path can be chosen (a fake page), and mutate it.
+- **`jest -t '<tag>'` in a mutation script only runs tests whose name holds the tag.** Three mutations "survived" because the runner case had `#679` in a comment, not in its name; the tally line (`69 skipped, 5 passed`) showed it.
+- **Give a check the caller's handle instead of taking a second one later.** The tester first held "the document when the keyboard checks began", which left a gap after the runner's last look; taking the runner's `HeldDocument` closed it and saved a page call. A helper that releases what it is given (`documentSince`) must not get a handle the caller still needs.
+- **`ts-node` run from `/tmp` needs `TS_NODE_PROJECT=<repo>/tsconfig.json`**, or it fails on `TS5109` before the script starts.
+
+## 2026-11-12 — #681 a popup's refused opening navigation
+- **Commit before a mutation check.** The mutation was undone with `git checkout <file>`, which also dropped an uncommitted JSDoc edit in the same file; it was noticed in `git status` and redone. Mutate committed files only.
+- **A mutation that does not compile proves nothing.** `if (false && …)` was rejected by the TypeScript transform and Jest reported `Tests: 0 total`, which reads like "nothing failed"; check the tally says `1 failed`.
+
+## 2026-11-12 — #683 the keyboard tester's held document
+- **A ts-node script in `/tmp` resolves packages from its own directory.** Besides `TS_NODE_PROJECT`, it needs `node_modules` linked next to the script (`ln -s <repo>/node_modules /tmp/<dir>/node_modules`), or `import … from 'playwright'` is `MODULE_NOT_FOUND`. To compare with main, `git archive main src | tar -x -C /tmp/<dir>/main` and pass the tree's root to the script.
+- **A JS handle that no longer answers was not necessarily released.** A reload destroys every handle into the old document, so "how many handles still answer" after several reloading runs counts one, on main too. Show a release on a run that reloads nothing.
+- **`gh pr create` with a long heredoc body in a compound command was refused by the permission layer.** Push in one call, write the body with the Write tool, and pass `--body-file`.
+
+## 2026-11-12 — #685 the dashboard's error page for a session with no org
+- **The portal E2E runs on this host.** `npm run e2e -w @iris/portal` uses Playwright Test's own Chromium launch, not IRIS's sandboxed launcher, so the root-suite host limit does not apply (47 passed in 1.6 min after `npm run build -w @iris/portal`).
+- **A race between requests can be shown without a browser.** N `fetch` calls with the session cookie, started a few ms apart, against `next start` on a scratch database: main answered 500 in 15 of 15 fresh processes. Only a fresh process hit it (new connections spread the arrivals); later rounds in the same process did not.
+- **Read the failed attempt's job log before theorising.** `gh api repos/{owner}/{repo}/actions/runs/<id>/attempts/1/jobs`, then `/actions/jobs/<id>/logs`: the `[WebServer]` lines held the thrown error, which named the cause.
+- **Jest in `apps/portal` cannot load `better-auth` (ES modules only)** and `jest.mock("@/…")` does not resolve the alias: mock by relative path and stand in for `better-auth/api`.
+
+## 2026-11-11 — #264 Stripe meter report (draft PR #637)
+
+- **A lock-holding test that waits on a gate must open the gate in a `finally`.** When the concurrency test's assertion failed (a mutation run), the first pass stayed blocked on its gate, held a pooled connection, and `db.destroy()` in `afterAll` hung the whole file instead of failing it. `await second.finally(release)`.
+- **The Stripe SDK prints a `<claude-code-hint …>` line to stderr under Claude Code.** A spawned-CLI test that asserted an empty stderr failed only for an agent. Assert the exit code and stdout.
+- **A session advisory lock on a pooled connection can outlive its pass** (the unlock query times out, Kysely returns the client to the pool). Use `pg_try_advisory_xact_lock` in a transaction that holds only the lock, and do the work on other connections.
+- **`pkill -f <pattern>` also matches the shell running it** when the pattern is on its own command line (exit 144, the tool call dies). Write the pattern as `[j]est …`.
+- **Jest's `--testPathIgnorePatterns` with hand-escaped paths silently ignored nothing.** To leave files out, pass the wanted ones: `jest --runTestsByPath $(git ls-files … | grep -vxFf excluded.txt)`.
+- On the loop host, `~/.claude/skills/delegating-to-opencode/review-chain.sh` does not exist (only `ask-opencode.sh`), so the pre-PR cross-family pass falls back to Claude internal; the PR's own CI review job (Codex) is then the only cross-family review.
+
 - **Commit before a mutation check.** Reverting a mutation with `git checkout <file>` also discards every uncommitted edit in that file (#271: a review fix in `lib/usage.ts` went with it and had to be redone). Commit first, or revert the mutation with the inverse edit.

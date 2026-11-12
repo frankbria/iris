@@ -18,7 +18,11 @@ import {
 } from '../src/ai-client/base';
 import { BudgetExceededError, DEFAULT_PRICING, toMicros } from '../src/ai-client/cost-tracker';
 import { AIClientFactory } from '../src/ai-client/factory';
-import { DEFAULT_MODELS, ModelUnavailableError } from '../src/ai-client/models';
+import {
+  DEFAULT_MODELS,
+  ModelNotForImagesError,
+  ModelUnavailableError,
+} from '../src/ai-client/models';
 import { ImagePreprocessor } from '../src/ai-client/preprocessor';
 import { IrisConfig } from '../src/config';
 
@@ -507,10 +511,10 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
       });
 
       it('prices a dated Anthropic ID at its family rate', () => {
-        // Sonnet 5: 1000 * $3/1M + 1000 * $15/1M
+        // Sonnet 5: 1000 * $2/1M + 1000 * $10/1M (the standard price since #523)
         expect(
           tracker.trackOperation('anthropic', 'claude-sonnet-5-20260514', false, usage),
-        ).toBeCloseTo(0.018, 10);
+        ).toBeCloseTo(0.012, 10);
         expect(tracker.trackOperation('anthropic', 'claude-sonnet-5-20260514', false)).toBe(0.0015);
       });
 
@@ -643,8 +647,10 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         expect(tracker.trackOperation('anthropic', 'claude-opus-5-latest', false)).toBe(0.004);
       });
 
-      it('prices the gpt-4o launch snapshot at its own, higher rate', () => {
-        // gpt-4o-2024-05-13 is $5/$15 per 1M, not gpt-4o's $2.50/$10.
+      // The one default row of this kind, gpt-4o-2024-05-13, went when OpenAI shut the
+      // snapshot down (#523); the rule it showed still holds for any row registered.
+      it('prices a snapshot with its own row at that rate, not its family rate', () => {
+        tracker.setPricing('openai', 'gpt-4o-2024-05-13', 0.004, 5e-6, 1.5e-5);
         expect(tracker.trackOperation('openai', 'gpt-4o-2024-05-13', false, usage)).toBeCloseTo(
           1000 * 5e-6 + 1000 * 1.5e-5,
           12,
@@ -748,7 +754,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
     describe('reserve-then-settle (issue #244)', () => {
       // A three-image Sonnet 5 analysis near the top of what one call can use.
       const bigVision = { inputTokens: 6000, outputTokens: 1000 };
-      const bigVisionCost = 6000 * 3e-6 + 1000 * 1.5e-5;
+      const bigVisionCost = 6000 * 2e-6 + 1000 * 1e-5;
 
       // #390: reports show settled spend; the budget still counts what is in flight.
       it('leaves a pending reservation out of getStats, not out of the budget', () => {
@@ -797,15 +803,12 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
 
       it('settles a reservation to the actual cost and token counts', () => {
         const id = tracker.reserve('anthropic', 'claude-sonnet-5');
-        expect(tracker.settle(id, { inputTokens: 1000, outputTokens: 100 })).toBeCloseTo(
-          0.0045,
-          10,
-        );
+        expect(tracker.settle(id, { inputTokens: 1000, outputTokens: 100 })).toBeCloseTo(0.003, 10);
 
-        expect(tracker.getDailyCost()).toBeCloseTo(0.0045, 10);
+        expect(tracker.getDailyCost()).toBeCloseTo(0.003, 10);
         const stats = tracker.getStats();
         expect(stats.operationCount).toBe(1);
-        expect(stats.costByModel['claude-sonnet-5']).toBeCloseTo(0.0045, 10);
+        expect(stats.costByModel['claude-sonnet-5']).toBeCloseTo(0.003, 10);
       });
 
       it('settles a reply without usage at the flat per-call price', () => {
@@ -1048,7 +1051,7 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
           inputTokens: 1000,
           outputTokens: 200,
         });
-        expect(cost).toBeCloseTo(1000 * 3e-6 + 200 * 1.5e-5, 10);
+        expect(cost).toBeCloseTo(1000 * 2e-6 + 200 * 1e-5, 10);
       });
 
       it('should fall back to per-image price when usage is not provided', () => {
@@ -1378,9 +1381,9 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
         reasoning: 'r',
         categories: ['color'],
       };
-      // Three images and a full reply on Sonnet 5: $0.033.
+      // Three images and a full reply on Sonnet 5: $0.022.
       const usage = { inputTokens: 6000, outputTokens: 1000 };
-      const callCost = 6000 * 3e-6 + 1000 * 1.5e-5;
+      const callCost = 6000 * 2e-6 + 1000 * 1e-5;
 
       const client = (dailyLimit: number, opts: SmartClientConfig = {}) =>
         createSmartClient(sonnet, {
@@ -1963,12 +1966,80 @@ describe('AI Client Batch 4: Cost Control & Caching', () => {
     it('names the configured provider when it is unavailable', async () => {
       jest.spyOn(AIClientFactory, 'create').mockReturnValue({
         isAvailable: async () => false,
+        supportsVision: () => true,
         analyzeVisualDiff: jest.fn(),
       } as never);
       const smart = createSmartClient(configFor(), smartOpts);
 
       // One vendor was tried, so "All providers failed" would misdescribe it.
       await expect(smart.analyzeVisualDiff(request)).rejects.toThrow(/^openai is not available$/);
+    });
+
+    // #523: gpt-4o is still served but no longer offered; that must not read as an outage.
+    it('says so when the configured model is not one IRIS uses for images', async () => {
+      jest.spyOn(AIClientFactory, 'create').mockReturnValue({
+        isAvailable: async () => false,
+        supportsVision: () => false,
+        analyzeVisualDiff: jest.fn(),
+      } as never);
+      const smart = createSmartClient(configFor(), smartOpts);
+
+      const refusal = smart.analyzeVisualDiff(request);
+      await expect(refusal).rejects.toThrow(
+        /^openai model "openai-model" is not one IRIS uses for images .*--ai-model$/,
+      );
+      // #652: typed, so the classifier can name it as the reason AI was unavailable.
+      await expect(refusal).rejects.toBeInstanceOf(ModelNotForImagesError);
+    });
+
+    // #652: an outage is not that fault, and must not be reported as one.
+    it('does not call an unavailable provider a model fault', async () => {
+      jest.spyOn(AIClientFactory, 'create').mockReturnValue({
+        isAvailable: async () => false,
+        supportsVision: () => true,
+        analyzeVisualDiff: jest.fn(),
+      } as never);
+      const smart = createSmartClient(configFor(), smartOpts);
+
+      await expect(smart.analyzeVisualDiff(request)).rejects.not.toBeInstanceOf(
+        ModelNotForImagesError,
+      );
+    });
+
+    // #652: with fallback on and nobody else able to answer, the cause is still the model.
+    it('keeps the model fault typed when the fallback vendors are merely unavailable', async () => {
+      jest.spyOn(AIClientFactory, 'create').mockImplementation(
+        (config) =>
+          ({
+            isAvailable: async () => false,
+            supportsVision: () => config.ai.provider !== 'openai',
+            analyzeVisualDiff: jest.fn(),
+          }) as never,
+      );
+      const smart = createSmartClient(configFor(true), smartOpts);
+
+      const refusal = smart.analyzeVisualDiff(request);
+      await expect(refusal).rejects.toBeInstanceOf(ModelNotForImagesError);
+      await expect(refusal).rejects.toThrow(/^openai model "openai-model" is not one IRIS uses/);
+    });
+
+    // A fallback vendor that failed for its own reason is the last error, as before.
+    it('reports a fallback vendor that really failed, not the model fault before it', async () => {
+      jest.spyOn(AIClientFactory, 'create').mockImplementation(
+        (config) =>
+          ({
+            isAvailable: async () => config.ai.provider !== 'openai',
+            supportsVision: () => config.ai.provider !== 'openai',
+            analyzeVisualDiff: async () => {
+              throw new Error(`${config.ai.provider} is down`);
+            },
+          }) as never,
+      );
+      const smart = createSmartClient(configFor(true), smartOpts);
+
+      const refusal = smart.analyzeVisualDiff(request);
+      await expect(refusal).rejects.toThrow(/^All providers failed\. Last error: \w+ is down$/);
+      await expect(refusal).rejects.not.toBeInstanceOf(ModelNotForImagesError);
     });
 
     it("keeps the configured provider's real error when later vendors are merely unavailable", async () => {

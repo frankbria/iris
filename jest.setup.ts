@@ -121,6 +121,7 @@ for (const key of [
   'IRIS_STRIPE_PRICE_PRO_FILE',
   'IRIS_STRIPE_PRICE_TEAM',
   'IRIS_STRIPE_PRICE_TEAM_FILE',
+  'IRIS_BILLING_GRACE_DAYS', // #266
   // Added with #192, which taught `iris connect` to read these. Without them
   // here an exported IRIS_CONNECT_HOST=0.0.0.0 fails the connect-default test on
   // a developer's machine while CI stays green — #185 exactly, recurring the

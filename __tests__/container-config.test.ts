@@ -336,11 +336,28 @@ describe('docker-compose.production.yml (issue #273)', () => {
     for (const v of STRIPE) expect(s).toMatch(new RegExp(`^\\s+${v}: \\$\\{${v}:-\\}$`, 'm'));
     expect(s).toMatch(/^\s+- stripe_secret_key$/m);
     expect(s).toMatch(/^\s+- stripe_webhook_secret$/m);
-    expect(service('worker')).not.toMatch(/STRIPE/);
     expect(file).toMatch(/^  stripe_secret_key:\n    file: \.\/secrets\/stripe_secret_key$/m);
     expect(file).toMatch(
       /^  stripe_webhook_secret:\n    file: \.\/secrets\/stripe_webhook_secret$/m,
     );
+  });
+
+  // The meter report runs in the worker (#264, ADR 0001 §1). It runs tenant pages, so it
+  // gets the API key alone: no webhook secret to forge events with, and no prices.
+  it('passes the worker the Stripe key and nothing else of Stripe', () => {
+    const s = service('worker');
+    expect(s).toMatch(/^\s+IRIS_STRIPE_SECRET_KEY_FILE: \$\{IRIS_STRIPE_SECRET_KEY_FILE:-\}$/m);
+    expect(s).toMatch(/^\s+- stripe_secret_key$/m);
+    expect(s.match(/STRIPE_\w+/g)).toEqual(['STRIPE_SECRET_KEY_FILE', 'STRIPE_SECRET_KEY_FILE']);
+    expect(s).not.toMatch(/stripe_webhook_secret/);
+  });
+
+  // The webhook and the sweep run in iris only (#266); the portal reads the stored deadline.
+  it('passes the payment grace period to iris alone, empty when unset', () => {
+    const setting = /^\s+IRIS_BILLING_GRACE_DAYS: \$\{IRIS_BILLING_GRACE_DAYS:-\}$/m;
+    expect(service('iris')).toMatch(setting);
+    expect(service('portal')).not.toMatch(/GRACE/);
+    expect(service('worker')).not.toMatch(/GRACE/);
   });
 
   it('has the deploy job write the Stripe secrets, and point at them only when set', () => {
@@ -591,5 +608,81 @@ describe('workflow pinning and deploy configuration (issue #359)', () => {
       );
       expect(body).toMatch(/timeout-minutes: \d+/);
     }
+  });
+});
+
+/**
+ * The dependency audit gate (issue #363) is one line of ci.yml. Nothing else fails when
+ * it is deleted, made advisory or widened to a level that never trips, so these pin it.
+ * That it does catch a vulnerable production dependency of either package is shown
+ * against the registry in the PR, not here: the suite makes no network calls.
+ */
+describe('dependency audit gate (issue #363)', () => {
+  const ci = read('.github/workflows/ci.yml')
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  /** One top-level job's text, from its key to the next job's key. */
+  const job = (name: string) => {
+    const start = ci.indexOf(`\n  ${name}:\n`);
+    expect(start).toBeGreaterThan(-1);
+    // Any line at a job key's indent ends the job, a quoted key too.
+    const next = ci.slice(start + 1).search(/\n {2}\S/);
+    return next === -1 ? ci.slice(start) : ci.slice(start, start + 1 + next);
+  };
+
+  it('fails the build on a high or critical advisory in a production dependency', () => {
+    const audits = ci.split('\n').filter((line) => /npm audit/.test(line));
+    expect(audits.map((line) => line.trim())).toEqual([
+      '- run: npm audit --omit=dev --audit-level=high',
+    ]);
+    // The job ends with that line: the step is in `build`, and has no key after it
+    // (`if: false`, a `shell` that swallows the exit code, a `working-directory`).
+    expect(job('build').trimEnd().endsWith(`\n${audits[0]}`)).toBe(true);
+    expect(ci).not.toMatch(/^ *defaults:/m);
+  });
+
+  it('cannot be passed over: no step of the build job may fail quietly', () => {
+    expect(job('build')).not.toMatch(/continue-on-error/);
+  });
+
+  it('gates both deploys, which run only after the build job', () => {
+    for (const deploy of ['deploy-staging', 'deploy-production']) {
+      const settings = job(deploy).split('\n    steps:\n')[0];
+      expect(settings).toMatch(/\n {4}needs: (build|\[build\])\n/);
+      // A status function in the job's `if` would run it after a failed build.
+      expect(settings).toMatch(/\n {4}if: /);
+      // Function names are case-insensitive and may be spaced from the bracket.
+      expect(settings).not.toMatch(/\b(always|cancelled|failure)\s*\(/i);
+    }
+  });
+
+  // `npm audit` at the root reads the root lockfile, which holds a workspace's
+  // dependencies too. A portal that stopped being a workspace would drop out of it.
+  it('covers the portal: it is a workspace recorded in the root lockfile', () => {
+    const root = JSON.parse(read('package.json')) as { workspaces: string[] };
+    expect(root.workspaces).toContain('apps/*');
+    const portal = JSON.parse(read('apps/portal/package.json')) as {
+      dependencies: Record<string, string>;
+    };
+    const lock = JSON.parse(read('package-lock.json')) as {
+      packages: Record<string, { dependencies?: Record<string, string> }>;
+    };
+    expect(Object.keys(portal.dependencies).length).toBeGreaterThan(5);
+    expect(lock.packages['apps/portal']?.dependencies).toEqual(portal.dependencies);
+  });
+
+  // Development dependencies are outside the gate; their advisories arrive as
+  // Dependabot security updates, whose PRs then pass through it.
+  it('leaves development dependencies to Dependabot security updates for the one lockfile', () => {
+    const dependabot = read('.github/dependabot.yml');
+    const npm = dependabot.slice(
+      dependabot.indexOf('- package-ecosystem: npm'),
+      dependabot.indexOf('- package-ecosystem: github-actions'),
+    );
+    expect(npm).toMatch(/directory: \/\n/);
+    expect(npm).toMatch(
+      /security-updates:\n\s+applies-to: security-updates\n\s+patterns: \["\*"\]/,
+    );
   });
 });

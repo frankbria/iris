@@ -101,3 +101,21 @@ same time.
 - [plans/012](../plans/012-mcp-server-spike.md) — MCP spike
 - [#80](https://github.com/frankbria/iris/issues/80) — JSON-RPC mocked methods
 - [#114](https://github.com/frankbria/iris/issues/114) — MCP spike issue
+
+## Update — 2026-11-11: hosted MCP over HTTP (#314)
+
+The hosted service now answers MCP at `POST /v1/mcp` (Streamable HTTP) with the org API
+key. Decisions taken with it:
+
+- **A tool call is a hosted a11y job**, not a browser driven by the API process. The job
+  queue already has the hardened worker, the egress proxy, the per-org cap, plan
+  enforcement, history and usage (#267, #346); a second path to a browser would have had
+  to repeat each of them.
+- **Stateless, JSON responses only.** No session id and no SSE stream: nothing outlives a
+  request, so any replica can answer (#316) and a deploy drops no session. The cost is no
+  progress notifications; a scan that outlasts the 45 s wait answers with its job id and
+  a second tool reads it.
+- **No batches**, as on the WebSocket (#528): one request, one rate token, at most one scan.
+- **The stdio server stays local** and unchanged; the two share the failure vocabulary
+  (`src/mcp/scan-errors.ts`), not the tool implementation.
+

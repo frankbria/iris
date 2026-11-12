@@ -1,30 +1,20 @@
-# #271 [P0.43] Portal: usage and billing page
+# #683 a11y: the keyboard tester never releases the document it reloaded into, and a move pushed away and back keeps a plain error
 
-Stacked on #636 (`feature/261-345-stripe-billing`): the Customer Portal action and
-`org_billing` come from there. Self-authored plan (the issue had none).
+Plan (self-authored; the issue has none). No architectural fork.
 
-## Decisions (autonomous)
-- One page, `/usage`, linked from the dashboard. Every member can read it; the billing
-  controls are for owners and admins, as on `/org` (the `billing: ['manage']` permission).
-- The period is the current UTC calendar month: it is the window the limits are enforced
-  on (#346) and the managed credit is counted on (#479), whatever the Stripe billing date.
-- "Runs" shows the number the API enforces: this month's billed jobs plus queued and
-  running ones. The query moves out of `enqueue` into `runsUsedThisMonth` so the page and
-  the 402 cannot disagree.
-- Credit left = plan credit minus this month's managed spend, the figure `/provider-keys`
-  already shows.
-- The Billing section of `/org` becomes a shared server component, rendered on both pages.
-
-## Steps
-1. `src/billing/usage.ts`: `runsUsedThisMonth(db, orgId)`; `enqueue` uses it.
-   Test: `__tests__/db/usage-ledger.test.ts`.
-2. `apps/portal/lib/usage.ts` (pure): month bounds, usage-vs-limit lines, the BYOK/managed
-   split, USD formatting. Test: `apps/portal/__tests__/usage.test.ts`.
-3. `apps/portal/components/billing-section.tsx` (moved from `app/org/page.tsx`),
-   `apps/portal/app/usage/page.tsx`, dashboard link. Test: `apps/portal/e2e/usage.spec.ts`.
-4. Docs: `.claude/rules/portal-pages.md`, `docs/data-flows.md` if a read is new,
-   `plans/README.md`.
-
-## Acceptance criteria
-- [ ] Current plan, period usage vs limits, managed credits remaining, BYOK vs managed split
-- [ ] Links to Stripe Customer Portal
+1. **Release `reloadedInto`.** The a11y runner releases it once the held keyboard check has
+   settled (the hold has asked it by then), and `KeyboardTester.run` releases the one a
+   previous run left before it starts, for a caller that keeps one page and never asks.
+   Fake-page tests in `keyboard-tester.test.ts` and `a11y-runner.test.ts`.
+2. **Decision (the issue's second criterion): the move is named.** The tester is the one
+   that saw the page move, so it throws `NavigatedDuringScanError` itself (under the URL of
+   the document it was given, "loaded again" when the page is at the same origin and path)
+   and `run` passes that error through without its "Keyboard testing failed:" prefix. A
+   router that pushed back before the runner's read no longer turns it into a plain error;
+   when the runner still sees the move it names it as before, with the tester's error as
+   the cause. `movedByItself` stays (the runner uses it for custom sequences).
+   Red first in real Chromium (`scan-navigation.test.ts`: the path is pushed back between
+   the tester's throw and the hold's read) and on the fake page.
+   Three existing fake-page assertions change with it: they quoted the plain error's text.
+3. Docs: `.claude/rules/browser-safety.md`, JSDoc, `plans/README.md` (P3.49 done, the P3.50
+   row for #685).

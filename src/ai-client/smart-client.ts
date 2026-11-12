@@ -14,7 +14,13 @@ import { AIClientFactory } from './factory';
 import { AIVisionCache } from './cache';
 import { BudgetExceededError, CostTracker } from './cost-tracker';
 import { ImagePreprocessor } from './preprocessor';
-import { DEFAULT_MODELS, ModelProvider, ModelUnavailableError, resolveModel } from './models';
+import {
+  DEFAULT_MODELS,
+  ModelNotForImagesError,
+  ModelProvider,
+  ModelUnavailableError,
+  resolveModel,
+} from './models';
 import { hostedLog } from '../log';
 
 /**
@@ -324,7 +330,10 @@ export class SmartAIVisionClient {
         const available = await client.isAvailable();
         if (!available) {
           otherFailure = true;
-          lastError ??= new Error(`${providerName} is not available`);
+          // A model outside the vision table is the user's to change, not an outage (#523).
+          lastError ??= client.supportsVision()
+            ? new Error(`${providerName} is not available`)
+            : new ModelNotForImagesError(providerName, model);
           continue;
         }
 
@@ -377,8 +386,15 @@ export class SmartAIVisionClient {
       return result;
     }
 
-    // With fallback off only one vendor was tried; say what happened to it.
-    if (lastError && (providers.length === 1 || !otherFailure)) throw lastError;
+    // With fallback off only one vendor was tried; say what happened to it. A model IRIS
+    // does not use for images is still the last error only when every other vendor was
+    // merely unavailable (one that was called and failed replaces it), so it stays the
+    // typed cause (#652).
+    if (
+      lastError &&
+      (providers.length === 1 || !otherFailure || lastError instanceof ModelNotForImagesError)
+    )
+      throw lastError;
     throw new Error(`All providers failed. Last error: ${lastError?.message || 'Unknown error'}`);
   }
 

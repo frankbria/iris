@@ -129,6 +129,14 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   deploy without `SSH_KNOWN_HOSTS` (no ssh-keyscan trust-on-first-use), and both deploy jobs
   have `timeout-minutes`. Staging's OAuth client carries only `tag:ci` (#535), and the
   workflow's `tags:` must equal the client's full tag set exactly.
+- **A green `review` check is not proof of a review (#565).** The shared workflow tries
+  Codex, then Kimi, then the `base_url` model, and keeps the check green when a provider
+  rejects the request (quota, credentials). If a later reviewer then reviews, the PR shows
+  only that review (a quota failover is in the job summary alone). If the last reviewer
+  is rejected, the PR gets "⚠️ Third Party Review did not complete" with the provider's
+  message, and when no reviewer reviewed, "Reviewer failover" says "No reviewer produced a
+  review for this commit". A real review is a comment headed "Third Party Review —
+  <model>". Before merging, read the comments, not the check.
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
 
@@ -255,6 +263,23 @@ break and expensive to rediscover:
   stage by `scripts/third-party-notices.js` from what `npm ci --omit=dev` installed (the root
   lockfile also lists the portal's packages, which are not installed, so it reads installed
   `package.json`s, not lockfile entries).
+
+- **Dependency audit gate (#363).** The last step of CI's `build` job is
+  `npm audit --omit=dev --audit-level=high`: a high or critical advisory in a production
+  dependency fails the build, and both deploy jobs `need` it. The root lockfile holds the
+  portal workspace's dependencies too, so the one command covers both packages. It fails
+  closed when the registry's advisory endpoint does not answer (exit 1, "audit endpoint
+  returned an error"): re-run the job. Development dependencies are outside it on
+  purpose: their advisories come as Dependabot security updates (the `security-updates`
+  group), and `npm audit`'s "fix" for several of them is a major downgrade (`jest@25`). A
+  fix that a package in between holds back is an `overrides` entry in the root
+  `package.json`; an advisory with no fix holds deploys until the dependency is replaced
+  or fixed, and the gate is never weakened to get past it (runbook, "When the dependency
+  audit fails"). `container-config.test.ts` pins it: the exact command as the build job's
+  last line (so no `if:`, `shell:` or `working-directory:` under it), no
+  `continue-on-error` or `defaults:`, both deploys with `needs: build` and no status
+  function (`always()`) in their `if`, and the portal recorded in the root lockfile. A
+  step added after the audit fails that test: put new steps above it.
 
 The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a

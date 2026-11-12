@@ -11,6 +11,12 @@ import { revokeKeysCreatedBy } from './member-keys';
 
 export type SuspensionAction = 'suspend' | 'unsuspend';
 
+/**
+ * The actor of a suspension for a failed payment (#266, src/billing/payment-grace.ts). A
+ * settled payment lifts a suspension whose latest row is this actor's, and no other.
+ */
+export const BILLING_ACTOR = 'billing';
+
 export interface SuspensionEvent {
   action: SuspensionAction;
   reason: string;
@@ -125,21 +131,29 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
 
   /**
    * Records `action` unless the subject is already in that state (then nothing is
-   * written). Serialized per subject, so two operators acting at once record one change.
+   * written; a suspension over billing's own is the exception, below). Serialized per subject, so two operators acting at once record one change.
+   * On a transaction it writes there, and is logged before that transaction commits.
    */
   const act = async (
     action: SuspensionAction,
     ref: string,
-    { reason, actor }: { reason: string; actor: string },
+    { reason, actor, onlyIfBy }: { reason: string; actor: string; onlyIfBy?: string },
   ): Promise<SuspensionStatus & { changed: boolean }> => {
     if (!reason.trim()) throw new Error('A reason is required');
     if (!actor.trim()) throw new Error('An actor is required');
-    const result = await db.transaction().execute(async (tx) => {
+    const write = async (tx: Kysely<unknown>) => {
       const id = await subject.resolve(tx, ref);
       await sql`select pg_advisory_xact_lock(hashtext(${subject.table + ':' + id}))`.execute(tx);
       const last = await latest(tx, id);
-      if ((last?.action ?? 'unsuspend') === action) {
-        return { id, suspended: action === 'suspend', last, changed: false };
+      // Anyone else's suspension is recorded over billing's (#266): otherwise the next
+      // paid invoice would lift it, and an abuse suspension would end with a payment.
+      const overBilling =
+        action === 'suspend' && last?.actor === BILLING_ACTOR && actor.trim() !== BILLING_ACTOR;
+      // `onlyIfBy` is decided here, under the lock: a suspension someone else recorded
+      // a moment ago is seen, not undone.
+      const notTheirs = onlyIfBy !== undefined && last?.actor !== onlyIfBy;
+      if (((last?.action ?? 'unsuspend') === action && !overBilling) || notTheirs) {
+        return { id, suspended: last?.action === 'suspend', last, changed: false };
       }
       // Dated strictly after the subject's latest row, under the lock: `now()` is when the
       // transaction began, and a transaction that began first can take the lock second,
@@ -153,7 +167,9 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
         returning action, reason, actor, created_at`.execute(tx);
       if (action === 'suspend') await subject.onSuspend?.(tx, id);
       return { id, suspended: action === 'suspend', last: toEvent(rows[0]), changed: true };
-    });
+    };
+    // On a caller's transaction (billing's, #266), join it: Kysely cannot nest one.
+    const result = await (db.isTransaction ? write(db) : db.transaction().execute(write));
     const { id, ...status } = result;
     if (status.changed) {
       log('info', `${subject.label} ${action === 'suspend' ? 'suspended' : 'unsuspended'}`, {
@@ -167,7 +183,9 @@ function suspensions(db: Kysely<unknown>, subject: Subject) {
 
   return {
     suspend: (ref: string, by: { reason: string; actor: string }) => act('suspend', ref, by),
-    unsuspend: (ref: string, by: { reason: string; actor: string }) => act('unsuspend', ref, by),
+    /** `onlyIfBy`: lift the suspension only when its latest row is that actor's (#266). */
+    unsuspend: (ref: string, by: { reason: string; actor: string; onlyIfBy?: string }) =>
+      act('unsuspend', ref, by),
     /** The hot-path check (auth, worker, portal): one indexed query, no existence check. */
     async isSuspended(id: string): Promise<boolean> {
       const { rows } = await sql<{ s: boolean }>`select ${latestSql(subject, id)} as s`.execute(db);

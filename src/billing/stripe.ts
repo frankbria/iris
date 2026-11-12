@@ -54,7 +54,7 @@ export function planForPrice(config: StripeConfig, priceId: string): PaidPlan | 
 
 /** `limits`: a caller that holds a lock while it waits bounds the request and skips retries. */
 export function stripeClient(
-  config: StripeConfig,
+  config: Pick<StripeConfig, 'secretKey'>,
   limits: Pick<Stripe.StripeConfig, 'timeout' | 'maxNetworkRetries'> = {},
 ): Stripe {
   return new Stripe(config.secretKey, { apiVersion: STRIPE_API_VERSION, ...limits });

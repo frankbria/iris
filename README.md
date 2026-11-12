@@ -38,7 +38,7 @@ IRIS runs two ways, and most of this README is about the first.
 | | **Local CLI** (this package) | **Hosted service** ([ADR 0001](docs/adr/0001-hosted-architecture.md)) |
 |---|---|---|
 | What you run | `iris run`, `watch`, `visual-diff`, `a11y`, `connect`, and `iris-mcp` | Nothing: an org signs up in the portal and calls the API |
-| Interface | CLI (JSON output), MCP stdio, local `iris connect` with a shared token | REST `/v1/…` (a11y and visual-diff jobs, results) and JSON-RPC over WSS, with org API keys |
+| Interface | CLI (JSON output), MCP stdio, local `iris connect` with a shared token | REST `/v1/…` (a11y and visual-diff jobs, results), JSON-RPC over WSS and MCP over HTTP (`/v1/mcp`), with org API keys |
 | AI keys | Yours, from the environment or `~/.iris/config.json` | The org's own keys (BYOK, encrypted at rest) or IRIS's managed credits |
 | Storage | SQLite and files under `~/.iris` (or `IRIS_DATA_DIR`) | PostgreSQL per org; screenshots in private S3-compatible storage |
 | Baselines | Git branches | Per project, changed only by approval |
@@ -387,6 +387,7 @@ without limit:
 | open connections | `--max-connections <n>` | 16 | handshake refused, HTTP `503` |
 | browser sessions, server-wide | `--max-sessions <n>` | 4 | `launchBrowser` error `-32000` |
 | actions per `executeBrowserAction` | `--max-actions <n>` | 100 | `-32602` for an `actions` array; `success: false` when an `instruction` translates to more |
+| characters in a `selector` or an assertion `target` | (fixed) | 4,096 | `-32602` for an `actions` array; an `instruction` never translates to a longer one (it is left to the AI, whose plan is checked the same way) |
 | requests per minute, per API key (hosted) | `--rate-per-key <n>` | 120 | error `-32029` "Rate limit exceeded", `data.retryAfterMs`; the request is not run |
 | requests per minute, per org (hosted) | `--rate-per-org <n>` | 300 | same; all of an org's keys share it |
 | browser sessions per org (hosted) | `--max-sessions-per-org <n>` | 2 | `launchBrowser` error `-32000` |
@@ -792,6 +793,40 @@ iris a11y --pages / --base-url https://example.com \
 The report contains axe-core violations with impact level, WCAG tags, and the
 offending selectors. Outcome is signalled by the exit code (`4` = violations found).
 
+**A page that navigates while it is scanned (#669).** IRIS loads the page, waits until its
+network has been idle for half a second, and scans the document it holds then. A page
+that moves to another origin or path after that, while its checks are still running (a
+`setTimeout` that calls `location.replace`, a meta refresh of a few seconds, a sign-in
+check that redirects after a slow call), is not scanned: it is listed as a page that
+could not be scanned, with the error `The page navigated during the scan: it was at <URL>
+when the scan began and moved to another page before its checks finished`, and the command
+exits `3` (or `4` when another page has violations). Scan the page it ends on instead.
+
+- A page that loads itself again while it is scanned (`location.reload()` on a timer, or
+  the same path under another query string) fails the same way, with `… and loaded again
+  before its checks finished` (#675): the checks that were running lost their document,
+  and the ones after them would have measured the second load.
+- A change of the query string or the fragment within the document (a router's
+  `history.replaceState`, an anchor) is not a move.
+- A router that pushes another path counts as a move, although the document is the same.
+- A key the keyboard checks press may leave the page on purpose (a dialog that navigates
+  on Escape passes its check), and so may a custom key sequence; that is not an error.
+  The keyboard checks run last for that reason, after axe and the screen-reader checks.
+  An arrow key that leaves the page is the key's doing too (#675), and is reported as a
+  failed keyboard check, `The page navigated`: an arrow key in a menu, listbox, tree, grid
+  or tab list is for moving focus. Tabs that keep the selected one in the fragment, the
+  query string or, through their router, the path stay on their document and are judged
+  by where focus went, as before.
+- The keyboard checks load the page again themselves before they press Escape on its
+  dialogs; that reload is theirs, and the page is held to the document it produced.
+- A handler that leaves the page some time after the key (a dialog that closes on Escape
+  and navigates when its animation ends) cannot be told from the page's own timer, and
+  fails the page as navigated during the scan.
+- A move that comes after the last check has finished is not seen: the results are the
+  first page's, which is the page that was scanned.
+- A move to an address the navigation policy refuses, or to a page that cannot be loaded,
+  is reported as that.
+
 ### Exit codes
 
 Every command signals its outcome through the exit code:
@@ -817,9 +852,11 @@ instead of shelling out. It is a **spike**: exactly one tool today.
 |---|---|
 | **Tool** | `run_accessibility_test` — scans a page with axe-core |
 | **Input** | `url` (required, http/https), `wcagLevel` (`AA` default, or `AAA`; WCAG 2.2, 2.0 and 2.1 criteria included) |
-| **Output** | `{ url, passed, violationCount, violations[], needsReview[] }`, each violation `{ id, impact, description, helpUrl, nodes }`; `needsReview` lists rules axe could not decide (`{ id, description, nodes }`), which never fail the scan |
+| **Output** | `{ url, redirected, passed, violationCount, violations[], needsReview[] }`, each violation `{ id, impact, description, helpUrl, nodes }`; `needsReview` lists rules axe could not decide (`{ id, description, nodes }`), which never fail the scan |
 | **Keys** | none — axe-core runs locally |
-| **Redirects** | followed, with every hop checked against the navigation policy |
+| **Redirects** | followed, with every hop checked against the navigation policy; `url` is then the landing page's origin and path |
+| **Hints** | not read-only (`readOnlyHint: false`, `destructiveHint: true`, `openWorldHint: true`): the scan loads the page in a real browser, so expect your client to ask before each call |
+| **Concurrency** | 2 scans at once; 8 more calls wait their turn, further ones get a tool error |
 
 Configure it by copying the example into your project (it is gitignored, so your
 copy stays local):
@@ -841,6 +878,38 @@ Then start Claude Code in the project and approve the server when prompted;
 `claude mcp list` should report `iris ... ✔ Connected`. Installed globally, the
 `iris-mcp` bin is the same entry point.
 
+#### Hosted: MCP over HTTP
+
+The hosted service speaks MCP too, at `POST /v1/mcp` (Streamable HTTP), with the same org
+API key as the REST API:
+
+```json
+{
+  "mcpServers": {
+    "iris-hosted": {
+      "type": "http",
+      "url": "https://<your IRIS host>/v1/mcp",
+      "headers": { "Authorization": "Bearer iris_..." }
+    }
+  }
+}
+```
+
+| | |
+|---|---|
+| **Tools** | `run_accessibility_test { url, wcagLevel? }` and `get_accessibility_test_result { jobId }` |
+| **What a call does** | queues the same job as `POST /v1/a11y/jobs` with one URL: a worker scans the page, and the run appears in the org's history (`GET /v1/runs`, the portal) and counts as one run on the plan |
+| **Output** | `{ jobId, status }`, and once `status` is `finished`: `url, redirected, passed, violationCount, violations[] ({ id, impact, nodes, helpUrl }), needsReviewRules[], keyboardPassed`. `url` is the page that was scanned: when the request was redirected it is the landing page's origin and path (no query string or fragment), `redirected` is true and `redirectedFrom` holds the URL you asked for. `helpUrl` is Deque's page for the rule. `passed` is true when axe reported no violation and the keyboard checks passed |
+| **Slow scans** | a call waits up to 45 s, then answers `status: "queued"` or `"running"` with the `jobId`; `get_accessibility_test_result` reads the result later and costs nothing |
+| **Limits** | the key's and org's request rate (HTTP 429), the org's 10 queued or running jobs and the plan's monthly runs (both a tool error; no scan starts) |
+| **URLs** | public `http(s)` pages only, without credentials: private, loopback and metadata addresses are refused before a run is spent |
+| **Transport** | stateless: one JSON response per `POST`, no session id, no SSE stream (`GET` and `DELETE` answer 405); JSON-RPC batches are refused |
+
+A client that disconnects while its scan is still waiting in the queue has the scan
+withdrawn: it never runs and is not counted. One a worker has already started finishes
+and is counted. Unlike the local tool, the hosted one reports the page as requested (not
+where a redirect landed) and names each violated rule without axe's description text.
+
 **Redirects are followed, and every hop is checked.** Pass `http://localhost:3000`
 to a site whose root redirects to `/login` and you get a scan of `/login`.
 
@@ -849,13 +918,39 @@ to request it, and each is then re-issued as a real navigation — so the scanne
 document's URL and its asset base stay correct. That matters more than it sounds:
 a page whose stylesheet 404s because it resolved against the wrong base reports
 contrast violations that do not exist. A hop pointing somewhere the policy blocks
-fails the call with the offending URL named.
+fails the call.
 
-**Deliberate limits.** The tool reports axe-core violations *only*. IRIS's
-keyboard-navigation and screen-reader sub-checks currently hardcode success
-([#73](https://github.com/frankbria/iris/issues/73),
-[#72](https://github.com/frankbria/iris/issues/72)), so surfacing them here would
-report passes that were never tested. Visual-diff and action tools come after the
+**A result says only what the tool decided to say (#362).** An assistant reads it,
+and the page under test chooses much of what an error or a redirect contains. So:
+
+- A failure is `Accessibility scan failed for <your URL>: <reason>`, with the reason
+  from a fixed list: the kind of address the navigation policy blocked (never the
+  redirect target itself), a `net::ERR_*` code, a timeout, "the browser could not
+  be started on the server", "the page navigated to another page during the scan" (#669:
+  it moved on by timer after it had loaded, so scan the page it ends on), "the page
+  reloaded during the scan" (#675), or "the scan could not be completed". The error's own text (local paths, addresses) goes to the
+  server's stderr.
+- A redirected scan reports `redirected: true` and the landing page's origin and
+  path, at most 200 characters. A page that moves on by itself (a script, a meta
+  refresh, its router) before the scan counts as redirected; a move that only
+  changes the query string or the fragment does not. Its query string and fragment, where sign-in
+  codes and tokens travel, are left out, and a path segment of 32 characters or
+  more (a reset link's token) is shown as `…`. A shorter token in the path is
+  not recognised as one.
+- `user:password@` in the URL you pass is never repeated.
+
+**The tool is not advertised as read-only.** Loading a page runs its scripts and
+sends the requests a visit would, and the URL comes from the model. The hints say
+so, which lets a client ask before each call rather than run it unprompted.
+
+**Two scans run at once.** Each scan is its own Chromium and assistants issue tool
+calls in parallel. Up to 8 more calls wait in arrival order (a client with a short
+request timeout may give up on a long wait); beyond that a call is refused at once
+with a tool error saying to call again.
+
+**Deliberate limits.** The tool reports axe-core results *only*: the keyboard and
+screen-reader checks `iris a11y` runs are not offered through it yet. Visual-diff
+and action tools come after the
 spike verdict — the CLI JSON contract above remains the supported integration
 surface in the meantime.
 
@@ -907,10 +1002,11 @@ leak into an Anthropic session.
 
 These choose the **text** model (`iris run`). Visual analysis (`visual-diff --semantic`,
 `watch --feedback`) needs a model that accepts images and takes it from `--ai-model <id>`;
-without it, each provider's vision default is used (`gpt-4o`, `claude-sonnet-5`, `llava`).
-IRIS knows which OpenAI families see (`gpt-4o`, `gpt-4.1`, `gpt-5`, `o1`/`o3`/`o4`, not
-`gpt-3.5` or `o1-mini`); for Ollama it asks the daemon (`/api/show` capabilities, so
-`llama3.2-vision`, `gemma3` or `qwen2.5vl` work) and checks that the model is pulled. That
+without it, each provider's vision default is used (`gpt-6.1-terra`, `claude-sonnet-5`, `llava`).
+IRIS knows which OpenAI families it can send images to (`gpt-6`, `gpt-5.6`, `gpt-5.5`,
+`gpt-5.4`, `gpt-5.2`; not the Responses-only `-pro` models, and not the families OpenAI has
+deprecated: `gpt-4o`, `gpt-4.1`, the first `gpt-5`, `o1`/`o3`/`o4`); for Ollama it asks the
+daemon (`/api/show` capabilities, so `llama3.2-vision`, `gemma3` or `qwen2.5vl` work) and checks that the model is pulled. That
 check gives up after 2 seconds and is reused for a minute.
 
 #### Model availability is checked, not assumed
@@ -980,7 +1076,7 @@ sections; anything else in it is ignored:
 {
   "ai": {
     "provider": "openai",
-    "model": "gpt-4o-mini"
+    "model": "gpt-6-luna"
   },
   "watch": {
     "patterns": ["**/*.{ts,tsx,js,jsx}"],

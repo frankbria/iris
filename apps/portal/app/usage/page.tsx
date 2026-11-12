@@ -8,7 +8,7 @@ import { orgEntitlements } from "../../../../src/billing/plans"
 import { runsUsedThisMonth, usageLedger } from "../../../../src/billing/usage"
 import { storageUsage } from "../../../../src/storage-quota"
 import { BillingControls, PlanLine } from "@/components/billing-section"
-import { SuspendedBanner } from "@/components/contact-link"
+import { OrgBanner } from "@/components/contact-link"
 import { getDb } from "@/lib/auth"
 import { getBilling } from "@/lib/billing"
 import { isManager, requireOrg } from "@/lib/org"
@@ -38,7 +38,7 @@ function ModeCells({ usage }: { usage: ModeUsage }) {
  * from the session (`requireOrg()`), never the request.
  */
 export default async function UsagePage() {
-  const { org, role, suspended } = await requireOrg()
+  const { org, role, suspended, payment } = await requireOrg()
   const db = getDb()
   const billing = getBilling()
   const period = utcMonth(new Date())
@@ -59,7 +59,7 @@ export default async function UsagePage() {
   const lastDay = new Date(period.to.getTime() - 1)
   return (
     <main className="flex min-h-svh flex-col gap-6 p-6">
-      {suspended && <SuspendedBanner />}
+      <OrgBanner suspended={suspended} payment={payment} />
       <div className="flex flex-col gap-1">
         <h1 className="font-heading text-lg font-medium">
           Usage and billing for {org.name}

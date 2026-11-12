@@ -2,6 +2,7 @@ import type Stripe from 'stripe';
 import { sql, type Kysely } from 'kysely';
 import { recordAudit } from '../audit-log';
 import { orgEntitlements, type PlanId } from './plans';
+import { trackPayment } from './payment-grace';
 import { planForPrice, stripeClient, type StripeConfig } from './stripe';
 
 /**
@@ -19,7 +20,9 @@ export type WebhookOutcome =
   | 'ignored'
   /** Seen before: answer 200, nothing read or changed. */
   | 'duplicate'
-  | 'applied';
+  | 'applied'
+  /** Too many deliveries in flight: answer 503, and Stripe delivers it again later. */
+  | 'busy';
 
 /** What IRIS needs of one of the customer's subscriptions. */
 export interface SubscriptionSnapshot {
@@ -33,8 +36,11 @@ export interface SubscriptionSnapshot {
 /** The customer's subscriptions as Stripe has them now, any status. */
 export type ReadSubscriptions = (customerId: string) => Promise<SubscriptionSnapshot[]>;
 
-/** Statuses that keep the paid plan; past_due too, until #266's grace period decides. */
+/** Statuses that keep the paid plan; past_due too: the grace period (#266) suspends, it does not downgrade. */
 const ENTITLED_STATUSES = ['active', 'trialing', 'past_due'];
+
+/** Statuses of a subscription whose latest invoice went unpaid (#266). */
+const PAYMENT_FAILED_STATUSES = ['past_due', 'unpaid'];
 
 type Reference = string | { id: string } | null | undefined;
 const idOf = (reference: Reference): string | null =>
@@ -83,7 +89,7 @@ async function applyEvent(
   tx: Kysely<unknown>,
   event: Stripe.Event,
   customerId: string,
-  dependencies: { config: StripeConfig; readSubscriptions: ReadSubscriptions },
+  dependencies: { config: StripeConfig; readSubscriptions: ReadSubscriptions; graceDays?: number },
 ): Promise<WebhookOutcome> {
   const { rows } = await sql<{ org_id: string }>`
     select org_id from org_billing where stripe_customer_id = ${customerId} for update`.execute(tx);
@@ -99,6 +105,10 @@ async function applyEvent(
       subscription_status = ${current?.status ?? null}, updated_at = now()
     where org_id = ${orgId}`.execute(tx);
   await applyPlan(tx, orgId, plan);
+  await trackPayment(tx, orgId, {
+    failing: PAYMENT_FAILED_STATUSES.includes(current?.status ?? ''),
+    graceDays: dependencies.graceDays,
+  });
   await recordAudit(tx, {
     orgId,
     action: 'subscription.update',
@@ -139,6 +149,13 @@ function stripeSubscriptionReader(config: StripeConfig): ReadSubscriptions {
 }
 
 /**
+ * Deliveries applied at once. Each holds a connection of the pool tenant traffic shares for
+ * up to the Stripe read's 10 s timeout, so a Stripe outage's redelivery waves must not take
+ * every connection: the rest are answered `busy` and Stripe redelivers them.
+ */
+export const MAX_CONCURRENT_DELIVERIES = 2;
+
+/**
  * Answers one delivery, given the exact body bytes Stripe signed and its signature header.
  * Rejects when Stripe cannot be read: nothing is recorded, the route answers 500, and
  * Stripe delivers the event again.
@@ -148,8 +165,16 @@ export function stripeWebhookHandler(
   config: StripeConfig,
   {
     readSubscriptions = stripeSubscriptionReader(config),
-  }: { readSubscriptions?: ReadSubscriptions } = {},
+    maxConcurrentDeliveries = MAX_CONCURRENT_DELIVERIES,
+    graceDays,
+  }: {
+    readSubscriptions?: ReadSubscriptions;
+    maxConcurrentDeliveries?: number;
+    /** Days from a failed payment to suspension (#266); `resolveGraceDays()` in production. */
+    graceDays?: number;
+  } = {},
 ) {
+  let deliveriesInFlight = 0;
   const stripe = stripeClient(config);
   const verify = (rawBody: string, signature: string): Stripe.Event | null => {
     try {
@@ -163,8 +188,16 @@ export function stripeWebhookHandler(
     if (!event) return 'invalid_signature';
     const customerId = customerOf(event);
     if (!customerId) return 'ignored';
-    return db
-      .transaction()
-      .execute((tx) => applyEvent(tx, event, customerId, { config, readSubscriptions }));
+    if (deliveriesInFlight >= maxConcurrentDeliveries) return 'busy';
+    deliveriesInFlight++;
+    try {
+      return await db
+        .transaction()
+        .execute((tx) =>
+          applyEvent(tx, event, customerId, { config, readSubscriptions, graceDays }),
+        );
+    } finally {
+      deliveriesInFlight--;
+    }
   };
 }

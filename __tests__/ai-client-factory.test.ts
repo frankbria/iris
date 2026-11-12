@@ -66,7 +66,7 @@ describe('AIClientFactory', () => {
 
   describe('supportsVision', () => {
     it('is true for a vision-capable model', () => {
-      expect(AIClientFactory.supportsVision(cfg('openai', 'gpt-4o'))).toBe(true);
+      expect(AIClientFactory.supportsVision(cfg('openai', 'gpt-6.1-terra'))).toBe(true);
     });
 
     it('is false for a non-vision model', () => {

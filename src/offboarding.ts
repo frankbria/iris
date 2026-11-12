@@ -3,8 +3,10 @@ import * as path from 'path';
 import Database from 'better-sqlite3';
 import { sql, type Kysely, type RawBuilder } from 'kysely';
 import { log } from './log';
+import { BILLING_ACTOR } from './org-suspension';
 import { orgArtifacts, type ArtifactStore } from './artifact-store';
 import { forgetArtifacts } from './storage-quota';
+import { AUDIT_RETENTION_DAYS } from './audit-log';
 
 /**
  * Org offboarding, account deletion and the daily retention pass (#349; owner decisions
@@ -32,6 +34,8 @@ export interface RetentionReport {
   orgsPurged: string[];
   tombstonesDropped: number;
   runsDeleted: number;
+  /** Audit entries past `AUDIT_RETENTION_DAYS` deleted this pass (#541). */
+  auditEntriesDeleted: number;
   sessionsDeleted: number;
   verificationsDeleted: number;
   termsDropped: number;
@@ -150,8 +154,8 @@ export function offboarding(db: Kysely<unknown>) {
 
   const latestSuspension = async (q: Kysely<unknown>, orgId: string) =>
     (
-      await sql<{ action: string; reason: string }>`
-        select action, reason from org_suspensions where org_id = ${orgId}
+      await sql<{ action: string; reason: string; actor: string }>`
+        select action, reason, actor from org_suspensions where org_id = ${orgId}
         order by created_at desc, id desc limit 1`.execute(q)
     ).rows[0];
 
@@ -256,8 +260,17 @@ export function offboarding(db: Kysely<unknown>) {
           on conflict (org_id) do nothing returning purge_after`.execute(tx);
         if (!inserted.rows.length)
           throw new OffboardingError(`Deletion of ${orgId} was already requested`);
+        // A failed payment's suspension is replaced by this one (#266), so its
+        // once-per-failure mark goes: if the deletion is cancelled while the payment is
+        // still failing, the sweep suspends again. Before the lock: billing takes the
+        // org_billing row first, then the suspension lock.
+        await sql`update org_billing set payment_suspended_at = null
+          where org_id = ${orgId}`.execute(tx);
         await lockSuspensions(tx, orgId);
-        if ((await latestSuspension(tx, orgId))?.action !== 'suspend')
+        // Over a billing suspension too: a late payment lifts only billing's own
+        // row, and must not reopen an org that is waiting to be purged.
+        const last = await latestSuspension(tx, orgId);
+        if (last?.action !== 'suspend' || last.actor === BILLING_ACTOR)
           await stampSuspension(tx, orgId, 'suspend', DELETION_REASON, actor);
         log('info', 'org deletion requested', { orgId, actor });
         return (inserted.rows[0] as { purge_after: Date }).purge_after;
@@ -416,6 +429,20 @@ export function offboarding(db: Kysely<unknown>) {
           );
         }),
       );
+      // An API key's creation entry stays while the key exists: it is the only record of
+      // who made the key, and a member's removal, leave or ban revokes their keys by it
+      // (#408, src/member-keys.ts). It goes on the first pass after the key does, or after
+      // its creator's account is deleted (the actor is cleared: it names nobody any more).
+      // shortcut: scans audit_log by created_at once a day, index it if the pass gets slow.
+      const auditEntriesDeleted = await step('audit', 0, async () =>
+        affected(
+          await sql`delete from audit_log a
+            where a.created_at < ${now}::timestamptz - make_interval(days => ${AUDIT_RETENTION_DAYS})
+              and not (a.action = 'api_key.create' and a.actor_user_id is not null and exists (
+                select 1 from apikey k
+                where k.id = substr(a.target, 5) and k."referenceId" = a.org_id))`.execute(db),
+        ),
+      );
       const sessionsDeleted = await step('sessions', 0, async () =>
         affected(await sql`delete from session where "expiresAt" < ${now}`.execute(db)),
       );
@@ -488,6 +515,7 @@ export function offboarding(db: Kysely<unknown>) {
         orgsPurged,
         tombstonesDropped,
         runsDeleted,
+        auditEntriesDeleted,
         sessionsDeleted,
         verificationsDeleted,
         termsDropped,

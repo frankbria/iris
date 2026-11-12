@@ -38,6 +38,29 @@ const orgOf = async (email: string) =>
     )
   )[0].id
 
+/** The hidden fields of the `/org` form containing `marker`, as the server renders it. */
+async function formFields(context: BrowserContext, marker: string) {
+  const html = await (await context.request.get("/org")).text()
+  const ssrForm = [...html.matchAll(/<form[^>]*>[\s\S]*?<\/form>/g)]
+    .map((m) => m[0])
+    .find((f) => f.includes(marker))!
+  const fields: Record<string, string> = {}
+  for (const [, name, value] of ssrForm.matchAll(
+    /<input type="hidden" name="([^"]+)"(?: value="([^"]*)")?\/>/g
+  ))
+    fields[name] = (value ?? "").replaceAll("&quot;", '"')
+  return fields
+}
+
+/** Posts a form's fields to `/org` from `context`'s session: a forged submit. */
+const post = async (context: BrowserContext, fields: Record<string, string>) =>
+  (
+    await context.request.post("/org", {
+      headers: { origin: baseURL },
+      multipart: fields,
+    })
+  ).text()
+
 test("managers see the plan and Upgrade; a member's forged Checkout is refused", async ({
   page,
   context,
@@ -63,22 +86,8 @@ test("managers see the plan and Upgrade; a member's forged Checkout is refused",
   ).toHaveCount(0)
 
   // The owner's Checkout form exactly as the server renders it.
-  const html = await (await context.request.get("/org")).text()
-  const ssrForm = [...html.matchAll(/<form[^>]*>[\s\S]*?<\/form>/g)]
-    .map((m) => m[0])
-    .find((f) => f.includes('name="plan" value="pro"'))!
-  const fields: Record<string, string> = {}
-  for (const [, name, value] of ssrForm.matchAll(
-    /<input type="hidden" name="([^"]+)"(?: value="([^"]*)")?\/>/g
-  ))
-    fields[name] = (value ?? "").replaceAll("&quot;", '"')
-  const forge = async (ctx: BrowserContext) =>
-    (
-      await ctx.request.post("/org", {
-        headers: { origin: baseURL },
-        multipart: fields,
-      })
-    ).text()
+  const fields = await formFields(context, 'name="plan" value="pro"')
+  const forge = (ctx: BrowserContext) => post(ctx, fields)
 
   // The webhook has recorded a subscription: the plan shows, Manage billing replaces Upgrade.
   await sql(
@@ -148,4 +157,79 @@ test("managers see the plan and Upgrade; a member's forged Checkout is refused",
       orgId,
     ])
   ).toEqual([{ stripe_customer_id: `cus_e2e_${orgId}` }])
+})
+
+/**
+ * Payment failure (#266). The state is written as the webhook and the sweep write it:
+ * the deadline on `org_billing`, and the suspension as a row by `billing`.
+ */
+// The action's answer in the form state, not the banner (which says the same of an operator's).
+const REFUSED_SUSPENDED = '{"error":"This organization is suspended."}'
+
+test("a failed payment warns, then suspends with its own banner; an operator's suspension still blocks the Customer Portal", async ({
+  page,
+  context,
+}) => {
+  const email = unique()
+  await signUpVerified(context.request, email, "Pia")
+  await logIn(page, email, PASSWORD)
+  await expect(page).toHaveURL(/\/dashboard$/)
+  const orgId = await orgOf(email)
+  const checkout = await formFields(context, 'name="plan" value="pro"')
+  const suspend = (action: "suspend" | "unsuspend", actor: string) =>
+    sql(
+      "insert into org_suspensions (org_id, action, reason, actor) values ($1, $2, 'e2e', $3)",
+      [orgId, action, actor]
+    )
+
+  // Within the grace period: a warning with the day it ends, on every org page.
+  await sql(
+    "insert into org_billing (org_id, stripe_customer_id, stripe_subscription_id, subscription_status, payment_grace_ends_at) values ($1, $2, 'sub_e2e', 'past_due', now() + interval '7 days')",
+    [orgId, `cus_e2e_${orgId}`]
+  )
+  await page.reload()
+  const banner = page.getByRole("note")
+  await expect(banner).toContainText(
+    /A payment for this organization failed\. Update the payment method under Billing by \d{4}-\d\d-\d\d \(UTC\) to avoid suspension\./
+  )
+  await page.goto("/api-keys")
+  await expect(banner).toContainText("A payment for this organization failed.")
+  await banner.getByRole("link", { name: "Billing" }).click()
+  await expect(page).toHaveURL(/\/org#billing$/)
+
+  // Past it, suspended by billing: the banner says why and Manage billing is still offered.
+  await sql(
+    "update org_billing set payment_grace_ends_at = now() - interval '1 minute', payment_suspended_at = now() where org_id = $1",
+    [orgId]
+  )
+  await suspend("suspend", "billing")
+  await page.reload()
+  await expect(banner).toHaveText(
+    "This organization is suspended because a payment failed. An owner or admin can update the payment method under Billing to restore it."
+  )
+  await expect(
+    page
+      .getByRole("region", { name: "Billing" })
+      .getByRole("button", { name: "Manage billing" })
+  ).toBeVisible()
+  // Paying is the only thing a billing suspension lets through: Checkout stays refused.
+  expect(await post(context, checkout)).toContain(REFUSED_SUSPENDED)
+
+  // An operator suspends it as well: the generic banner, and no Customer Portal either.
+  const manage = await formFields(context, "Manage billing")
+  await suspend("unsuspend", "e2e-operator")
+  await suspend("suspend", "e2e-operator")
+  await page.reload()
+  await expect(banner).toContainText("This organization is suspended. Contact")
+  expect(await post(context, manage)).toContain(REFUSED_SUSPENDED)
+
+  // Settled, and the operator done: no banner.
+  await suspend("unsuspend", "e2e-operator")
+  await sql(
+    "update org_billing set subscription_status = 'active', payment_grace_ends_at = null, payment_suspended_at = null where org_id = $1",
+    [orgId]
+  )
+  await page.reload()
+  await expect(page.getByRole("region", { name: "Billing" })).toBeVisible()
+  await expect(banner).toHaveCount(0)
 })

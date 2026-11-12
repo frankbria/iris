@@ -177,7 +177,7 @@ export class OpenAITextClient extends BaseAIClient {
             { role: 'system', content: TRANSLATION_SYSTEM_PROMPT },
             { role: 'user', content: translationUserPrompt(request) },
           ],
-          // The o-series refuses anything but the default temperature (#520).
+          // Per family: a temperature, a reasoning effort, or neither (#520, #523).
           ...openAISampling(this.config.model),
           // max_tokens is deprecated for OpenAI chat completions (#298).
           max_completion_tokens: 1000,
