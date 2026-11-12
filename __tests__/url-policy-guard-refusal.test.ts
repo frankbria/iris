@@ -302,21 +302,6 @@ describe('the navigation an error page is explained by (#673, #677)', () => {
     await expect(guardedDocumentUrl(guarded.page, REQUESTED)).rejects.toThrow(REFUSED);
   });
 
-  it('a navigation refused again is the newest again', async () => {
-    const guarded = await afterMoves(async ({ pause }) => {
-      await pause(refusedDocument(MAIN_FRAME, 'redirected', 'https://example.com/hop'));
-      for (let n = 1; n < MAX_REMEMBERED_REFUSALS; n++) {
-        await pause(refusedDocument(MAIN_FRAME, `refused-${n}`, OTHER));
-      }
-      // Its next hop: without the move to the end, the entry after this one evicts it.
-      await pause(refusedDocument(MAIN_FRAME, 'redirected'));
-      await pause(refusedDocument(MAIN_FRAME, 'one-more', OTHER));
-    });
-
-    guarded.holds(errorPage('redirected'));
-    await expect(guardedDocumentUrl(guarded.page, REQUESTED)).rejects.toThrow(REFUSED);
-  });
-
   it('a page that left the error page between the two reads: the document it holds', async () => {
     const guarded = await afterMoves(async ({ pause, holds }) => {
       await pause(refusedDocument(MAIN_FRAME));

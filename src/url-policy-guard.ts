@@ -183,11 +183,12 @@ function blockReason(url: string, policy: UrlPolicyOptions, resourceType?: strin
 function recordRefusal(state: GuardState, refusal: NavigationRefusal): void {
   state.refusal = refusal;
   if (!refusal.navigationId) return;
-  // Deleted first, so a redirect hop refused later in a navigation counts as newest.
-  state.refusals.delete(refusal.navigationId);
+  // A navigation is refused once (the refusal ends it), though both the page session and
+  // the browser net may record that one refusal.
   state.refusals.set(refusal.navigationId, refusal);
   if (state.refusals.size > MAX_REMEMBERED_REFUSALS) {
-    state.refusals.delete(state.refusals.keys().next().value as string);
+    const [oldest] = state.refusals.keys();
+    state.refusals.delete(oldest);
   }
 }
 
