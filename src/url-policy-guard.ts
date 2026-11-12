@@ -664,7 +664,10 @@ export async function guardedDocumentUrl(page: Page, requested: string): Promise
     );
 
   if (url.startsWith(ERROR_DOCUMENT)) {
-    const frame = (await state?.session?.send('Page.getFrameTree'))?.frameTree.frame;
+    // A session that cannot answer (the page closed meanwhile) knows no reason; the error
+    // page `page.url()` showed is still what the caller must not measure.
+    const tree = await state?.session?.send('Page.getFrameTree').catch(() => undefined);
+    const frame = tree?.frameTree.frame;
     if (!frame || frame.unreachableUrl !== undefined) {
       const { url: refusedUrl, detail } = (frame && state?.refusals.get(frame.loaderId)) ?? {};
       throw refusedUrl && detail

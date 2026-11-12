@@ -182,7 +182,8 @@ describe('the refusal a failed navigation is explained by (#668)', () => {
       return null;
     });
     await guardedGoto(guarded.page, REQUESTED);
-    guarded.holds(errorPage('failed-otherwise'));
+    // Even under the id the frame's refused request had: it was never recorded.
+    guarded.holds(errorPage('refused-navigation'));
     guarded.url.mockReturnValue(ERROR_PAGE);
 
     await expect(guardedDocumentUrl(guarded.page, REQUESTED)).rejects.toThrow(GENERIC);
@@ -336,6 +337,15 @@ describe('the navigation an error page is explained by (#673, #677)', () => {
       'https://example.com/landed',
     );
     expect(guarded.send).not.toHaveBeenCalledWith('Page.getFrameTree');
+  });
+
+  it('a session that can no longer answer: the generic reason, not a protocol error', async () => {
+    const guarded = await afterMoves(async ({ pause }) => {
+      await pause(refusedDocument(MAIN_FRAME));
+    });
+    guarded.send.mockRejectedValue(new Error('cdpSession.send: Target page has been closed'));
+
+    await expect(guardedDocumentUrl(guarded.page, REQUESTED)).rejects.toThrow(GENERIC);
   });
 
   it('an error page on a page with no guard has no reason to give', async () => {

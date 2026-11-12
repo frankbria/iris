@@ -159,6 +159,9 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
     between the two reads), its `url` plus `urlFragment` is the document's URL and goes
     through the policy check like any other.
   - `guardedGoto` still reads the latest refusal, which it resets itself.
+  - A guard session that cannot answer (the page closed meanwhile) gives the generic
+    reason, not the protocol error, so the a11y runner's `NavigatedDuringScanError` path
+    never trades its error for one.
   - A fake CDP session behind a test that reaches an error page must answer
     `Page.getFrameTree` with `frameTree.frame` (`loaderId`, `url`, and `unreachableUrl`
     for an error page), as `a11y-runner.test.ts` does.
