@@ -437,6 +437,57 @@ describe('URL policy guard', () => {
       );
     }, 60_000);
 
+    // The second move is made from the test, once the first one's error page is there:
+    // a page that makes both itself races its own timer against the first commit.
+    const thenMovesTo = async (target: string): Promise<void> => {
+      const committed = p.waitForEvent('framenavigated', (frame) => frame === p.mainFrame());
+      await p.evaluate(`location.replace(${JSON.stringify(target)})`).catch(() => undefined);
+      await committed;
+      // Playwright hears of the commit before the guard's own session does.
+      await p.evaluate('1');
+    };
+
+    it('does not give an earlier refusal for a later move that failed for another reason (#673)', async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/script-to-metadata`;
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+      // The control: the refusal is the reason while its own error page is the document.
+      expect(() => guardedDocumentUrl(p, first)).toThrow(/blocked by navigation policy/);
+
+      await thenMovesTo('http://localhost:1/');
+
+      expect(() => guardedDocumentUrl(p, first)).toThrow(
+        new Error(`${first} moved on to a page that could not be loaded`),
+      );
+    }, 60_000);
+
+    it('gives the refusal of a move that followed one that failed for another reason (#673)', async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/script-to-nowhere`;
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+      expect(() => guardedDocumentUrl(p, first)).toThrow(
+        new Error(`${first} moved on to a page that could not be loaded`),
+      );
+
+      await thenMovesTo(`${METADATA}?q=1#part`);
+
+      expect(() => guardedDocumentUrl(p, first)).toThrow(
+        /script-to-nowhere redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy: .*link-local\/metadata/,
+      );
+    }, 60_000);
+
+    it('gives the refusal of a redirect hop, which is the same navigation (#673)', async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/script-to-nowhere`;
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+
+      await thenMovesTo(`${origin}/to-metadata`);
+
+      expect(() => guardedDocumentUrl(p, first)).toThrow(
+        /script-to-nowhere redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy: .*link-local\/metadata/,
+      );
+    }, 60_000);
+
     it('refuses a document the policy no longer admits', async () => {
       await installUrlPolicyGuard(p, {});
       await guardedGoto(p, `${origin}/final`);
