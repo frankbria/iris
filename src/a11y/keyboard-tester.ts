@@ -371,7 +371,9 @@ export class KeyboardTester {
       // elsewhere (a dialog whose Escape handler navigates).
       const startUrl = page.url();
       if (!scanned && this.config.testEscapeHandling) {
-        ownHold = await holdDocument(page, startUrl);
+        // Under its origin and path alone: the URL is quoted when the page moves on by
+        // itself, and its query string, fragment and credentials are the page's (#683).
+        ownHold = await holdDocument(page, documentKey(startUrl));
       }
       const started = scanned ?? ownHold;
       const dialogsBefore =
@@ -442,12 +444,16 @@ export class KeyboardTester {
         if (trapTests.length > 0 || this.navigatedByKey) {
           // Going back would put the start URL under results measured on the page it moved
           // to by itself, and the runner would see no move (#679).
-          if (!this.navigatedByKey && started && (await documentNow(page, started)) !== 'same') {
-            this.movedByItself = true;
-            throw new NavigatedDuringScanError(
-              started.url,
-              documentKey(page.url()) === documentKey(started.url),
-            );
+          if (!this.navigatedByKey && started) {
+            const now = await documentNow(page, started);
+            if (now !== 'same') {
+              this.movedByItself = true;
+              // Another document under another path is a move to another page, as for the hold.
+              throw new NavigatedDuringScanError(
+                started.url,
+                now === 'replaced' && documentKey(page.url()) === documentKey(started.url),
+              );
+            }
           }
           // 'load', not 'networkidle': a page with long-polling or a socket never goes idle.
           // A reload that fails leaves the page as it is: the check still runs, it does not

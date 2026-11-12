@@ -610,6 +610,31 @@ describe('KeyboardTester', () => {
       expect(wentBack()).toBe(0);
     });
 
+    it('calls a path pushed away and back at once a move, not a reload (#683)', async () => {
+      const scanned = heldDocument(false);
+      // Under another path for the one read that judges it.
+      scanned.replaced.mockImplementation(async () => {
+        mockPage.url.mockReturnValueOnce('https://example.test/route');
+        return false;
+      });
+
+      await expect(keyboardTester.run(mockPage, 'test', scanned)).rejects.toThrow(
+        'moved to another page before its checks finished',
+      );
+    });
+
+    it('quotes the page it began on without its query string, fragment or credentials (#683)', async () => {
+      mockPage.url.mockReturnValue('https://user:secret@example.test/?token=t0ken#access');
+      mockPage.evaluateHandle.mockResolvedValueOnce({
+        evaluate: jest.fn().mockRejectedValue(new Error('Execution context was destroyed')),
+        dispose: jest.fn().mockResolvedValue(undefined),
+      } as never);
+
+      await expect(keyboardTester.run(mockPage, 'test')).rejects.toThrow(
+        `The page navigated during the scan: it was at ${start} when the scan began and loaded again`,
+      );
+    });
+
     it('stops when the document the run began on was replaced, with no caller holding one', async () => {
       const dispose = jest.fn().mockResolvedValue(undefined);
       mockPage.evaluateHandle.mockResolvedValueOnce({
