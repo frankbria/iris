@@ -195,7 +195,9 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
     reads a popup today (the a11y runner scans the page it opened); the read still fails,
     pinned in `url-policy-guard.test.ts`. If a caller starts reading popups, let the browser
     net keep an inherited target's refusals by navigation id and hand them to the popup's
-    guard in `joinBrowserNet`.
+    guard in `joinBrowserNet`. An opening request refused outright (no redirect) may be
+    answered by the context route instead, which records nothing either; measure which
+    layer answers first before building on one.
 - Hostnames that *resolve* to private addresses are the egress proxy's job, below.
 
 ### URL Guard: Popups, Pins, Opaque Starts (issue #337)
