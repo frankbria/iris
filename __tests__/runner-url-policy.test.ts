@@ -154,6 +154,8 @@ describe('runner URL policy', () => {
       const timed: Record<string, string> = {
         '/replace-after-2s': `<script>setTimeout(() => location.replace('/landed?token=s3cret'), 2000)</script>`,
         '/meta-refresh-2s': '<meta http-equiv="refresh" content="2;url=/landed?token=s3cret">',
+        // Loads itself again, once, under the same URL (#675).
+        '/reloads-after-2s': `<script>if (!sessionStorage.reloaded) { sessionStorage.reloaded = '1'; setTimeout(() => location.reload(), 2000); }</script>`,
       };
       const timedMove = timed[req.url ?? ''];
       if (timedMove) {
@@ -230,6 +232,16 @@ describe('runner URL policy', () => {
         expect(hits).toEqual([path, '/landed?token=s3cret']);
       },
     );
+
+    // #675: the same URL, so only the document can tell that the scan lost its page.
+    it('a11y fails the scan of a page that reloads while it is scanned, by name', async () => {
+      const error = await a11yError(a11y, a11yConfig(`${origin}/reloads-after-2s`));
+      expect(error).toBe(
+        `The page navigated during the scan: it was at ${origin}/reloads-after-2s when the scan ` +
+          'began and loaded again before its checks finished',
+      );
+      expect(hits).toEqual(['/reloads-after-2s', '/reloads-after-2s']);
+    });
 
     it('visual refuses the metadata host', async () => {
       expect(await visualError(visual, METADATA_URL)).toMatch(

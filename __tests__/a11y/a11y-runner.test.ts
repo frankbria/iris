@@ -70,6 +70,12 @@ describe('AccessibilityRunner', () => {
       // to, unless a test says the page moved on.
       url: jest.fn(() => mockPage.goto.mock.calls.at(-1)?.[0] ?? 'about:blank'),
       evaluate: jest.fn().mockResolvedValue([]),
+      // The handle the runner holds the scanned document by (#675): it answers while the
+      // page holds that document.
+      evaluateHandle: jest.fn().mockResolvedValue({
+        evaluate: jest.fn().mockResolvedValue(0),
+        dispose: jest.fn().mockResolvedValue(undefined),
+      }),
       close: jest.fn().mockResolvedValue(undefined),
       // What installUrlPolicyGuard touches: the runner always installs it (#335).
       context: () => mockContext,
@@ -455,6 +461,41 @@ describe('AccessibilityRunner', () => {
         expect(result.summary.pagesErrored).toBe(1);
         // Nothing else was measured on the second page.
         expect(mockKeyboardTester.run).not.toHaveBeenCalled();
+      });
+
+      it('fails the page, by name, when it loaded again under the same URL (#675)', async () => {
+        mockPage.url.mockReturnValue(first);
+        const scannedDocument = {
+          evaluate: jest.fn().mockResolvedValue(0),
+          dispose: jest.fn().mockResolvedValue(undefined),
+        };
+        mockPage.evaluateHandle.mockResolvedValue(scannedDocument);
+        mockAxeRunner.run.mockImplementation(() => {
+          scannedDocument.evaluate.mockRejectedValue(new Error('Execution context was destroyed'));
+          return Promise.reject(new Error('Execution context was destroyed'));
+        });
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBe(
+          `The page navigated during the scan: it was at ${first} when the scan began and ` +
+            'loaded again before its checks finished',
+        );
+        expect(mockKeyboardTester.run).not.toHaveBeenCalled();
+      });
+
+      it('holds the document a navigation left when one committed as it took hold (#675)', async () => {
+        mockPage.url.mockReturnValue(first);
+        const held = await mockPage.evaluateHandle('document');
+        mockPage.evaluateHandle
+          .mockReset()
+          .mockRejectedValueOnce(new Error('Execution context was destroyed'))
+          .mockResolvedValue(held);
+
+        const result = await scanOf();
+
+        expect(result.results[0].error).toBeUndefined();
+        expect(mockPage.evaluateHandle).toHaveBeenCalledTimes(2);
       });
 
       it('fails the page, by name, when the move destroyed the axe scan', async () => {

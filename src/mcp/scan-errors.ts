@@ -5,6 +5,8 @@
  * path from a failed browser launch, a token in a landing page's query string.
  */
 
+import { saysReloaded } from '../a11y/scan-navigation';
+
 const REDIRECT_BLOCKED = /redirects to .* blocked by navigation policy/;
 const BLOCKED = 'blocked by navigation policy';
 /** Only where Playwright puts the code, and bounded: the rest of the line names a URL. */
@@ -35,7 +37,12 @@ function blockedAddressKind(detail: string): string | null {
 export function scanFailureReason(detail: string): string {
   // First, and anchored: the message goes on to quote the scanned URL, whose path the page
   // chose and could word like one of the reasons below.
-  if (NAVIGATED.test(detail)) return 'the page navigated to another page during the scan';
+  if (NAVIGATED.test(detail)) {
+    // By the message's end, which is the runner's: the URL before it is the page's.
+    return saysReloaded(detail)
+      ? 'the page reloaded during the scan'
+      : 'the page navigated to another page during the scan';
+  }
   const kind = blockedAddressKind(detail);
   if (REDIRECT_BLOCKED.test(detail)) {
     return kind
