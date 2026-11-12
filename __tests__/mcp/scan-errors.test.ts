@@ -98,6 +98,18 @@ describe('scanFailureReason', () => {
         ),
       ),
     ).toBe(reason);
+    // #675: a page that loaded again says so at the end, after the URL the page chose.
+    const reloaded = (scannedUrl: string) =>
+      `The page navigated during the scan: it was at ${scannedUrl} when the scan began and ` +
+      'loaded again before its checks finished';
+    expect(scanFailureReason(reloaded('https://example.com/account'))).toBe(
+      'the page reloaded during the scan',
+    );
+    expect(
+      scanFailureReason(
+        navigated('https://example.com/and loaded again before its checks finished'),
+      ),
+    ).toBe(reason);
     // Only as the runner words it: a page's own error text that quotes the phrase is not one.
     expect(scanFailureReason('Error: The page navigated during the scan: no')).toBe(
       'the scan could not be completed (details are on the server log)',

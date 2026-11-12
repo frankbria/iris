@@ -17,6 +17,7 @@
 
 import { randomBytes } from 'crypto';
 import { Page } from 'playwright';
+import { HeldDocument, holdDocument } from './scan-navigation';
 import type { KeyboardTestResult } from './types';
 
 export interface KeyboardTestConfig {
@@ -269,6 +270,18 @@ const destroyedByNavigation = (error: unknown): boolean =>
   error instanceof Error && /Execution context was destroyed|navigat/i.test(error.message);
 
 /**
+ * Whether the page left the document held before a key was pressed: by its URL, or by
+ * loading a document again under the same one (#675). Lets go of the held document.
+ */
+async function leftSince(page: Page, held: HeldDocument): Promise<boolean> {
+  try {
+    return page.url() !== held.url || (await held.replaced());
+  } finally {
+    await held.release();
+  }
+}
+
+/**
  * KeyboardTester handles keyboard navigation and accessibility testing
  */
 export class KeyboardTester {
@@ -276,10 +289,12 @@ export class KeyboardTester {
 
   /**
    * Whether a key this tester pressed during the last `run` left the page (an Escape handler
-   * that navigates, #286). The a11y runner reads it to tell such a move from one the page
-   * made by itself (#669). As far as it can be told: a check that died on a navigation
-   * right after Escape, or a URL that differs once that check has answered, is taken for
-   * Escape's doing.
+   * that navigates, #286; an arrow key that routes, #675). The a11y runner reads it to tell
+   * such a move from one the page made by itself (#669). As far as it can be told: a check
+   * that died on a navigation right after an Escape or arrow key, or a page that holds
+   * another URL or another document once that check has answered, is taken for the key's
+   * doing. A handler that navigates later than that is not: nothing outside the page ties
+   * a later move to an earlier key.
    */
   navigatedByKey = false;
 
@@ -373,7 +388,8 @@ export class KeyboardTester {
         // The trap test pressed Escape on every dialog it examined, so one that closes on
         // Escape was gone by now and this test recorded nothing for it (#286). Start again
         // from the page as loaded. The URL guard is per page, so the reload is guarded too.
-        if (trapTests.length > 0) {
+        // Also when a key of an earlier check left the page (#675): its dialogs are not here.
+        if (trapTests.length > 0 || this.navigatedByKey) {
           // 'load', not 'networkidle': a page with long-polling or a socket never goes idle.
           // A reload that fails leaves the page as it is: the check still runs, it does not
           // cost every result collected so far.
@@ -763,7 +779,7 @@ export class KeyboardTester {
           { index: candidate.index, attr },
         );
 
-        const urlBeforeEscape = page.url();
+        const beforeEscape = await holdDocument(page, page.url());
         await page.keyboard.press('Escape');
 
         let navigated = false;
@@ -789,8 +805,8 @@ export class KeyboardTester {
           });
 
         // Also when the check above ran on the page Escape went to: it then answered
-        // "gone", and only the URL says why.
-        if (page.url() !== urlBeforeEscape) this.navigatedByKey = true;
+        // "gone", and only the URL or the document says why.
+        if (await leftSince(page, beforeEscape)) this.navigatedByKey = true;
 
         traps.push({
           container: candidate.container,
@@ -900,8 +916,29 @@ export class KeyboardTester {
           }, element.selector);
 
           const before = await this.activeElementPath(page);
+          const beforeArrow = await holdDocument(page, page.url());
           await page.keyboard.press('ArrowDown');
-          const after = await this.activeElementPath(page);
+          let navigated = false;
+          const after = await this.activeElementPath(page).catch((error: unknown) => {
+            if (!destroyedByNavigation(error)) throw error;
+            navigated = true;
+            return null;
+          });
+          // The key left the page instead of moving focus (a widget that routes on arrow
+          // keys): the key's own move, not the page's (#675), and not what an arrow key in
+          // a composite widget is for.
+          if ((await leftSince(page, beforeArrow)) || navigated) {
+            this.navigatedByKey = true;
+            interactions.push({
+              key: 'ArrowDown',
+              target: element.label,
+              expectedBehavior: `Focus moves to next item in ${element.role}`,
+              actualBehavior: 'The page navigated',
+              success: false,
+              timestamp: new Date(),
+            });
+            break; // the other widgets were on the page it left
+          }
 
           // The verdict is whether focus MOVED. Previously this was hardcoded true,
           // so a menu that ignored arrow keys entirely still passed.
@@ -982,7 +1019,7 @@ export class KeyboardTester {
         });
         if (!picked) break;
         try {
-          const urlBeforeEscape = page.url();
+          const beforeEscape = await holdDocument(page, page.url());
           await page.keyboard.press('Escape');
           const open = await page
             .evaluate(STILL_OPEN, { selector: DIALOG_SELECTOR, attr, value, place: picked })
@@ -991,7 +1028,7 @@ export class KeyboardTester {
               this.navigatedByKey = true;
               return null; // Escape left the page: dismissed
             });
-          if (page.url() !== urlBeforeEscape) this.navigatedByKey = true;
+          if (await leftSince(page, beforeEscape)) this.navigatedByKey = true;
           if (open === null) {
             outcome(picked.label, 'Closed (the page navigated)', true);
             break; // the remaining dialogs were on the page it left

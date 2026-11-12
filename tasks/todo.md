@@ -1,23 +1,32 @@
-🤖 Auto-mode: plan posted for the record and self-approved (no architectural fork). Reply to request changes before merge.
+# #675 a11y: a reload, or a key other than Escape that navigates, during the scan
 
-## Plan (self-authored; the issue had none)
+Plan (self-authored; the issue has none).
 
-**What a real Chromium shows** (probe on the build host, Playwright's own Chromium): when the main frame commits an error page, `Page.frameNavigated` on the page's CDP session carries the `loaderId` of the navigation that failed, and that id equals the `networkId` of the `Fetch.requestPaused` event of that navigation's document request, on every redirect hop. A refused move followed by a move to `http://localhost:1/` commits one error page whose loader id is the second navigation's.
+1. `src/a11y/scan-navigation.ts`: `holdDocument(page, url)` keeps a handle to the document
+   the page holds. A cross-document navigation destroys it whatever the URL (a reload, the
+   same path under another query string); `history.pushState` / `replaceState` and a
+   fragment change do not (measured in Chromium, /tmp/iris-675/probe.js).
+   `onScannedDocument` takes the held document: a move is "origin or path differs" (as
+   before) or "the held document is gone while the page answers".
+   A reload's error keeps the prefix and ends "... and loaded again before its checks finished".
+2. `src/a11y/a11y-runner.ts`: hold the document where the scanned URL is read.
+3. `src/a11y/keyboard-tester.ts`: `navigatedByKey` is also set by ArrowDown, and by a key
+   that reloads the page; an ArrowDown that left the page is a failed interaction saying
+   so, the other widgets were on the page it left, and the Escape check returns to the
+   start page.
+4. `src/mcp/scan-errors.ts`: fixed reason "the page reloaded during the scan".
+5. Docs: README, `.claude/rules/browser-safety.md`, `plans/README.md` (P3.45 done, P3.46 row
+   for #677, P3.44 follow-up), `tasks/lessons.md`.
 
-1. **Tests first** (`__tests__/url-policy-guard-refusal.test.ts`, stand-in CDP session; `__tests__/url-policy-guard.test.ts`, real Chromium):
-   - refused move, then a move that fails otherwise: the generic reason (red on main);
-   - the reverse order: the refusal;
-   - a refused navigation that never commits, superseded by one that fails otherwise: the generic reason;
-   - a subframe's commit changes nothing; the #662 and #668 cases unchanged in what they assert.
-2. **Guard** (`src/url-policy-guard.ts`): the page session subscribes to `Page.frameNavigated` (enabled before `Fetch.enable`). A refused main-frame document is remembered with its navigation's id by both layers that can refuse it (page session, browser net). When the main frame commits, the guard keeps that refusal as "why the document the page holds is an error page" only if the commit's `loaderId` is the refused navigation's; otherwise it clears it. `guardedDocumentUrl` quotes that, not the last refusal recorded.
-3. **Docs**: `.claude/rules/browser-safety.md`, `plans/README.md` (P3.44 done, the missing P3.45 row for #675), `tasks/lessons.md` if anything is learned.
+Decisions (the issue asks for one):
+- An arrow key that navigates: the keyboard check's own move, seen by the check that
+  follows the key, like Escape.
+- A handler that navigates after a delay: NOT the check's own. Nothing outside the page
+  ties a later navigation to an earlier key, so it stays "navigated during the scan". A
+  real-Chromium test pins each.
 
-## Decisions taken
-- The navigation's id (the issue's second option, with the `Page.frameNavigated` subscription of its first), not a URL comparison: the error page's `unreachableUrl` carries the fragment and the paused request's URL does not.
-- `guardedGoto` is unchanged: it resets the record itself and reports the failure of its own navigation.
-- `guardedDocumentUrl` stays synchronous. Only the latest refused navigation is remembered.
-
-## Acceptance criteria
-- [ ] The reason quoted for an error page is the refusal of the navigation that left it, or the generic reason when that navigation was not refused.
-- [ ] A real-Chromium test in `__tests__/url-policy-guard.test.ts`: refused move, then a move that fails otherwise, gets the generic reason; the reverse order gets the refusal.
-- [ ] The #662 and #668 cases still pass.
+Acceptance criteria
+- [ ] Cross-document main-frame navigation during a held check detected whatever its URL;
+      same-document query/fragment change still not.
+- [ ] Decision on arrow key / delayed Escape, with a real-Chromium test.
+- [ ] README and `.claude/rules/browser-safety.md` updated.

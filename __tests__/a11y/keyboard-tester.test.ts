@@ -23,6 +23,11 @@ describe('KeyboardTester', () => {
     // Create mock Playwright page
     mockPage = {
       evaluate: jest.fn(),
+      // The document held across each Escape and arrow key (#675); it stays.
+      evaluateHandle: jest.fn().mockResolvedValue({
+        evaluate: jest.fn().mockResolvedValue(0),
+        dispose: jest.fn().mockResolvedValue(undefined),
+      }),
       focus: jest.fn(),
       keyboard: {
         press: jest.fn(),

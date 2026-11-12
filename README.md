@@ -802,12 +802,22 @@ could not be scanned, with the error `The page navigated during the scan: it was
 when the scan began and moved to another page before its checks finished`, and the command
 exits `3` (or `4` when another page has violations). Scan the page it ends on instead.
 
-- A change of the query string or the fragment alone is not a move, whether a router
-  rewrote it or the page loaded itself again under it; neither is a reload.
+- A page that loads itself again while it is scanned (`location.reload()` on a timer, or
+  the same path under another query string) fails the same way, with `… and loaded again
+  before its checks finished` (#675): the checks that were running lost their document,
+  and the ones after them would have measured the second load.
+- A change of the query string or the fragment within the document (a router's
+  `history.replaceState`, an anchor) is not a move.
 - A router that pushes another path counts as a move, although the document is the same.
 - A key the keyboard checks press may leave the page on purpose (a dialog that navigates
   on Escape passes its check), and so may a custom key sequence; that is not an error.
   The keyboard checks run last for that reason, after axe and the screen-reader checks.
+  An arrow key that leaves the page is the key's doing too (#675), and is reported as a
+  failed keyboard check, `The page navigated`: an arrow key in a menu, listbox, tree, grid
+  or tab list is for moving focus.
+- A handler that leaves the page some time after the key (a dialog that closes on Escape
+  and navigates when its animation ends) cannot be told from the page's own timer, and
+  fails the page as navigated during the scan.
 - A move that comes after the last check has finished is not seen: the results are the
   first page's, which is the page that was scanned.
 - A move to an address the navigation policy refuses, or to a page that cannot be loaded,
@@ -913,7 +923,8 @@ and the page under test chooses much of what an error or a redirect contains. So
   from a fixed list: the kind of address the navigation policy blocked (never the
   redirect target itself), a `net::ERR_*` code, a timeout, "the browser could not
   be started on the server", "the page navigated to another page during the scan" (#669:
-  it moved on by timer after it had loaded, so scan the page it ends on), or "the scan could not be completed". The error's own text (local paths, addresses) goes to the
+  it moved on by timer after it had loaded, so scan the page it ends on), "the page
+  reloaded during the scan" (#675), or "the scan could not be completed". The error's own text (local paths, addresses) goes to the
   server's stderr.
 - A redirected scan reports `redirected: true` and the landing page's origin and
   path, at most 200 characters. A page that moves on by itself (a script, a meta

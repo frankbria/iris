@@ -14,7 +14,12 @@ import { AddressInfo } from 'net';
 import { chromium, Browser, Page } from 'playwright';
 import { AxeRunner } from '../../src/a11y/axe-integration';
 import { KeyboardTester } from '../../src/a11y/keyboard-tester';
-import { NavigatedDuringScanError, onScannedDocument } from '../../src/a11y/scan-navigation';
+import {
+  HeldDocument,
+  holdDocument,
+  NavigatedDuringScanError,
+  onScannedDocument,
+} from '../../src/a11y/scan-navigation';
 
 const page = (head: string, script: string): string =>
   `<html lang="en"><head><title>first</title>${head}</head><body><h1>first</h1>` +
@@ -31,7 +36,16 @@ const PAGES: Record<string, string> = {
     '',
     "setTimeout(() => history.pushState(null, '', '/route'), 2000)",
   ),
-  '/reloads-after-2s': page('', 'setTimeout(() => location.reload(), 2000)'),
+  // Once: the second load stays, so a check may wait for it and measure it.
+  '/reloads-after-2s': page(
+    '',
+    "if (!sessionStorage.reloaded) { sessionStorage.reloaded = '1'; setTimeout(() => location.reload(), 2000); }",
+  ),
+  // The same path loaded again under another query string, which is no move by its URL.
+  '/same-path-other-query-after-2s': page(
+    '',
+    "if (!location.search) setTimeout(() => location.replace(location.pathname + '?again'), 2000)",
+  ),
   '/stays': page('', ''),
   // The same path on another host: this server under its other loopback name.
   '/other-host-after-2s': page(
@@ -50,6 +64,32 @@ const PAGES: Record<string, string> = {
   ).replace(
     '<h1>first</h1>',
     '<h1>first</h1><div role="dialog" aria-label="Notice"><button>OK</button></div>',
+  ),
+  // A dialog whose Escape handler loads the page again, once.
+  '/escape-reloads': page(
+    '',
+    "addEventListener('keydown', (e) => { if (e.key === 'Escape' && !sessionStorage.reloaded) { sessionStorage.reloaded = '1'; location.reload(); } })",
+  ).replace(
+    '<h1>first</h1>',
+    '<h1>first</h1><div role="dialog" aria-label="Notice"><button>OK</button></div>',
+  ),
+  // A dialog that closes on Escape and leaves the page three seconds later.
+  '/escape-leaves-after-3s': page(
+    '',
+    "addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; document.querySelector('[role=dialog]').remove(); setTimeout(() => location.assign('/second'), 3000); })",
+  ).replace(
+    '<h1>first</h1>',
+    '<h1>first</h1><div role="dialog" aria-label="Notice"><button>OK</button></div>',
+  ),
+  // A menu whose arrow key routes to another page instead of moving focus.
+  '/arrow-leaves': page(
+    '',
+    "addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') location.assign('/second'); })",
+  ).replace(
+    '<h1>first</h1>',
+    '<h1>first</h1><ul role="menu" aria-label="Sections">' +
+      '<li role="menuitem" tabindex="0">One</li><li role="menuitem" tabindex="-1">Two</li></ul>' +
+      '<ul role="menu" aria-label="More"><li role="menuitem" tabindex="0">Three</li></ul>',
   ),
   // Large enough that axe is still scanning it two seconds after its response: measured at
   // 2.9 s for a third of this size, and the move comes 1.5 s after the network went idle.
@@ -101,12 +141,16 @@ describe('onScannedDocument', () => {
    * second, and the URL read here is checked to be the first page's: a move that came
    * first would make the test about nothing.
    */
-  async function scanned(path: string): Promise<string> {
+  async function scanned(path: string): Promise<HeldDocument> {
     await tab.goto(`${origin}${path}`, { waitUntil: 'networkidle' });
-    const scannedUrl = tab.url();
-    expect(scannedUrl).toBe(`${origin}${path}`);
-    return scannedUrl;
+    const held = await holdDocument(tab, tab.url());
+    expect(held.url).toBe(`${origin}${path}`);
+    return held;
   }
+
+  /** The main frame's next document, whatever its URL. */
+  const nextDocument = (): Promise<unknown> =>
+    tab.waitForEvent('framenavigated', (frame) => frame === tab.mainFrame());
 
   /** A check that cannot finish on this document: only a navigation ends it. */
   const neverSettlesHere = (): Promise<unknown> => tab.evaluate('new Promise(() => {})');
@@ -122,9 +166,9 @@ describe('onScannedDocument', () => {
     }).run(tab, 'test', url);
 
   it('names the move when a delayed location.replace destroys a running check', async () => {
-    const scannedUrl = await scanned('/replace-after-2s');
+    const held = await scanned('/replace-after-2s');
 
-    const outcome = onScannedDocument(tab, scannedUrl, neverSettlesHere);
+    const outcome = onScannedDocument(tab, held, neverSettlesHere);
 
     await expect(outcome).rejects.toBeInstanceOf(NavigatedDuringScanError);
     await expect(outcome).rejects.toThrow(
@@ -136,26 +180,26 @@ describe('onScannedDocument', () => {
   });
 
   it('names the move when a meta refresh of 2 seconds destroys a running check', async () => {
-    const scannedUrl = await scanned('/meta-refresh-2s');
+    const held = await scanned('/meta-refresh-2s');
 
-    await expect(onScannedDocument(tab, scannedUrl, neverSettlesHere)).rejects.toBeInstanceOf(
+    await expect(onScannedDocument(tab, held, neverSettlesHere)).rejects.toBeInstanceOf(
       NavigatedDuringScanError,
     );
   });
 
   it('names the move when it comes while the real axe scan is running', async () => {
-    const scannedUrl = await scanned('/large-and-replaces-after-1s');
+    const held = await scanned('/large-and-replaces-after-1s');
 
-    await expect(onScannedDocument(tab, scannedUrl, () => axe(scannedUrl))).rejects.toBeInstanceOf(
+    await expect(onScannedDocument(tab, held, () => axe(held.url))).rejects.toBeInstanceOf(
       NavigatedDuringScanError,
     );
     expect(tab.url()).toBe(`${origin}/second`);
   });
 
   it('keeps the error of the check the move destroyed as the cause', async () => {
-    const scannedUrl = await scanned('/replace-after-2s');
+    const held = await scanned('/replace-after-2s');
 
-    const error: unknown = await onScannedDocument(tab, scannedUrl, neverSettlesHere).catch(
+    const error: unknown = await onScannedDocument(tab, held, neverSettlesHere).catch(
       (thrown: unknown) => thrown,
     );
 
@@ -164,9 +208,9 @@ describe('onScannedDocument', () => {
   });
 
   it('counts a move to the same path on another host', async () => {
-    const scannedUrl = await scanned('/other-host-after-2s');
+    const held = await scanned('/other-host-after-2s');
 
-    await expect(onScannedDocument(tab, scannedUrl, neverSettlesHere)).rejects.toBeInstanceOf(
+    await expect(onScannedDocument(tab, held, neverSettlesHere)).rejects.toBeInstanceOf(
       NavigatedDuringScanError,
     );
     expect(new URL(tab.url()).hostname).toBe('localhost');
@@ -184,12 +228,12 @@ describe('onScannedDocument', () => {
     const both = { testTrapDetection: true, testEscapeHandling: true };
 
     it('fail a page that moved on by itself while they walked it', async () => {
-      const scannedUrl = await scanned('/links-and-replaces-after-2s');
+      const held = await scanned('/links-and-replaces-after-2s');
       const tester = keyboard(both);
 
       const outcome = onScannedDocument(
         tab,
-        scannedUrl,
+        held,
         async () => {
           const result = await tester.run(tab, 'test');
           // However fast the walk was, the page has left before this check is judged.
@@ -209,18 +253,79 @@ describe('onScannedDocument', () => {
       { testTrapDetection: true, testEscapeHandling: false },
       { testTrapDetection: false, testEscapeHandling: true },
     ])('pass a page their own Escape press left (%o)', async (checks) => {
-      const scannedUrl = await scanned('/escape-leaves');
+      const held = await scanned('/escape-leaves');
       const tester = keyboard(checks);
 
       const result = await onScannedDocument(
         tab,
-        scannedUrl,
+        held,
         () => tester.run(tab, 'test'),
         () => tester.navigatedByKey,
       );
 
       expect(tester.navigatedByKey).toBe(true);
       expect(result.passed).toBe(true);
+    });
+
+    it('pass over a page their own Escape press loaded again (#675)', async () => {
+      const held = await scanned('/escape-reloads');
+      const tester = keyboard({ testTrapDetection: true, testEscapeHandling: false });
+
+      await onScannedDocument(
+        tab,
+        held,
+        () => tester.run(tab, 'test'),
+        () => tester.navigatedByKey,
+      );
+
+      expect(tester.navigatedByKey).toBe(true);
+      expect(await held.replaced()).toBe(true);
+    });
+
+    it('report an arrow key that left the page, as their own move (#675)', async () => {
+      const held = await scanned('/arrow-leaves');
+      const tester = keyboard(both);
+
+      const result = await onScannedDocument(
+        tab,
+        held,
+        () => tester.run(tab, 'test'),
+        () => tester.navigatedByKey,
+      );
+
+      expect(tester.navigatedByKey).toBe(true);
+      expect(result.passed).toBe(false);
+      // One entry: the second menu was on the page the key left.
+      expect(result.interactions.filter((interaction) => interaction.key === 'ArrowDown')).toEqual([
+        expect.objectContaining({
+          target: 'UL',
+          actualBehavior: 'The page navigated',
+          success: false,
+        }),
+      ]);
+      // The Escape check went back to the page under test instead of judging the other one.
+      expect(tab.url()).toBe(`${origin}/arrow-leaves`);
+    });
+
+    // The limit (#675): nothing outside the page ties a later move to an earlier key.
+    it("fail a page whose Escape handler leaves it after a delay, as the page's own move", async () => {
+      const held = await scanned('/escape-leaves-after-3s');
+      const tester = keyboard({ testTrapDetection: true, testEscapeHandling: false });
+
+      const outcome = onScannedDocument(
+        tab,
+        held,
+        async () => {
+          const result = await tester.run(tab, 'test');
+          expect(result.trapTests).toEqual([expect.objectContaining({ escapeMethod: 'Escape' })]);
+          await tab.waitForURL(`${origin}/second`);
+          return result;
+        },
+        () => tester.navigatedByKey,
+      );
+
+      await expect(outcome).rejects.toBeInstanceOf(NavigatedDuringScanError);
+      expect(tester.navigatedByKey).toBe(false);
     });
 
     it('forget an earlier page whose Escape press left it', async () => {
@@ -237,13 +342,13 @@ describe('onScannedDocument', () => {
   });
 
   it("keeps a check's own error when the move was the check's own", async () => {
-    const scannedUrl = await scanned('/stays');
+    const held = await scanned('/stays');
     const failure = new Error('the validator failed');
 
     await expect(
       onScannedDocument(
         tab,
-        scannedUrl,
+        held,
         async () => {
           await tab.goto(`${origin}/second`);
           throw failure;
@@ -254,38 +359,38 @@ describe('onScannedDocument', () => {
   });
 
   it('refuses a result that was measured after the move, on the second document', async () => {
-    const scannedUrl = await scanned('/meta-refresh-2s');
+    const held = await scanned('/meta-refresh-2s');
 
     const measuredOnSecondPage = async () => {
       await tab.waitForURL(`${origin}/second`);
-      const result = await axe(scannedUrl);
+      const result = await axe(held.url);
       // The scan itself succeeded: only the comparison can tell whose result this is.
-      expect(result.url).toBe(scannedUrl);
+      expect(result.url).toBe(held.url);
       return result;
     };
 
-    await expect(onScannedDocument(tab, scannedUrl, measuredOnSecondPage)).rejects.toBeInstanceOf(
+    await expect(onScannedDocument(tab, held, measuredOnSecondPage)).rejects.toBeInstanceOf(
       NavigatedDuringScanError,
     );
   });
 
   it('returns the result of a page that only rewrites its query string and fragment', async () => {
-    const scannedUrl = await scanned('/rewrites-query-and-fragment');
+    const held = await scanned('/rewrites-query-and-fragment');
 
-    const result = await onScannedDocument(tab, scannedUrl, async () => {
+    const result = await onScannedDocument(tab, held, async () => {
       await tab.waitForURL(`${origin}/rewrites-query-and-fragment?tab=2#section`);
-      return axe(scannedUrl);
+      return axe(held.url);
     });
 
-    expect(result.url).toBe(scannedUrl);
+    expect(result.url).toBe(held.url);
     expect(tab.url()).toBe(`${origin}/rewrites-query-and-fragment?tab=2#section`);
   });
 
   it('counts a router that pushes another path as a move, though the document is the same', async () => {
-    const scannedUrl = await scanned('/router-pushes-a-path');
+    const held = await scanned('/router-pushes-a-path');
 
     await expect(
-      onScannedDocument(tab, scannedUrl, async () => {
+      onScannedDocument(tab, held, async () => {
         await tab.waitForURL(`${origin}/route`);
         return 'measured';
       }),
@@ -293,38 +398,73 @@ describe('onScannedDocument', () => {
   });
 
   it('returns the result of a page that stays', async () => {
-    const scannedUrl = await scanned('/stays');
+    const held = await scanned('/stays');
 
-    const result = await onScannedDocument(tab, scannedUrl, () => axe(scannedUrl));
+    const result = await onScannedDocument(tab, held, () => axe(held.url));
 
     expect(result.summary.violations).toBe(0);
   });
 
   it("keeps a check's own error when the page did not move", async () => {
-    const scannedUrl = await scanned('/stays');
+    const held = await scanned('/stays');
     const failure = new Error('axe-core did not answer');
 
-    await expect(onScannedDocument(tab, scannedUrl, () => Promise.reject(failure))).rejects.toBe(
-      failure,
-    );
+    await expect(onScannedDocument(tab, held, () => Promise.reject(failure))).rejects.toBe(failure);
   });
 
-  // The limit the module documents: the same path is the same page to this comparison.
-  it("keeps a check's own error when the page reloaded under it", async () => {
-    const scannedUrl = await scanned('/reloads-after-2s');
+  describe('a document loaded again under the same path (#675)', () => {
+    it('names the reload that destroys a running check', async () => {
+      const held = await scanned('/reloads-after-2s');
 
-    const outcome = onScannedDocument(tab, scannedUrl, neverSettlesHere);
+      const outcome = onScannedDocument(tab, held, neverSettlesHere);
 
-    await expect(outcome).rejects.not.toBeInstanceOf(NavigatedDuringScanError);
-    await expect(outcome).rejects.toThrow(/context was destroyed|navigat/i);
+      await expect(outcome).rejects.toBeInstanceOf(NavigatedDuringScanError);
+      await expect(outcome).rejects.toThrow(
+        `The page navigated during the scan: it was at ${origin}/reloads-after-2s when the scan ` +
+          'began and loaded again before its checks finished',
+      );
+      expect(tab.url()).toBe(`${origin}/reloads-after-2s`);
+    });
+
+    it('refuses a result that was measured after the reload, on the second document', async () => {
+      const held = await scanned('/reloads-after-2s');
+
+      const measuredOnSecondLoad = async () => {
+        await nextDocument();
+        return axe(held.url);
+      };
+
+      await expect(onScannedDocument(tab, held, measuredOnSecondLoad)).rejects.toThrow(
+        'loaded again before its checks finished',
+      );
+    });
+
+    it('names a load of the same path under another query string', async () => {
+      const held = await scanned('/same-path-other-query-after-2s');
+
+      await expect(onScannedDocument(tab, held, neverSettlesHere)).rejects.toThrow(
+        'loaded again before its checks finished',
+      );
+      expect(tab.url()).toBe(`${origin}/same-path-other-query-after-2s?again`);
+    });
+
+    it('tells a held document that was replaced from one that was only renamed', async () => {
+      const reloaded = await scanned('/reloads-after-2s');
+      await nextDocument();
+      expect(await reloaded.replaced()).toBe(true);
+
+      const renamed = await scanned('/rewrites-query-and-fragment');
+      await tab.waitForURL(`${origin}/rewrites-query-and-fragment?tab=2#section`);
+      expect(await renamed.replaced()).toBe(false);
+    });
   });
 
   it("keeps a check's own error when the page was closed under it", async () => {
-    const scannedUrl = await scanned('/stays');
+    const held = await scanned('/stays');
     const failure = new Error('Target closed');
 
     await expect(
-      onScannedDocument(tab, scannedUrl, async () => {
+      onScannedDocument(tab, held, async () => {
         await tab.close();
         throw failure;
       }),

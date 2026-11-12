@@ -60,16 +60,15 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   (next item).
   `guardedGoto` itself is unchanged for the executor, watcher and visual runner.
 - **Every a11y check is held to the scanned document** (#669):
-  `onScannedDocument(page, scannedUrl, check, moveIsTheChecksOwn?)`
+  `onScannedDocument(page, scanned, check, moveIsTheChecksOwn?)`
   (src/a11y/scan-navigation.ts) turns a check's result *or* error into
   `NavigatedDuringScanError` ("The page navigated during the scan: it was at <scanned URL>
   …", never the destination; the destroyed check's error is its `cause`) when the page's
   scheme, host or path differs once the check has settled. A page that moves on by timer
   after `networkidle` used to die on a raw protocol error or report the second document
-  under the first URL. Query-only and fragment-only changes are not moves (as in #662); a
-  reload is not seen, and a check that fails on one keeps its own error; a router that
-  pushes another path is a move. Before reading `page.url()` it makes a page call until one
-  answers (five at most): the failed check can reach its `catch` before Playwright has
+  under the first URL. Query-only and fragment-only changes within the document are not
+  moves (as in #662); a router that pushes another path is a move. Before reading
+  `page.url()` it makes a page call until one answers (five at most): the failed check can reach its `catch` before Playwright has
   processed the navigation's commit, and without that the URL read is the old one (the
   tests fail without it). The runner then asks `guardedDocumentUrl` first, so a move the
   policy refused or that could not be loaded keeps #662's words.
@@ -81,9 +80,32 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
     often runs on the page Escape went to and just answers "gone". With default settings
     the keyboard walk is where a 1 to 2 s timer lands (axe is done in half a second on an
     ordinary page), so holding only axe would have fixed slow pages alone.
+  - **A reload is a move too, told by the document and not the URL** (#675): the runner
+    holds the scanned document (`holdDocument(page, url)`: a JS handle to `document`) and
+    `onScannedDocument` takes that `HeldDocument`. A cross-document navigation destroys the
+    handle's execution context whatever the URL (`location.reload()`, the same path under
+    another query string); `pushState`, `replaceState` and a fragment change leave it
+    alive (measured in Chromium). `replaced()` is "the handle no longer answers and the
+    page does", so a closed page is not a reload and a hung one is not either. No CDP
+    session and no event: nothing lags behind `page.url()` (the #673 lesson). The message
+    ends "… and loaded again before its checks finished" and the MCP reason is "the page
+    reloaded during the scan", chosen by the message's end (`saysReloaded`), which the
+    runner writes after the URL. A fake page in a mocked suite needs `evaluateHandle`
+    resolving to `{ evaluate, dispose }`.
+  - **Arrow keys are the tester's own keys as well** (#675): `navigatedByKey` is set when
+    the check after an Escape *or ArrowDown* press died on a navigation, or the page holds
+    another URL or another document once it answered (`leftSince`, which also sees a key
+    that reloads the page). An ArrowDown that left the page is a failed interaction, "The
+    page navigated"; the other widgets were on the page it left, and the Escape check goes
+    back to the start page when any key left it. Playwright's next page call waits for a
+    navigation the key started synchronously, even when the response takes 1.5 s
+    (measured), so "the check right after the key" is reliable for those.
+  - **A handler that navigates after a delay is the page's move, by decision** (#675):
+    nothing outside the page ties a later navigation to an earlier key, and a time window
+    after each key would hand the page's own timers back to the keys. A test pins it.
   - Not seen: a move after the last check finished (the results are the first page's), and
-    a timer move that lands right after one of the tester's Escape presses (taken for the
-    key's).
+    a timer move that lands right after one of the tester's Escape or arrow presses (taken
+    for the key's).
   - The MCP tools' fixed reason is "the page navigated to another page during the scan",
     matched first and anchored, since the message quotes a URL the page chose.
   - `__tests__/a11y/scan-navigation.test.ts` launches Chromium through Playwright itself,
