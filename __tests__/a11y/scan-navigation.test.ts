@@ -414,6 +414,32 @@ describe('onScannedDocument', () => {
         await expect(outcome).rejects.toThrow('moved to another page before its checks finished');
       });
 
+      // The tester saw the move; the hold reads the page a moment later (#683).
+      it('fail by name a page whose router pushed another path and then the first one back', async () => {
+        const held = await scanned('/many-links-and-a-dialog');
+        const tester = keyboard(both);
+
+        const outcome = onScannedDocument(
+          tab,
+          held,
+          () =>
+            tester.run(tab, 'test', held).catch(async (error: unknown) => {
+              // What the page's router would do between the tester's throw and the hold's read.
+              await tab.evaluate("history.pushState(null, '', '/many-links-and-a-dialog')");
+              throw error;
+            }),
+          () => tester.navigatedByKey,
+          () => tester.reloadedInto,
+        );
+        outcome.catch(() => undefined);
+        await duringTheTabWalk("history.pushState(null, '', '/route')");
+
+        await expect(outcome).rejects.toBeInstanceOf(NavigatedDuringScanError);
+        await expect(outcome).rejects.toThrow('moved to another page before its checks finished');
+        expect(tester.movedByItself).toBe(true);
+        expect(tab.url()).toBe(`${origin}/many-links-and-a-dialog`);
+      });
+
       it('still go back when the page only rewrote its query string', async () => {
         const held = await scanned('/many-links-and-a-dialog');
         const tester = keyboard(both);

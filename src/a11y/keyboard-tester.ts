@@ -17,7 +17,12 @@
 
 import { randomBytes } from 'crypto';
 import { Page } from 'playwright';
-import { documentKey, HeldDocument, holdDocument } from './scan-navigation';
+import {
+  documentKey,
+  HeldDocument,
+  holdDocument,
+  NavigatedDuringScanError,
+} from './scan-navigation';
 import type { KeyboardTestResult } from './types';
 
 export interface KeyboardTestConfig {
@@ -314,14 +319,16 @@ export class KeyboardTester {
    * The document this tester loaded itself during the last `run`, when it loaded the page
    * again: the Escape check starts from the page as loaded (#286). The a11y runner holds the
    * page to it from then on, since the document it scanned is gone by the tester's doing,
-   * not the page's (#675).
+   * not the page's (#675). The caller releases it once it has asked it; one left over is
+   * released when the next `run` begins (#683).
    */
   reloadedInto: HeldDocument | undefined;
 
   /**
    * Whether the last `run` stopped because the page had moved on by itself before the Escape
    * check could go back to the start page (#679). No key was to blame, so the a11y runner
-   * does not take that move for a custom sequence's either.
+   * does not take that move for a custom sequence's either. `run` then rejects with a
+   * {@link NavigatedDuringScanError}.
    */
   movedByItself = false;
 
@@ -340,6 +347,10 @@ export class KeyboardTester {
    * @param scanned the document the caller holds the page to, when it holds one (the a11y
    * runner's): the Escape check does not go back over a move away from it (#679). Without
    * one, the document the page has when the run begins.
+   * @throws NavigatedDuringScanError when the page moved away from that document by itself
+   * (#679), as it is: the tester saw the move, and a router may have pushed the first path
+   * back by the time the caller reads the page (#683). Any other failure is an `Error`
+   * whose message starts "Keyboard testing failed:".
    */
   async run(page: Page, testName: string, scanned?: HeldDocument): Promise<KeyboardTestResult> {
     const interactions: KeyboardInteraction[] = [];
@@ -347,6 +358,7 @@ export class KeyboardTester {
     let trapTests: FocusTrap[] = [];
     let passed = true;
     this.navigatedByKey = false;
+    await this.reloadedInto?.release();
     this.reloadedInto = undefined;
     this.movedByItself = false;
     let ownHold: HeldDocument | undefined;
@@ -359,7 +371,9 @@ export class KeyboardTester {
       // elsewhere (a dialog whose Escape handler navigates).
       const startUrl = page.url();
       if (!scanned && this.config.testEscapeHandling) {
-        ownHold = await holdDocument(page, startUrl);
+        // Under its origin and path alone: the URL is quoted when the page moves on by
+        // itself, and its query string, fragment and credentials are the page's (#683).
+        ownHold = await holdDocument(page, documentKey(startUrl));
       }
       const started = scanned ?? ownHold;
       const dialogsBefore =
@@ -430,9 +444,16 @@ export class KeyboardTester {
         if (trapTests.length > 0 || this.navigatedByKey) {
           // Going back would put the start URL under results measured on the page it moved
           // to by itself, and the runner would see no move (#679).
-          if (!this.navigatedByKey && started && (await documentNow(page, started)) !== 'same') {
-            this.movedByItself = true;
-            throw new Error('The page moved on by itself before the Escape check');
+          if (!this.navigatedByKey && started) {
+            const now = await documentNow(page, started);
+            if (now !== 'same') {
+              this.movedByItself = true;
+              // Another document under another path is a move to another page, as for the hold.
+              throw new NavigatedDuringScanError(
+                started.url,
+                now === 'replaced' && documentKey(page.url()) === documentKey(started.url),
+              );
+            }
           }
           // 'load', not 'networkidle': a page with long-polling or a socket never goes idle.
           // A reload that fails leaves the page as it is: the check still runs, it does not
@@ -486,6 +507,7 @@ export class KeyboardTester {
         trapTests,
       };
     } catch (error) {
+      if (error instanceof NavigatedDuringScanError) throw error;
       throw new Error(
         `Keyboard testing failed: ${error instanceof Error ? error.message : String(error)}`,
       );
