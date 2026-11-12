@@ -274,6 +274,15 @@ const destroyedByNavigation = (error: unknown): boolean =>
 export class KeyboardTester {
   private config: KeyboardTestConfig;
 
+  /**
+   * Whether a key this tester pressed during the last `run` left the page (an Escape handler
+   * that navigates, #286). The a11y runner reads it to tell such a move from one the page
+   * made by itself (#669). As far as it can be told: a check that died on a navigation
+   * right after Escape, or a URL that differs once that check has answered, is taken for
+   * Escape's doing.
+   */
+  navigatedByKey = false;
+
   constructor(config: KeyboardTestConfig) {
     this.config = config;
   }
@@ -291,6 +300,7 @@ export class KeyboardTester {
     let focusOrder: FocusableElement[] = [];
     let trapTests: FocusTrap[] = [];
     let passed = true;
+    this.navigatedByKey = false;
 
     try {
       // Dialogs showing on the page as loaded, before any check presses a key (the Tab walk
@@ -753,6 +763,7 @@ export class KeyboardTester {
           { index: candidate.index, attr },
         );
 
+        const urlBeforeEscape = page.url();
         await page.keyboard.press('Escape');
 
         let navigated = false;
@@ -773,8 +784,13 @@ export class KeyboardTester {
           .catch((error: unknown) => {
             if (!destroyedByNavigation(error)) throw error;
             navigated = true; // Escape left the page: dismissed
+            this.navigatedByKey = true;
             return true;
           });
+
+        // Also when the check above ran on the page Escape went to: it then answered
+        // "gone", and only the URL says why.
+        if (page.url() !== urlBeforeEscape) this.navigatedByKey = true;
 
         traps.push({
           container: candidate.container,
@@ -966,13 +982,16 @@ export class KeyboardTester {
         });
         if (!picked) break;
         try {
+          const urlBeforeEscape = page.url();
           await page.keyboard.press('Escape');
           const open = await page
             .evaluate(STILL_OPEN, { selector: DIALOG_SELECTOR, attr, value, place: picked })
             .catch((error: unknown) => {
               if (!destroyedByNavigation(error)) throw error;
+              this.navigatedByKey = true;
               return null; // Escape left the page: dismissed
             });
+          if (page.url() !== urlBeforeEscape) this.navigatedByKey = true;
           if (open === null) {
             outcome(picked.label, 'Closed (the page navigated)', true);
             break; // the remaining dialogs were on the page it left

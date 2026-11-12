@@ -56,9 +56,41 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   a name the egress proxy refuses is the proxy's 403 document over http, which
   `failOnHttpError` fails first, and a refused CONNECT (the error page) over https. The
   runner drops the fragment and any credentials before reporting (`reportedUrl`), as the
-  response's URL had none. Read once: a page that navigates while axe runs fails the scan as before,
-  and nothing compares the URL afterwards (a single-page app may rewrite it at any time).
+  response's URL had none. Read once, and the checks that only read the page are held to it
+  (next item).
   `guardedGoto` itself is unchanged for the executor, watcher and visual runner.
+- **Every a11y check is held to the scanned document** (#669):
+  `onScannedDocument(page, scannedUrl, check, moveIsTheChecksOwn?)`
+  (src/a11y/scan-navigation.ts) turns a check's result *or* error into
+  `NavigatedDuringScanError` ("The page navigated during the scan: it was at <scanned URL>
+  …", never the destination; the destroyed check's error is its `cause`) when the page's
+  scheme, host or path differs once the check has settled. A page that moves on by timer
+  after `networkidle` used to die on a raw protocol error or report the second document
+  under the first URL. Query-only and fragment-only changes are not moves (as in #662); a
+  reload is not seen, and a check that fails on one keeps its own error; a router that
+  pushes another path is a move. Before reading `page.url()` it makes a page call until one
+  answers (five at most): the failed check can reach its `catch` before Playwright has
+  processed the navigation's commit, and without that the URL read is the old one (the
+  tests fail without it). The runner then asks `guardedDocumentUrl` first, so a move the
+  policy refused or that could not be loaded keeps #662's words.
+  - **Order is axe, screen reader, keyboard.** The keyboard checks press keys, and a key
+    may leave the page on purpose (an Escape handler that navigates passes, #286), so they
+    run last and their move is their own when `KeyboardTester.navigatedByKey` is set or
+    custom sequences are configured. The tester sets the flag when the check after an
+    Escape press died on a navigation **or the URL differs once it answered**: the check
+    often runs on the page Escape went to and just answers "gone". With default settings
+    the keyboard walk is where a 1 to 2 s timer lands (axe is done in half a second on an
+    ordinary page), so holding only axe would have fixed slow pages alone.
+  - Not seen: a move after the last check finished (the results are the first page's), and
+    a timer move that lands right after one of the tester's Escape presses (taken for the
+    key's).
+  - The MCP tools' fixed reason is "the page navigated to another page during the scan",
+    matched first and anchored, since the message quotes a URL the page chose.
+  - `__tests__/a11y/scan-navigation.test.ts` launches Chromium through Playwright itself,
+    so it runs where sandboxed Chromium cannot start. Its fixtures move 2 s after their
+    response (idle comes at 0.5 s) and `scanned()` asserts the URL read was the first
+    page's; the runner cases in `runner-url-policy.test.ts` use a page large enough that
+    axe outlasts the timer.
 - **The refusal a failed navigation is explained by is the main frame's** (#668): the page
   session records a refused `Document` only when the request's `frameId` is the page's
   target id (a top-level frame's id is its target id, read with `Target.getTargetInfo`

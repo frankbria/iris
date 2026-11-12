@@ -11,6 +11,8 @@ const BLOCKED = 'blocked by navigation policy';
 const NETWORK_ERROR = /^(?:[\w.]+: )?(net::ERR_[A-Z0-9_]{1,60})(?![A-Z0-9_])/;
 /** Playwright's navigation, the runner's page deadline (#293), axe's own timer. */
 const TIMED_OUT = /Timeout \d+ ?ms exceeded|did not finish within|timed out after \d+ ?ms/;
+/** The runner's own words for a page that moved on under its checks (src/a11y/scan-navigation.ts, #669). */
+const NAVIGATED = /^The page navigated during the scan: /;
 /** Playwright's launch call, or IRIS's own message about it (src/browser.ts). */
 const LAUNCH_FAILED = /browserType\.launch|Chromium could not start/;
 
@@ -31,6 +33,9 @@ function blockedAddressKind(detail: string): string | null {
  * `detail` is the raw error; nothing of it is returned except a `net::ERR_*` code.
  */
 export function scanFailureReason(detail: string): string {
+  // First, and anchored: the message goes on to quote the scanned URL, whose path the page
+  // chose and could word like one of the reasons below.
+  if (NAVIGATED.test(detail)) return 'the page navigated to another page during the scan';
   const kind = blockedAddressKind(detail);
   if (REDIRECT_BLOCKED.test(detail)) {
     return kind

@@ -84,6 +84,26 @@ describe('scanFailureReason', () => {
     ).toBe('it redirects to a URL the navigation policy blocks');
   });
 
+  // #669: the runner's own message, which quotes the scanned URL after its first words.
+  it('reports a page that moved on under its checks, whatever its URL says', () => {
+    const navigated = (scannedUrl: string) =>
+      `The page navigated during the scan: it was at ${scannedUrl} when the scan began and ` +
+      'moved to another page before its checks finished';
+    const reason = 'the page navigated to another page during the scan';
+    expect(scanFailureReason(navigated('https://example.com/account'))).toBe(reason);
+    expect(
+      scanFailureReason(
+        navigated(
+          'https://example.com/redirects to x blocked by navigation policy: private/loopback host',
+        ),
+      ),
+    ).toBe(reason);
+    // Only as the runner words it: a page's own error text that quotes the phrase is not one.
+    expect(scanFailureReason('Error: The page navigated during the scan: no')).toBe(
+      'the scan could not be completed (details are on the server log)',
+    );
+  });
+
   it.each([
     'page.goto: Timeout 30000ms exceeded.',
     'The page did not finish within 120 s',
