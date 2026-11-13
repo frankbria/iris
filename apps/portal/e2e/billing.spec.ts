@@ -14,7 +14,8 @@ import { e2eEnv } from "./env"
  * The org page's Billing section (#261) through the real portal. Stripe is configured
  * with placeholders and never reached: the state comes from the database (as the
  * webhook writes it, #345), and the refusals are forged posts, with a positive control
- * that is refused only after the permission check (a live subscription).
+ * that is refused only after the permission check (an operator's suspension). A live
+ * subscription's Checkout goes to the Customer Portal (#688), which would reach Stripe.
  */
 const { baseURL, databaseUrl } = e2eEnv()
 
@@ -60,6 +61,9 @@ const post = async (context: BrowserContext, fields: Record<string, string>) =>
       multipart: fields,
     })
   ).text()
+
+// The action's answer in the form state, not the banner (which says the same of an operator's).
+const REFUSED_SUSPENDED = '{"error":"This organization is suspended."}'
 
 test("managers see the plan and Upgrade; a member's forged Checkout is refused", async ({
   page,
@@ -141,10 +145,12 @@ test("managers see the plan and Upgrade; a member's forged Checkout is refused",
   await expect(theirBilling.getByRole("button")).toHaveCount(0)
 
   // Positive control: from the owner's session the forged post reaches the action and
-  // passes the permission check; the live subscription refuses it before Stripe.
-  expect(await forge(context)).toContain(
-    "This organization already has a subscription."
+  // passes the permission check; an operator's suspension refuses it before Stripe.
+  await sql(
+    "insert into org_suspensions (org_id, action, reason, actor) values ($1, 'suspend', 'e2e', 'e2e-operator')",
+    [orgId]
   )
+  expect(await forge(context)).toContain(REFUSED_SUSPENDED)
   // From the member's session it is refused at the permission check.
   expect(await forge(theirs)).toContain(
     "Only owners and admins can change billing."
@@ -163,8 +169,6 @@ test("managers see the plan and Upgrade; a member's forged Checkout is refused",
  * Payment failure (#266). The state is written as the webhook and the sweep write it:
  * the deadline on `org_billing`, and the suspension as a row by `billing`.
  */
-// The action's answer in the form state, not the banner (which says the same of an operator's).
-const REFUSED_SUSPENDED = '{"error":"This organization is suspended."}'
 
 test("a failed payment warns, then suspends with its own banner; an operator's suspension still blocks the Customer Portal", async ({
   page,

@@ -285,7 +285,10 @@ org name. The provider is a subprocessor; its retention applies.
 
 Live when the operator sets `IRIS_STRIPE_*` (#261, #345); off otherwise. IRIS sends Stripe
 the org id (customer metadata `org_id`, and `client_reference_id` on Checkout) and the
-price of the plan chosen (`src/billing/stripe.ts`). The customer enters billing contact
+price of the plan chosen (`src/billing/stripe.ts`). Before each Checkout the portal also
+asks Stripe for that customer's subscriptions and open Checkout Sessions, and expires the
+open ones (customer id and session ids only, #688), so an org cannot pay for two
+subscriptions. The customer enters billing contact
 and card details on Stripe's own Checkout and Customer Portal pages: IRIS never receives or
 stores them. Stripe sends IRIS signed webhook events (`POST /v1/stripe/webhook`). For each new one about a
 known customer, `iris connect` calls the Stripe API once (list that customer's

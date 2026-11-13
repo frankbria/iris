@@ -6,8 +6,8 @@ import type { PlanId } from './plans';
 
 /**
  * Stripe customers, Checkout and the Customer Portal (#261, ADR 0001 §6). Subscription
- * state is never read from here: only the verified webhook (src/billing/stripe-webhook.ts)
- * changes it.
+ * state is never written from here: only the verified webhook (src/billing/stripe-webhook.ts)
+ * changes it. Checkout reads Stripe's list only to refuse a second subscription (#688).
  */
 
 export type PaidPlan = Exclude<PlanId, 'free'>;
@@ -76,6 +76,27 @@ export function hasLiveSubscription(account: OrgBillingAccount | null): boolean 
 
 export class BillingError extends Error {}
 
+/** Stripe statuses that still bill or can bill again: a second subscription would be a second charge. */
+const SUBSCRIBED_STATUSES: readonly Stripe.Subscription.Status[] = [
+  'active',
+  'trialing',
+  'past_due',
+  'unpaid',
+  'paused',
+];
+
+/**
+ * Checkouts that may hold a portal pool connection at once (pg's default pool is 10): each
+ * holds one across its Stripe calls, so more waiting on Stripe could starve sign-ins.
+ */
+export const MAX_CONCURRENT_CHECKOUTS = 2;
+
+/** Each Stripe call made while a checkout holds its connection: bounded, never retried. */
+const BOUNDED: Stripe.RequestOptions = { timeout: 10_000, maxNetworkRetries: 0 };
+
+export type CheckoutResult =
+  { outcome: 'checkout'; url: string } | { outcome: 'subscribed' } | { outcome: 'busy' };
+
 /** One org's Stripe side, for the portal's server actions. */
 export function stripeBilling(db: Kysely<unknown>, stripe: Stripe, config: StripeConfig) {
   async function account(orgId: string): Promise<OrgBillingAccount | null> {
@@ -112,28 +133,78 @@ export function stripeBilling(db: Kysely<unknown>, stripe: Stripe, config: Strip
     return (await account(orgId))?.customerId ?? customer.id;
   }
 
+  /** The customer's Checkout Sessions still open are expired, so none of them can be paid. */
+  async function expireOpenSessions(customer: string): Promise<void> {
+    for await (const session of stripe.checkout.sessions.list(
+      { customer, status: 'open', limit: 100 },
+      BOUNDED,
+    )) {
+      try {
+        await stripe.checkout.sessions.expire(session.id, {}, BOUNDED);
+      } catch (error) {
+        // Completed since the list: its subscription is what the next read finds.
+        if (!(error instanceof Stripe.errors.StripeInvalidRequestError)) throw error;
+      }
+    }
+  }
+
+  async function hasLiveStripeSubscription(customer: string): Promise<boolean> {
+    for await (const subscription of stripe.subscriptions.list(
+      { customer, status: 'all', limit: 100 },
+      BOUNDED,
+    ))
+      if (SUBSCRIBED_STATUSES.includes(subscription.status)) return true;
+    return false;
+  }
+
+  let checkoutsInFlight = 0;
+
   return {
     account,
 
-    /** A Checkout URL for a first subscription; refused while one is live. */
-    async checkoutUrl(
+    /**
+     * Stripe Checkout for a first subscription, or `subscribed` when the org already has
+     * one (the database's last webhook state, then Stripe's own list). One call per org at
+     * a time: `busy` when another is running for the org, or when `MAX_CONCURRENT_CHECKOUTS`
+     * are running at all. Before a new session, the customer's open ones are expired.
+     */
+    async checkout(
       orgId: string,
       plan: PaidPlan,
       returnUrl: string,
       actor: AuditActor,
-    ): Promise<string> {
-      if (hasLiveSubscription(await account(orgId)))
-        throw new BillingError('This organization already has a subscription.');
-      const session = await stripe.checkout.sessions.create({
-        mode: 'subscription',
-        customer: await ensureCustomer(orgId, actor),
-        client_reference_id: orgId,
-        line_items: [{ price: config.prices[plan], quantity: 1 }],
-        success_url: returnUrl,
-        cancel_url: returnUrl,
-      });
-      if (!session.url) throw new BillingError('Stripe returned no Checkout URL.');
-      return session.url;
+    ): Promise<CheckoutResult> {
+      if (hasLiveSubscription(await account(orgId))) return { outcome: 'subscribed' };
+      const customer = await ensureCustomer(orgId, actor);
+      // shortcut: a per-process count, as the webhook's; a second portal process needs a shared one.
+      if (checkoutsInFlight >= MAX_CONCURRENT_CHECKOUTS) return { outcome: 'busy' };
+      checkoutsInFlight++;
+      try {
+        return await db.transaction().execute(async (tx): Promise<CheckoutResult> => {
+          const { rows } = await sql<{ locked: boolean }>`
+            select pg_try_advisory_xact_lock(hashtext(${`stripe-checkout:${orgId}`})) as locked`.execute(
+            tx,
+          );
+          if (!rows[0].locked) return { outcome: 'busy' };
+          await expireOpenSessions(customer);
+          if (await hasLiveStripeSubscription(customer)) return { outcome: 'subscribed' };
+          const session = await stripe.checkout.sessions.create(
+            {
+              mode: 'subscription',
+              customer,
+              client_reference_id: orgId,
+              line_items: [{ price: config.prices[plan], quantity: 1 }],
+              success_url: returnUrl,
+              cancel_url: returnUrl,
+            },
+            BOUNDED,
+          );
+          if (!session.url) throw new BillingError('Stripe returned no Checkout URL.');
+          return { outcome: 'checkout', url: session.url };
+        });
+      } finally {
+        checkoutsInFlight--;
+      }
     },
 
     /** A Customer Portal URL: plan changes, cards, invoices and cancelling. */
