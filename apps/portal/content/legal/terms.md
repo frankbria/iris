@@ -27,7 +27,7 @@ You are responsible for the sites you point IRIS at, for the instructions you gi
 
 IRIS has a free plan and paid plans. The current plans, their prices and what each includes are shown in the portal before you subscribe.
 
-- **Billing.** Paid plans are subscriptions billed monthly in advance through our payment processor, Stripe, to the payment method you give. Each plan includes set monthly allowances. When an allowance is used up, that kind of work stops until the next billing period or until you change plan; we do not charge for usage beyond your plan without your agreement.
+- **Billing.** Paid plans are subscriptions billed monthly in advance through our payment processor, Stripe, to the payment method you give. Each plan includes set monthly allowances, which reset on the first day of each calendar month (UTC), whatever date your subscription renews. When an allowance is used up, that kind of work stops until it resets or until you change plan; we do not charge for usage beyond your plan without your agreement.
 - **Taxes.** Prices do not include taxes. Where we must collect sales tax, VAT or a similar tax, it is added to your invoice.
 - **Changing or cancelling.** You can change plan or cancel at any time in the portal. A cancellation takes effect at the end of the period you have paid for, and your organization then moves to the free plan.
 - **Refunds.** Fees are not refundable, including for a partly used period, except where the law requires a refund or these terms say otherwise.
