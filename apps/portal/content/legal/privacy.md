@@ -36,7 +36,7 @@ When your organization has added its own OpenAI or Anthropic key, IRIS may send 
 
 ## 5. Who we share it with
 
-We use service providers (subprocessors) to host the service, send email and, when paid plans launch, take payments. They are listed on our [subprocessor page](/subprocessors). We do not sell your personal data. We may disclose data when the law requires it, or to protect the service and its users. If our business is sold or merged, your data may pass to the new owner, who must keep this policy's commitments or tell you first.
+We use service providers (subprocessors) to host the service, send email and take payments. They are listed on our [subprocessor page](/subprocessors). We do not sell your personal data. We may disclose data when the law requires it, or to protect the service and its users. If our business is sold or merged, your data may pass to the new owner, who must keep this policy's commitments or tell you first.
 
 ## 6. International transfers
 
