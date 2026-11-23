@@ -215,7 +215,7 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
 
 - **Config is all four `IRIS_STRIPE_*` (each with `_FILE`) or none** (`resolveStripeConfig`):
   none is billing off (no section on `/org`, the route 404s); some throws (`iris connect`
-  exits 3). On the `jest.setup.ts` scrub list. `stripe` is pinned exactly (23.1.0) and the
+  exits 3). On the `jest.setup.ts` scrub list. `stripe` is pinned exactly (23.2.0) and the
   client pins `STRIPE_API_VERSION`; keep the webhook endpoint on the same version.
 - **State only from the webhook**, never the Checkout redirect (ADR 0001 §6). The route
   takes no API key and passes the **raw body text** to `constructEvent`: re-serialised JSON

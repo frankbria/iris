@@ -686,7 +686,7 @@ signed webhook. Set up once per Stripe mode (test first, then live):
    clicks or two tabs cannot end in two subscriptions. Checkout's "limit customers to one
    subscription" setting, if your account offers it, is optional extra protection.
 3. **Webhook endpoint** (Developers → Webhooks): `https://<public host>/v1/stripe/webhook`,
-   API version `2026-10-28.endive` (`STRIPE_API_VERSION` in `src/billing/stripe.ts`), events `checkout.session.completed`,
+   API version `2026-11-18.endive` (`STRIPE_API_VERSION` in `src/billing/stripe.ts`), events `checkout.session.completed`,
    `customer.subscription.created`, `customer.subscription.updated`,
    `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`. Copy its
    signing secret (`whsec_…`).
