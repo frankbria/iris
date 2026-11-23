@@ -48,9 +48,12 @@ with the retention pass's `audit` step (src/offboarding.ts; "Tenant Audit Log" i
 
 ### Privacy, subprocessors and DPA (issue #277)
 
-Drafts at `/privacy`, `/subprocessors` and `/dpa` (`apps/portal/content/legal/{privacy,
-subprocessors,dpa}.md`), same renderer and draft banner as #276; owner/counsel approval is
-#450. `docs/legal/dpa-template.md` is a copy of `dpa.md` (a portal test keeps them equal).
+Published at `/privacy`, `/subprocessors` and `/dpa` (`apps/portal/content/legal/{privacy,
+subprocessors,dpa}.md`), same renderer as #276. The owner approved the wording and filled
+the placeholders in #450, so none is a draft: a test fails on `draft: true` or on any
+`[bracketed]` text that is not a link (the DPA's `[customer legal name, address]` excepted,
+filled in at signing). A wording change bumps the version as the runbook says.
+`docs/legal/dpa-template.md` is a copy of `dpa.md` (a portal test keeps them equal).
 
 - **`docs/data-flows.md` is the source of truth** for what is stored, where, for how long
   and what goes to which third party, each entry citing its code. A change that adds or

@@ -6,8 +6,8 @@
  * change the file's `version` and the constant here together; everyone re-accepts.
  */
 export const LEGAL_VERSIONS = {
-  terms: '2026-10-02',
-  'acceptable-use': '2026-10-02',
+  terms: '2026-11-23',
+  'acceptable-use': '2026-11-23',
 } as const;
 
 export type LegalDocument = keyof typeof LEGAL_VERSIONS;
@@ -19,9 +19,9 @@ export type LegalDocument = keyof typeof LEGAL_VERSIONS;
  * file's front-matter `version`.
  */
 export const PUBLISHED_VERSIONS = {
-  privacy: '2026-10-06',
-  subprocessors: '2026-10-06',
-  dpa: '2026-10-02',
+  privacy: '2026-11-23',
+  subprocessors: '2026-11-23',
+  dpa: '2026-11-23',
 } as const;
 
 export type PublishedDocument = keyof typeof PUBLISHED_VERSIONS;
