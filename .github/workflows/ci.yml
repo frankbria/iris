@@ -450,8 +450,8 @@ jobs:
               || { echo "::error::not an image digest: $ref"; exit 1; }
           done
           for port in "$IRIS_API_PORT" "$PORTAL_PORT"; do
-            printf '%s' "$port" | grep -Eq '^[1-9][0-9]{0,4}$' \
-              || { echo "::error::IRIS_API_PORT/PORTAL_PORT must be port numbers"; exit 1; }
+            { printf '%s' "$port" | grep -Eq '^[1-9][0-9]{0,4}$' && [ "$port" -le 65535 ]; } \
+              || { echo "::error::IRIS_API_PORT/PORTAL_PORT must be port numbers (1-65535)"; exit 1; }
           done
 
           install -m 700 -d ~/.ssh
