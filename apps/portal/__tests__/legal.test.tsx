@@ -61,13 +61,17 @@ describe("legal documents", () => {
     " JaVaScRiPt:void0",
     "https:/\\x",
     "http://plain.example/",
+    "mailto:a@b.co?subject=x",
+    "mailto:a@b.co?bcc=c@d.co",
+    "mailto:a@b",
+    "MAILTO:a@b.co",
   ]
-  const KEPT = ["/terms", "https://ok.example/"]
+  const KEPT = ["/terms", "https://ok.example/", "mailto:support@example.com"]
 
   it.each([
     ["a paragraph", (md: string) => md],
     ["a table cell", (md: string) => `| H |\n|---|\n| ${md} |`],
-  ])("keeps only site paths and https links in %s", (_, wrap) => {
+  ])("keeps only site paths, https links and bare mailto: in %s", (_, wrap) => {
     for (const href of [...REFUSED, ...KEPT]) {
       const { unmount } = render(
         <LegalDocument doc={doc("", wrap(`[go](${href})`))} />
@@ -155,6 +159,32 @@ describe("legal documents", () => {
         (m) => !(name === "dpa" && m === "[customer legal name, address]")
       )
       expect({ name, left }).toEqual({ name, left: [] })
+    }
+  })
+
+  it("every link written in a shipped document renders as a link (#450)", () => {
+    for (const name of [
+      "terms",
+      "acceptable-use",
+      "privacy",
+      "subprocessors",
+      "dpa",
+    ] as const) {
+      const d = readLegal(name)
+      const written = [...d.body.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map(
+        (m) => m[1]
+      )
+      const { container, unmount } = render(<LegalDocument doc={d} />)
+      const rendered = [...container.querySelectorAll("main a")].map((a) =>
+        a.getAttribute("href")
+      )
+      for (const href of written)
+        expect({ name, href, ok: rendered.includes(href) }).toEqual({
+          name,
+          href,
+          ok: true,
+        })
+      unmount()
     }
   })
 

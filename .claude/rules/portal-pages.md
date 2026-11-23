@@ -66,6 +66,10 @@ filled in at signing). A wording change bumps the version as the runbook says.
 - The renderer also takes simple pipe tables (header, `|---|` row, cells through the same
   escaping `inline()`). `LegalFooter` (on legal pages and the `(auth)` layout) links all five
   documents; it is a `nav`, not a list, so the renderer's list tests are unaffected.
+- **Links:** `safeHref()` keeps site paths, `https://` URLs and a bare `mailto:` address
+  (no `?`, so no injected headers or body); anything else renders as its label only. A
+  test renders each shipped document and fails if a link written in it is not a link, so
+  a new link scheme fails CI instead of silently becoming text.
 
 ### Portal Runs Pages (issue #270)
 
