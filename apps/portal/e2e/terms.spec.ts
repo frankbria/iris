@@ -19,7 +19,9 @@ const { baseURL, databaseUrl } = e2eEnv()
 
 test.beforeEach(({ context }) => ownRateLimitBucket(context))
 
-test("both documents are public and say they are drafts", async ({ page }) => {
+test("both documents are public and in effect (no draft banner)", async ({
+  page,
+}) => {
   for (const [path, title] of [
     ["/terms", "Terms of Service"],
     ["/acceptable-use", "Acceptable Use Policy"],
@@ -28,7 +30,7 @@ test("both documents are public and say they are drafts", async ({ page }) => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(title)
     await expect(
       page.getByText("Draft — pending review; not yet in effect")
-    ).toBeVisible()
+    ).toHaveCount(0)
     await expect(page.getByText(/^Version \d{4}-\d{2}-\d{2}$/)).toBeVisible()
   }
 })

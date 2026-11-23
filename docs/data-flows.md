@@ -305,6 +305,9 @@ Stripe is a subprocessor; its retention applies.
 
 Only when `BACKUP_RCLONE_REMOTE` is set: the age-encrypted backups above. The storage
 provider cannot read them.
+The published subprocessor list (#450) has no off-box backup row, because none is in use:
+add the provider to `/subprocessors` (30 days' notice, as the DPA says) before setting
+`BACKUP_RCLONE_REMOTE` in production.
 
 ### Sites under test
 
