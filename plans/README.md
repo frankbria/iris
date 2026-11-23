@@ -143,7 +143,7 @@ production.
 | `P0.45` | [#273](https://github.com/frankbria/iris/issues/273) | Production environment and deploy pipeline | P0.20 (#248), P0.44 (#347) | DONE (PR #439) |
 | `P0.46` | [#274](https://github.com/frankbria/iris/issues/274) | Backups and restore drill for Postgres and object storage | P0.45 (#273) | DONE (PR #446; bucket half split to #445) |
 | `P0.47` | [#275](https://github.com/frankbria/iris/issues/275) | Observability: structured logs, metrics, alerting | P0.45 (#273) | DONE (PR #448) |
-| `P0.59` | [#440](https://github.com/frankbria/iris/issues/440) | Move staging onto the hosted stack so staged-<sha> proves what production runs | P0.45 (#273) | IN REVIEW (PR #702; merge only once the `staging` environment has its hosted secrets. Unblocks #514, #445, #376, #316) |
+| `P0.59` | [#440](https://github.com/frankbria/iris/issues/440) | Move staging onto the hosted stack so staged-<sha> proves what production runs | P0.45 (#273) | DONE ([#702](https://github.com/frankbria/iris/pull/702); first hosted staging deploy green 2026-11-23. Unblocks #514, #445, #376, #316) |
 | `P0.60` | [#514](https://github.com/frankbria/iris/issues/514) | Wire object storage and the managed AI key into the hosted deploy, on staging first | P0.59 (#440) | TODO |
 | `P0.61` | [#515](https://github.com/frankbria/iris/issues/515) | Production first-deploy checklist: every step that needs the production box | every other open P0 and P1 | BLOCKED (needs-operator, needs-owner; last by design) |
 
