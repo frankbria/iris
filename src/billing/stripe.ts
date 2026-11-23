@@ -19,7 +19,7 @@ export interface StripeConfig {
 }
 
 /** The API version this code was written against; the webhook endpoint must use it too. */
-export const STRIPE_API_VERSION = '2026-10-28.endive';
+export const STRIPE_API_VERSION = '2026-11-18.endive';
 
 const SETTINGS = {
   secretKey: 'IRIS_STRIPE_SECRET_KEY',
