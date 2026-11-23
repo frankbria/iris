@@ -72,8 +72,8 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   a `v*` ref, for a dispatch too (no tag input: an input would let a branch run deploy).
 - **`staged-<sha>` is a record, not a boundary**: deploy-staging tags both images
   (`imagetools create`, no rebuild) as its *last* step; anything with `packages: write`
-  could move it. Staging runs token mode without worker/portal, so it proves the iris
-  image boots (plus the portal digest serving `/terms` on the runner), not the hosted stack.
+  could move it. Since #440 it is written only after deploy.sh brought the hosted stack up
+  healthy on staging (see "Staging runs the hosted stack" below).
 - **One directory per release** (`releases/<tag>-<run>-<attempt>/`: compose, settings.env,
   per-release secrets); `shared/secrets/` holds pg_password, master_key, database_url
   (rewritten only if it differs: serving containers mount it). `current` is switched only
@@ -139,6 +139,34 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   <model>". Before merging, read the comments, not the check.
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
+
+### Staging runs the hosted stack (issue #440)
+
+`deploy-staging` builds both images, then deploys **those digests** the way
+`deploy-production` does: `docker-compose.production.yml` + `deploy/deploy.sh` from a
+release directory (`/opt/iris-staging/releases/staging-<sha12>-<run>-<attempt>/`), the
+release's secrets from the `staging` environment, `pg_password` / `master_key` generated
+once in `shared/secrets/`. Then it proves what the healthchecks stop short of (sandboxed
+Chromium in iris *and* the worker, the CLI, both host ports answering), and only then
+writes `staged-<sha>`. Container-config tests pin the job's shape and that its secret
+files and `_FILE` pointers equal production's.
+
+- **Project name `iris-staging`, not the file's `name: iris-production`.** settings.env
+  sets `COMPOSE_PROJECT_NAME='iris-staging'`; deploy.sh copies it into `.env`, and compose
+  takes a `.env` `COMPOSE_PROJECT_NAME` over the top-level `name:` (a test runs `docker
+  compose config` on it). Containers, network and volumes are `iris-staging-*`, so the
+  two stacks cannot collide on one box. Backup/watchdog/retention on staging need their
+  `*_COMPOSE_PROJECT=iris-staging` and `DEPLOY_DIR=/opt/iris-staging`.
+- **Ports default to 14000 / 13000** (`vars.IRIS_API_PORT || '14000'`): the staging box
+  is shared and the token-mode server held 4000. The host's nginx site points there.
+- **Preflight**: no box secrets → skip (a fork stays green); box configured but
+  `BETTER_AUTH_SECRET`, `SMTP_URL`, `PORTAL_URL` or `SMTP_FROM` missing → fail by name
+  before anything is built. A silent skip would leave production nothing to promote.
+- **The deploy user must be able to create `/opt/iris-staging`** (or the operator
+  creates it once, owned by that user); the job says so when it cannot.
+- **The smoke step needs `curl` on the box** (host-loopback checks of both ports).
+- `docker-compose.staging.yml` stays as the token-mode reference and what
+  `iris-image.test.ts` runs; nothing deploys it.
 
 ### Backups (issue #274)
 

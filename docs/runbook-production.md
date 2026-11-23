@@ -81,9 +81,9 @@ the job by name; they never skip it.
     `cd "$(readlink -f current)"` first. Always work from the real path: containers
     created through the `current` link would mount files through it.
 - **Ports.** iris-api publishes on `127.0.0.1:4000` and the portal on `127.0.0.1:3000`.
-  The staging compose also takes `127.0.0.1:4000`, so on a box that runs both, set
-  the `IRIS_API_PORT` / `PORTAL_PORT` variables and use the same ports in the nginx
-  site. Never publish either on a public interface: the portal's rate limits trust
+  Staging defaults to `127.0.0.1:14000` / `127.0.0.1:13000`, so the two stacks can
+  share a box. Whatever you set in `IRIS_API_PORT` / `PORTAL_PORT`, use the same
+  ports in the nginx site. Never publish either on a public interface: the portal's rate limits trust
   `X-Real-IP`, which only nginx may set.
 
 ### 4. Secrets generated on the box
@@ -123,8 +123,9 @@ release keeps serving.
 
 ## Promote a release
 
-1. Merge to `main`. `deploy-staging` deploys it, boots the portal image, and then tags
-   both images `staged-<sha>`. If staging fails, no tag is written.
+1. Merge to `main`. `deploy-staging` builds both images, deploys those digests through
+   `deploy.sh` on staging, smoke-tests them, and then tags both images `staged-<sha>`.
+   If staging fails, no tag is written.
 2. Tag that commit and push the tag:
 
    ```bash
@@ -142,12 +143,13 @@ release keeps serving.
      `deploy.sh` from the tagged commit, `settings.env`, and the release's secrets;
    - runs `deploy.sh` there.
 
-**What staging proves.** Staging runs the iris image in token mode, without the worker
-or the portal. So `staged-<sha>` proves that the iris image deployed and booted, with a
-real Chromium launch, and that the portal image serves `/terms`. It does not prove the
-hosted stack (hosted connect, worker, portal against Postgres and SMTP). A follow-up
-issue moves staging to the hosted stack. Until then, production's own gates and
-health checks are the first run of that combination.
+**What staging proves.** Staging runs the same hosted stack (#440):
+`docker-compose.production.yml` through `deploy.sh`, under `/opt/iris-staging` and the
+compose project `iris-staging`, with the `staging` environment's own secrets. So
+`staged-<sha>` means those exact digests passed `deploy.sh`'s SMTP check, migrations and
+healthchecks on a box, launched a sandboxed Chromium in iris and in the worker, and
+answered on the host ports the nginx site uses. What it does not prove is production's
+own configuration: its secrets, relay, ports and nginx site.
 
 ### What `deploy.sh` does
 

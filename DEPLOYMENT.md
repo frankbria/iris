@@ -26,13 +26,17 @@ services publish on loopback only. Every image is pinned by digest.
 | | Staging | Production |
 |---|---|---|
 | Trigger | merge to `main` (`deploy-staging` in `.github/workflows/ci.yml`) | a protected `v*` tag on a commit staging deployed (`deploy-production`) |
-| Compose file | `docker-compose.staging.yml` | `docker-compose.production.yml` |
-| What runs | the iris image in token mode (`IRIS_CONNECT_TOKEN`) | the hosted stack above |
-| Builds | yes, then tags both images `staged-<sha>` | never: promotes the digests staging ran |
-| Gates | the image boots and answers | SMTP check, migrations, health; rollback to the previous release on failure |
+| Compose file | `docker-compose.production.yml` (project `iris-staging`) | `docker-compose.production.yml` |
+| Deploy directory | `/opt/iris-staging` | `/opt/iris-production` |
+| What runs | the hosted stack above (#440) | the hosted stack above |
+| Host ports | `127.0.0.1:14000` (iris-api), `127.0.0.1:13000` (portal) | `127.0.0.1:4000`, `127.0.0.1:3000` |
+| Builds | yes, deploys those digests, then tags both images `staged-<sha>` | never: promotes the digests staging ran |
+| Gates | `deploy.sh` (SMTP check, migrations, health, rollback), then Chromium in iris and the worker and both host ports | `deploy.sh`: SMTP check, migrations, health; rollback to the previous release on failure |
 
-Staging does not yet run the hosted stack (#440), so production's first deploy is the
-first place the worker and portal run together.
+Both run `deploy/deploy.sh` from a release directory, so `staged-<sha>` is written only
+after the same stack production runs became healthy on the staging box.
+`docker-compose.staging.yml` is now the token-mode reference only (self-hosting, and the
+image test on every PR).
 
 ## Secrets and variables
 
@@ -40,9 +44,11 @@ Both GitHub environments need the connection secrets: `HOST`, `USER` (able to `c
 `SSH_KEY`, `SSH_KNOWN_HOSTS`, and either `TS_AUTHKEY` or `TS_OAUTH_CLIENT_ID` +
 `TS_OAUTH_SECRET` (with `TS_TAGS`) for the tailnet.
 
-**Staging** also needs `IRIS_CONNECT_TOKEN`, the shared token of its token-mode server.
-
-**Production** also needs:
+**Both** also need the hosted settings below, each environment its own values (staging's
+`SMTP_URL` may be a test relay). The ports default per environment: staging 14000 / 13000,
+production 4000 / 3000. Staging skips its deploy when the connection secrets are absent (a
+fork), but once they are set, a missing hosted setting fails the job by name.
+`IRIS_CONNECT_TOKEN` is no longer read by either deploy.
 
 | Name | Kind | Purpose |
 |---|---|---|
@@ -50,7 +56,7 @@ Both GitHub environments need the connection secrets: `HOST`, `USER` (able to `c
 | `SMTP_URL` | secret | Mail relay for verification and reset mail (carries its password) |
 | `PORTAL_URL` | variable | The portal's public `https://` origin |
 | `SMTP_FROM` | variable | Sender address |
-| `IRIS_API_PORT`, `PORTAL_PORT` | variable | Optional loopback ports (default 4000, 3000) |
+| `IRIS_API_PORT`, `PORTAL_PORT` | variable | Optional loopback ports (default 4000, 3000; staging 14000, 13000) |
 | `IRIS_SECURITY_CONTACT`, `IRIS_ABUSE_CONTACT`, `IRIS_SUPPORT_CONTACT`, `IRIS_SECURITY_TXT_EXPIRES_DAYS` | variable | Optional published contacts (`mailto:` or `https:`) |
 
 Generated on the box at the first deploy and never overwritten: `pg_password`,

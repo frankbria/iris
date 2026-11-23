@@ -5,7 +5,9 @@
 # Images are pinned by digest through IRIS_IMAGE / PORTAL_IMAGE, which
 # deploy/deploy.sh writes into the release's .env: the deploy promotes the exact digests staging
 # ran, never a tag that could have moved. Hardening matches
-# docker-compose.staging.yml (#332); its comments explain each setting.
+# docker-compose.staging.yml (#332); its comments explain each setting. Staging
+# runs this same file (#440), under the project name iris-staging (COMPOSE_PROJECT_NAME
+# in its settings.env) and its own deploy directory.
 #
 # Each release is its own directory, <deploy dir>/releases/<id>/, holding this file,
 # the seccomp profile, settings.env and the release's own secrets (./secrets). The
