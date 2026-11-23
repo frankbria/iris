@@ -9,15 +9,17 @@
 # library and the bundled browsers are matched pairs, and a drift between them
 # fails in ways that look like application bugs.
 #
-# Verified to ship Node v24.22.1 / npm 11.19.1, satisfying
-# "engines": { "node": "^22.22.0 || >=24" }.
+# Since 1.65.1 the image ships Node 26 (its NODE_VERSION build arg), which
+# satisfies "engines": { "node": "^22.22.0 || >=24" }. Note the split: .nvmrc
+# and CI's jest run stay on Node 24, so the container runs one major ahead of
+# the test suite; iris-image.test.ts is what exercises Node 26.
 
 # --- deps -------------------------------------------------------------------
 # Production dependencies only, compiled. Separate from `build` so the compiler
 # toolchain never reaches the shipped image: better-sqlite3 has no prebuilt
 # binary for this platform and needs node-gyp, which the Playwright base image
 # has no `make` for.
-FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea AS deps
+FROM mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579 AS deps
 
 WORKDIR /app
 RUN apt-get update \
@@ -42,7 +44,7 @@ RUN node scripts/third-party-notices.js . > THIRD_PARTY_NOTICES.txt
 
 # --- build ------------------------------------------------------------------
 # Full dependency tree (TypeScript et al.) purely to produce dist/.
-FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea AS build
+FROM mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579 AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -55,7 +57,7 @@ COPY src ./src
 RUN npm run build
 
 # --- runtime ----------------------------------------------------------------
-FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea AS runtime
+FROM mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579 AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app

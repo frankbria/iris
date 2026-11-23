@@ -203,9 +203,11 @@ break and expensive to rediscover:
 
 - **Base image is `mcr.microsoft.com/playwright:v<version>-noble`**, tracking the
   `playwright` version in package.json. It carries Chromium *and* its system
-  libraries, so no `playwright install --with-deps` at build time. Verified to
-  ship Node v24.18.1, satisfying the `engines` floor. Keep the tag in step with
-  the library — they are matched pairs.
+  libraries, so no `playwright install --with-deps` at build time. Keep the tag in
+  step with the library — they are matched pairs. Since 1.65.1 the image ships
+  Node 26 while `.nvmrc` and CI stay on 24: the container runs a major ahead of
+  the jest suite, and `iris-image.test.ts` is the only check on Node 26. Read the
+  Node major from the image config's `NODE_VERSION` build arg before a bump.
 - **Three stages, deliberately.** `better-sqlite3` has no prebuilt binary here
   and needs node-gyp, which the Playwright image has no `make` for; the compiler
   goes in a `deps` stage and never reaches the shipped image. That stage runs
