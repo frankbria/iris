@@ -1,4 +1,8 @@
-# Staging runtime for IRIS (issue #192).
+# Token-mode runtime for IRIS (issue #192): one `iris connect` server behind a shared
+# token, plus Postgres. Staging ran this file until #440; it now runs the hosted stack
+# from docker-compose.production.yml through deploy/deploy.sh like production. This
+# file stays as the token-mode reference for a self-hosted box and as what
+# __tests__/iris-image.test.ts runs the iris image under on every PR (#306).
 #
 # Committed so the port, environment, restart policy and healthcheck are
 # reviewable in a diff. That is the substantive difference from the pm2 setup it

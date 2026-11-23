@@ -81,8 +81,8 @@ jobs:
           cache-from: type=gha,scope=portal
           cache-to: type=gha,mode=max,scope=portal
       # The iris image (#306), on every push and PR: it used to be built only by the
-      # post-merge staging deploy. iris-image.test.ts runs it under docker-compose.staging.yml
-      # (healthy, sandboxed Chromium, the default-seccomp negative control, /data, no portal
+      # post-merge staging deploy. iris-image.test.ts runs it under the token-mode
+      # docker-compose.staging.yml (healthy, sandboxed Chromium, the default-seccomp negative control, /data, no portal
       # packages). The sandbox needs the sysctl above.
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -167,19 +167,25 @@ jobs:
       # test results. What to do when it fails: docs/runbook-production.md.
       - run: npm audit --omit=dev --audit-level=high
 
-  # Build and deploy the container to staging (issue #192).
+  # Build the images and deploy them to staging (issues #192, #440).
+  #
+  # Staging runs what production runs (#440): docker-compose.production.yml through
+  # deploy/deploy.sh (iris-api in hosted mode, the worker, the portal, Postgres), in
+  # its own deploy directory and compose project, with the `staging` environment's
+  # own secrets. So `staged-<sha>`, the record production promotes from, means the
+  # hosted stack passed deploy.sh's gates (SMTP check, migrations, health) on a box.
   #
   # Only on a merge to main, and only after `build` is green — a deploy is not a
-  # place to discover a failing test. Skips itself cleanly when the environment's
-  # secrets are absent, so a fork or a repo without them gets a green CI rather
-  # than a permanently red job it cannot fix.
+  # place to discover a failing test. Skips itself cleanly when the box's
+  # connection secrets are absent, so a fork or a repo without them gets a green CI
+  # rather than a permanently red job it cannot fix. Once the box is configured,
+  # a missing hosted setting fails the job by name: a deploy that silently did not
+  # happen would leave production nothing to promote.
   #
   # Secrets come from the `staging` GitHub Environment rather than the repo, so
-  # the names below are unqualified (HOST, USER, ...) and a `production`
-  # environment can later hold different values under the same names. That is
-  # also what makes IRIS_CONNECT_TOKEN per-environment: it is the credential to
-  # one running service, and a repo-wide value would let a staging leak drive
-  # the production browser.
+  # the names below are unqualified (HOST, USER, ...) and the `production`
+  # environment holds different values under the same names. BETTER_AUTH_SECRET in
+  # particular must differ between the two: it signs portal sessions.
   #
   # NETWORK PATH — the VPS firewalls port 22 off the public internet (the exact
   # rules are in the operator's runbook, not here: this repo is public), so a
@@ -198,8 +204,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     # Bounded like deploy-production (#359): a hung ssh or registry call fails the job
-    # instead of holding a runner for the default six hours.
-    timeout-minutes: 30
+    # instead of holding a runner for the default six hours. 45 like production: a
+    # deploy pulls two images and waits on three healthchecks.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write # push the image to GHCR
@@ -207,6 +214,11 @@ jobs:
     concurrency:
       group: deploy-staging
       cancel-in-progress: true
+    env:
+      # Staging's own tree, apart from production's /opt/iris-production and from the
+      # token-mode layout staging used before #440 (/opt/iris). Same shape as
+      # production: releases/<id>/, shared/secrets/, current.
+      DEPLOY_DIR: /opt/iris-staging
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Everything below is pointless without a target. Checked once, up front,
@@ -225,7 +237,10 @@ jobs:
           DEPLOY_HOST: ${{ secrets.HOST }}
           DEPLOY_USER: ${{ secrets.USER }}
           DEPLOY_SSH_KEY: ${{ secrets.SSH_KEY }}
-          IRIS_CONNECT_TOKEN: ${{ secrets.IRIS_CONNECT_TOKEN }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          SMTP_URL: ${{ secrets.SMTP_URL }}
+          PORTAL_URL: ${{ vars.PORTAL_URL }}
+          SMTP_FROM: ${{ vars.SMTP_FROM }}
           TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
           TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
@@ -241,25 +256,37 @@ jobs:
           DEPLOY_HOST=$(printf '%s' "$DEPLOY_HOST" | tr -d '[:space:]')
           DEPLOY_USER=$(printf '%s' "$DEPLOY_USER" | tr -d '[:space:]')
 
-          # All six, not just the two the ssh call needs first. Checking a
-          # subset meant a missing USER or IRIS_CONNECT_TOKEN still built and
-          # pushed an image before failing at scp — work done and a registry tag
-          # moved, for a deploy that was never going to land.
-          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] \
-             || [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$IRIS_CONNECT_TOKEN" ] \
+          # No box at all (a fork, a repo without the environment): skip cleanly.
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_SSH_KEY" ] \
              || { [ -z "$TS_AUTHKEY" ] \
                   && { [ -z "$TS_OAUTH_CLIENT_ID" ] || [ -z "$TS_OAUTH_SECRET" ]; }; }; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Staging secrets not configured - skipping deploy."
+            exit 0
+          fi
+
+          # A configured box with the hosted settings missing fails by name, before
+          # an image is built or a registry tag moves (#440). All checked at once,
+          # so one run lists everything that is missing.
+          missing=''
+          for name in BETTER_AUTH_SECRET SMTP_URL PORTAL_URL SMTP_FROM; do
+            [ -n "$(printf '%s' "${!name}" | tr -d '[:space:]')" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::The staging environment is missing:$missing (see DEPLOYMENT.md)"
+            exit 1
+          fi
+          case "$PORTAL_URL" in https://*) ;; *) echo "::error::PORTAL_URL must be https"; exit 1 ;; esac
+          # settings.env is compose's .env syntax: one line, single-quoted.
+          case "$PORTAL_URL$SMTP_FROM" in *"'"* | *$'\n'*) echo "::error::PORTAL_URL/SMTP_FROM may not hold ' or a newline"; exit 1 ;; esac
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          # The `secrets` context is unavailable in a step-level `if`, so the
+          # credential choice travels as an output instead.
+          if [ -n "$TS_AUTHKEY" ]; then
+            echo "ts_auth=authkey" >> "$GITHUB_OUTPUT"
           else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-            # The `secrets` context is unavailable in a step-level `if`, so the
-            # credential choice travels as an output instead.
-            if [ -n "$TS_AUTHKEY" ]; then
-              echo "ts_auth=authkey" >> "$GITHUB_OUTPUT"
-            else
-              echo "ts_auth=oauth" >> "$GITHUB_OUTPUT"
-            fi
+            echo "ts_auth=oauth" >> "$GITHUB_OUTPUT"
           fi
 
       # Before any step that touches the box. Without this the deploy step spends
@@ -349,8 +376,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # The portal image (#273), same tags in its own package. Staging does not run
-      # the portal yet; the step after the deploy boots this exact digest instead.
+      # The portal image (#273), same tags in its own package. Staging deploys both
+      # by the digests these steps report, as production later does.
       - if: steps.preflight.outputs.configured == 'true'
         id: portal_image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -364,15 +391,45 @@ jobs:
           cache-from: type=gha,scope=portal
           cache-to: type=gha,mode=max,scope=portal
 
+      # The hosted stack through deploy/deploy.sh (#440), as deploy-production does it
+      # (its comments explain the shared parts): a release directory per run, this
+      # release's secrets from the staging environment, the Postgres password and BYOK
+      # master key generated once on the box, then deploy.sh's gates and health wait.
       - if: steps.preflight.outputs.configured == 'true'
-        name: Deploy and smoke test
+        name: Deploy
         env:
           DEPLOY_HOST: ${{ secrets.HOST }}
           DEPLOY_USER: ${{ secrets.USER }}
           DEPLOY_SSH_KEY: ${{ secrets.SSH_KEY }}
           DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-          IRIS_CONNECT_TOKEN: ${{ secrets.IRIS_CONNECT_TOKEN }}
-          IMAGE_TAG: ${{ github.sha }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          SMTP_URL: ${{ secrets.SMTP_URL }}
+          PORTAL_URL: ${{ vars.PORTAL_URL }}
+          SMTP_FROM: ${{ vars.SMTP_FROM }}
+          # Staging's host ports default to 14000 / 13000, not production's 4000 / 3000:
+          # the staging box is shared, and the token-mode server staging ran before
+          # #440 held 127.0.0.1:4000. The host's nginx site points at these.
+          IRIS_API_PORT: ${{ vars.IRIS_API_PORT || '14000' }}
+          PORTAL_PORT: ${{ vars.PORTAL_PORT || '13000' }}
+          IRIS_SECURITY_CONTACT: ${{ vars.IRIS_SECURITY_CONTACT }}
+          IRIS_ABUSE_CONTACT: ${{ vars.IRIS_ABUSE_CONTACT }}
+          IRIS_SUPPORT_CONTACT: ${{ vars.IRIS_SUPPORT_CONTACT }}
+          IRIS_SECURITY_TXT_EXPIRES_DAYS: ${{ vars.IRIS_SECURITY_TXT_EXPIRES_DAYS }}
+          # Optional (#549): object storage and managed AI credits.
+          IRIS_S3_ENDPOINT: ${{ vars.IRIS_S3_ENDPOINT }}
+          IRIS_S3_BUCKET: ${{ vars.IRIS_S3_BUCKET }}
+          IRIS_S3_REGION: ${{ vars.IRIS_S3_REGION }}
+          IRIS_S3_ACCESS_KEY_ID: ${{ vars.IRIS_S3_ACCESS_KEY_ID }}
+          IRIS_S3_SECRET_ACCESS_KEY: ${{ secrets.IRIS_S3_SECRET_ACCESS_KEY }}
+          IRIS_MANAGED_AI_PROVIDER: ${{ vars.IRIS_MANAGED_AI_PROVIDER }}
+          IRIS_MANAGED_AI_KEY: ${{ secrets.IRIS_MANAGED_AI_KEY }}
+          # Optional (#261, #345): Stripe billing in test mode, all four or none.
+          IRIS_STRIPE_SECRET_KEY: ${{ secrets.IRIS_STRIPE_SECRET_KEY }}
+          IRIS_STRIPE_WEBHOOK_SECRET: ${{ secrets.IRIS_STRIPE_WEBHOOK_SECRET }}
+          IRIS_STRIPE_PRICE_PRO: ${{ vars.IRIS_STRIPE_PRICE_PRO }}
+          IRIS_STRIPE_PRICE_TEAM: ${{ vars.IRIS_STRIPE_PRICE_TEAM }}
+          IRIS_IMAGE: ghcr.io/${{ github.repository }}@${{ steps.iris_image.outputs.digest }}
+          PORTAL_IMAGE: ghcr.io/${{ github.repository }}-portal@${{ steps.portal_image.outputs.digest }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -386,6 +443,16 @@ jobs:
           # whitespace, the trimmed value no longer matches it and would print in
           # clear wherever ssh or the diagnosis below echoes it.
           echo "::add-mask::$DEPLOY_HOST"
+
+          # The refs and ports go on remote command lines below: hold them to their shapes.
+          for ref in "$IRIS_IMAGE" "$PORTAL_IMAGE"; do
+            printf '%s' "$ref" | grep -Eq '^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$' \
+              || { echo "::error::not an image digest: $ref"; exit 1; }
+          done
+          for port in "$IRIS_API_PORT" "$PORTAL_PORT"; do
+            { printf '%s' "$port" | grep -Eq '^[1-9][0-9]{0,4}$' && [ "$port" -le 65535 ]; } \
+              || { echo "::error::IRIS_API_PORT/PORTAL_PORT must be port numbers (1-65535)"; exit 1; }
+          done
 
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
@@ -460,144 +527,112 @@ jobs:
             exit 1
           fi
 
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p /opt/iris/docker'
-          scp -i ~/.ssh/deploy_key docker-compose.staging.yml \
-            "$DEPLOY_USER@$DEPLOY_HOST:/opt/iris/docker-compose.yml"
-          # Referenced by the compose file's security_opt; without it the
-          # sandboxed Chromium cannot start (#332).
-          scp -i ~/.ssh/deploy_key docker/seccomp-chromium.json \
-            "$DEPLOY_USER@$DEPLOY_HOST:/opt/iris/docker/seccomp-chromium.json"
+          ssh_opts=(-i ~/.ssh/deploy_key -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+          # Paths and digests in the remote commands expand here, on the runner, on purpose.
+          # shellcheck disable=SC2029
+          box() { ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$@"; }
 
-          # compose reads .env automatically; it no longer carries the token.
-          printf 'IRIS_TAG=%s\n' "$IMAGE_TAG" > /tmp/iris.env
-          scp -i ~/.ssh/deploy_key /tmp/iris.env "$DEPLOY_USER@$DEPLOY_HOST:/opt/iris/.env"
-          rm -f /tmp/iris.env
-
-          # The token becomes the compose secret file (#332), sent over ssh's
-          # STDIN rather than on the remote command line, which every other user
-          # of this shared box can read in the process list. The container sees
-          # the host file's owner and mode through the bind mount, so it must be
-          # readable by pwuser (uid 1001); the 0700 directory keeps whoever holds
-          # uid 1001 on the host out.
-          printf '%s' "$IRIS_CONNECT_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" '
-            set -eu
-            umask 077
-            install -d -m 700 /opt/iris/secrets
-            cat > /opt/iris/secrets/connect_token
-            chown 1001:1001 /opt/iris/secrets/connect_token
-            chmod 400 /opt/iris/secrets/connect_token
-          '
-
-          # Postgres credentials (#248), generated ON the box so the password never
-          # travels. Once: postgres reads POSTGRES_PASSWORD_FILE only when it first
-          # initialises its volume, so a new password on every deploy would lock
-          # the server out of its own database. The URL is derived every time.
-          # Owners follow the bind mount: postgres runs as uid 70 in the alpine
-          # image, pwuser as 1001.
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" '
-            set -eu
-            umask 077
-            cd /opt/iris/secrets
-            if [ ! -s pg_password ]; then
-              head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n" > pg_password
-            fi
-            printf "postgres://iris:%s@postgres:5432/iris" "$(cat pg_password)" > database_url
-            chown 70:70 pg_password
-            chown 1001:1001 database_url
-            chmod 400 pg_password database_url
-          '
-
-          # The box has to authenticate to GHCR: a newly published package is
-          # private by default even for a public repo, so an anonymous pull fails
-          # with "unauthorized".
-          #
-          # The token arrives over ssh's STDIN, not as an argument — a remote
-          # command line is readable in the host's process list by every other
-          # user on this shared box. And it is the run-scoped GITHUB_TOKEN rather
-          # than a stored PAT, so nothing long-lived is left behind; the logout
-          # below drops even that.
-          printf '%s' "$GHCR_TOKEN" | ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
-
-          # `docker compose up -d` derives running state from these files, so
-          # this is idempotent: re-running leaves the same healthy state rather
-          # than stacking another copy.
-          #
-          # --force-recreate because compose hashes the secret's mount spec, not
-          # the file's content: a re-run of the same SHA after rotating the token
-          # would keep the old container serving the old token while the
-          # healthcheck reads the new one. A new SHA recreates anyway.
-          #
-          # `|| :` on the logout so a registry hiccup at teardown cannot fail an
-          # otherwise-good deploy; the credential is short-lived regardless.
-          #
-          # Migrations run between pull and up, from the NEW image (#248, ADR 0001
-          # §2): a failed migration stops the deploy while the old container keeps
-          # serving. Idempotent, so a re-run applies nothing. Postgres is brought up
-          # on its own and recreated only when its config changed; --force-recreate
-          # applies to iris alone, so a deploy does not bounce the database.
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            'cd /opt/iris && docker compose pull --quiet \
-             && docker compose up -d --wait postgres \
-             && docker compose run --rm --no-deps --entrypoint node iris dist/db/migrate.js \
-             && docker compose up -d --force-recreate --no-deps --remove-orphans iris; \
-             rc=$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit $rc'
-
-          # Smoke test: wait for the container's own healthcheck to report
-          # healthy, then fail the job if it does not. The healthcheck completes
-          # an authenticated JSON-RPC round trip, so "healthy" means the service
-          # actually serves — not merely that a port is open.
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" '
-            set -eu
-            for i in $(seq 1 30); do
-              status=$(docker inspect -f "{{.State.Health.Status}}" iris-staging 2>/dev/null || echo missing)
-              [ "$status" = healthy ] && { echo "healthy after ${i}0s"; exit 0; }
-              [ "$status" = unhealthy ] && break
-              sleep 10
-            done
-            echo "iris-staging did not become healthy; last status: ${status:-unknown}"
-            docker logs --tail 50 iris-staging 2>&1 || true
+          # Each run stages its own release directory; the serving one is not touched
+          # until deploy.sh's SMTP and migration gates pass (see deploy/deploy.sh).
+          release="$DEPLOY_DIR/releases/staging-${GITHUB_SHA::12}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if ! box "set -eu; umask 077; install -d -m 700 $DEPLOY_DIR $DEPLOY_DIR/releases $DEPLOY_DIR/shared $DEPLOY_DIR/shared/secrets
+            install -d -m 700 $release $release/docker $release/secrets $release/systemd"; then
+            echo "::error::Cannot create $DEPLOY_DIR on the box as USER. Create it once, owned by that user (sudo install -d -o <user> -m 755 $DEPLOY_DIR), then re-run."
             exit 1
-          '
+          fi
+          scp "${ssh_opts[@]}" docker-compose.production.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.yml"
+          scp "${ssh_opts[@]}" docker/seccomp-chromium.json "$DEPLOY_USER@$DEPLOY_HOST:$release/docker/seccomp-chromium.json"
+          scp "${ssh_opts[@]}" deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/deploy.sh"
+          # Backups (#274), watchdog (#275), retention (#349): shipped as in production,
+          # for the operator to install as root-owned copies if staging should run them.
+          # Their *_COMPOSE_PROJECT and DEPLOY_DIR settings must then name staging's.
+          scp "${ssh_opts[@]}" deploy/backup.sh deploy/restore.sh deploy/watchdog.sh deploy/retention.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:$release/"
+          scp "${ssh_opts[@]}" deploy/systemd/iris-backup.service deploy/systemd/iris-backup.timer \
+            deploy/systemd/iris-backup-failed.service deploy/systemd/iris-watchdog.service \
+            deploy/systemd/iris-watchdog.timer deploy/systemd/iris-retention.service \
+            deploy/systemd/iris-retention.timer "$DEPLOY_USER@$DEPLOY_HOST:$release/systemd/"
+          {
+            # The production compose file names its project iris-production; compose
+            # takes COMPOSE_PROJECT_NAME from .env over that, so staging's containers,
+            # network and volumes are iris-staging-* and never collide with production's.
+            printf "COMPOSE_PROJECT_NAME='iris-staging'\n"
+            printf "PORTAL_URL='%s'\nSMTP_FROM='%s'\n" "$PORTAL_URL" "$SMTP_FROM"
+            printf 'IRIS_API_PORT=%d\nPORTAL_PORT=%d\n' "$IRIS_API_PORT" "$PORTAL_PORT"
+            for name in IRIS_SECURITY_CONTACT IRIS_ABUSE_CONTACT IRIS_SUPPORT_CONTACT IRIS_SECURITY_TXT_EXPIRES_DAYS \
+              IRIS_S3_ENDPOINT IRIS_S3_BUCKET IRIS_S3_REGION IRIS_S3_ACCESS_KEY_ID IRIS_MANAGED_AI_PROVIDER \
+              IRIS_STRIPE_PRICE_PRO IRIS_STRIPE_PRICE_TEAM; do
+              value=${!name}
+              [ -n "$value" ] || continue
+              case "$value" in *"'"* | *$'\n'*) echo "::error::$name may not hold ' or a newline" >&2; exit 1 ;; esac
+              printf "%s='%s'\n" "$name" "$value"
+            done
+            # The secret files are always written (below); the services read them only
+            # when pointed at them, so an empty one stays unset (#549).
+            [ -z "$IRIS_S3_SECRET_ACCESS_KEY" ] || printf "IRIS_S3_SECRET_ACCESS_KEY_FILE='/run/secrets/s3_secret_access_key'\n"
+            [ -z "$IRIS_MANAGED_AI_KEY" ] || printf "IRIS_MANAGED_AI_KEY_FILE='/run/secrets/managed_ai_key'\n"
+            [ -z "$IRIS_STRIPE_SECRET_KEY" ] || printf "IRIS_STRIPE_SECRET_KEY_FILE='/run/secrets/stripe_secret_key'\n"
+            [ -z "$IRIS_STRIPE_WEBHOOK_SECRET" ] || printf "IRIS_STRIPE_WEBHOOK_SECRET_FILE='/run/secrets/stripe_webhook_secret'\n"
+          } | box "cat > $release/settings.env"
 
-          # The periodic healthcheck stops short of the browser on purpose, so
-          # prove that layer once, here. Through the launch factory every
-          # session uses (dist/browser.js, #331), so it launches sandboxed under
-          # the container's real seccomp profile and capabilities (#332): a host
-          # that still blocks the sandbox fails here, not at a user's first
-          # session. Not the
-          # `launchBrowser` RPC: that RPC answers "Browser launched
-          # successfully" without starting one (protocol.ts:346 returns
-          # page: null), so a check built on it passes with Chromium deleted.
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            'docker exec -w /app iris-staging node -e "require(\"./dist/browser\").launchBrowser().then(b=>b.close()).then(()=>console.log(\"chromium ok\"))"'
+          # This release's secrets, over ssh's STDIN, never a remote command line (the
+          # process list of a shared box is readable by every user). Read by uid 1001
+          # (pwuser, and the portal image's user).
+          put_secret() {
+            printf '%s' "$2" | box "set -eu; umask 077; cd $release/secrets
+              cat > $1 && chown 1001:1001 $1 && chmod 400 $1"
+          }
+          put_secret better_auth_secret "$BETTER_AUTH_SECRET"
+          put_secret smtp_url "$SMTP_URL"
+          put_secret s3_secret_access_key "$IRIS_S3_SECRET_ACCESS_KEY"
+          put_secret managed_ai_key "$IRIS_MANAGED_AI_KEY"
+          put_secret stripe_secret_key "$IRIS_STRIPE_SECRET_KEY"
+          put_secret stripe_webhook_secret "$IRIS_STRIPE_WEBHOOK_SECRET"
 
-          # Independent of both: prove the shipped CLI runs.
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            'docker exec iris-staging node dist/cli.js --version'
+          # Shared, generated ON the box once and never overwritten: the Postgres
+          # password (the volume keeps the one it was initialised with) and the BYOK
+          # master key. The URL is derived, and replaced only if it differs, since
+          # serving containers mount it.
+          box "set -eu; umask 077; cd $DEPLOY_DIR/shared/secrets
+            if [ ! -s pg_password ]; then head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > pg_password; chown 70:70 pg_password; chmod 400 pg_password; fi
+            if [ ! -s master_key ]; then printf 'k1:%s' \"\$(head -c 32 /dev/urandom | base64 | tr -d '\n')\" > master_key; chown 1001:1001 master_key; chmod 400 master_key; fi
+            printf 'postgres://iris:%s@postgres:5432/iris' \"\$(cat pg_password)\" > database_url.new
+            if cmp -s database_url.new database_url; then rm database_url.new; else
+              chown 1001:1001 database_url.new; chmod 400 database_url.new; mv database_url.new database_url; fi"
 
-      # The pushed portal digest serves /terms, on the runner: staging has no portal
-      # service yet. A static page, because the container gets no config: /login calls
-      # getAuth() since #409 and answers 500 without SMTP and a database.
-      - if: steps.preflight.outputs.configured == 'true'
-        name: Boot the portal image
-        env:
-          PORTAL_REF: ghcr.io/${{ github.repository }}-portal@${{ steps.portal_image.outputs.digest }}
-        run: |
-          set -euo pipefail
-          docker run -d --name portal-smoke -p 127.0.0.1:3000:3000 --read-only \
-            --cap-drop ALL --security-opt no-new-privileges:true "$PORTAL_REF"
-          for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/terms || :)
-            [ "$code" = 200 ] && { echo "portal /terms 200 after ${i}s"; exit 0; }
-            sleep 1
-          done
-          docker logs portal-smoke 2>&1 | tail -30
-          exit 1
+          # The box authenticates to GHCR with the run-scoped token (a new package is
+          # private by default), over STDIN, and logs out after the deploy.
+          printf '%s' "$GHCR_TOKEN" | box "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+          box "cd $release && chmod 700 deploy.sh backup.sh restore.sh watchdog.sh retention.sh \
+            && IRIS_IMAGE='$IRIS_IMAGE' PORTAL_IMAGE='$PORTAL_IMAGE' ./deploy.sh; \
+            rc=\$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit \$rc"
+
+          # Beyond the healthchecks deploy.sh waited on (#309: iris-api /health/ready,
+          # the portal's /api/health, the worker's heartbeat), prove what they stop
+          # short of, once per deploy, in the release that is now serving:
+          #   * Chromium launches sandboxed in iris and in the worker, through the
+          #     launch factory every session uses (dist/browser.js, #331), under the
+          #     containers' real seccomp profile and capabilities (#332). Not the
+          #     `launchBrowser` RPC, which answers without starting one.
+          #   * The shipped CLI runs.
+          #   * Both services answer on the host loopback ports the nginx site points
+          #     at, so a port mismatch fails here and not as a 502 later.
+          box "set -eu; cd $release
+            command -v curl >/dev/null || { echo 'the smoke test needs curl on the box'; exit 1; }
+            for service in iris worker; do
+              docker compose exec -T -w /app \$service node -e 'require(\"./dist/browser\").launchBrowser().then(b=>b.close()).then(()=>console.log(\"chromium ok\"))'
+            done
+            docker compose exec -T iris node dist/cli.js --version
+            code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$IRIS_API_PORT/health/ready || :)
+            [ \"\$code\" = 200 ] || { echo \"iris-api /health/ready on 127.0.0.1:$IRIS_API_PORT answered \$code\"; exit 1; }
+            code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORTAL_PORT/api/health || :)
+            [ \"\$code\" = 200 ] || { echo \"portal /api/health on 127.0.0.1:$PORTAL_PORT answered \$code\"; exit 1; }
+            echo \"iris-api and portal answer on 127.0.0.1:$IRIS_API_PORT and :$PORTAL_PORT\""
 
       # The record production promotes from (#273): `staged-<sha>` on both images,
       # pointing at the digests this job just deployed and smoke-tested. A new tag on
-      # the same manifest, no rebuild. Last, so a failed deploy records nothing.
+      # the same manifest, no rebuild. Last, so a failed deploy records nothing: it is
+      # written only after the hosted stack became healthy through deploy.sh (#440).
       - if: steps.preflight.outputs.configured == 'true'
         name: Record the staged digests
         env:

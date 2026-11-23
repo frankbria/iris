@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { once } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -24,7 +24,7 @@ const compose = read('docker-compose.staging.yml')
   .filter((line) => !/^\s*#/.test(line))
   .join('\n');
 
-describe('docker-compose.staging.yml hardening (issue #332)', () => {
+describe('docker-compose.staging.yml (token mode) hardening (issue #332)', () => {
   it('reaps Chromium children with an init process as PID 1', () => {
     expect(compose).toMatch(/^\s+init: true$/m);
   });
@@ -133,17 +133,13 @@ describe('Dockerfile and deploy wiring (issue #332)', () => {
     expect(read('docker-compose.staging.yml')).toMatch(/^\s+IRIS_DATA_DIR: \/data$/m);
   });
 
-  it('ships the seccomp profile and the token file to the host, and not the token in .env', () => {
+  it('ships the seccomp profile with both deploys: the compose files reference it', () => {
     const ci = read('.github/workflows/ci.yml');
-    expect(ci).toMatch(/docker\/seccomp-chromium\.json/);
-    expect(ci).toMatch(/\/opt\/iris\/secrets\/connect_token/);
-    expect(ci).not.toMatch(/IRIS_CONNECT_TOKEN=%s/);
-    // The token is read once at startup; a rotated file needs a new container.
-    expect(ci).toMatch(/docker compose up -d --force-recreate/);
+    expect(ci.match(/^\s+scp .* docker\/seccomp-chromium\.json /gm)).toHaveLength(2);
   });
 });
 
-describe('staging Postgres and migrations (issue #248)', () => {
+describe('token-mode compose Postgres (issue #248)', () => {
   const postgres = compose.slice(compose.indexOf('\n  postgres:'), compose.indexOf('\nvolumes:'));
 
   it('keeps Postgres off the host: no published port', () => {
@@ -157,16 +153,6 @@ describe('staging Postgres and migrations (issue #248)', () => {
     expect(compose).not.toMatch(/^\s+(DATABASE_URL|POSTGRES_PASSWORD):/m);
     expect(compose).toMatch(/^\s+- connect_token\n\s+- database_url$/m);
     expect(compose).toMatch(/depends_on:\n\s+postgres:\n\s+condition: service_healthy$/m);
-  });
-
-  it('migrates from the new image after pull and before up, and stops the deploy if it fails', () => {
-    const ci = read('.github/workflows/ci.yml');
-    expect(ci).toMatch(
-      /docker compose pull --quiet \\\s+&& docker compose up -d --wait postgres \\\s+&& docker compose run --rm --no-deps --entrypoint node iris dist\/db\/migrate\.js \\\s+&& docker compose up -d --force-recreate --no-deps --remove-orphans iris;/,
-    );
-    // Generated once on the box: a new password per deploy would not match the
-    // one the existing volume was initialised with.
-    expect(ci).toMatch(/if \[ ! -s pg_password \]; then/);
   });
 });
 
@@ -445,6 +431,156 @@ describe('docker-compose.production.yml (issue #273)', () => {
       expect(file).toMatch(
         new RegExp(`^  ${secret}:\\n\\s+file: \\.\\./\\.\\./shared/secrets/${secret}$`, 'm'),
       );
+    }
+  });
+});
+
+/**
+ * Staging runs the hosted stack (#440): the production compose file through deploy.sh,
+ * in its own directory and compose project, so `staged-<sha>` proves what production
+ * then promotes. Only a merge to main runs the job, so these pin its shape.
+ */
+describe('deploy-staging runs the hosted stack (issue #440)', () => {
+  const ci = read('.github/workflows/ci.yml');
+  const uncomment = (text: string) =>
+    text
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+  const staging = uncomment(
+    ci.slice(ci.indexOf('\n  deploy-staging:\n'), ci.indexOf('\n  deploy-production:\n')),
+  );
+  const production = uncomment(ci.slice(ci.indexOf('\n  deploy-production:\n')));
+  const steps = staging.split(/\n {6}- /);
+  const stepIndex = (name: string) => steps.findIndex((s) => s.includes(`name: ${name}\n`));
+
+  it('deploys docker-compose.production.yml with deploy.sh, not the token-mode file', () => {
+    expect(staging).toContain(
+      'scp "${ssh_opts[@]}" docker-compose.production.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.yml"',
+    );
+    expect(staging).toContain(
+      'scp "${ssh_opts[@]}" deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/deploy.sh"',
+    );
+    expect(staging).toContain("IRIS_IMAGE='$IRIS_IMAGE' PORTAL_IMAGE='$PORTAL_IMAGE' ./deploy.sh;");
+    expect(staging).not.toMatch(/docker-compose\.staging\.yml/);
+    expect(staging).not.toMatch(/IRIS_CONNECT_TOKEN/);
+  });
+
+  it('keeps apart from production: its own deploy directory and compose project', () => {
+    expect(staging).toMatch(/^\s+DEPLOY_DIR: \/opt\/iris-staging$/m);
+    expect(production).toMatch(/^\s+DEPLOY_DIR: \/opt\/iris-production$/m);
+    expect(staging).toContain(`printf "COMPOSE_PROJECT_NAME='iris-staging'\\n"`);
+    expect(staging).toContain(
+      'release="$DEPLOY_DIR/releases/staging-${GITHUB_SHA::12}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
+    );
+  });
+
+  it('fails by name when the box is configured and a hosted setting is missing', () => {
+    expect(staging).toContain('for name in BETTER_AUTH_SECRET SMTP_URL PORTAL_URL SMTP_FROM; do');
+    expect(staging).toContain('::error::The staging environment is missing:');
+    for (const name of ['BETTER_AUTH_SECRET', 'SMTP_URL']) {
+      expect(staging).toContain(`${name}: \${{ secrets.${name} }}`);
+    }
+    for (const name of ['PORTAL_URL', 'SMTP_FROM']) {
+      expect(staging).toContain(`${name}: \${{ vars.${name} }}`);
+    }
+    expect(staging).toContain('::error::PORTAL_URL must be https');
+    // Still skips when there is no box at all (a fork).
+    expect(staging).toContain('::notice::Staging secrets not configured - skipping deploy.');
+  });
+
+  // The same secret files and the same _FILE pointers as production, so the deploy
+  // that gates production's promotion configures the services the same way.
+  it("writes the release's secrets and optional settings as production does", () => {
+    const lines = (text: string) =>
+      [
+        ...text.matchAll(
+          /^\s+(put_secret \w+ "\$\w+"|\[ -z "\$\w+" \] \|\| printf "\w+_FILE=.*)$/gm,
+        ),
+      ].map((m) => m[1]);
+    expect(lines(staging)).toHaveLength(10);
+    expect(lines(staging)).toEqual(lines(production));
+    const optional =
+      /for name in IRIS_SECURITY_CONTACT IRIS_ABUSE_CONTACT IRIS_SUPPORT_CONTACT IRIS_SECURITY_TXT_EXPIRES_DAYS \\\n\s+IRIS_S3_ENDPOINT IRIS_S3_BUCKET IRIS_S3_REGION IRIS_S3_ACCESS_KEY_ID IRIS_MANAGED_AI_PROVIDER \\\n\s+IRIS_STRIPE_PRICE_PRO IRIS_STRIPE_PRICE_TEAM; do/;
+    expect(staging).toMatch(optional);
+    expect(production).toMatch(optional);
+    expect(staging).toContain("if [ ! -s master_key ]; then printf 'k1:%s'");
+    expect(staging).toContain('if [ ! -s pg_password ]; then');
+  });
+
+  it("publishes on loopback ports that default apart from production's", () => {
+    expect(staging).toContain("IRIS_API_PORT: ${{ vars.IRIS_API_PORT || '14000' }}");
+    expect(staging).toContain("PORTAL_PORT: ${{ vars.PORTAL_PORT || '13000' }}");
+    expect(staging).toContain(`printf 'IRIS_API_PORT=%d\\nPORTAL_PORT=%d\\n'`);
+  });
+
+  it('deploys the digests it built, and records staged-<sha> only after the deploy', () => {
+    expect(staging).toContain(
+      'IRIS_IMAGE: ghcr.io/${{ github.repository }}@${{ steps.iris_image.outputs.digest }}',
+    );
+    expect(staging).toContain(
+      'PORTAL_IMAGE: ghcr.io/${{ github.repository }}-portal@${{ steps.portal_image.outputs.digest }}',
+    );
+    const deploy = stepIndex('Deploy');
+    expect(deploy).toBeGreaterThan(0);
+    expect(stepIndex('Record the staged digests')).toBe(steps.length - 1);
+    expect(stepIndex('Record the staged digests')).toBe(deploy + 1);
+    // The runner-side portal boot (#273) is gone: staging serves the portal itself.
+    expect(staging).not.toMatch(/portal-smoke/);
+  });
+
+  it('proves Chromium in iris and the worker, and both host ports, after deploy.sh', () => {
+    const deploy = steps[stepIndex('Deploy')];
+    const smoke = deploy.slice(deploy.indexOf('./deploy.sh;'));
+    expect(smoke).toContain('for service in iris worker; do');
+    expect(smoke).toContain('require(\\"./dist/browser\\").launchBrowser()');
+    expect(smoke).toContain('docker compose exec -T iris node dist/cli.js --version');
+    expect(smoke).toContain('http://127.0.0.1:$IRIS_API_PORT/health/ready');
+    expect(smoke).toContain('http://127.0.0.1:$PORTAL_PORT/api/health');
+  });
+
+  // Compose takes COMPOSE_PROJECT_NAME from the project's .env over the file's top-level
+  // `name: iris-production`; deploy.sh writes .env from settings.env. Needs only the
+  // docker CLI (no daemon): required under CI, skipped locally without it.
+  const composeCli = (() => {
+    try {
+      execFileSync('docker', ['compose', 'version'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      if (process.env.CI) throw new Error('docker compose is required in CI');
+      return false;
+    }
+  })();
+  (composeCli ? it : it.skip)('names the compose project iris-staging through settings.env', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-staging-name-'));
+    try {
+      fs.copyFileSync(
+        path.join(ROOT, 'docker-compose.production.yml'),
+        path.join(dir, 'docker-compose.yml'),
+      );
+      const digest = `sha256:${'a'.repeat(64)}`;
+      fs.writeFileSync(
+        path.join(dir, '.env'),
+        "COMPOSE_PROJECT_NAME='iris-staging'\nPORTAL_URL='https://staging.example'\n" +
+          `SMTP_FROM='IRIS <no-reply@example.com>'\nIRIS_IMAGE=ghcr.io/o/iris@${digest}\n` +
+          `PORTAL_IMAGE=ghcr.io/o/iris-portal@${digest}\nIRIS_API_PORT=14000\nPORTAL_PORT=13000\n`,
+      );
+      const config = JSON.parse(
+        execFileSync('docker', ['compose', 'config', '--format', 'json', '--no-path-resolution'], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            DOCKER_CONFIG: process.env.DOCKER_CONFIG ?? '',
+          },
+        }),
+      ) as { name: string; services: Record<string, { ports?: { published: string }[] }> };
+      expect(config.name).toBe('iris-staging');
+      expect(config.services.iris.ports?.[0].published).toBe('14000');
+      expect(config.services.portal.ports?.[0].published).toBe('13000');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });
