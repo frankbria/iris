@@ -19,7 +19,7 @@ export type LegalDocument = keyof typeof LEGAL_VERSIONS;
  * file's front-matter `version`.
  */
 export const PUBLISHED_VERSIONS = {
-  privacy: '2026-11-23',
+  privacy: '2026-11-26',
   subprocessors: '2026-11-23',
   dpa: '2026-11-23',
 } as const;
