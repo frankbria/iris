@@ -322,7 +322,9 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   period; not failing with one ends it. Anything else writes nothing, so retries and a late
   `invoice.payment_failed` after `invoice.paid` change nothing.
 - **The deadline is stored when the failure is first seen** (`now() + IRIS_BILLING_GRACE_DAYS`,
-  whole days 0-90, default 7, read by `hostedServices()`; malformed exits 3). The sweep and
+  whole days 0-90, default 7, read by `hostedServices()`; malformed exits 3, so a deploy
+  rolls back; production sets it from the `production` environment's variable of that name,
+  written to `settings.env` only when set, #639). The sweep and
   the portal need no setting, and changing it never moves a running deadline. It has
   microseconds: a JS `Date` read back from it is up to 1 ms earlier, so a test sweeps at
   the deadline plus a second.

@@ -118,6 +118,22 @@ describe('hosted iris connect refuses to start without key authentication', () =
     },
     40_000,
   );
+  // #639: the deploy writes the operator's value verbatim; a typo must fail the deploy (the
+  // container never turns healthy, deploy.sh rolls back), never mean "no grace" or "never".
+  test.each(['seven', '-1', '91', '7.5'])(
+    'a malformed IRIS_BILLING_GRACE_DAYS (%s) exits 3 and names it',
+    async (value) => {
+      const c = spawnConnect({
+        ...HOSTED_ENV,
+        DATABASE_URL: 'postgres://unused',
+        IRIS_BILLING_GRACE_DAYS: value,
+      });
+      expect(await exitCode(c)).toBe(3);
+      expect(c.out).toMatch(/IRIS_BILLING_GRACE_DAYS must be a whole number/);
+      expect(c.out).not.toMatch(/listening/);
+    },
+    40_000,
+  );
 });
 
 test('a database that never answers exits 3 instead of serving 503s', async () => {
