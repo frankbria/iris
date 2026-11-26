@@ -67,6 +67,14 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/THIRD_PARTY_NOTICES.txt ./THIRD_PARTY_NOTICES.txt
 COPY --from=build /app/dist ./dist
 COPY docker/healthcheck.js ./docker/healthcheck.js
+# The hosted stack's egress firewall (#376): the compose `egress` service runs the script
+# from this image on the host's network, so the rules ship by digest with the release.
+# iptables is inert in the app containers, which hold no capabilities.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iptables \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/egress-firewall.sh ./docker/egress-firewall.sh
+COPY docker/egress-probe.js ./docker/egress-probe.js
 
 # Mount point of the history volume (IRIS_DB_PATH=/data/iris.db in compose).
 # Docker seeds a new, empty named volume from this directory, owner included;

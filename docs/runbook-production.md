@@ -70,6 +70,9 @@ the job by name; they never skip it.
 
 - Docker with the compose plugin, and the tailnet ACL allowing `tag:ci` to reach the
   box on port 22 (as for staging).
+- Docker's iptables firewall (the default; not `firewall-backend: nftables`), so its
+  `DOCKER-USER` chain exists: the deploy's egress firewall goes there ("Container egress
+  firewall" below). Nothing to install by hand.
 - The job deploys under `/opt/iris-production` and creates what it needs:
   - `releases/<tag>-<run>-<attempt>/`: one directory per deploy run, holding the
     compose file, `docker/seccomp-chromium.json`, `deploy.sh`, `settings.env`, `.env`
@@ -157,12 +160,15 @@ own configuration: its secrets, relay, ports and nginx site.
    its object store (`seaweedfs`, "Artifact storage" below). Compose recreates one only
    when its definition changed, which in practice means you bumped its pinned digest
    (a security release). That restart happens before the gates and is not rolled back.
+   Then it starts the egress firewall on the stack's bridge ("Container egress
+   firewall" below), so the gates already run behind it.
 2. It runs the SMTP check from the new portal image.
 3. It runs the migrations from the new iris image.
-4. It recreates `iris`, `worker` and `portal` and waits for their healthchecks. Only
-   once they are healthy does it point `current` at the new release, so a deploy that
-   is cut off (job cancelled, host rebooted) leaves `current` on the last good one.
-5. If they stay unhealthy, it recreates them from the previous release's directory
+4. It recreates `iris`, `worker` and `portal` and waits for their healthchecks, then
+   runs the egress probe in `iris` and the worker. Only once they are healthy and the
+   probe passed does it point `current` at the new release, so a deploy that is cut off
+   (job cancelled, host rebooted) leaves `current` on the last good one.
+5. If they stay unhealthy or the probe fails, it recreates them from the previous release's directory
    (its compose file, settings, secrets and images), leaves `current` where it was,
    and exits non-zero.
 
@@ -172,7 +178,7 @@ failed with "The job was interrupted too many times"). A scan restarts from the
 beginning, so a tenant sees a longer run, not an error.
 
 If step 1, 2 or 3 fails, the script exits non-zero and nothing has changed: the serving
-release's files and containers are untouched. The first deploy has no previous
+release's files and containers are untouched (the egress firewall, once applied, stays). The first deploy has no previous
 release, so it says so and exits non-zero without a rollback. `current` only ever
 names a release that became healthy, so it is always a valid rollback target. A rerun
 of the same tag stages a new release directory and is an ordinary deploy, which also
@@ -191,6 +197,62 @@ picks up rotated secrets.
   `/tmp/iris-worker-heartbeat` at every poll, and every 30s while a job runs. The
   healthcheck fails when the file is 180s old: three times the longest gap, which is
   the 60s ceiling of `--poll-ms`.
+
+## Container egress firewall (issue #376)
+
+The hosted containers run tenant pages and call AI providers, Stripe and the mail relay.
+Beneath the browser's own resolve-and-pin proxy (#374), the host refuses every new
+connection from the stack's containers to a private, CGNAT (`100.64.0.0/10`), link-local
+(`169.254.0.0/16`, the cloud metadata address), loopback, documentation, benchmarking,
+multicast or reserved IPv4 range. Public destinations are untouched.
+
+**How.** The compose service `egress` runs `docker/egress-firewall.sh` from the iris image,
+on the host's network with `NET_ADMIN` (and `NET_RAW`, for a host on the legacy iptables
+backend) and nothing else. It writes a chain `IRIS-EGRESS-<bridge>` and two jumps to it:
+from `DOCKER-USER` for traffic routed out of the stack's bridge, and from `INPUT` for
+traffic to the host's own addresses. `deploy.sh` finds the bridge (compose's default
+network for the project; it refuses a network with IPv6, as the rules are IPv4 only) and
+starts the service before the gates. The rules key on that one bridge, so other stacks on
+the box are unaffected.
+
+**What stays allowed.** Replies on connections the ingress opened to a published port;
+DNS (Docker's resolver forwards from inside the container to the host's resolvers,
+which may be private); everything between the stack's own containers (Postgres, and on
+staging the object store); every public address, which includes the host's own public
+address and so the nginx ingress and an object-store name it serves. A service the
+containers must reach on a **private** address (a relay or object store on the LAN or
+the tailnet) is refused: give it a public address, or put it on the stack's network.
+
+**Fail closed.** The rules stay when the container stops or is removed. The container
+checks them every 30 seconds and re-applies what is missing, and `restart: unless-stopped`
+brings it back after a reboot, which flushes the host's rules. Its healthcheck fails
+while a rule is missing, so the watchdog restarts and alerts on it (#275). Rolling back a
+release does not remove them.
+
+**The probe.** After the new containers are healthy, `deploy.sh` runs
+`node docker/egress-probe.js` in `iris` and in the worker: a TCP connection to
+`169.254.169.254:80` must be refused at once (the firewall's reset). A connection, or a
+timeout (what a host with no metadata service shows with no firewall at all), fails the
+deploy and rolls it back. The log line is `egress probe: 169.254.169.254:80 refused, as
+the egress firewall does`.
+
+**Check it by hand** (in the current release's real path):
+
+```bash
+docker compose ps egress                    # healthy
+docker compose logs egress                  # "applied (iptables-nft): ..."
+docker compose exec -T iris node docker/egress-probe.js
+docker compose exec -T iris node docker/egress-probe.js 10.0.0.1 443
+```
+
+**Remove the rules** (only to retire the stack; any deploy puts them back). As root,
+with `<bridge>` from `IRIS_EGRESS_BRIDGE` in the release's `.env`:
+
+```bash
+iptables -D DOCKER-USER -i <bridge> ! -o <bridge> -j IRIS-EGRESS-<bridge>
+iptables -D INPUT -i <bridge> -j IRIS-EGRESS-<bridge>
+iptables -F IRIS-EGRESS-<bridge> && iptables -X IRIS-EGRESS-<bridge>
+```
 
 ## Roll back
 

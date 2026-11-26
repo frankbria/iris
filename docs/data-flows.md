@@ -319,5 +319,8 @@ it is a subprocessor like the bucket's own provider.
 ### Sites under test
 
 IRIS's browser requests the URLs the customer names, from the hosting provider's network,
-through the egress proxy that refuses private addresses (`src/egress-proxy.ts`). Those sites
-are chosen by the customer and are not IRIS's subprocessors.
+through the egress proxy that refuses private addresses (`src/egress-proxy.ts`). Beneath it,
+the host refuses every new connection from the hosted containers to private, CGNAT,
+link-local (cloud metadata) and reserved addresses (`docker/egress-firewall.sh`, #376), so
+nothing in the containers, browser or not, reaches the hosting provider's internal network.
+Those sites are chosen by the customer and are not IRIS's subprocessors.

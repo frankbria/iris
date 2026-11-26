@@ -234,6 +234,49 @@ services:
         max-size: '10m'
         max-file: '3'
 
+  # Container egress firewall (#376): host rules that refuse new connections from this
+  # stack's bridge to private, CGNAT, link-local (cloud metadata) and reserved IPv4 ranges.
+  # docker/egress-firewall.sh says what is allowed. deploy.sh starts it before the gates
+  # with the bridge it found (IRIS_EGRESS_BRIDGE in .env) and probes the metadata address
+  # from the running containers. The rules outlive this container (fail closed); it
+  # re-applies them every 30s and after a reboot.
+  egress:
+    image: ${IRIS_IMAGE:?set IRIS_IMAGE to the iris image by digest}
+    entrypoint: ['bash', '/app/docker/egress-firewall.sh']
+    environment:
+      IRIS_EGRESS_BRIDGE: ${IRIS_EGRESS_BRIDGE:-}
+    # The host's network and NET_ADMIN are what writing its firewall takes; NET_RAW only
+    # for a host on the legacy iptables backend.
+    network_mode: host
+    user: '0'
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run:size=1m
+      - /tmp:size=1m
+    init: true
+    restart: unless-stopped
+    mem_limit: 64m
+    pids_limit: 32
+    healthcheck:
+      test: ['CMD', 'bash', '/app/docker/egress-firewall.sh', 'check']
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      start_interval: 1s
+      retries: 2
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
   # No `ports:`: only this compose network reaches it.
   postgres:
     # Pinned by digest like the app images; bump tag and digest together. The next
