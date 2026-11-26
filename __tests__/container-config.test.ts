@@ -359,7 +359,15 @@ describe('docker-compose.production.yml (issue #273)', () => {
       );
       expect(job).toContain(`${name}: \${{ secrets.${name} }}`);
     }
-    expect(job).toMatch(/IRIS_STRIPE_PRICE_PRO IRIS_STRIPE_PRICE_TEAM; do/);
+    expect(job).toMatch(/IRIS_STRIPE_PRICE_PRO IRIS_STRIPE_PRICE_TEAM IRIS_BILLING_GRACE_DAYS; do/);
+  });
+
+  // #639: written to settings.env only when the variable is set, so unset keeps the default.
+  it('has the deploy job pass the payment grace period from its variable', () => {
+    const ci = read('.github/workflows/ci.yml');
+    const job = ci.slice(ci.indexOf('\n  deploy-production:'));
+    expect(job).toContain('IRIS_BILLING_GRACE_DAYS: ${{ vars.IRIS_BILLING_GRACE_DAYS }}');
+    expect(ci.slice(0, ci.indexOf('\n  deploy-production:'))).not.toMatch(/GRACE/);
   });
 
   it('reads the empty defaults as unset, not as a partial configuration (#549)', () => {
@@ -501,9 +509,10 @@ describe('deploy-staging runs the hosted stack (issue #440)', () => {
     expect(lines(staging)).toHaveLength(10);
     expect(lines(staging)).toEqual(lines(production));
     const optional =
-      /for name in IRIS_SECURITY_CONTACT IRIS_ABUSE_CONTACT IRIS_SUPPORT_CONTACT IRIS_SECURITY_TXT_EXPIRES_DAYS \\\n\s+IRIS_S3_ENDPOINT IRIS_S3_BUCKET IRIS_S3_REGION IRIS_S3_ACCESS_KEY_ID IRIS_MANAGED_AI_PROVIDER \\\n\s+IRIS_STRIPE_PRICE_PRO IRIS_STRIPE_PRICE_TEAM; do/;
-    expect(staging).toMatch(optional);
-    expect(production).toMatch(optional);
+      /for name in IRIS_SECURITY_CONTACT IRIS_ABUSE_CONTACT IRIS_SUPPORT_CONTACT IRIS_SECURITY_TXT_EXPIRES_DAYS \\\n\s+IRIS_S3_ENDPOINT IRIS_S3_BUCKET IRIS_S3_REGION IRIS_S3_ACCESS_KEY_ID IRIS_MANAGED_AI_PROVIDER \\\n\s+IRIS_STRIPE_PRICE_PRO IRIS_STRIPE_PRICE_TEAM/;
+    expect(staging).toMatch(new RegExp(`${optional.source}; do`));
+    // Production also takes the payment grace period (#639); staging runs no Stripe sweep.
+    expect(production).toMatch(new RegExp(`${optional.source} IRIS_BILLING_GRACE_DAYS; do`));
     expect(staging).toContain("if [ ! -s master_key ]; then printf 'k1:%s'");
     expect(staging).toContain('if [ ! -s pg_password ]; then');
   });

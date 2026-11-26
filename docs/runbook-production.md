@@ -706,6 +706,7 @@ signed webhook. Set up once per Stripe mode (test first, then live):
 | `IRIS_STRIPE_WEBHOOK_SECRET` | secret | the endpoint's signing secret; written to `secrets/stripe_webhook_secret` |
 | `IRIS_STRIPE_PRICE_PRO` | variable | the Pro price id |
 | `IRIS_STRIPE_PRICE_TEAM` | variable | the Team price id |
+| `IRIS_BILLING_GRACE_DAYS` | variable | optional: days from a failed payment to suspension, 0-90 (unset: 7) |
 
 Some but not all of them stop `iris connect` (exit 3, so the deploy rolls back) and make
 the portal's `/org` fail. Check from the Stripe dashboard that a test event is answered
@@ -799,8 +800,12 @@ every portal page.
 - Align Stripe's own retry schedule (Settings → Billing → Subscriptions and emails →
   Manage failed payments) with the grace period: if Stripe cancels the subscription before
   the deadline, the org simply becomes Free and is never suspended.
-- The compose file passes `IRIS_BILLING_GRACE_DAYS` to `iris`, but the deploy job does not
-  write it to `settings.env` yet, so production runs the default until that is added.
+- **To change the period**, set the `IRIS_BILLING_GRACE_DAYS` variable in the `production`
+  environment (Settings → Environments → production → Environment variables) and deploy.
+  The deploy job writes it to the release's `settings.env` (#639); unset keeps 7 days. A
+  value that is not a whole number from 0 to 90 stops `iris connect` (exit 3), so the new
+  containers never turn healthy and `deploy.sh` rolls back to the previous release. Check
+  it after a deploy: `docker compose exec iris printenv IRIS_BILLING_GRACE_DAYS`.
 
 ## Retention and offboarding (issue #349)
 
