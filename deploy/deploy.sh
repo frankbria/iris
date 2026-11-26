@@ -216,17 +216,20 @@ if [ -s "$proxy_dir/upstreams.conf" ] && [ -n "$(docker compose ps -aq proxy)" ]
   # Rolling (#316): the new containers start next to the serving ones, the proxy moves to
   # them once they are healthy, and the old ones drain before they stop. Nothing the
   # serving release runs is touched until the switch.
+  # .prev is this run's own backup (switch_proxy writes it): one left by an earlier run names
+  # containers long gone.
+  rm -f "$proxy_dir/upstreams.conf.prev"
   mapfile -t old < <(docker compose ps -aq "${app_services[@]}")
   scale=()
   for service in "${app_services[@]}"; do
     scale+=(--scale "$service=$(($(docker compose ps -aq "$service" | wc -l) + 1))")
   done
-  new=()
-  if docker compose up -d --no-deps --no-recreate "${scale[@]}" "${app_services[@]}"; then
-    mapfile -t new < <(docker compose ps -aq "${app_services[@]}" | grep -vxF -f <(printf '%s\n' "${old[@]}") || :)
-  fi
+  scaled=0
+  docker compose up -d --no-deps --no-recreate "${scale[@]}" "${app_services[@]}" || scaled=$?
+  # Whatever it created, even when it failed partway: removed below unless all are healthy.
+  mapfile -t new < <(docker compose ps -aq "${app_services[@]}" | grep -vxF -f <(printf '%s\n' "${old[@]}") || :)
   new_of() { for id in "${new[@]}"; do [ "$(service_of "$id")" != "$1" ] || echo "$id"; done; }
-  if [ "${#new[@]}" = "${#app_services[@]}" ] && wait_healthy "${new[@]}" && egress_probe "${new[@]}" \
+  if [ "$scaled" = 0 ] && [ "${#new[@]}" = "${#app_services[@]}" ] && wait_healthy "${new[@]}" && egress_probe "${new[@]}" \
     && switch_proxy "$(new_of iris)" "$(new_of portal)"; then
     point_current "$release"
     log "rolling: switched to $(name_of "$(new_of iris)") and $(name_of "$(new_of portal)")"
@@ -245,6 +248,7 @@ if [ -s "$proxy_dir/upstreams.conf" ] && [ -n "$(docker compose ps -aq proxy)" ]
     done
     wait
     docker rm -f "${old[@]}" >/dev/null || :
+    rm -f "$proxy_dir/upstreams.conf.prev"
     log 'healthy'
     prune_releases
     exit 0
@@ -278,16 +282,22 @@ fi
 log 'new containers did not become healthy, or the egress probe or the proxy failed'
 docker compose ps -a || :
 for service in "${app_services[@]}" proxy; do docker compose logs --tail 30 "$service" || :; done
-# The proxy holds the host ports the previous release's containers publish.
-rm -f "$proxy_dir/upstreams.conf"
-docker compose rm -sf proxy || :
+behind_proxy=0
+if [ -n "$previous" ] && (cd "$previous" && docker compose config --services | grep -qx proxy); then
+  behind_proxy=1
+else
+  # The previous release publishes the host ports itself, which the proxy holds.
+  rm -f "$proxy_dir/upstreams.conf"
+  docker compose rm -sf proxy || :
+fi
 if [ -z "$previous" ]; then
   log 'first deploy: no previous release to roll back to'
   exit 1
 fi
 log "rolling back to $previous"
 if (cd "$previous" && docker compose up -d --force-recreate --no-deps --remove-orphans \
-  --wait --wait-timeout "$wait_timeout" "${app_services[@]}"); then
+  --wait --wait-timeout "$wait_timeout" "${app_services[@]}") \
+  && { [ "$behind_proxy" = 0 ] || switch_proxy "$(docker compose ps -q iris)" "$(docker compose ps -q portal)"; }; then
   log 'rolled back; the previous release is serving'
 else
   log 'ROLLBACK ALSO FAILED: the previous release is not healthy either'

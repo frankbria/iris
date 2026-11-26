@@ -524,9 +524,11 @@ secrets:
 
   // Behind the proxy (#316) the serving containers are never touched before the switch, so
   // a failed release is only removed.
-  it('an unhealthy release is removed; the previous one keeps serving: its images, settings and files', () => {
+  it('an unhealthy release is removed; the previous one keeps serving: its images, settings and files', async () => {
     const serving = current()!;
     const before = running();
+    const upstreams = path.join(root, 'shared', 'proxy', 'upstreams.conf');
+    const routed = fs.readFileSync(upstreams, 'utf8');
     const r = deploy(stage('r6', { mark: 'b' }), refs.unhealthy, refs.unhealthy);
     expect(r.out).toMatch(/the serving release kept serving/);
     expect(r.status).toBe(1);
@@ -540,6 +542,10 @@ secrets:
     expect(now.iris.mark).toBe('a'); // the previous release's settings, not r6's
     expect(now.portal.mounts).toContain(path.join(serving, 'secrets', 'smtp_url'));
     expect(now).toEqual(before); // the very same containers
+    // The proxy still points at them: no stale backup of an earlier switch was restored.
+    expect(fs.readFileSync(upstreams, 'utf8')).toBe(routed);
+    const port = Number(docker('port', serviceId('proxy'), '4000/tcp').split(':').pop());
+    expect(await get(port, 'host')).toBe(now.iris.id.slice(0, 12));
   }, 150_000);
 
   // #376: a release whose containers reach the metadata address is not switched to.

@@ -233,12 +233,16 @@ proxy across a deploy; `container-config.test.ts` pins the order.
   own healthcheck). Up to `DEPLOY_DRAIN_TIMEOUT`, then `docker stop` (iris's #309 drain).
   The old worker gets `docker stop -t <drain>` at once, in the background: SIGTERM is
   "stop after the current job".
-- **Failure before the switch removes the new containers** and restores
-  `upstreams.conf.prev`; the serving ones were never touched (no previous-directory
-  rollback on this path). The cold path (no `upstreams.conf`, or no proxy container: a
+- **Failure before the switch removes the new containers** (whatever `up --scale` created,
+  even when it failed partway) and restores `upstreams.conf.prev` only if this run's
+  switch wrote it: the rolling path deletes any older `.prev` first, since it names
+  containers long gone (codex review). The serving ones were never touched (no
+  previous-directory rollback on this path). Between the reload and `point_current` there
+  is no recovery: two local commands, accepted. The cold path (no `upstreams.conf`, or no proxy container: a
   rollback to a pre-#316 release removes it as an orphan) recreates in place as before
-  and starts the proxy; its rollback removes the proxy first (it holds the ports the
-  previous release publishes).
+  and starts the proxy. Its rollback removes the proxy first when the previous release
+  publishes the ports itself (no `proxy` service), and otherwise re-points the proxy at
+  the previous release's recreated containers.
 - **Orphans go at the switch** (`up --no-deps --remove-orphans proxy`), so staging's store
   still leaves with a release that drops its file.
 - **The overlap**: two iris processes share Postgres and the `/data` volumes (SQLite locks)
