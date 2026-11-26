@@ -54,6 +54,20 @@ export default async function ContactPage() {
           Account, billing and suspension questions.
         </p>
       </section>
+      {contacts.status && (
+        <section aria-labelledby="status" className="flex flex-col gap-1">
+          <h2 id="status" className="font-medium">
+            Service status
+          </h2>
+          <p>
+            <ContactLink url={contacts.status} placeholder="" />
+          </p>
+          <p className="text-muted-foreground">
+            Whether the portal and the API are up, checked from outside our
+            servers every few minutes.
+          </p>
+        </section>
+      )}
       <LegalFooter />
     </main>
   )

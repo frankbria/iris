@@ -1,0 +1,84 @@
+name: status
+
+# The public status page (#317, owner decision 2026-11-26: option C). Every five minutes a
+# GitHub-hosted runner, outside our servers, runs the runbook's two probes ("Uptime from
+# outside") with scripts/status-probe.js and publishes the result to GitHub Pages.
+#
+# Off until the owner configures it, and safe to run before: with no STATUS_PROBE_URL
+# secret the `config` job answers "disabled" and `publish` is skipped, so nothing touches
+# Pages or creates the github-pages environment. To turn it on (runbook "Status page"):
+#   1. Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+#   2. Settings -> Secrets and variables -> Actions -> New repository secret
+#      STATUS_PROBE_URL = the portal's https URL (staging first, production later).
+# A secret, not a variable: secrets are masked in the public log, and the repo names no
+# operator host (#329). The script prints status codes only.
+#
+# GitHub runs schedules late under load, and disables a public repo's schedule after 60
+# days without activity; the page states when it last checked.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+# One publication at a time; a late run waits rather than cancelling one mid-deploy.
+concurrency:
+  group: status-page
+  cancel-in-progress: false
+
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      enabled: ${{ steps.config.outputs.enabled }}
+    steps:
+      - id: config
+        env:
+          STATUS_PROBE_URL: ${{ secrets.STATUS_PROBE_URL }}
+        run: |
+          if [ -n "$STATUS_PROBE_URL" ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo '::notice::Status page not configured: set the STATUS_PROBE_URL secret (runbook "Status page")'
+          fi
+
+  publish:
+    needs: config
+    if: needs.config.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write # deploy-pages
+      id-token: write # deploy-pages proves the run's identity to Pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+      # Where the site is published: the last status.json, the history, is read back from it.
+      - id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - id: probe
+        env:
+          STATUS_PROBE_URL: ${{ secrets.STATUS_PROBE_URL }}
+          STATUS_PREVIOUS_URL: ${{ steps.pages.outputs.base_url }}/status.json
+          STATUS_OUT: _site
+        run: node scripts/status-probe.js
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      # After publishing, so the page shows the outage: a red run is what notifies the owner.
+      - if: steps.probe.outputs.healthy != 'true'
+        run: |
+          echo '::error::A status probe is down: see the published status page'
+          exit 1

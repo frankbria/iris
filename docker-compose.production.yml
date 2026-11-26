@@ -190,6 +190,8 @@ services:
       IRIS_ABUSE_CONTACT: ${IRIS_ABUSE_CONTACT:-}
       IRIS_SUPPORT_CONTACT: ${IRIS_SUPPORT_CONTACT:-}
       IRIS_SECURITY_TXT_EXPIRES_DAYS: ${IRIS_SECURITY_TXT_EXPIRES_DAYS:-}
+      # The public status page (#317): optional; linked from /contact only when set.
+      IRIS_STATUS_URL: ${IRIS_STATUS_URL:-}
       # Object storage (#257, #549): empty is unset (no artifacts; visual jobs answer 503).
       # The deploy sets the _FILE path only when it wrote the secret.
       IRIS_S3_ENDPOINT: ${IRIS_S3_ENDPOINT:-}

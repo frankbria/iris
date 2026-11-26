@@ -734,6 +734,35 @@ or unreachable. Add an external uptime monitor (any hosted service) on:
 - `https://<portal host>/v1/jobs/x` without a key: iris-api through nginx answers
   **401**. Alert on anything else.
 
+### Status page (issue #317)
+
+`.github/workflows/status.yml` runs those two probes from a GitHub-hosted runner every five
+minutes (`scripts/status-probe.js`, one retry per failed probe) and publishes a static page
+on GitHub Pages: overall state, each component's state and since when, and its uptime over
+the last 288 checks (about a day). A run where a probe is down publishes the page and then
+fails, so GitHub notifies you of the failed workflow. Until it is configured, every run
+succeeds doing nothing ("Status page not configured").
+
+To turn it on (repository admin, in this order: the publish job calls Pages):
+
+1. **Settings → Pages → Build and deployment → Source: GitHub Actions.** (Optionally a
+   custom domain there, e.g. `status.<domain>`, with its DNS record.)
+2. **Settings → Secrets and variables → Actions → Secrets → New repository secret**:
+   `STATUS_PROBE_URL` = the portal's https URL, the staging portal first. A secret, not a
+   variable, so it is masked in the public Actions log (#329).
+3. **Actions → status → Run workflow** once, and open the URL the `publish` job shows.
+4. Link it from the portal: set the `IRIS_STATUS_URL` variable (the page's https URL) in
+   the `staging` environment (**Settings → Environments → staging → Environment variables**)
+   and deploy; `/contact` then shows "Service status". `IRIS_STATUS_URL` must be an https
+   URL: anything else fails the portal's health check, so a deploy rolls back.
+5. For production, change `STATUS_PROBE_URL` to the production portal (#515), and add
+   `IRIS_STATUS_URL` to the `deploy-production` job the way #639 added
+   `IRIS_BILLING_GRACE_DAYS` (its `env` and the `for name in …` loop), then set the variable
+   in the `production` environment. The compose file already passes it to the portal.
+
+GitHub runs schedules late under load and disables the schedule of a public repo after 60
+days without activity; the page says when it last checked.
+
 ## Publishing a new version of the terms (issue #276)
 
 The Terms of Service and Acceptable Use Policy are `apps/portal/content/legal/terms.md`

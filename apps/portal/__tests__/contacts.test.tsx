@@ -21,6 +21,7 @@ describe("readContacts", () => {
       security: null,
       abuse: null,
       support: null,
+      status: null,
       expiresDays: 365,
     })
   })
@@ -32,11 +33,13 @@ describe("readContacts", () => {
         IRIS_ABUSE_CONTACT: " https://example.com/abuse ",
         IRIS_SUPPORT_CONTACT: "mailto:help@example.com",
         IRIS_SECURITY_TXT_EXPIRES_DAYS: "90",
+        IRIS_STATUS_URL: "https://status.example.com/",
       })
     ).toEqual({
       security: "mailto:security@example.com",
       abuse: "https://example.com/abuse",
       support: "mailto:help@example.com",
+      status: "https://status.example.com/",
       expiresDays: 90,
     })
   })
@@ -56,6 +59,11 @@ describe("readContacts", () => {
     // Shown decoded on /contact and in the banner: a bad escape must fail here, at
     // configuration, not later as a page that cannot render.
     ["IRIS_SUPPORT_CONTACT", "mailto:help%desk@example.com"],
+    // The status page (#317) is a web page only.
+    ["IRIS_STATUS_URL", "mailto:status@example.com"],
+    ["IRIS_STATUS_URL", "MAILTO:status@example.com"],
+    ["IRIS_STATUS_URL", "http://status.example.com/"],
+    ["IRIS_STATUS_URL", "javascript:alert(1)"],
   ])("refuses %s=%j, naming the variable", (name, value) => {
     expect(() => readContacts({ [name]: value })).toThrow(name)
   })
