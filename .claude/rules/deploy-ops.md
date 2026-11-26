@@ -10,6 +10,7 @@ paths:
   - "scripts/check-pack.js"
   - "scripts/third-party-notices.js"
   - "__tests__/{container-config,iris-image,check-pack}.test.ts"
+  - "docker/**"
 ---
 
 ### TLS Ingress (issue #347)
@@ -204,6 +205,62 @@ compares them), `-s3.config` identities (never anonymous), `127.0.0.1:18333`, vo
   `s3.bucket.list`, which also confirms it) and requires an unsigned GET to be 403.
 - **Managed AI stays iris-only** (#549's decision, kept in #514): the worker runs tenant
   pages and makes no AI call yet.
+
+### Container egress firewall (issue #376)
+
+Compose service `egress` (docker-compose.production.yml) runs `docker/egress-firewall.sh`
+from the iris image: `network_mode: host`, `user: '0'`, `cap_drop: ALL` + `NET_ADMIN` and
+`NET_RAW` only. Host chain `IRIS-EGRESS-<bridge>`, jumped to from `DOCKER-USER`
+(`-i <bridge> ! -o <bridge>`) and `INPUT` (`-i <bridge>`): ESTABLISHED/RELATED and DNS
+(53) return, then every non-global IPv4 range is REJECTed (TCP `tcp-reset`). Runbook
+"Container egress firewall". `container-config.test.ts` pins it; `iris-image.test.ts` runs
+the real script on the CI runner; `deploy-script.test.ts` checks the bridge name and the
+probe's rollback.
+
+- **Why host rules, from a container.** The apps hold no capabilities, and per-container
+  rules die with the network namespace on every restart. Host rules keyed on the stack's
+  bridge cover every app container, a restart and a rollback included, and touch no other
+  stack. The service is the deploy applying them: no host step, no script outside the
+  release (deploy-production copies a fixed file list, which must not change), and
+  `restart: unless-stopped` re-applies after a reboot flushed them.
+- **Only `deploy.sh` and the iris image carry it to production.** The script and
+  `docker/egress-probe.js` ship in the image (with `iptables`, apt in the runtime stage);
+  the service is in the production compose file. Nothing in deploy-production changed.
+- **The bridge comes from deploy.sh**, after the data services created the network:
+  `docker compose config`'s `name:` + `_default`, the `com.docker.network.bridge.name`
+  option or `br-<12 of the id>`, appended to `.env` as `IRIS_EGRESS_BRIDGE`. A network
+  with IPv6 is refused (the rules are IPv4 only). Not set on the default network in
+  compose: changing an existing network's options means recreating it under the
+  serving release, and a rollback's compose file would differ again.
+- **`egress` is not a data service**: deploy.sh's list excludes it and starts it on its own
+  once the bridge is known, before the gates, so the SMTP check and migrations run behind it.
+- **The backend is Docker's own**: the script writes into every one of `iptables-nft` /
+  `iptables-legacy` that shows `DOCKER-USER` (both after a migration), and fails by name
+  when neither does (Docker's nftables firewall backend has no such chain).
+- **Fail closed**: nothing removes the rules (stop, removal, rollback). The loop re-checks
+  every 30s with `-C` and re-applies with one `iptables-restore --noflush` (declaring the
+  chain empties it). The healthcheck is the same check.
+- **Each jump must be first in its chain** (`-S <chain> | sed -n 2p`, codex review): ufw
+  puts its jumps atop `INPUT` on reload, and its ACCEPTs (22, 443) would then let the
+  containers reach the host. The repair deletes every copy and inserts at 1.
+- **Reboot window and pre-#376 rollback are accepted gaps** (runbook): Docker starts the
+  apps and `egress` together after a reboot; a rollback to a release without the service
+  removes it as an orphan (rules stay until reboot).
+- **The probe needs a reset, not just a failure**: `egress-probe.js` passes only on
+  `ECONNREFUSED`. A timeout is what a metadata-less host shows with no firewall, and the
+  GitHub runner's metadata service answers, which the image test uses as its negative
+  control. It runs in iris and the worker (the portal shares the bridge, so the rules).
+- **DNS only to the host's non-loopback nameservers** (its `/etc/resolv.conf`, which a
+  host-network container sees): Docker's embedded resolver forwards to those from inside
+  the container's namespace, and they are often private (a VPS resolver, tailnet DNS); to
+  a loopback upstream (systemd-resolved) it forwards from the host's (`ExtServers:
+  [host(127.0.0.53)]` in a container's resolv.conf), which needs nothing. A blanket port-53
+  exemption let containers reach any private address on 53 (codex review). A daemon.json
+  `dns` setting is not read: lookups then fail, loudly, at the SMTP gate.
+- **`192.0.0.9` and `192.0.0.10` return before `192.0.0.0/24` is refused**: IANA marks
+  them globally reachable (PCP and TURN anycast).
+- **Private dependencies are refused by design**: an SMTP relay or object store on a
+  private/tailnet address needs a public address or a place on the stack's network.
 
 ### Backups (issue #274)
 

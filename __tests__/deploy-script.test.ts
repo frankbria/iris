@@ -5,9 +5,11 @@
  * `@sha256:` digest refs and really pulls them. The images are busybox builds that
  * model only what the script depends on: a migration that exits 0 or 1
  * (`dist/db/migrate.js`), an SMTP check that passes only when the release's mounted
- * `smtp_url` secret says `ok`, healthchecks that pass or fail, and a worker that
- * writes a heartbeat checked by the production compose file's own command. Their
- * `node` is a shell wrapper, so those "scripts" are shell.
+ * `smtp_url` secret says `ok`, healthchecks that pass or fail, a worker that
+ * writes a heartbeat checked by the production compose file's own command, and an egress
+ * probe (`docker/egress-probe.js`) that passes or fails (#376). Their `node` is a shell
+ * wrapper, so those "scripts" are shell. The egress service stands in for the firewall:
+ * on the host's network, it is healthy only when the bridge deploy.sh named exists.
  *
  * Each case stages a release directory the way the deploy job does
  * (<root>/releases/<id>/ with its compose file, settings.env and secrets/, shared
@@ -105,6 +107,18 @@ services:
     <<: *app
     image: \${PORTAL_IMAGE:?}
     secrets: [smtp_url]
+  egress:
+    image: \${IRIS_IMAGE:?}
+    init: true
+    network_mode: host
+    command: ['sleep', 'infinity']
+    environment:
+      IRIS_EGRESS_BRIDGE: \${IRIS_EGRESS_BRIDGE:-}
+    healthcheck:
+      test: ['CMD-SHELL', 'test -n "$$IRIS_EGRESS_BRIDGE" && test -e "/sys/class/net/$$IRIS_EGRESS_BRIDGE"']
+      interval: 1s
+      timeout: 2s
+      retries: 1
 secrets:
   smtp_url:
     file: ./secrets/smtp_url
@@ -136,7 +150,7 @@ secrets:
    * Builds and pushes one image; returns its digest ref. COPY only, no RUN: each RUN
    * is a container, which costs tens of seconds on a loaded WSL daemon.
    */
-  function image(name: string, { migrate = 0, health = 0 } = {}): string {
+  function image(name: string, { migrate = 0, health = 0, egress = 0 } = {}): string {
     const ctx = path.join(dir, `ctx-${name}`);
     const put = (file: string, body: string, mode = 0o644) => {
       fs.mkdirSync(path.dirname(path.join(ctx, file)), { recursive: true });
@@ -149,6 +163,7 @@ secrets:
       '[ "$(cat /run/secrets/smtp_url)" = ok ]\n',
     );
     put('app/health', `${health}\n`);
+    put('app/docker/egress-probe.js', `exit ${egress}\n`);
     put(
       'app/worker.sh',
       'while :; do [ "$(cat /app/health)" = 0 ] && touch /tmp/iris-worker-heartbeat; sleep 1; done\n',
@@ -269,6 +284,7 @@ secrets:
     refs.v2 = image('v2');
     refs.badMigration = image('bad-migration', { migrate: 1 });
     refs.unhealthy = image('unhealthy', { health: 1 });
+    refs.leaky = image('leaky', { egress: 1 });
   }, 180_000);
 
   afterAll(() => {
@@ -304,6 +320,19 @@ secrets:
         path.join(fs.realpathSync(release), 'secrets', 'smtp_url'),
       );
     }
+    // The firewall keys on the stack's own bridge (#376): compose's default network.
+    const id = docker('network', 'inspect', '-f', '{{.Id}}', 'iris-deploy-test_default');
+    const egress = docker(
+      'ps',
+      '-q',
+      '--filter',
+      'label=com.docker.compose.project=iris-deploy-test',
+      '--filter',
+      'label=com.docker.compose.service=egress',
+    );
+    expect(docker('inspect', '-f', '{{range .Config.Env}}{{.}} {{end}}', egress)).toContain(
+      `IRIS_EGRESS_BRIDGE=br-${id.slice(0, 12)}`,
+    );
     // DEPLOY_KEEP_RELEASES=2: the failed r0 is gone.
     expect(fs.readdirSync(path.join(root, 'releases')).sort()).toEqual(['r1', 'r2']);
   }, 150_000);
@@ -400,6 +429,18 @@ secrets:
     expect(now.iris.mark).toBe('a'); // the previous release's settings, not r6's
     expect(now.portal.mounts).toContain(path.join(serving, 'secrets', 'smtp_url'));
   }, 150_000);
+
+  // #376: a release whose containers reach the metadata address is not switched to.
+  it('a release that fails the egress probe rolls back', () => {
+    const serving = current()!;
+    const r = deploy(stage('r6e', { mark: 'b' }), refs.leaky, refs.v1);
+    expect(r.out).toMatch(/egress probe failed in iris/);
+    expect(r.out).toMatch(/rolled back/);
+    expect(r.status).toBe(1);
+    expect(current()).toBe(serving);
+    expect(running().iris.image).toBe(refs.v2);
+  }, 150_000);
+
   // A bumped Postgres digest (a security release) must reach the running database;
   // an unchanged one must leave it alone (#273 review).
   it('recreates postgres only when its image changed', () => {

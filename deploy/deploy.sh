@@ -10,12 +10,14 @@
 # <deploy dir>/current points at the release that is serving, and only ever at one
 # that became healthy. Steps, each gating the next:
 #   1. pull the new images; start the data services (postgres; staging's object store),
-#      recreating one only if its pinned image or definition changed
+#      recreating one only if its pinned image or definition changed; then the egress
+#      firewall (#376) on the stack's bridge, so the gates already run behind it
 #   2. SMTP readiness check from the new portal image      } on failure: exit 1; the
 #   3. migrations from the new iris image                  } serving release is untouched
-#   4. recreate iris, worker, portal; wait for their healthchecks; healthy: point
+#   4. recreate iris, worker, portal; wait for their healthchecks; probe from iris and
+#      the worker that the metadata address is refused; healthy and refused: point
 #      `current` here (only now, so an interrupted deploy keeps its rollback target)
-#   5. unhealthy: recreate them from the previous release's directory (its compose
+#   5. unhealthy or not refused: recreate them from the previous release's directory (its compose
 #      file, settings, secrets and images), `current` unchanged, exit 1
 #
 # Compose always runs from a release's real path, so each container's bind mounts name
@@ -72,12 +74,32 @@ docker compose pull --quiet
 # A plain assignment, so a failing `config` stops the script (set -e); an empty list
 # would make `up` start every service, the app ones included, before the gates.
 services=$(docker compose config --services)
-mapfile -t data_services < <(printf '%s\n' "$services" | grep -vxF -e iris -e worker -e portal || :)
+mapfile -t data_services < <(printf '%s\n' "$services" | grep -vxF -e iris -e worker -e portal -e egress || :)
 if [ "${#data_services[@]}" = 0 ]; then
   log 'no data services in the compose file'
   exit 2
 fi
 docker compose up -d --wait --wait-timeout "$wait_timeout" "${data_services[@]}"
+
+# The egress firewall (#376) keys its host rules on the stack's bridge, which exists now
+# that the data services are up: compose's default network, `br-<id>` unless named.
+# Host rules, so like postgres they are not rolled back.
+project=$(docker compose config | sed -n 's/^name: //p')
+network="${project}_default"
+if [ "$(docker network inspect -f '{{.EnableIPv6}}' "$network")" != false ]; then
+  log "$network has IPv6: the egress firewall's rules are IPv4 only"
+  exit 1
+fi
+bridge=$(docker network inspect -f \
+  '{{with index .Options "com.docker.network.bridge.name"}}{{.}}{{else}}br-{{printf "%.12s" $.Id}}{{end}}' \
+  "$network")
+printf 'IRIS_EGRESS_BRIDGE=%s\n' "$bridge" >> .env
+if ! docker compose up -d --wait --wait-timeout "$wait_timeout" egress; then
+  docker compose logs --tail 30 egress || :
+  log "the egress firewall did not come up on $bridge: the serving release keeps serving"
+  exit 1
+fi
+log "egress firewall: $bridge"
 
 if ! docker compose run --rm --no-deps portal node verify/apps/portal/scripts/verify-smtp.js; then
   log 'SMTP check failed: nothing changed, the serving release keeps serving'
@@ -88,10 +110,21 @@ if ! docker compose run --rm --no-deps --entrypoint node iris dist/db/migrate.js
   exit 1
 fi
 
+# From inside the running containers, the metadata address must be refused by the firewall.
+egress_probe() {
+  local service
+  for service in iris worker; do
+    docker compose exec -T "$service" node docker/egress-probe.js || {
+      log "egress probe failed in $service: the metadata address is not refused"
+      return 1
+    }
+  done
+}
+
 # `current` moves only once the release is healthy: a deploy cut off before then (job
 # cancelled, host rebooted) leaves it on the last good release, the next rollback target.
 if docker compose up -d --force-recreate --no-deps --remove-orphans \
-  --wait --wait-timeout "$wait_timeout" "${app_services[@]}"; then
+  --wait --wait-timeout "$wait_timeout" "${app_services[@]}" && egress_probe; then
   point_current "$release"
   log 'healthy'
   # Old releases hold secrets: keep the newest few, never the serving one.
@@ -102,7 +135,7 @@ if docker compose up -d --force-recreate --no-deps --remove-orphans \
   exit 0
 fi
 
-log 'new containers did not become healthy'
+log 'new containers did not become healthy, or the egress probe failed'
 docker compose ps -a || :
 for service in "${app_services[@]}"; do docker compose logs --tail 30 "$service" || :; done
 if [ -z "$previous" ]; then

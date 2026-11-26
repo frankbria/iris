@@ -236,7 +236,7 @@ describe('docker-compose.production.yml (issue #273)', () => {
 
   it('pins every image by digest: a literal @sha256 or a required digest env var', () => {
     const images = [...file.matchAll(/^\s+image: (.*)$/gm)].map((m) => m[1]);
-    expect(images).toHaveLength(4);
+    expect(images).toHaveLength(5);
     for (const image of images) {
       expect(image).toMatch(
         /^(?:[^\s$]+@sha256:[0-9a-f]{64}|\$\{(?:IRIS|PORTAL)_IMAGE:\?[^}]*\})$/,
@@ -448,6 +448,94 @@ describe('docker-compose.production.yml (issue #273)', () => {
  * in its own directory and compose project, so `staged-<sha>` proves what production
  * then promotes. Only a merge to main runs the job, so these pin its shape.
  */
+describe('container egress firewall (issue #376)', () => {
+  const nonComment = (name: string) =>
+    read(name)
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+  const egress = nonComment('docker-compose.production.yml').match(
+    /^  egress:\n((?:(?:    .*)?\n)*)/m,
+  )![1];
+  const script = nonComment('docker/egress-firewall.sh');
+  const deploy = nonComment('deploy/deploy.sh');
+
+  it('runs the firewall script from the iris image, on the host network, with NET_ADMIN alone', () => {
+    expect(egress).toMatch(/^\s+image: \$\{IRIS_IMAGE:\?[^}]*\}$/m);
+    expect(egress).toMatch(/^\s+entrypoint: \['bash', '\/app\/docker\/egress-firewall\.sh'\]$/m);
+    expect(egress).toMatch(/^\s+network_mode: host$/m);
+    expect(egress).toMatch(
+      /^\s+cap_drop:\n\s+- ALL\n\s+cap_add:\n\s+- NET_ADMIN\n\s+- NET_RAW\n\s+security_opt:/m,
+    );
+    expect(egress).toMatch(/^\s+- no-new-privileges:true$/m);
+    expect(egress).toMatch(/^\s+read_only: true$/m);
+    expect(egress).toMatch(/^\s+restart: unless-stopped$/m);
+    expect(egress).toMatch(/^\s+IRIS_EGRESS_BRIDGE: \$\{IRIS_EGRESS_BRIDGE:-\}$/m);
+    expect(egress).toMatch(
+      /test: \['CMD', 'bash', '\/app\/docker\/egress-firewall\.sh', 'check'\]/,
+    );
+    expect(egress).not.toMatch(/privileged|ports:|volumes:|secrets:/);
+  });
+
+  it('refuses private, CGNAT, link-local (metadata) and reserved ranges, TCP with a reset', () => {
+    const denied = script
+      .match(/^denied=\(\n([\s\S]*?)\n\)$/m)![1]
+      .trim()
+      .split(/\s+/);
+    for (const range of [
+      '0.0.0.0/8',
+      '10.0.0.0/8',
+      '100.64.0.0/10',
+      '127.0.0.0/8',
+      '169.254.0.0/16',
+      '172.16.0.0/12',
+      '192.0.0.0/24',
+      '192.0.2.0/24',
+      '192.168.0.0/16',
+      '198.18.0.0/15',
+      '198.51.100.0/24',
+      '203.0.113.0/24',
+      '224.0.0.0/4',
+      '240.0.0.0/4',
+    ]) {
+      expect(denied).toContain(range);
+    }
+    expect(script).toContain('-d $range -p tcp -j REJECT --reject-with tcp-reset');
+    expect(script).toContain('-d $range -j REJECT --reject-with icmp-admin-prohibited');
+    // Routed traffic leaving the bridge, and traffic to the host itself.
+    expect(script).toContain('DOCKER-USER -i $bridge ! -o $bridge -j $chain');
+    expect(script).toContain('INPUT -i $bridge -j $chain');
+  });
+
+  it('exempts DNS to the host resolvers only, and keeps both jumps first (codex review)', () => {
+    // No blanket port-53 exemption: a private address must not be reachable on 53.
+    expect(script).not.toMatch(/^\s+echo "-p (udp|tcp) --dport 53 -j RETURN"$/m);
+    expect(script).toContain('echo "-d $resolver/32 -p udp --dport 53 -j RETURN"');
+    expect(script).toMatch(/\$2 !~ \/\^127\\\.\//);
+    // A rule above a jump (ufw's ACCEPTs) fails the check; the repair re-inserts at 1.
+    expect(script).toContain('sed -n 2p)" = "-A $rule" ] || return 1');
+    expect(script).toContain('"$ipt" -w -I ${rule/ / 1 }');
+  });
+
+  it('ships the script and the probe in the iris image, with iptables', () => {
+    const runtime = nonComment('Dockerfile').split(/^FROM .* AS runtime$/m)[1];
+    expect(runtime).toMatch(/apt-get install -y --no-install-recommends iptables/);
+    expect(runtime).toMatch(/^COPY docker\/egress-firewall\.sh \.\/docker\/egress-firewall\.sh$/m);
+    expect(runtime).toMatch(/^COPY docker\/egress-probe\.js \.\/docker\/egress-probe\.js$/m);
+  });
+
+  it('has deploy.sh start it on the bridge before the gates and probe before switching', () => {
+    expect(deploy).toMatch(/grep -vxF -e iris -e worker -e portal -e egress/);
+    expect(deploy).toMatch(/\{\{\.EnableIPv6\}\}/);
+    expect(deploy).toMatch(/^printf 'IRIS_EGRESS_BRIDGE=%s\\n' "\$bridge" >> \.env$/m);
+    const start = deploy.indexOf('up -d --wait --wait-timeout "$wait_timeout" egress');
+    expect(start).toBeGreaterThan(0);
+    expect(start).toBeLessThan(deploy.indexOf('verify-smtp.js'));
+    expect(deploy).toMatch(/docker compose exec -T "\$service" node docker\/egress-probe\.js/);
+    expect(deploy).toMatch(/"\$\{app_services\[@\]\}" && egress_probe; then\n\s+point_current/);
+  });
+});
+
 describe('deploy-staging runs the hosted stack (issue #440)', () => {
   const ci = read('.github/workflows/ci.yml');
   const uncomment = (text: string) =>
@@ -724,6 +812,7 @@ describe('staging object store (issue #514)', () => {
       };
       expect(config.name).toBe('iris-staging');
       expect(Object.keys(config.services).sort()).toEqual([
+        'egress',
         'iris',
         'portal',
         'postgres',
