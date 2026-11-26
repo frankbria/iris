@@ -32,6 +32,8 @@ export default defineConfig({
       // Published contacts (#348): abuse left unset to show its placeholder.
       IRIS_SECURITY_CONTACT: "mailto:security@iris.test",
       IRIS_SUPPORT_CONTACT: "mailto:support@iris.test",
+      // The status page link (#317): shown on /contact only when set.
+      IRIS_STATUS_URL: "https://status.iris.test/",
       // Signed screenshot URLs on run detail (#463); the bucket is made by global setup.
       IRIS_S3_ENDPOINT: env.s3.endpoint,
       IRIS_S3_BUCKET: env.s3.bucket,

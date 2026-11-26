@@ -217,7 +217,7 @@ production.
 | `P2.3` | [#314](https://github.com/frankbria/iris/issues/314) | Hosted MCP over HTTP with tenant auth and metering | P0.24 (#341), P0.35 (#263), P2.2 (#362) | DONE (#647) |
 | `P2.4` | [#315](https://github.com/frankbria/iris/issues/315) | Per-plan artifact storage quota | P0.29 (#257), P0.37 (#346) | DONE (#551) |
 | `P2.5` | [#316](https://github.com/frankbria/iris/issues/316) | Zero-downtime deploys | P0.45 (#273), P1.30 (#309), P0.59 (#440) | TODO |
-| `P2.6` | [#317](https://github.com/frankbria/iris/issues/317) | Public status page | P0.47 (#275), P0.59 (#440) | BLOCKED (needs-owner: where the page is hosted) |
+| `P2.6` | [#317](https://github.com/frankbria/iris/issues/317) | Public status page | P0.47 (#275), P0.59 (#440) | CODE DONE (option C, owner 2026-11-26): `status.yml` + `scripts/status-probe.js`, `/contact` link via `IRIS_STATUS_URL`; probes proven against staging. Live once the owner enables Pages and sets `STATUS_PROBE_URL` (runbook "Status page") |
 | `P2.7` | [#318](https://github.com/frankbria/iris/issues/318) | Store money as integer micro-units | P0.35 (#263) | DONE (#552) |
 | `P2.8` | [#319](https://github.com/frankbria/iris/issues/319) | Watcher: `--execute` targets and nested ignore globs | — | DONE (#553) |
 | `P2.9` | [#320](https://github.com/frankbria/iris/issues/320) | npm package publish-readiness | — | DONE (#554) |

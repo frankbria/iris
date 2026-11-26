@@ -442,3 +442,28 @@ break and expensive to rediscover:
 The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a
 file because compose interprets `${...}` in an inline script as its own syntax.
+
+### Public Status Page (issue #317)
+
+Owner decision 2026-11-26: option C. `.github/workflows/status.yml` (schedule `*/5` +
+dispatch) runs `scripts/status-probe.js` (plain CommonJS, no dependencies, unit-tested in
+`__tests__/status-probe.test.ts` against a real local server) and publishes to GitHub Pages.
+Runbook "Status page" has the owner's settings.
+
+- **Off until configured, and safe before.** The `config` job only reads the
+  `STATUS_PROBE_URL` **secret**; `publish` (the only job naming `github-pages`, Pages
+  actions or Pages permissions) runs only when it is set. Referencing the environment would
+  create it, and `configure-pages` fails while Pages is off. A test pins both.
+- **A secret, not a variable**: Actions logs are public and secrets are masked; the script
+  prints status codes only and the page never shows the URL (#329).
+- **History is the published `status.json`**, read back through `configure-pages`'s
+  `base_url`, filtered (ISO time, two booleans) and capped at 288 checks. Nothing is
+  committed. First run or unreadable: a fresh history.
+- **Probes** are the runbook's "Uptime from outside": `/` 200 or a same-origin redirect to
+  `/login`; `/v1/jobs/x` 401 (anything else, 502 included, is down). One retry after 5 s.
+- **A down probe publishes, then fails the run** (last step), so GitHub's failed-workflow
+  mail is the alert.
+- **Portal link**: `IRIS_STATUS_URL` (https only, `readContacts().status`, malformed throws
+  so `/api/health` fails) shows a "Service status" section on `/contact`. Compose passes it
+  to the portal; `deploy-staging` writes it from `vars.IRIS_STATUS_URL`; `deploy-production`
+  does not yet (the owner's edit, runbook step 5).

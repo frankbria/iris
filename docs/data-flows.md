@@ -316,6 +316,16 @@ of the artifact bucket (tenants' screenshots, diffs and baselines), synced daily
 unless the operator's rclone remote is a `crypt` remote (the runbook recommends one), and
 it is a subprocessor like the bucket's own provider.
 
+### Status page (GitHub Actions and Pages)
+
+Only once the owner sets the `STATUS_PROBE_URL` secret and enables Pages (#317):
+`.github/workflows/status.yml` runs `scripts/status-probe.js` on a GitHub-hosted runner
+every five minutes. It sends two requests to the portal without credentials (`GET /` and
+`GET /v1/jobs/x`) and publishes, on GitHub Pages, whether each answered as expected, the
+time of each check and an uptime share, for the last 288 checks (`status.json` and the
+page). No customer data, address or hostname is sent or published; the Actions log has
+status codes only. The history lives only in the published `status.json`.
+
 ### Sites under test
 
 IRIS's browser requests the URLs the customer names, from the hosting provider's network,

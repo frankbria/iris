@@ -339,6 +339,13 @@ describe('docker-compose.production.yml (issue #273)', () => {
   });
 
   // The webhook and the sweep run in iris only (#266); the portal reads the stored deadline.
+  // #317: the portal links the public status page from /contact when this is set.
+  it('passes the status page URL to the portal alone, empty when unset', () => {
+    expect(service('portal')).toMatch(/^\s+IRIS_STATUS_URL: \$\{IRIS_STATUS_URL:-\}$/m);
+    expect(service('iris')).not.toMatch(/IRIS_STATUS_URL/);
+    expect(service('worker')).not.toMatch(/IRIS_STATUS_URL/);
+  });
+
   it('passes the payment grace period to iris alone, empty when unset', () => {
     const setting = /^\s+IRIS_BILLING_GRACE_DAYS: \$\{IRIS_BILLING_GRACE_DAYS:-\}$/m;
     expect(service('iris')).toMatch(setting);
@@ -598,7 +605,8 @@ describe('deploy-staging runs the hosted stack (issue #440)', () => {
     expect(lines(staging)).toEqual(lines(production));
     const optional =
       /for name in IRIS_SECURITY_CONTACT IRIS_ABUSE_CONTACT IRIS_SUPPORT_CONTACT IRIS_SECURITY_TXT_EXPIRES_DAYS \\\n\s+IRIS_S3_ENDPOINT IRIS_S3_BUCKET IRIS_S3_REGION IRIS_S3_ACCESS_KEY_ID IRIS_MANAGED_AI_PROVIDER \\\n\s+IRIS_STRIPE_PRICE_PRO IRIS_STRIPE_PRICE_TEAM/;
-    expect(staging).toMatch(new RegExp(`${optional.source}; do`));
+    // Staging also takes the status page URL (#317); production's job is the owner's to extend.
+    expect(staging).toMatch(new RegExp(`${optional.source} IRIS_STATUS_URL; do`));
     // Production also takes the payment grace period (#639); staging runs no Stripe sweep.
     expect(production).toMatch(new RegExp(`${optional.source} IRIS_BILLING_GRACE_DAYS; do`));
     expect(staging).toContain("if [ ! -s master_key ]; then printf 'k1:%s'");
