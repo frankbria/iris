@@ -268,8 +268,16 @@ model, and the page under test chooses much of what an error or a redirect conta
   `major.minor`, read from its `package.json` so the API process never loads axe.
   `axe-help-url.test.ts` holds it equal to `axe.getRules()`'s links, so an axe upgrade that
   changes the form goes red there.
-- **`passed` is the stored page verdict** with every impact in `failOn`: no violation and
-  the keyboard checks passed. #646 (what `passed` means for the stdio tool) is still open.
+- **`passed` is the stored page verdict** (#646, owner decision 2026-11-26): the job is
+  queued with the call's `failOn` (default `DEFAULT_FAIL_ON` in src/a11y/wcag.ts, the CLI's
+  `--fail-on` default, also the REST default), and `describeJob` answers `run_results.passed`,
+  so a REST job read by id answers at its own `failOn`. The hosted worker always runs the
+  keyboard checks, so they are part of it.
+- **The stdio tool (#646)** takes `failOn` (same default) and `keyboard` (opt-in) and answers
+  the runner's page verdict (`withVerdict`, #288), so it and `iris a11y` agree on one page.
+  Keyboard results are under `keyboard`: `{ passed, checks, failures }`, at most
+  `MAX_KEYBOARD_FAILURES` (20), each field cut to 200 characters (page-labelled targets).
+  The screen-reader checks are not offered.
 - **The URL pre-flight** refuses non-http(s), credentials (params are stored and org-readable)
   and what `assertNavigationAllowed` refuses, before `enqueue`, so it costs no run. A name
   that resolves to a private address still fails in the worker, at the egress proxy.

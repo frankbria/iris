@@ -17,6 +17,16 @@ export function wcagTags(level: WcagLevel): string[] {
   return [...TAGS[level]];
 }
 
+/** axe's impact levels, most severe first. */
+export const IMPACTS = ['critical', 'serious', 'moderate', 'minor'] as const;
+export type Impact = (typeof IMPACTS)[number];
+
+/**
+ * The impacts that fail a page unless the caller names others: `iris a11y --fail-on` and
+ * the MCP tool's `failOn` (#646), so the two give one verdict for one page.
+ */
+export const DEFAULT_FAIL_ON: readonly Impact[] = ['critical', 'serious'];
+
 /**
  * The tags in `tags` that select no rule in the installed axe-core (#500). axe runs the
  * union of a tag list, so a misspelt tag silently scans with fewer rules, and a list of only

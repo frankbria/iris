@@ -12,7 +12,7 @@ import { DEFAULT_KEEP_RUNS } from './visual/artifacts';
 import type { TranslationResult } from './translator';
 import { describeAction } from './actions';
 import type { ExecutionResult } from './executor';
-import { unknownAxeTags, wcagTags } from './a11y/wcag';
+import { DEFAULT_FAIL_ON, IMPACTS, unknownAxeTags, wcagTags } from './a11y/wcag';
 
 /**
  * `--pages` collector (#289): repeatable. Within one value, a URL with a scheme (`data:`,
@@ -38,8 +38,6 @@ function collectPages(value: string, previous: string[] | undefined): string[] {
   if (pages.length === 0) throw new InvalidArgumentError('--pages needs a page (got none).');
   return [...(previous ?? []), ...pages];
 }
-
-const IMPACTS = ['critical', 'serious', 'moderate', 'minor'] as const;
 
 /** `--fail-on` as a threshold map, or the error message when it is not a valid list (#289). */
 function parseFailOn(value: string): Record<string, boolean> | string {
@@ -1882,7 +1880,7 @@ program
   .option(
     '--fail-on <impacts>',
     'Fail on impact levels (critical,serious,moderate,minor)',
-    'critical,serious',
+    DEFAULT_FAIL_ON.join(','),
   )
   .option('--format <type>', 'Output format (html|json|junit)', 'html')
   .option('--output <path>', 'Output file path')

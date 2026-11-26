@@ -844,9 +844,10 @@ instead of shelling out. It is a **spike**: exactly one tool today.
 
 | | |
 |---|---|
-| **Tool** | `run_accessibility_test` — scans a page with axe-core |
-| **Input** | `url` (required, http/https), `wcagLevel` (`AA` default, or `AAA`; WCAG 2.2, 2.0 and 2.1 criteria included) |
-| **Output** | `{ url, redirected, passed, violationCount, violations[], needsReview[] }`, each violation `{ id, impact, description, helpUrl, nodes }`; `needsReview` lists rules axe could not decide (`{ id, description, nodes }`), which never fail the scan |
+| **Tool** | `run_accessibility_test` — scans a page with axe-core, and on request presses real keys |
+| **Input** | `url` (required, http/https), `wcagLevel` (`AA` default, or `AAA`; WCAG 2.2, 2.0 and 2.1 criteria included), `failOn` (impacts that fail the page, default `["critical","serious"]` like `iris a11y --fail-on`), `keyboard` (`true` also runs the keyboard checks; default `false`) |
+| **Output** | `{ url, redirected, passed, violationCount, violations[], needsReview[], keyboard? }`, each violation `{ id, impact, description, helpUrl, nodes }`; `needsReview` lists rules axe could not decide (`{ id, description, nodes }`), which never fail the scan; `keyboard` (only with `keyboard: true`) is `{ passed, checks, failures[] }`, at most 20 failures `{ key, target, expected, actual }` |
+| **Verdict** | `passed` is the verdict `iris a11y` gives the page at the same `--fail-on`: no violation at a `failOn` impact and, with `keyboard`, the keyboard checks passed. Violations below `failOn` are still listed |
 | **Keys** | none — axe-core runs locally |
 | **Redirects** | followed, with every hop checked against the navigation policy; `url` is then the landing page's origin and path |
 | **Hints** | not read-only (`readOnlyHint: false`, `destructiveHint: true`, `openWorldHint: true`): the scan loads the page in a real browser, so expect your client to ask before each call |
@@ -891,9 +892,9 @@ API key as the REST API:
 
 | | |
 |---|---|
-| **Tools** | `run_accessibility_test { url, wcagLevel? }` and `get_accessibility_test_result { jobId }` |
+| **Tools** | `run_accessibility_test { url, wcagLevel?, failOn? }` and `get_accessibility_test_result { jobId }` |
 | **What a call does** | queues the same job as `POST /v1/a11y/jobs` with one URL: a worker scans the page, and the run appears in the org's history (`GET /v1/runs`, the portal) and counts as one run on the plan |
-| **Output** | `{ jobId, status }`, and once `status` is `finished`: `url, redirected, passed, violationCount, violations[] ({ id, impact, nodes, helpUrl }), needsReviewRules[], keyboardPassed`. `url` is the page that was scanned: when the request was redirected it is the landing page's origin and path (no query string or fragment), `redirected` is true and `redirectedFrom` holds the URL you asked for. `helpUrl` is Deque's page for the rule. `passed` is true when axe reported no violation and the keyboard checks passed |
+| **Output** | `{ jobId, status }`, and once `status` is `finished`: `url, redirected, passed, violationCount, violations[] ({ id, impact, nodes, helpUrl }), needsReviewRules[], keyboardPassed`. `url` is the page that was scanned: when the request was redirected it is the landing page's origin and path (no query string or fragment), `redirected` is true and `redirectedFrom` holds the URL you asked for. `helpUrl` is Deque's page for the rule. `passed` is the job's verdict: no violation at an impact in `failOn` (default `["critical","serious"]`, as `iris a11y`) and the keyboard checks passed; the hosted scan always runs them |
 | **Slow scans** | a call waits up to 45 s, then answers `status: "queued"` or `"running"` with the `jobId`; `get_accessibility_test_result` reads the result later and costs nothing |
 | **Limits** | the key's and org's request rate (HTTP 429), the org's 10 queued or running jobs and the plan's monthly runs (both a tool error; no scan starts) |
 | **URLs** | public `http(s)` pages only, without credentials: private, loopback and metadata addresses are refused before a run is spent |
@@ -942,8 +943,8 @@ calls in parallel. Up to 8 more calls wait in arrival order (a client with a sho
 request timeout may give up on a long wait); beyond that a call is refused at once
 with a tool error saying to call again.
 
-**Deliberate limits.** The tool reports axe-core results *only*: the keyboard and
-screen-reader checks `iris a11y` runs are not offered through it yet. Visual-diff
+**Deliberate limits.** The keyboard checks run only with `keyboard: true` (they press
+keys on the page and take longer); the screen-reader checks are not offered. Visual-diff
 and action tools come after the
 spike verdict — the CLI JSON contract above remains the supported integration
 surface in the meantime.
