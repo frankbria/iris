@@ -136,6 +136,12 @@ test("a paid org: usage against the plan, credit left, the split, and billing fo
       ($2, 'a11y_job', 100, null, 'their-job', null, false, now())`,
     [orgId, other]
   )
+  // A billed call whose usage row failed to write is spent until the month ends (#641);
+  // a call in flight is not shown.
+  await sql(
+    `insert into managed_ai_reservations (org_id, amount_usd, held) values ($1, 0.5, true), ($1, 0.3, false)`,
+    [orgId]
+  )
   // A queued job counts against the month before it is billed (#346).
   await sql(
     `insert into runs (org_id, kind, status, params) values ($1, 'a11y', 'queued', '{"urls":["https://a.example/"]}')`,
@@ -171,7 +177,7 @@ test("a paid org: usage against the plan, credit left, the split, and billing fo
 
   const credits = page.getByRole("region", { name: "IRIS credits" })
   await expect(
-    credits.getByText("$8.25 of $10.00 left this month.")
+    credits.getByText("$7.75 of $10.00 left this month.")
   ).toBeVisible()
   await expect(
     credits.getByText("AI calls use IRIS credits first, then your own keys.")
@@ -179,6 +185,12 @@ test("a paid org: usage against the plan, credit left, the split, and billing fo
   await expect(
     credits.getByRole("link", { name: "AI provider keys" })
   ).toHaveAttribute("href", "/provider-keys")
+  // Both pages read managedCreditLeft(), the figure the resolver admits against (#641).
+  await page.goto("/provider-keys")
+  await expect(
+    page.getByText("IRIS credits: $7.75 of $10.00 left this month.")
+  ).toBeVisible()
+  await page.goto("/usage")
 
   const split = page.getByRole("table", {
     name: "AI usage this month, by who paid",

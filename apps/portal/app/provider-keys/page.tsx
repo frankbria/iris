@@ -2,7 +2,7 @@ import Link from "next/link"
 
 import { orgEntitlements } from "../../../../src/billing/plans"
 import {
-  managedSpendThisMonth,
+  managedCreditLeft,
   orgAiSettings,
 } from "../../../../src/billing/managed-ai"
 import {
@@ -36,13 +36,12 @@ export default async function ProviderKeysPage() {
   const manager = isManager(role)
   // How the org pays for AI (#479) and what is left of this month's credit.
   const db = getDb()
-  const [mode, plan, spent] = await Promise.all([
+  const [mode, plan] = await Promise.all([
     orgAiSettings(db).get(org.id),
     orgEntitlements(db).get(org.id),
-    managedSpendThisMonth(db, org.id),
   ])
   const credit = plan.managedAiCreditUsdPerMonth
-  const left = Math.max(credit - spent, 0)
+  const left = await managedCreditLeft(db, org.id, credit)
   return (
     <main className="flex min-h-svh flex-col gap-6 p-6">
       <OrgBanner suspended={suspended} payment={payment} />

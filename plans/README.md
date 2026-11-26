@@ -278,7 +278,7 @@ production.
 | `P3.30` | [#603](https://github.com/frankbria/iris/issues/603) | iris run: a malformed budget variable exits 3 instead of a config error | P3.18 (#510) | DONE (#607) |
 | `P3.20` | [#518](https://github.com/frankbria/iris/issues/518) | CRAP tech debt: changed functions over the ceiling | — | DONE (#608, #610) |
 | `P3.31` | [#609](https://github.com/frankbria/iris/issues/609) | Lizard misreads src/watcher.ts, so changed lines there fail the CRAP gate | P3.20 (#518) | DONE (#611) |
-| `P3.32` | [#641](https://github.com/frankbria/iris/issues/641) | Portal: credit left ignores held managed-AI reservations, so it can show credit the resolver refuses | P0.43 (#271) | TODO |
+| `P3.32` | [#641](https://github.com/frankbria/iris/issues/641) | Portal: credit left ignores held managed-AI reservations, so it can show credit the resolver refuses | P0.43 (#271) | DONE |
 | `P3.33` | [#644](https://github.com/frankbria/iris/issues/644) | CI review job fails at "Fetch the PR diff" when the diff holds a raw ESC byte | — | TODO |
 | `P3.34` | [#645](https://github.com/frankbria/iris/issues/645) | stripUserinfo and redactString leave part of a password that contains an @ or a space | — | DONE: both cut to the authority's last `@`; a URL held whole is parsed (`urlWithoutUserinfo`, `stripUserinfo(text, quotedUrl)`); a raw space in free text stays a documented limit |
 | `P3.35` | [#646](https://github.com/frankbria/iris/issues/646) | MCP tool: offer the keyboard checks, and decide what `passed` means against `--fail-on` | P2.2 (#362) | DONE: `failOn` input (CLI default) decides `passed` on both tools; stdio `keyboard: true` opt-in (owner, 2026-11-26) |

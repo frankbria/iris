@@ -78,6 +78,27 @@ export async function managedSpendThisMonth(db: Kysely<unknown>, orgId: string):
 }
 
 /**
+ * The managed credit an org can still draw this UTC month, in USD, never below 0: the plan's
+ * `creditUsd` minus this month's managed spend and this month's `held` reservations (billed
+ * calls whose usage row failed to write, #482). Live reservations (calls in flight) are left
+ * out: they are transient, and `reserveCredit` subtracts them itself. The portal pages and
+ * the resolver both use it, so a page never shows credit the resolver refuses (#641).
+ */
+export async function managedCreditLeft(
+  db: Kysely<unknown>,
+  orgId: string,
+  creditUsd: number,
+): Promise<number> {
+  const { rows } = await sql<{ held: string }>`
+    select coalesce(sum(amount_usd), 0) as held from managed_ai_reservations
+    where org_id = ${orgId} and held
+      and created_at >= date_trunc('month', now() at time zone 'UTC') at time zone 'UTC'`.execute(
+    db,
+  );
+  return Math.max(creditUsd - (await managedSpendThisMonth(db, orgId)) - Number(rows[0].held), 0);
+}
+
+/**
  * A credential for one call. A managed one carries `release`: the caller runs it once the
  * call is over (settled or not), which frees the credit reserved for it (#482).
  */
@@ -94,8 +115,8 @@ export type ResolvedAI = AICredentials & {
 const RESERVATION_TTL_MINUTES = 10;
 
 /**
- * Reserves `estimateUsd` of the org's managed credit if spend plus live reservations leave
- * room for it, under a per-org lock so parallel calls cannot all pass. Returns the
+ * Reserves `estimateUsd` of the org's managed credit if the credit left
+ * (`managedCreditLeft`) minus live reservations leaves room for it, under a per-org lock so parallel calls cannot all pass. Returns the
  * reservation's id, or null when the credit is used up.
  */
 async function reserveCredit(
@@ -114,11 +135,11 @@ async function reserveCredit(
       or (held and created_at < date_trunc('month', now() at time zone 'UTC') at time zone 'UTC'))`.execute(
       tx,
     );
-    const { rows } = await sql<{ reserved: string }>`
-      select coalesce(sum(amount_usd), 0) as reserved from managed_ai_reservations
-      where org_id = ${orgId}`.execute(tx);
-    const committed = (await managedSpendThisMonth(tx, orgId)) + Number(rows[0].reserved);
-    if (committed + estimateUsd > creditUsd) return null;
+    const { rows } = await sql<{ live: string }>`
+      select coalesce(sum(amount_usd), 0) as live from managed_ai_reservations
+      where org_id = ${orgId} and not held`.execute(tx);
+    const left = await managedCreditLeft(tx, orgId, creditUsd);
+    if (Number(rows[0].live) + estimateUsd > left) return null;
     const inserted = await sql<{ id: string }>`
       insert into managed_ai_reservations (org_id, amount_usd) values (${orgId}, ${estimateUsd})
       returning id`.execute(tx);
