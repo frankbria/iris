@@ -234,19 +234,31 @@ probe's rollback.
   serving release, and a rollback's compose file would differ again.
 - **`egress` is not a data service**: deploy.sh's list excludes it and starts it on its own
   once the bridge is known, before the gates, so the SMTP check and migrations run behind it.
-- **The backend is Docker's own**: the script uses whichever of `iptables-nft` /
-  `iptables-legacy` shows `DOCKER-USER`, and fails by name when neither does (Docker's
-  nftables firewall backend has no such chain).
+- **The backend is Docker's own**: the script writes into every one of `iptables-nft` /
+  `iptables-legacy` that shows `DOCKER-USER` (both after a migration), and fails by name
+  when neither does (Docker's nftables firewall backend has no such chain).
 - **Fail closed**: nothing removes the rules (stop, removal, rollback). The loop re-checks
   every 30s with `-C` and re-applies with one `iptables-restore --noflush` (declaring the
   chain empties it). The healthcheck is the same check.
+- **Each jump must be first in its chain** (`-S <chain> | sed -n 2p`, codex review): ufw
+  puts its jumps atop `INPUT` on reload, and its ACCEPTs (22, 443) would then let the
+  containers reach the host. The repair deletes every copy and inserts at 1.
+- **Reboot window and pre-#376 rollback are accepted gaps** (runbook): Docker starts the
+  apps and `egress` together after a reboot; a rollback to a release without the service
+  removes it as an orphan (rules stay until reboot).
 - **The probe needs a reset, not just a failure**: `egress-probe.js` passes only on
   `ECONNREFUSED`. A timeout is what a metadata-less host shows with no firewall, and the
   GitHub runner's metadata service answers, which the image test uses as its negative
   control. It runs in iris and the worker (the portal shares the bridge, so the rules).
-- **DNS to any address is allowed**: Docker's embedded resolver forwards from inside the
-  container's namespace to the host's resolvers, which are often private (a VPS resolver,
-  tailnet DNS). Refusing 53 would break every lookup and the serving release with it.
+- **DNS only to the host's non-loopback nameservers** (its `/etc/resolv.conf`, which a
+  host-network container sees): Docker's embedded resolver forwards to those from inside
+  the container's namespace, and they are often private (a VPS resolver, tailnet DNS); to
+  a loopback upstream (systemd-resolved) it forwards from the host's (`ExtServers:
+  [host(127.0.0.53)]` in a container's resolv.conf), which needs nothing. A blanket port-53
+  exemption let containers reach any private address on 53 (codex review). A daemon.json
+  `dns` setting is not read: lookups then fail, loudly, at the SMTP gate.
+- **`192.0.0.9` and `192.0.0.10` return before `192.0.0.0/24` is refused**: IANA marks
+  them globally reachable (PCP and TURN anycast).
 - **Private dependencies are refused by design**: an SMTP relay or object store on a
   private/tailnet address needs a public address or a place on the stack's network.
 

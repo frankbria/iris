@@ -216,18 +216,37 @@ starts the service before the gates. The rules key on that one bridge, so other 
 the box are unaffected.
 
 **What stays allowed.** Replies on connections the ingress opened to a published port;
-DNS (Docker's resolver forwards from inside the container to the host's resolvers,
-which may be private); everything between the stack's own containers (Postgres, and on
+DNS (port 53) to the host's own non-loopback nameservers in `/etc/resolv.conf`, which may
+be private (Docker's resolver forwards to those from inside the container; to a loopback
+one such as systemd-resolved's it forwards from the host); the two global anycast
+addresses inside `192.0.0.0/24` (`192.0.0.9`, `192.0.0.10`); everything between the stack's own containers (Postgres, and on
 staging the object store); every public address, which includes the host's own public
 address and so the nginx ingress and an object-store name it serves. A service the
 containers must reach on a **private** address (a relay or object store on the LAN or
 the tailnet) is refused: give it a public address, or put it on the stack's network.
 
+A daemon `dns` setting in `/etc/docker/daemon.json` replaces those nameservers for the
+containers and is not read: with one, lookups from the containers fail (the SMTP check
+fails the deploy). Use the host's resolver configuration instead.
+
 **Fail closed.** The rules stay when the container stops or is removed. The container
 checks them every 30 seconds and re-applies what is missing, and `restart: unless-stopped`
-brings it back after a reboot, which flushes the host's rules. Its healthcheck fails
-while a rule is missing, so the watchdog restarts and alerts on it (#275). Rolling back a
-release does not remove them.
+brings it back after a reboot, which flushes the host's rules. Both jumps must be the
+first rule of their chain: a firewall manager that puts its own rules above them (`ufw`
+reloading puts its jumps at the top of `INPUT`) fails the check, and the repair moves
+them back. Its healthcheck fails while a rule is missing or moved, so the watchdog
+restarts and alerts on it (#275). Rolling back a release does not remove them.
+
+Two limits, both accepted for now:
+
+- **After a reboot** Docker starts every container at once, so for the second or so before
+  the `egress` container has applied its rules the others run without them. Nothing
+  reaches out in that window (the apps are still starting and serve no tenant yet). To
+  close it, persist the rules so they load before Docker (for example the
+  `iptables-persistent` package, saved while the stack runs): a host step for the operator.
+- **Rolling back to a release from before #376** removes the `egress` container (an
+  orphan to that release's compose file). The rules stay until the next reboot, and the
+  next deploy of a current release brings the container back.
 
 **The probe.** After the new containers are healthy, `deploy.sh` runs
 `node docker/egress-probe.js` in `iris` and in the worker: a TCP connection to

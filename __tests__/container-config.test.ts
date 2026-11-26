@@ -507,6 +507,16 @@ describe('container egress firewall (issue #376)', () => {
     expect(script).toContain('INPUT -i $bridge -j $chain');
   });
 
+  it('exempts DNS to the host resolvers only, and keeps both jumps first (codex review)', () => {
+    // No blanket port-53 exemption: a private address must not be reachable on 53.
+    expect(script).not.toMatch(/^\s+echo "-p (udp|tcp) --dport 53 -j RETURN"$/m);
+    expect(script).toContain('echo "-d $resolver/32 -p udp --dport 53 -j RETURN"');
+    expect(script).toMatch(/\$2 !~ \/\^127\\\.\//);
+    // A rule above a jump (ufw's ACCEPTs) fails the check; the repair re-inserts at 1.
+    expect(script).toContain('sed -n 2p)" = "-A $rule" ] || return 1');
+    expect(script).toContain('"$ipt" -w -I ${rule/ / 1 }');
+  });
+
   it('ships the script and the probe in the iris image, with iptables', () => {
     const runtime = nonComment('Dockerfile').split(/^FROM .* AS runtime$/m)[1];
     expect(runtime).toMatch(/apt-get install -y --no-install-recommends iptables/);
