@@ -576,7 +576,8 @@ describe('zero-downtime deploys (issue #316)', () => {
     expect(conf).toMatch(/resolver 127\.0\.0\.11/);
     expect(conf).toMatch(/listen 4000; proxy_pass iris_api;/);
     expect(conf).toMatch(/listen 3000; proxy_pass portal;/);
-    expect(deploy).toMatch(/server %s:4000 resolve;/);
+    // By name (follows a restart) and, until the name resolves, by address (codex review).
+    expect(deploy).toMatch(/server %s:%s resolve; server %s:%s backup;/);
   });
 
   it('switches only after the new containers are healthy and probed, then drains the old ones', () => {

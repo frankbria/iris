@@ -223,7 +223,9 @@ proxy across a deploy; `container-config.test.ts` pins the order.
   container, so the smoke step and the runbook's commands still work after a deploy.
 - **The switch is a file and a reload**: `shared/proxy/upstreams.conf` names the new
   containers (`server <name>:<port> resolve`, nginx >= 1.27.3 OSS, resolver 127.0.0.11, so
-  a restart's new address is followed), written atomically (tmp + mv in the bind-mounted
+  a restart's new address is followed), plus `server <address>:<port> backup`: nginx
+  resolves a new name only after the new worker starts, so the address carries the first
+  connections (codex review on #716), written atomically (tmp + mv in the bind-mounted
   directory), `nginx -t`, then `nginx -s reload`. Old workers keep their connections
   (`worker_shutdown_timeout 1h`). `nginx.conf` is a heredoc in deploy.sh, rewritten each
   deploy: production copies a fixed file list, so the config ships inside deploy.sh.

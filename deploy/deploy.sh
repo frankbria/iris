@@ -146,12 +146,17 @@ mv -f "$proxy_dir/nginx.conf.new" "$proxy_dir/nginx.conf"
 name_of() { docker inspect -f '{{.Name}}' "$1" | tr -d /; }
 service_of() { docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$1"; }
 
-# Points the proxy at the given iris and portal containers (by name: Docker's DNS follows
-# a restart's new address) and reloads it.
+address_of() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1"; }
+
+# Points the proxy at the given iris and portal containers and reloads it. By name, so
+# Docker's DNS follows a restart's new address; but nginx resolves a new name only after
+# the new worker starts (codex review), so each also gets its address now as a backup,
+# which carries the first connections until the name has resolved.
 switch_proxy() {
   [ ! -s "$proxy_dir/upstreams.conf" ] || cp -f "$proxy_dir/upstreams.conf" "$proxy_dir/upstreams.conf.prev"
-  printf 'upstream iris_api { zone iris_api 64k; server %s:4000 resolve; }\nupstream portal { zone portal 64k; server %s:3000 resolve; }\n' \
-    "$(name_of "$1")" "$(name_of "$2")" > "$proxy_dir/upstreams.conf.new"
+  printf 'upstream %s { zone %s 64k; server %s:%s resolve; server %s:%s backup; }\n' \
+    iris_api iris_api "$(name_of "$1")" 4000 "$(address_of "$1")" 4000 \
+    portal portal "$(name_of "$2")" 3000 "$(address_of "$2")" 3000 > "$proxy_dir/upstreams.conf.new"
   chmod 644 "$proxy_dir/upstreams.conf.new"
   mv -f "$proxy_dir/upstreams.conf.new" "$proxy_dir/upstreams.conf"
   # Also drops a service this release no longer has (staging's store without its file).
