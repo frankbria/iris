@@ -15,6 +15,7 @@ import { errMessage, log, redactStrings } from './log';
 import { signRunArtifacts, type ArtifactStore } from './artifact-store';
 import { StorageQuotaExceededError } from './storage-quota';
 import type { WebhookOutcome } from './billing/stripe-webhook';
+import { DEFAULT_FAIL_ON, IMPACTS } from './a11y/wcag';
 
 /**
  * The hosted job REST API (#267, ADR 0001 §1): `POST /v1/a11y/jobs` queues a scan,
@@ -25,7 +26,7 @@ import type { WebhookOutcome } from './billing/stripe-webhook';
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
-const Impact = z.enum(['critical', 'serious', 'moderate', 'minor']);
+const Impact = z.enum(IMPACTS);
 
 const JobUrls = z
   .array(
@@ -46,7 +47,10 @@ const A11yJobBody = z
   .object({
     urls: JobUrls,
     wcagLevel: z.enum(['A', 'AA', 'AAA']).default('AA'),
-    failOn: z.array(Impact).min(1).default(['critical', 'serious']),
+    failOn: z
+      .array(Impact)
+      .min(1)
+      .default([...DEFAULT_FAIL_ON]),
   })
   .strict();
 

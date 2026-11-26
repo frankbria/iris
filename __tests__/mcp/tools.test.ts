@@ -92,6 +92,30 @@ const NEEDS_REVIEW_HTML = `<!DOCTYPE html>
   </body>
 </html>`;
 
+/** Only a moderate violation (`meta-viewport`, wcag2aa): passes the default failOn. */
+const MODERATE_ONLY_HTML = `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" /><title>Moderate fixture</title>
+    <meta name="viewport" content="width=device-width, maximum-scale=1.5" />
+  </head>
+  <body>
+    <main><h1>Moderate fixture</h1></main>
+  </body>
+</html>`;
+
+/** No WCAG violation, but a positive tabindex: a manual focus order the keyboard check fails. */
+const TABINDEX_HTML = `<!DOCTYPE html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Tabindex fixture</title></head>
+  <body>
+    <main><h1>Tabindex fixture</h1>
+      <button type="button">First</button>
+      <button type="button" tabindex="3">Jumps the queue</button>
+    </main>
+  </body>
+</html>`;
+
 interface A11yStructuredContent {
   url: string;
   redirected: boolean;
@@ -105,6 +129,11 @@ interface A11yStructuredContent {
     nodes: number;
   }>;
   needsReview: Array<{ id: string; description: string; nodes: number }>;
+  keyboard?: {
+    passed: boolean;
+    checks: number;
+    failures: Array<{ key: string; target: string; expected: string; actual: string }>;
+  };
 }
 
 interface CallResult {
@@ -191,6 +220,8 @@ describe('run_accessibility_test tool', () => {
         '/clean': CLEAN_HTML,
         '/wcag21': WCAG21_ONLY_HTML,
         '/needs-review': NEEDS_REVIEW_HTML,
+        '/moderate': MODERATE_ONLY_HTML,
+        '/tabindex': TABINDEX_HTML,
       };
       res.end(pages[(req.url ?? '').split('?')[0]] ?? FAILING_HTML);
     });
@@ -495,6 +526,75 @@ describe('run_accessibility_test tool', () => {
       const text = result.content?.[0]?.text ?? '';
       expect(text).toMatch(/need manual review/);
       expect(text).toContain('color-contrast');
+    }, 120_000);
+  });
+
+  // #646: `passed` is the runner's verdict at `failOn` (default: the CLI's --fail-on), and
+  // the keyboard checks run on request.
+  describe('failOn and keyboard', () => {
+    it('passes a page whose only violation is below the default failOn, and lists it', async () => {
+      const result = await callTool({ url: `${origin}/moderate` });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 1 });
+      expect(result.structuredContent!.violations).toEqual([
+        expect.objectContaining({ id: 'meta-viewport', impact: 'moderate' }),
+      ]);
+      expect(result.structuredContent!.keyboard).toBeUndefined();
+      expect(result.content?.[0]?.text).toMatch(/Passed at failOn critical, serious\./);
+    }, 120_000);
+
+    it('fails the same page when failOn names its impact', async () => {
+      const result = await callTool({ url: `${origin}/moderate`, failOn: ['moderate'] });
+
+      expect(result.structuredContent).toMatchObject({ passed: false, violationCount: 1 });
+      expect(result.content?.[0]?.text).toMatch(/Failed at failOn moderate\./);
+    }, 120_000);
+
+    it.each([[[]], [['severe']], ['critical']])(
+      'reports a validation error for failOn %j',
+      async (failOn) => {
+        const result = await callTool({ url: cleanURL, failOn });
+        expect(result.isError).toBe(true);
+        expect(result.content?.[0]?.text).toMatch(/validation/i);
+      },
+    );
+
+    it('runs no keyboard check unless asked: a positive tabindex passes axe alone', async () => {
+      const result = await callTool({ url: `${origin}/tabindex` });
+
+      expect(result.structuredContent).toMatchObject({ passed: true, violationCount: 0 });
+      expect(result.structuredContent!.keyboard).toBeUndefined();
+    }, 120_000);
+
+    it('with keyboard: true, a failed keyboard check fails the page and is reported', async () => {
+      const result = await callTool({ url: `${origin}/tabindex`, keyboard: true });
+
+      expect(result.isError).toBeFalsy();
+      const { passed, violationCount, keyboard } = result.structuredContent!;
+      expect({ passed, violationCount }).toEqual({ passed: false, violationCount: 0 });
+      expect(keyboard!.passed).toBe(false);
+      expect(keyboard!.checks).toBeGreaterThan(0);
+      expect(keyboard!.failures.length).toBeGreaterThan(0);
+      expect(keyboard!.failures).toContainEqual({
+        key: 'Tab',
+        target: 'page',
+        expected: 'Logical focus order',
+        actual: 'Focus order contains issues',
+      });
+      expect(result.content?.[0]?.text).toMatch(/keyboard check\(s\) failed/);
+    }, 120_000);
+
+    it('with keyboard: true, a clean page passes with the keyboard checks', async () => {
+      const result = await callTool({ url: cleanURL, keyboard: true });
+
+      expect(result.structuredContent).toMatchObject({
+        passed: true,
+        keyboard: { passed: true, failures: [] },
+      });
+      expect(result.content?.[0]?.text).toMatch(
+        /Passed at failOn critical, serious with the keyboard checks/,
+      );
     }, 120_000);
   });
 

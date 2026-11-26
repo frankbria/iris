@@ -22,6 +22,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { RunQuotaExceededError, type StoredJob, type TenantScope } from '../history-store';
 import { authorize, readBody, send, type ApiJobs, type JobsApiDeps } from '../jobs-api';
 import { errMessage, log } from '../log';
+import { DEFAULT_FAIL_ON, IMPACTS, type Impact } from '../a11y/wcag';
 import { assertNavigationAllowed } from '../url-policy';
 import { JOB_TIMED_OUT, ORG_SUSPENDED } from '../worker';
 import { axeRuleHelpUrl } from './axe-help-url';
@@ -34,9 +35,6 @@ export const GET_ACCESSIBILITY_TEST_RESULT = 'get_accessibility_test_result';
 
 /** Same bound as the job API's `urls` entries. */
 const MAX_URL_LENGTH = 2048;
-
-/** Every impact fails the run, so `passed` means what the stdio tool's does: no violation. */
-const FAIL_ON_ANY = ['critical', 'serious', 'moderate', 'minor'] as const;
 
 const outputSchema = {
   jobId: z.string().describe(`The scan's id: pass it to ${GET_ACCESSIBILITY_TEST_RESULT}.`),
@@ -64,7 +62,10 @@ const outputSchema = {
   passed: z
     .boolean()
     .optional()
-    .describe('True when axe-core reported no violations and the keyboard checks passed.'),
+    .describe(
+      'The stored page verdict: no violation with an impact in the failOn the scan was ' +
+        'queued with, and the keyboard checks passed.',
+    ),
   violationCount: z.number().optional().describe('Total number of distinct axe rules violated.'),
   violations: z
     .array(
@@ -92,6 +93,7 @@ type ToolOutput = z.infer<z.ZodObject<typeof outputSchema>>;
 /** One page of a stored a11y run, as `history-store` writes it; older rows lack the rules. */
 const StoredPage = z.object({
   url: z.string().nullable(),
+  passed: z.boolean(),
   result: z.object({
     error: z.string().optional(),
     violations: z.record(z.string(), z.number()).default({}),
@@ -199,8 +201,8 @@ function describeJob(job: StoredJob) {
     url,
     redirected: landed !== undefined,
     ...(landed !== undefined && { redirectedFrom: requested }),
-    // Not the stored verdict: a job submitted over REST may have had a narrower `failOn`.
-    passed: violationCount === 0 && page.result.keyboardPassed,
+    // The stored verdict (#646): at the failOn the job was queued with, as `iris a11y` decides.
+    passed: page.passed,
     violationCount,
     violations,
     needsReviewRules: page.result.needsReviewRules,
@@ -253,13 +255,18 @@ async function awaitJob(id: string, deps: HostedToolsDeps): Promise<StoredJob | 
   }
 }
 
-async function runScan(url: string, wcagLevel: 'AA' | 'AAA', deps: HostedToolsDeps) {
+async function runScan(
+  url: string,
+  wcagLevel: 'AA' | 'AAA',
+  failOn: readonly Impact[],
+  deps: HostedToolsDeps,
+) {
   const refusal = urlRefusal(url);
   if (refusal) return toolError(refusal);
   let id: string | null;
   try {
     id = await deps.jobs.enqueue(
-      { kind: 'a11y', params: { urls: [url], wcagLevel, failOn: [...FAIL_ON_ANY] } },
+      { kind: 'a11y', params: { urls: [url], wcagLevel, failOn: [...failOn] } },
       { maxOutstanding: deps.maxOutstanding, monthlyRunLimit: deps.monthlyRunLimit },
     );
   } catch (error) {
@@ -334,6 +341,14 @@ export function registerHostedTools(server: McpServer, deps: HostedToolsDeps): v
           .enum(['AA', 'AAA'])
           .optional()
           .describe('WCAG 2.2 conformance level to check against. Defaults to AA.'),
+        failOn: z
+          .array(z.enum(IMPACTS))
+          .min(1)
+          .optional()
+          .describe(
+            `Violation impacts that fail the page. Defaults to ${JSON.stringify(DEFAULT_FAIL_ON)}, ` +
+              'as `iris a11y --fail-on` does; violations below it are still listed.',
+          ),
       },
       outputSchema,
       // As the stdio tool (#362): a real browser visits a URL the model chose.
@@ -344,8 +359,10 @@ export function registerHostedTools(server: McpServer, deps: HostedToolsDeps): v
         openWorldHint: true,
       },
     },
-    ({ url, wcagLevel }) =>
-      answered(RUN_ACCESSIBILITY_TEST, () => runScan(url, wcagLevel ?? 'AA', deps)),
+    ({ url, wcagLevel, failOn }) =>
+      answered(RUN_ACCESSIBILITY_TEST, () =>
+        runScan(url, wcagLevel ?? 'AA', failOn ?? DEFAULT_FAIL_ON, deps),
+      ),
   );
   server.registerTool(
     GET_ACCESSIBILITY_TEST_RESULT,
