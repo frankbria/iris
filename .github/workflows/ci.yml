@@ -624,7 +624,9 @@ jobs:
             key=\$(cat s3_secret_access_key)
             printf '{\"identities\":[{\"name\":\"iris\",\"credentials\":[{\"accessKey\":\"iris-staging\",\"secretKey\":\"%s\"}],\"actions\":[\"Admin\",\"Read\",\"Write\",\"List\",\"Tagging\"]}]}' \"\$key\" > seaweedfs_s3.json.new
             if cmp -s seaweedfs_s3.json.new seaweedfs_s3.json; then rm seaweedfs_s3.json.new; else mv seaweedfs_s3.json.new seaweedfs_s3.json; fi
-            printf '%s' \"\$key\" > $release/secrets/s3_secret_access_key"
+            printf '%s' \"\$key\" > $release/secrets/s3_secret_access_key.new
+            chown 1001:1001 $release/secrets/s3_secret_access_key.new; chmod 400 $release/secrets/s3_secret_access_key.new
+            mv $release/secrets/s3_secret_access_key.new $release/secrets/s3_secret_access_key"
 
           # The box authenticates to GHCR with the run-scoped token (a new package is
           # private by default), over STDIN, and logs out after the deploy.

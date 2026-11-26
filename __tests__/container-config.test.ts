@@ -636,7 +636,13 @@ describe('staging object store (issue #514)', () => {
   it('generates the key on the box once and points the services at it only with an endpoint', () => {
     expect(staging).toContain('if [ ! -s s3_secret_access_key ]; then head -c 32 /dev/urandom');
     expect(staging).toContain('mv seaweedfs_s3.json.new seaweedfs_s3.json');
-    expect(staging).toContain(`printf '%s' \\"\\$key\\" > $release/secrets/s3_secret_access_key"`);
+    // A new file renamed over put_secret's read-only one (codex review): no truncation.
+    expect(staging).toContain(
+      `printf '%s' \\"\\$key\\" > $release/secrets/s3_secret_access_key.new`,
+    );
+    expect(staging).toContain(
+      'mv $release/secrets/s3_secret_access_key.new $release/secrets/s3_secret_access_key"',
+    );
     // Never a workflow secret; bucket and key id only with the endpoint (a partial
     // configuration exits 3).
     expect(staging).not.toMatch(/secrets\.IRIS_S3_/);
