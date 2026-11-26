@@ -62,6 +62,7 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
       'org-held',
       'org-mid',
       'org-agree',
+      'org-dec',
     ]) {
       await sql`insert into organization (id, name, slug, "createdAt") values (${org}, ${org}, ${org}, now())`.execute(
         db,
@@ -239,6 +240,19 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
     // Never below zero, whatever the ledger holds.
     await spend('org-agree', 20, 'managed');
     expect(await managedCreditLeft(db, 'org-agree', 10)).toBe(0);
+  });
+
+  // Codex review: in JS floats 10 - 9.83 is 0.16999..., which refused a $0.17 call the page
+  // showed as affordable. The credit is computed and compared in Postgres numeric.
+  it('admits a call that exactly uses a decimal credit left (#641)', async () => {
+    await orgEntitlements(db).setPlan('org-dec', 'pro'); // $10
+    await orgAiSettings(db).set('org-dec', 'managed', 'user:u8');
+    await spend('org-dec', 9.83, 'managed');
+    expect(await managedCreditLeft(db, 'org-dec', 10)).toBe(0.17);
+    expect(await resolver(MANAGED, () => 0.18)({ orgId: 'org-dec' })).toBeNull();
+    const exact = await resolver(MANAGED, () => 0.17)({ orgId: 'org-dec' });
+    expect(exact?.billingMode).toBe('managed');
+    await exact!.release!();
   });
 
   it("prices the worst case at the provider's dearest rates plus the request size (#482)", () => {

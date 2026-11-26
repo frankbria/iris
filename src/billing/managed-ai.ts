@@ -89,14 +89,21 @@ export async function managedCreditLeft(
   orgId: string,
   creditUsd: number,
 ): Promise<number> {
-  const { rows } = await sql<{ held: string }>`
-    select coalesce(sum(amount_usd), 0) as held from managed_ai_reservations
-    where org_id = ${orgId} and held
-      and created_at >= date_trunc('month', now() at time zone 'UTC') at time zone 'UTC'`.execute(
-    db,
-  );
-  return Math.max(creditUsd - (await managedSpendThisMonth(db, orgId)) - Number(rows[0].held), 0);
+  const { rows } = await sql<{
+    left: string;
+  }>`select ${creditLeftSql(orgId, creditUsd)} as left`.execute(db);
+  return Number(rows[0].left);
 }
+
+/** `managedCreditLeft` as a Postgres numeric, so the admission check never rounds money. */
+const creditLeftSql = (orgId: string, creditUsd: number) => sql`greatest(${creditUsd}::numeric
+  - (select coalesce(sum(quantity * coalesce(unit_cost_usd, 0)), 0) from usage_events
+     where org_id = ${orgId} and billing_mode = 'managed'
+       and created_at >= date_trunc('month', now() at time zone 'UTC') at time zone 'UTC')
+  - (select coalesce(sum(amount_usd), 0) from managed_ai_reservations
+     where org_id = ${orgId} and held
+       and created_at >= date_trunc('month', now() at time zone 'UTC') at time zone 'UTC'),
+  0)`;
 
 /**
  * A credential for one call. A managed one carries `release`: the caller runs it once the
@@ -135,11 +142,12 @@ async function reserveCredit(
       or (held and created_at < date_trunc('month', now() at time zone 'UTC') at time zone 'UTC'))`.execute(
       tx,
     );
-    const { rows } = await sql<{ live: string }>`
-      select coalesce(sum(amount_usd), 0) as live from managed_ai_reservations
-      where org_id = ${orgId} and not held`.execute(tx);
-    const left = await managedCreditLeft(tx, orgId, creditUsd);
-    if (Number(rows[0].live) + estimateUsd > left) return null;
+    // In numeric, not JS floats: $9.83 spent of $10 must still admit a $0.17 call (codex review).
+    const { rows } = await sql<{ fits: boolean }>`
+      select coalesce(sum(amount_usd), 0) + ${estimateUsd}::numeric
+        <= ${creditLeftSql(orgId, creditUsd)} as fits
+      from managed_ai_reservations where org_id = ${orgId} and not held`.execute(tx);
+    if (!rows[0].fits) return null;
     const inserted = await sql<{ id: string }>`
       insert into managed_ai_reservations (org_id, amount_usd) values (${orgId}, ${estimateUsd})
       returning id`.execute(tx);
