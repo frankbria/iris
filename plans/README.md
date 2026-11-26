@@ -144,7 +144,7 @@ production.
 | `P0.46` | [#274](https://github.com/frankbria/iris/issues/274) | Backups and restore drill for Postgres and object storage | P0.45 (#273) | DONE (PR #446; bucket half split to #445) |
 | `P0.47` | [#275](https://github.com/frankbria/iris/issues/275) | Observability: structured logs, metrics, alerting | P0.45 (#273) | DONE (PR #448) |
 | `P0.59` | [#440](https://github.com/frankbria/iris/issues/440) | Move staging onto the hosted stack so staged-<sha> proves what production runs | P0.45 (#273) | DONE ([#702](https://github.com/frankbria/iris/pull/702); first hosted staging deploy green 2026-11-23. Unblocks #514, #445, #376, #316) |
-| `P0.60` | [#514](https://github.com/frankbria/iris/issues/514) | Wire object storage and the managed AI key into the hosted deploy, on staging first | P0.59 (#440) | IN REVIEW (staging's own SeaweedFS store; browser path waits on a DNS record, owner) |
+| `P0.60` | [#514](https://github.com/frankbria/iris/issues/514) | Wire object storage and the managed AI key into the hosted deploy, on staging first | P0.59 (#440) | DONE ([#706](https://github.com/frankbria/iris/pull/706); end to end on the staging box 2026-11-26; browser path is P1.45, #711) |
 | `P0.61` | [#515](https://github.com/frankbria/iris/issues/515) | Production first-deploy checklist: every step that needs the production box | every other open P0 and P1 | BLOCKED (needs-operator, needs-owner; last by design) |
 
 **K. Legal, trust & data lifecycle**
@@ -156,7 +156,7 @@ production.
 | `P0.50` | [#348](https://github.com/frankbria/iris/issues/348) | Abuse handling and security contact | P0.24 (#341) | DONE (PR #455) |
 | `P0.51` | [#349](https://github.com/frankbria/iris/issues/349) | Account deletion, org offboarding and data retention | P0.26 (#254), P0.29 (#257) | DONE (PR #470) |
 | `P0.52` | [#435](https://github.com/frankbria/iris/issues/435) | Reap jobs stuck in running after a worker crash | P0.39 (#267) | DONE (PR #443) |
-| `P0.53` | [#445](https://github.com/frankbria/iris/issues/445) | Object storage backups: bucket versioning/replication and a restore drill | P0.60 (#514) | IN REVIEW ([#642](https://github.com/frankbria/iris/pull/642): versioning, restore commands, version retention and the off-site copy; closes on the staging drill) |
+| `P0.53` | [#445](https://github.com/frankbria/iris/issues/445) | Object storage backups: bucket versioning/replication and a restore drill | P0.60 (#514) | DONE ([#642](https://github.com/frankbria/iris/pull/642); staging drill 2026-11-26: 303/303 restored, off-site copy run with real rclone) |
 | `P0.54` | [#450](https://github.com/frankbria/iris/issues/450) | Owner/counsel approval of the ToS and AUP wording | P0.48 (#276) | DONE (PR #704) |
 | `P0.55` | [#460](https://github.com/frankbria/iris/issues/460) | Signed artifact URLs in run detail | P0.29 (#257) | DONE (PR #471) |
 | `P0.56` | [#463](https://github.com/frankbria/iris/issues/463) | Portal: visual diff images and baseline approval | P0.40 (#268), P0.55 (#460) | DONE (PR #474) |
@@ -206,6 +206,7 @@ production.
 | `P1.39` | [#442](https://github.com/frankbria/iris/issues/442) | Job-level deadline: a hung browser holds the worker forever | P0.52 (#435) | DONE (#545) |
 | `P1.43` | [#658](https://github.com/frankbria/iris/issues/658) | Credential-stripping patterns take quadratic time on long input: one request can block the hosted RPC server | P3.34 (#645) | DONE: the userinfo and query-parameter patterns are linear with the same match set; error text is cut to 16,384 units before the patterns; selectors and assertion targets are bounded at 4,096 characters |
 | `P1.44` | [#688](https://github.com/frankbria/iris/issues/688) | Billing: guard against a second subscription before Checkout | P0.33 (#261) | DONE (PR #689): run against Stripe test mode on 2026-11-12 (a subscribed org sent to the Customer Portal, an older open session expired, two concurrent requests leave one open session) |
+| `P1.45` | [#711](https://github.com/frankbria/iris/issues/711) | Staging artifact endpoint: DNS name, nginx site and cert so the portal shows screenshots on staging | P0.60 (#514) | BLOCKED (needs-owner: the DNS record) |
 
 ### P2 — Post-launch fast-follow
 

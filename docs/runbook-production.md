@@ -494,10 +494,24 @@ commands above and compares checksums. Record each one here.
 | Date       | Where                                                    | Data                                              | Damage                                             | Restore                                                                  | Result                                    |
 | ---------- | -------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------- |
 | 2026-11-11 | local, pinned `chrislusf/seaweedfs:4.48` (not staging) | 201 objects, 100 kB each: 200 run images, 1 baseline | run prefix purged (200 deletes), baseline overwritten | `artifact-undelete` 1.8 s, `artifact-versions` + `artifact-restore` 3.2 s | SHA-256 over all 201 objects equals the one taken before the damage |
+| 2026-11-26 | **staging** bucket (#514's SeaweedFS), deployed image of #642 | 303 objects: a hosted visual job's 3 images (run screenshot, seeded and approved baselines) + 300 scratch objects of 100 kB | approved baseline overwritten, the other 302 deleted (12:10:32 UTC) | `artifact-undelete` on both prefixes 2.0 s (302 objects), `artifact-versions` + `artifact-restore` 1.5 s | 303/303 SHA-256 equal to before the damage (12:10:38 UTC) |
 
-The drill on the **staging bucket** is still to do: staging has no bucket until #514.
-The off-site copy has not run against a real rclone yet (its test uses a stub): run it
-once by hand on staging and check `current/` and `replaced/` on the remote.
+**Off-site copy, staging smoke test (2026-11-26).** `deploy/backup.sh` ran twice on the
+staging box with real rclone (`rclone/rclone:1.76.0`, pinned by digest) from the bucket
+into a directory remote on the same box (a smoke test, not the production destination).
+Run 1 copied all 303 objects to `current/`. One object was then overwritten and another
+deleted. Run 2 left 302 files in `current/`, the overwritten one with its new content, and
+moved both old copies to `replaced/<UTC time>/`, where the overwritten one's SHA-256 equals
+its original. Each run took about 1 s. On the first run, rclone logs "directory not found"
+for `replaced/` before anything has been replaced; the script treats that as nothing to
+prune (exit 3) and goes on.
+
+**Until staging's services are pointed at the store** (#711: they need its https name),
+`docker compose exec iris … admin artifact-*` has no store on staging. The drill ran those
+commands in a one-off container of the deployed image instead: the release's environment
+and secret mounts, `IRIS_S3_ENDPOINT=http://127.0.0.1:8333`, and
+`--network container:<the seaweedfs container>`, which makes the store loopback.
+`artifact-store.ts` accepts http only on loopback.
 
 ## Monitoring and alerts (issue #275)
 
