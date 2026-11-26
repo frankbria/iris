@@ -22,6 +22,7 @@ import * as userActiveOrgs from './migrations/0019_user_active_orgs';
 import * as orgBilling from './migrations/0020_org_billing';
 import * as usageStripeReported from './migrations/0021_usage_stripe_reported';
 import * as billingGrace from './migrations/0022_billing_grace';
+import * as authRateLimit from './migrations/0023_auth_rate_limit';
 import { createPostgresDb, resolveDatabaseUrl } from './postgres';
 
 /**
@@ -52,6 +53,7 @@ export const MIGRATIONS = {
   '0020_org_billing': orgBilling,
   '0021_usage_stripe_reported': usageStripeReported,
   '0022_billing_grace': billingGrace,
+  '0023_auth_rate_limit': authRateLimit,
 };
 
 /**

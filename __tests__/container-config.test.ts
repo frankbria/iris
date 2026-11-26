@@ -236,7 +236,7 @@ describe('docker-compose.production.yml (issue #273)', () => {
 
   it('pins every image by digest: a literal @sha256 or a required digest env var', () => {
     const images = [...file.matchAll(/^\s+image: (.*)$/gm)].map((m) => m[1]);
-    expect(images).toHaveLength(5);
+    expect(images).toHaveLength(6);
     for (const image of images) {
       expect(image).toMatch(
         /^(?:[^\s$]+@sha256:[0-9a-f]{64}|\$\{(?:IRIS|PORTAL)_IMAGE:\?[^}]*\})$/,
@@ -402,14 +402,16 @@ describe('docker-compose.production.yml (issue #273)', () => {
     );
   });
 
-  it('publishes iris-api and the portal on loopback only, at the ingress ports (#347)', () => {
+  it('publishes iris-api and the portal on loopback only, at the ingress ports, through the proxy (#347, #316)', () => {
     const ports = [...file.matchAll(/^\s+- '([^']*:\d+)'$/gm)].map((m) => m[1]);
     expect(ports).toEqual([
       '127.0.0.1:${IRIS_API_PORT:-4000}:4000',
       '127.0.0.1:${PORTAL_PORT:-3000}:3000',
     ]);
-    expect(service('postgres')).not.toMatch(/ports:/);
-    expect(service('worker')).not.toMatch(/ports:/);
+    expect(service('proxy')).toMatch(/^\s+ports:\n\s+- '127\.0\.0\.1:\$\{IRIS_API_PORT/m);
+    for (const name of ['postgres', 'worker', 'iris', 'portal']) {
+      expect(service(name)).not.toMatch(/^\s+ports:/m);
+    }
     const nginx = read('deploy/nginx/iris.conf');
     expect(nginx).toMatch(/127\.0\.0\.1:4000/);
     expect(nginx).toMatch(/127\.0\.0\.1:3000/);
@@ -538,8 +540,79 @@ describe('container egress firewall (issue #376)', () => {
     const start = deploy.indexOf('up -d --wait --wait-timeout "$wait_timeout" egress');
     expect(start).toBeGreaterThan(0);
     expect(start).toBeLessThan(deploy.indexOf('verify-smtp.js'));
-    expect(deploy).toMatch(/docker compose exec -T "\$service" node docker\/egress-probe\.js/);
-    expect(deploy).toMatch(/"\$\{app_services\[@\]\}" && egress_probe; then\n\s+point_current/);
+    expect(deploy).toMatch(/docker exec "\$id" node docker\/egress-probe\.js/);
+    // Both ways to the switch probe the new containers first (#316 moved them).
+    expect(deploy).toMatch(/wait_healthy "\$\{new\[@\]\}" && egress_probe "\$\{new\[@\]\}"/);
+    expect(deploy).toMatch(/&& egress_probe "\$\{serving\[@\]\}" \\\n\s+&& switch_proxy/);
+  });
+});
+
+describe('zero-downtime deploys (issue #316)', () => {
+  const nonComment = (name: string) =>
+    read(name)
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+  const proxy = nonComment('docker-compose.production.yml').match(
+    /^  proxy:\n((?:(?:    .*)?\n)*)/m,
+  )![1];
+  const deploy = read('deploy/deploy.sh');
+
+  it('runs a digest-pinned nginx as the one holder of the host ports, hardened', () => {
+    expect(proxy).toMatch(/^\s+image: nginx:[\w.-]+@sha256:[0-9a-f]{64}$/m);
+    expect(proxy).toMatch(/^\s+- \.\.\/\.\.\/shared\/proxy:\/etc\/iris-proxy:ro$/m);
+    expect(proxy).toMatch(/^\s+user: '101:101'$/m);
+    expect(proxy).toMatch(/^\s+cap_drop:\n\s+- ALL$/m);
+    expect(proxy).toMatch(/^\s+- no-new-privileges:true$/m);
+    expect(proxy).toMatch(/^\s+read_only: true$/m);
+    expect(proxy).toMatch(/^\s+restart: unless-stopped$/m);
+  });
+
+  it('proxies TCP (sessions and headers pass through) and lets old workers finish on reload', () => {
+    const conf = deploy.match(/<<'NGINX'\n([\s\S]*?)\nNGINX\n/)![1];
+    expect(conf).toMatch(/^stream \{$/m);
+    expect(conf).not.toMatch(/^http \{|proxy_set_header/m);
+    expect(conf).toMatch(/^worker_shutdown_timeout 1h;$/m);
+    expect(conf).toMatch(/resolver 127\.0\.0\.11/);
+    expect(conf).toMatch(/listen 4000; proxy_pass iris_api;/);
+    expect(conf).toMatch(/listen 3000; proxy_pass portal;/);
+    expect(deploy).toMatch(/server %s:4000 resolve;/);
+  });
+
+  it('switches only after the new containers are healthy and probed, then drains the old ones', () => {
+    const rolling = deploy.slice(deploy.indexOf('if [ -s "$proxy_dir/upstreams.conf" ]; then'));
+    const order = [
+      '--no-recreate "${scale[@]}"',
+      'wait_healthy "${new[@]}"',
+      'switch_proxy "$(new_of iris)"',
+      'point_current "$release"',
+      'open_connections "$id"',
+      'docker rm -f "${old[@]}"',
+    ].map((step) => rolling.indexOf(step));
+    expect(order.every((i) => i > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(deploy).toMatch(/^drain_timeout=\$\{DEPLOY_DRAIN_TIMEOUT:-300\}$/m);
+    // The old worker gets SIGTERM (stop after the current job) with the whole drain window.
+    expect(deploy).toMatch(/docker stop -t "\$drain_timeout" "\$id"/);
+  });
+
+  it('has deploy-staging hold a session across deploy.sh and fail a rolling deploy that drops one', () => {
+    const ci = read('.github/workflows/ci.yml');
+    const staging = ci.slice(ci.indexOf('  deploy-staging:'), ci.indexOf('  deploy-production:'));
+    const production = ci.slice(ci.indexOf('  deploy-production:'));
+    expect(staging).toMatch(/scp .* scripts\/rollout-watch\.js /);
+    const start = staging.indexOf('/watch/rollout-watch.js $IRIS_API_PORT $PORTAL_PORT');
+    expect(start).toBeGreaterThan(0);
+    expect(start).toBeLessThan(staging.indexOf('./deploy.sh; \\'));
+    expect(staging).toMatch(
+      /jq -e '\.held\.failed == 0 and \.held\.sockets == 1 and \.held\.spannedSwitch and \.fresh\.failed == 0'/,
+    );
+    expect(production).not.toMatch(/rollout-watch/);
+  });
+
+  it("keeps the portal's auth rate limits in the database, shared by both portals", () => {
+    expect(read('apps/portal/lib/auth.ts')).toMatch(/rateLimit: \{ storage: "database" \}/);
+    expect(read('src/db/migrate.ts')).toMatch(/'0023_auth_rate_limit': authRateLimit/);
   });
 });
 
@@ -682,8 +755,8 @@ describe('deploy-staging runs the hosted stack (issue #440)', () => {
         }),
       ) as { name: string; services: Record<string, { ports?: { published: string }[] }> };
       expect(config.name).toBe('iris-staging');
-      expect(config.services.iris.ports?.[0].published).toBe('14000');
-      expect(config.services.portal.ports?.[0].published).toBe('13000');
+      // Published by the proxy since #316.
+      expect(config.services.proxy.ports?.map((p) => p.published)).toEqual(['14000', '13000']);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -824,6 +897,7 @@ describe('staging object store (issue #514)', () => {
         'iris',
         'portal',
         'postgres',
+        'proxy',
         'seaweedfs',
         'worker',
       ]);

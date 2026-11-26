@@ -543,6 +543,7 @@ jobs:
           # until deploy.sh's SMTP and migration gates pass (see deploy/deploy.sh).
           release="$DEPLOY_DIR/releases/staging-${GITHUB_SHA::12}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           if ! box "set -eu; umask 077; install -d -m 700 $DEPLOY_DIR $DEPLOY_DIR/releases $DEPLOY_DIR/shared $DEPLOY_DIR/shared/secrets
+            install -d -m 755 $DEPLOY_DIR/shared/proxy
             install -d -m 700 $release $release/docker $release/secrets $release/systemd"; then
             echo "::error::Cannot create $DEPLOY_DIR on the box as USER. Create it once, owned by that user (sudo install -d -o <user> -m 755 $DEPLOY_DIR), then re-run."
             exit 1
@@ -552,6 +553,8 @@ jobs:
           scp "${ssh_opts[@]}" deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/deploy.sh"
           # Staging only (#514); deploy-production never copies it.
           scp "${ssh_opts[@]}" docker-compose.staging-s3.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.staging-s3.yml"
+          # Staging only (#316): the client-side record of the deploy, below.
+          scp "${ssh_opts[@]}" scripts/rollout-watch.js "$DEPLOY_USER@$DEPLOY_HOST:$release/rollout-watch.js"
           # Backups (#274), watchdog (#275), retention (#349): shipped as in production,
           # for the operator to install as root-owned copies if staging should run them.
           # Their *_COMPOSE_PROJECT and DEPLOY_DIR settings must then name staging's.
@@ -635,9 +638,34 @@ jobs:
           # The box authenticates to GHCR with the run-scoped token (a new package is
           # private by default), over STDIN, and logs out after the deploy.
           printf '%s' "$GHCR_TOKEN" | box "docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+
+          # Zero-downtime proof (#316): while deploy.sh runs, a client on the box holds one
+          # keep-alive session to iris-api and opens fresh requests to both host ports every
+          # second (scripts/rollout-watch.js, in a container of the new iris image). It ends
+          # 15s after the proxy switch, which is when deploy.sh's drain lets the old iris go.
+          watch=iris-staging-rollout-watch
+          box "docker rm -f $watch >/dev/null 2>&1 || :
+            docker run -d --name $watch --network host --cap-drop ALL --read-only \
+              -v $release/rollout-watch.js:/watch/rollout-watch.js:ro -v $DEPLOY_DIR/shared/proxy:/watch/proxy:ro \
+              --entrypoint node '$IRIS_IMAGE' /watch/rollout-watch.js $IRIS_API_PORT $PORTAL_PORT /watch/proxy/upstreams.conf >/dev/null"
+
+          rc=0
           box "cd $release && chmod 700 deploy.sh backup.sh restore.sh watchdog.sh retention.sh \
             && IRIS_IMAGE='$IRIS_IMAGE' PORTAL_IMAGE='$PORTAL_IMAGE' ./deploy.sh; \
-            rc=\$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit \$rc"
+            rc=\$?; docker logout ghcr.io >/dev/null 2>&1 || :; exit \$rc" 2>&1 | tee /tmp/deploy.out || rc=$?
+          if [ "$rc" != 0 ]; then
+            box "docker rm -f $watch >/dev/null 2>&1" || :
+            exit "$rc"
+          fi
+          seen=$(box "timeout 120 docker wait $watch >/dev/null; docker logs $watch 2>&1 | tail -n 1; docker rm -f $watch >/dev/null")
+          echo "rollout watch: $seen"
+          if grep -q 'rolling: switched' /tmp/deploy.out; then
+            printf '%s' "$seen" | jq -e '.held.failed == 0 and .held.sockets == 1 and .held.spannedSwitch and .fresh.failed == 0' >/dev/null \
+              || { echo "::error::The rolling deploy dropped a request or the held session (rollout watch above)"; exit 1; }
+            echo 'zero downtime: the held session and every fresh request were answered across the switch'
+          else
+            echo 'not a rolling deploy (the first behind the proxy, #316): requests may fail during it'
+          fi
 
           # Beyond the healthchecks deploy.sh waited on (#309: iris-api /health/ready,
           # the portal's /api/health, the worker's heartbeat), prove what they stop
