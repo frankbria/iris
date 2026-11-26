@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes } from 'crypto';
-import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { CreateBucketCommand, PutBucketVersioningCommand, S3Client } from '@aws-sdk/client-s3';
 import { removeBucket } from './utils/s3-bucket';
 import {
   baselineKey,
@@ -502,4 +502,23 @@ if (!s3Configured) {
     expect(await text(last)).toBe(last);
     expect(await store.pruneVersions(future())).toBe(0);
   }, 120_000);
+
+  // Suspending versioning keeps the versions already stored, so the retention pass must
+  // still expire them, or a deleted image would outlive its 14 days (codex review).
+  it('keeps pruning old versions after versioning is suspended', async () => {
+    const key = shot('suspended');
+    await store.put(key, Buffer.from('v1'), 'image/png');
+    await store.put(key, Buffer.from('v2'), 'image/png');
+    await admin.send(
+      new PutBucketVersioningCommand({
+        Bucket: bucket,
+        VersioningConfiguration: { Status: 'Suspended' },
+      }),
+    );
+    expect(await store.versioningEnabled()).toBe(false);
+    expect(await store.versions(key)).toHaveLength(2);
+    expect(await store.pruneVersions(future())).toBeGreaterThan(0);
+    expect(await store.versions(key)).toHaveLength(1);
+    expect(await text(key)).toBe('v2');
+  });
 });

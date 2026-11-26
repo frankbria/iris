@@ -377,7 +377,12 @@ export class S3ArtifactStore implements ArtifactStore {
   }
 
   async pruneVersions(olderThan: Date): Promise<number> {
-    if (!(await this.versioningEnabled())) return 0;
+    // A suspended bucket keeps the versions it already holds (S3), so they still expire;
+    // only a bucket that was never versioned has none (codex review).
+    const { Status } = await this.client.send(
+      new GetBucketVersioningCommand({ Bucket: this.bucket }),
+    );
+    if (!Status) return 0;
     const doomed: VersionRef[] = [];
     const spentMarkers: VersionRef[] = [];
     let pruned = 0;
