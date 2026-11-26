@@ -167,7 +167,12 @@ ${body}
 async function readPrevious(url) {
   if (!url) return null;
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS), cache: 'no-store' });
+    // Pages serves status.json with `Cache-Control: max-age=600`, and runs are five minutes
+    // apart: without a cache-buster a run reads a copy missing the last checks and
+    // republishes the history without them (glm review).
+    const fresh = new URL(url);
+    fresh.searchParams.set('t', String(Date.now()));
+    const res = await fetch(fresh, { signal: AbortSignal.timeout(TIMEOUT_MS) });
     return res.ok ? await res.json() : null;
   } catch {
     return null;

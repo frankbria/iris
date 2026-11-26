@@ -61,6 +61,7 @@ describe("readContacts", () => {
     ["IRIS_SUPPORT_CONTACT", "mailto:help%desk@example.com"],
     // The status page (#317) is a web page only.
     ["IRIS_STATUS_URL", "mailto:status@example.com"],
+    ["IRIS_STATUS_URL", "MAILTO:status@example.com"],
     ["IRIS_STATUS_URL", "http://status.example.com/"],
     ["IRIS_STATUS_URL", "javascript:alert(1)"],
   ])("refuses %s=%j, naming the variable", (name, value) => {

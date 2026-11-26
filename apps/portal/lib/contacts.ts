@@ -59,7 +59,8 @@ function contactUrl(name: string, raw: string | undefined): string | null {
 /** A status page is a web page: the contact rules, `mailto:` refused. */
 function statusUrl(raw: string | undefined): string | null {
   const value = contactUrl("IRIS_STATUS_URL", raw)
-  if (value?.startsWith("mailto:"))
+  // The parsed scheme: `MAILTO:` passes contactUrl too (glm review).
+  if (value && new URL(value).protocol !== "https:")
     throw new Error("IRIS_STATUS_URL must be an https: URL")
   return value
 }

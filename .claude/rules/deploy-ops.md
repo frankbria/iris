@@ -457,7 +457,8 @@ Runbook "Status page" has the owner's settings.
 - **A secret, not a variable**: Actions logs are public and secrets are masked; the script
   prints status codes only and the page never shows the URL (#329).
 - **History is the published `status.json`**, read back through `configure-pages`'s
-  `base_url`, filtered (ISO time, two booleans) and capped at 288 checks. Nothing is
+  `base_url` with a `?t=` cache-buster (Pages' CDN caches it 10 min, longer than the
+  schedule, glm review), filtered (ISO time, two booleans) and capped at 288 checks. Nothing is
   committed. First run or unreadable: a fresh history.
 - **Probes** are the runbook's "Uptime from outside": `/` 200 or a same-origin redirect to
   `/login`; `/v1/jobs/x` 401 (anything else, 502 included, is down). One retry after 5 s.

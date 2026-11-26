@@ -99,7 +99,11 @@ describe('probing a server', () => {
     const githubOutput = path.join(out, 'github-output');
     // The previous publication, served like the Pages site would serve it.
     const previous = { checks: [{ time: '2026-11-26T10:00:00.000Z', portal: true, api: false }] };
-    const pages = http.createServer((_req, res) => res.end(JSON.stringify(previous)));
+    const asked: string[] = [];
+    const pages = http.createServer((req, res) => {
+      asked.push(req.url ?? '');
+      res.end(JSON.stringify(previous));
+    });
     pages.listen(0, '127.0.0.1');
     await once(pages, 'listening');
     const log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -116,6 +120,8 @@ describe('probing a server', () => {
       expect(checks).toHaveLength(2);
       expect(checks[0]).toEqual(previous.checks[0]);
       expect(checks[1]).toMatchObject({ portal: true, api: true });
+      // Past the Pages CDN's ten-minute cache, or a run republishes a stale history.
+      expect(asked).toEqual([expect.stringMatching(/^\/status\.json\?t=\d+$/)]);
       const page = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
       expect(page).toContain('All systems operational');
       expect(page).not.toContain('127.0.0.1');
