@@ -14,6 +14,7 @@ import { providerKeyStore } from '../../src/byok/store';
 import { orgEntitlements } from '../../src/billing/plans';
 import {
   managedAiResolver,
+  managedCreditLeft,
   managedSpendThisMonth,
   orgAiSettings,
   resolveManagedKey,
@@ -52,7 +53,17 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
     u.pathname = `/${dbName}`;
     db = createPostgresDb(u.toString());
     await migrateToLatest(db);
-    for (const org of ['org-m', 'org-b', 'org-x', 'org-r', 'org-big', 'org-held', 'org-mid']) {
+    for (const org of [
+      'org-m',
+      'org-b',
+      'org-x',
+      'org-r',
+      'org-big',
+      'org-held',
+      'org-mid',
+      'org-agree',
+      'org-dec',
+    ]) {
       await sql`insert into organization (id, name, slug, "createdAt") values (${org}, ${org}, ${org}, now())`.execute(
         db,
       );
@@ -201,6 +212,47 @@ const MANAGED = { provider: 'anthropic' as const, apiKey: 'iris-managed-key' };
     const left = await sql<{ amount_usd: string }>`select amount_usd from managed_ai_reservations
       where org_id = 'org-mid' order by amount_usd`.execute(db);
     expect(left.rows.map((r) => Number(r.amount_usd))).toEqual([1]);
+  });
+
+  // #641: the pages show managedCreditLeft(); the resolver admits against the same figure,
+  // so a held reservation lowers both, and last month's held row lowers neither.
+  it('the credit left the pages show is what the resolver grants, held reservations included (#641)', async () => {
+    await orgEntitlements(db).setPlan('org-agree', 'pro'); // $10
+    await orgAiSettings(db).set('org-agree', 'managed', 'user:u7');
+    await spend('org-agree', 6, 'managed');
+    const lastMonth = sql`date_trunc('month', now() at time zone 'UTC') at time zone 'UTC' - interval '1 hour'`;
+    await sql`insert into managed_ai_reservations (org_id, amount_usd, created_at, held) values
+      ('org-agree', 5, ${lastMonth}, true)`.execute(db);
+    expect(await managedCreditLeft(db, 'org-agree', 10)).toBeCloseTo(4);
+
+    const held = await resolver(MANAGED, () => 1.5)({ orgId: 'org-agree' });
+    await held!.release!({ unrecorded: true }); // billed, usage row lost: $1.50 held
+    // A live reservation is not shown: it ends with its call.
+    const live = await resolver(MANAGED, () => 0.25)({ orgId: 'org-agree' });
+    expect(await managedCreditLeft(db, 'org-agree', 10)).toBeCloseTo(2.5);
+    await live!.release!();
+
+    // The resolver grants exactly what the page shows, and not a cent more.
+    expect(await resolver(MANAGED, () => 2.51)({ orgId: 'org-agree' })).toBeNull();
+    const all = await resolver(MANAGED, () => 2.5)({ orgId: 'org-agree' });
+    expect(all?.billingMode).toBe('managed');
+    await all!.release!();
+    // Never below zero, whatever the ledger holds.
+    await spend('org-agree', 20, 'managed');
+    expect(await managedCreditLeft(db, 'org-agree', 10)).toBe(0);
+  });
+
+  // Codex review: in JS floats 10 - 9.83 is 0.16999..., which refused a $0.17 call the page
+  // showed as affordable. The credit is computed and compared in Postgres numeric.
+  it('admits a call that exactly uses a decimal credit left (#641)', async () => {
+    await orgEntitlements(db).setPlan('org-dec', 'pro'); // $10
+    await orgAiSettings(db).set('org-dec', 'managed', 'user:u8');
+    await spend('org-dec', 9.83, 'managed');
+    expect(await managedCreditLeft(db, 'org-dec', 10)).toBe(0.17);
+    expect(await resolver(MANAGED, () => 0.18)({ orgId: 'org-dec' })).toBeNull();
+    const exact = await resolver(MANAGED, () => 0.17)({ orgId: 'org-dec' });
+    expect(exact?.billingMode).toBe('managed');
+    await exact!.release!();
   });
 
   it("prices the worst case at the provider's dearest rates plus the request size (#482)", () => {

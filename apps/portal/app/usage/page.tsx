@@ -1,7 +1,7 @@
 import Link from "next/link"
 
 import {
-  managedSpendThisMonth,
+  managedCreditLeft,
   orgAiSettings,
 } from "../../../../src/billing/managed-ai"
 import { orgEntitlements } from "../../../../src/billing/plans"
@@ -42,18 +42,17 @@ export default async function UsagePage() {
   const db = getDb()
   const billing = getBilling()
   const period = utcMonth(new Date())
-  const [plan, summary, runsUsed, stored, mode, managedSpent, account] =
-    await Promise.all([
-      orgEntitlements(db).get(org.id),
-      usageLedger(db).summary(org.id, period.from, period.to),
-      runsUsedThisMonth(db, org.id),
-      storageUsage(db, org.id),
-      orgAiSettings(db).get(org.id),
-      managedSpendThisMonth(db, org.id),
-      billing ? billing.account(org.id) : null,
-    ])
+  const [plan, summary, runsUsed, stored, mode, account] = await Promise.all([
+    orgEntitlements(db).get(org.id),
+    usageLedger(db).summary(org.id, period.from, period.to),
+    runsUsedThisMonth(db, org.id),
+    storageUsage(db, org.id),
+    orgAiSettings(db).get(org.id),
+    billing ? billing.account(org.id) : null,
+  ])
   const sessions = plan.maxConcurrentSessions
   const credit = plan.managedAiCreditUsdPerMonth
+  const left = await managedCreditLeft(db, org.id, credit)
   const split = aiSplit(summary)
   // `to` is exclusive: the last day shown is the one before it.
   const lastDay = new Date(period.to.getTime() - 1)
@@ -130,7 +129,7 @@ export default async function UsagePage() {
         </h2>
         <p className="text-sm">
           {credit > 0
-            ? `${formatUsd(Math.max(credit - managedSpent, 0))} of ${formatUsd(credit)} left this month.`
+            ? `${formatUsd(left)} of ${formatUsd(credit)} left this month.`
             : "Your plan includes no IRIS credits."}
         </p>
         <p className="text-sm text-muted-foreground">

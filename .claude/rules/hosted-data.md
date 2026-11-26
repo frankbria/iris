@@ -400,6 +400,9 @@ migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
   counting and is deleted at the org's next admission (a crashed call). A billed call whose
   usage row failed to write is released as `{ unrecorded: true }`: its row becomes `held`
   and counts as spent until the month ends (codex review), since nothing else records it.
+  `managedCreditLeft()` (credit minus spend minus this month's held rows) is the one
+  figure: the resolver admits a call when live reservations + its worst case fit it, and
+  the portal pages show it (#641).
   A live row ends only with its TTL, so a call started before midnight UTC still counts
   after it. The estimate is a
   resolver parameter, computed in `hostedServices()`: the portal imports `managed-ai.ts`,

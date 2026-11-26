@@ -22,9 +22,10 @@ it; the billing controls are for owners and admins.
   "(limit reached)" shows on runs and storage only: the agent-turn and vision-call limits
   are not enforced yet (hosted-data.md, #346), so `planUsage` never marks them reached.
   Drop `notEnforced` there when enforcement lands.
-- **Credit left is plan credit minus `managedSpendThisMonth()`**, as on `/provider-keys`.
-  A `held` reservation (#482) is not subtracted on either page, so the resolver can refuse
-  a call slightly before the page reaches zero.
+- **Credit left is `managedCreditLeft()`** (src/billing/managed-ai.ts, #641), on `/usage` and
+  `/provider-keys`: plan credit minus this month's managed spend and `held` reservations
+  (#482), the figure the resolver admits against. Live reservations (calls in flight) are
+  not shown.
 - **`lib/usage.ts` is pure** (type-only imports from `src/`), so the portal's jsdom Jest
   can test it; importing `src/billing/plans.ts` there loads Kysely (ESM) and fails.
 - **`components/billing-section.tsx`** (`PlanLine`, `BillingControls`) is what `/org` and
