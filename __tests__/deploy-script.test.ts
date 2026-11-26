@@ -89,6 +89,8 @@ services:
     image: \${IRIS_IMAGE:?}
     environment:
       MARK: \${MARK:?}
+      # An optional setting as the production file passes one (#549): empty is unset.
+      OPTIONAL: \${OPTIONAL:-}
     secrets: [shared]
   worker:
     <<: *app
@@ -106,6 +108,19 @@ services:
 secrets:
   smtp_url:
     file: ./secrets/smtp_url
+  shared:
+    file: ../../shared/secrets/shared
+`;
+
+/** A second compose file adding a data service, as staging's object store does (#514). */
+const STORE = `
+services:
+  store:
+    image: \${DB_IMAGE:?}
+    init: true
+    command: ['sleep', 'infinity']
+    secrets: [shared]
+secrets:
   shared:
     file: ../../shared/secrets/shared
 `;
@@ -149,11 +164,20 @@ secrets:
   }
 
   /** A release directory as the deploy job stages it. */
-  function stage(id: string, { smtp = 'ok', mark = 'a', db = refs.db } = {}): string {
+  function stage(
+    id: string,
+    { smtp = 'ok', mark = 'a', db = refs.db, store = false } = {},
+  ): string {
     const release = path.join(root, 'releases', id);
     fs.mkdirSync(path.join(release, 'secrets'), { recursive: true });
     fs.writeFileSync(path.join(release, 'docker-compose.yml'), COMPOSE);
-    fs.writeFileSync(path.join(release, 'settings.env'), `DB_IMAGE=${db}\nMARK=${mark}\n`);
+    let settings = `DB_IMAGE=${db}\nMARK=${mark}\n`;
+    if (store) {
+      // What deploy-staging adds (#514): the store's compose file and the optional settings.
+      fs.writeFileSync(path.join(release, 'docker-compose.store.yml'), STORE);
+      settings += "COMPOSE_FILE='docker-compose.yml:docker-compose.store.yml'\nOPTIONAL='set'\n";
+    }
+    fs.writeFileSync(path.join(release, 'settings.env'), settings);
     fs.writeFileSync(path.join(release, 'secrets', 'smtp_url'), smtp);
     return release;
   }
@@ -394,5 +418,39 @@ secrets:
     expect(deploy(stage('r8', { db: refs.db2 }), refs.v2, refs.v1).status).toBe(0);
     expect(pg()).not.toBe(before);
     expect(docker('inspect', '-f', '{{.Config.Image}}', pg())).toBe(refs.db2);
+  }, 150_000);
+
+  // Staging's object store (#514): a release whose settings name a second compose file
+  // gets its data service started with postgres, before the gates, and the optional
+  // settings reach the app; the next release without them drops both.
+  it('starts the data services of every compose file settings.env names, and drops them after', () => {
+    const service = (name: string) =>
+      docker(
+        'ps',
+        '-q',
+        '--filter',
+        'label=com.docker.compose.project=iris-deploy-test',
+        '--filter',
+        `label=com.docker.compose.service=${name}`,
+      );
+    const optional = () =>
+      /OPTIONAL=(\S*)/.exec(
+        docker('inspect', '-f', '{{range .Config.Env}}{{.}} {{end}}', service('iris')),
+      )?.[1];
+
+    // The store is up before the gates: a failed migration leaves it running.
+    const failed = deploy(stage('r9', { store: true }), refs.badMigration, refs.badMigration);
+    expect(failed.out).toMatch(/migration failed/);
+    expect(service('store')).not.toBe('');
+    expect(optional()).toBe('');
+
+    const withStore = stage('r10', { store: true });
+    expect(deploy(withStore, refs.v2, refs.v1).status).toBe(0);
+    expect(service('store')).not.toBe('');
+    expect(optional()).toBe('set');
+
+    expect(deploy(stage('r11'), refs.v2, refs.v1).status).toBe(0);
+    expect(service('store')).toBe('');
+    expect(optional()).toBe('');
   }, 150_000);
 });

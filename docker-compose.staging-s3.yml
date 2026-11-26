@@ -1,0 +1,46 @@
+# Staging's own S3-compatible artifact store (issue #514): SeaweedFS, pinned exactly as
+# in CI. deploy-staging copies this file into the release next to the production compose
+# file and names both in COMPOSE_FILE (settings.env); deploy-production never copies it,
+# so production uses whichever S3 endpoint the owner chooses (the code speaks only S3).
+#
+# The S3 identity file is built on the box by the deploy job from a secret generated
+# there once (<deploy dir>/shared/secrets/s3_secret_access_key). With -s3.config the
+# server has identities, so an unsigned request is a 403: never anonymous. It lives in
+# shared/, not in the release: compose does not recreate a service whose secret file only
+# moved, so a per-release file would be pruned from under the running store and a
+# restart would fail on the missing bind source.
+
+services:
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+    command: ['server', '-dir=/data', '-s3', '-s3.config=/run/secrets/seaweedfs_s3']
+    # Loopback only: the host's nginx site for the S3 name proxies here, unchanged
+    # (SigV4 signs the host and the path, so no prefix is added or stripped).
+    ports:
+      - '127.0.0.1:${IRIS_S3_PORT:-18333}:8333'
+    secrets:
+      - seaweedfs_s3
+    volumes:
+      - seaweedfs-data:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8333/healthz']
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  seaweedfs-data:
+
+secrets:
+  seaweedfs_s3:
+    file: ../../shared/secrets/seaweedfs_s3.json
