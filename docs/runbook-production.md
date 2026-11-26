@@ -83,7 +83,8 @@ the job by name; they never skip it.
   - `current`: a link to the release that is serving. To run compose by hand,
     `cd "$(readlink -f current)"` first. Always work from the real path: containers
     created through the `current` link would mount files through it.
-- **Ports.** iris-api publishes on `127.0.0.1:4000` and the portal on `127.0.0.1:3000`.
+- **Ports.** The stack's `proxy` container (#316, "Zero-downtime deploys" below) publishes
+  iris-api on `127.0.0.1:4000` and the portal on `127.0.0.1:3000`.
   Staging defaults to `127.0.0.1:14000` / `127.0.0.1:13000`, so the two stacks can
   share a box. Whatever you set in `IRIS_API_PORT` / `PORTAL_PORT`, use the same
   ports in the nginx site. Never publish either on a public interface: the portal's rate limits trust
@@ -164,22 +165,24 @@ own configuration: its secrets, relay, ports and nginx site.
    firewall" below), so the gates already run behind it.
 2. It runs the SMTP check from the new portal image.
 3. It runs the migrations from the new iris image.
-4. It recreates `iris`, `worker` and `portal` and waits for their healthchecks, then
-   runs the egress probe in `iris` and the worker. Only once they are healthy and the
-   probe passed does it point `current` at the new release, so a deploy that is cut off
-   (job cancelled, host rebooted) leaves `current` on the last good one.
-5. If they stay unhealthy or the probe fails, it recreates them from the previous release's directory
-   (its compose file, settings, secrets and images), leaves `current` where it was,
-   and exits non-zero.
+4. It starts new `iris`, `worker` and `portal` containers next to the serving ones and
+   waits for their healthchecks, then runs the egress probe in the new `iris` and
+   worker. Only once they are healthy and the probe passed does it switch the proxy to
+   them and point `current` at the new release, so a deploy that is cut off (job
+   cancelled, host rebooted) leaves `current` on the last good one. Then it drains and
+   removes the old containers ("Zero-downtime deploys" below).
+5. If they stay unhealthy or the probe fails, it removes the new containers, leaves
+   `current` where it was, and exits non-zero. The serving containers were never touched.
 
-A job the recreated worker was running is not lost (#435): its claim stops heartbeating,
-and about 3 minutes later any worker's reaper requeues it (up to 3 attempts, then it is
-failed with "The job was interrupted too many times"). A scan restarts from the
-beginning, so a tenant sees a longer run, not an error.
+The first deploy behind the proxy (and the first of a new box) is **cold**: it recreates
+the three in place, an outage as before #316, then starts the proxy on them. If that
+fails, it removes the proxy and recreates them from the previous release's directory
+(its compose file, settings, secrets and images).
 
 If step 1, 2 or 3 fails, the script exits non-zero and nothing has changed: the serving
-release's files and containers are untouched (the egress firewall, once applied, stays). The first deploy has no previous
-release, so it says so and exits non-zero without a rollback. `current` only ever
+release's files and containers are untouched (the egress firewall, once applied, stays).
+A cold first deploy has no previous release, so it says so and exits non-zero without
+a rollback. `current` only ever
 names a release that became healthy, so it is always a valid rollback target. A rerun
 of the same tag stages a new release directory and is an ordinary deploy, which also
 picks up rotated secrets.
@@ -197,6 +200,58 @@ picks up rotated secrets.
   `/tmp/iris-worker-heartbeat` at every poll, and every 30s while a job runs. The
   healthcheck fails when the file is 180s old: three times the longest gap, which is
   the 60s ceiling of `--poll-ms`.
+
+## Zero-downtime deploys (issue #316)
+
+A deploy drops nothing that ends within the drain window: no refused connection, no
+failed request, no WebSocket session cut by the switch.
+
+**How.** The `proxy` service (nginx, digest-pinned) is the only holder of the host ports.
+It proxies **TCP**, so WebSocket sessions, `X-Real-IP` and every other header the host's
+nginx sets pass through unchanged. Its `nginx.conf` and `upstreams.conf` live in
+`shared/proxy/`, written by `deploy.sh`; `upstreams.conf` names the one iris and one
+portal container that get new connections. A deploy:
+
+1. starts a second container of each app service with the new release
+   (`up --no-recreate --scale <service>=2`) and waits for their healthchecks and the
+   egress probe;
+2. rewrites `upstreams.conf` and reloads nginx: new connections go to the new containers,
+   while nginx's old workers keep the connections they hold, to the old ones;
+3. points `current` at the release (`deploy: rolling: switched to …`);
+4. drains: the old worker gets SIGTERM at once and finishes its current job (it is given
+   the whole window); the old iris and portal keep serving what they hold until no
+   connection from outside their own loopback is left on their port (`deploy: drained
+   … 0 connections left`), at most `DEPLOY_DRAIN_TIMEOUT` (300 s), then stop with their
+   own drain (#309: in-flight requests answered, then sessions closed);
+5. removes the old containers.
+
+A session still open after the window is ended by step 4, as every session was before.
+A job still running is stopped by the same timeout and requeued by the reaper (#435): its
+claim stops heartbeating, and about 3 minutes later any worker requeues it (up to 3
+attempts). A change to the proxy's own definition (its image digest, the ports) recreates
+it, which drops its connections once.
+
+**While the two run side by side**, both iris processes share the database and the
+volumes (`/data` SQLite: the ledger and vision cache take SQLite's locks), and each keeps
+its own in-memory RPC rate buckets (#342): a tenant with sessions on both can use up to
+twice its per-key and per-org rate until the old one stops. New connections all go to the
+new one, so only sessions already open count on the old side. Shared buckets are #714. The
+portal's auth rate limits are in the database (`rateLimit` table, migration 0023), so the
+two portals share them.
+
+**Check it by hand** (in the current release's real path):
+
+```bash
+cat ../../shared/proxy/upstreams.conf       # the containers that get new connections
+docker compose ps                           # one of each app service after a deploy
+docker compose logs proxy                   # nginx: reloads, upstream errors
+```
+
+**Staging proves it on every deploy.** `deploy-staging` runs `scripts/rollout-watch.js`
+on the box during `deploy.sh`: one keep-alive session to iris-api held across the switch
+(one request a second) and fresh requests to both ports every second, ending 15 s after
+the switch. The job prints `rollout watch: {…}` and fails a rolling deploy whose held
+session used more than one socket or saw a failure, or where a fresh request failed.
 
 ## Container egress firewall (issue #376)
 

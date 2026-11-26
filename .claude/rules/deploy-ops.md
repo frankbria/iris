@@ -206,6 +206,54 @@ compares them), `-s3.config` identities (never anonymous), `127.0.0.1:18333`, vo
 - **Managed AI stays iris-only** (#549's decision, kept in #514): the worker runs tenant
   pages and makes no AI call yet.
 
+### Zero-downtime deploys (issue #316)
+
+`deploy.sh` rolls the app services behind the stack's own `proxy` (nginx, digest-pinned, a
+**TCP** `stream` proxy: WebSockets and the host nginx's headers pass through). Runbook
+"Zero-downtime deploys". `deploy-script.test.ts` holds a request open through the real
+proxy across a deploy; `container-config.test.ts` pins the order.
+
+- **Why a proxy in the stack, not the host's nginx**: the host site is the operator's (root,
+  `nginx -t` + reload), and deploy-production may not change. The proxy owns the host
+  ports; iris and the portal publish nothing, so two of each can run at once.
+- **Rolling = compose scale**: `up -d --no-deps --no-recreate --scale <svc>=<n+1>` starts one
+  new container per service from the new release and leaves the old (diverged) ones alone.
+  New = `ps -aq` after minus before. `wait_healthy` polls the new ids (not `up --wait`,
+  which would also wait on the old ones). `docker compose exec <svc>` picks any running
+  container, so the smoke step and the runbook's commands still work after a deploy.
+- **The switch is a file and a reload**: `shared/proxy/upstreams.conf` names the new
+  containers (`server <name>:<port> resolve`, nginx >= 1.27.3 OSS, resolver 127.0.0.11, so
+  a restart's new address is followed), plus `server <address>:<port> backup`: nginx
+  resolves a new name only after the new worker starts, so the address carries the first
+  connections (codex review on #716), written atomically (tmp + mv in the bind-mounted
+  directory), `nginx -t`, then `nginx -s reload`. Old workers keep their connections
+  (`worker_shutdown_timeout 1h`). `nginx.conf` is a heredoc in deploy.sh, rewritten each
+  deploy: production copies a fixed file list, so the config ships inside deploy.sh.
+  Files 0644 in a 0755 directory: the proxy runs as uid 101.
+- **Drain = no outside connections left**: `open_connections` reads the container's
+  `/proc/net/tcp{,6}` for ESTABLISHED on its service port from anything but loopback (its
+  own healthcheck). Up to `DEPLOY_DRAIN_TIMEOUT`, then `docker stop` (iris's #309 drain).
+  The old worker gets `docker stop -t <drain>` at once, in the background: SIGTERM is
+  "stop after the current job".
+- **Failure before the switch removes the new containers** (whatever `up --scale` created,
+  even when it failed partway) and restores `upstreams.conf.prev` only if this run's
+  switch wrote it: the rolling path deletes any older `.prev` first, since it names
+  containers long gone (codex review). The serving ones were never touched (no
+  previous-directory rollback on this path). Between the reload and `point_current` there
+  is no recovery: two local commands, accepted. The cold path (no `upstreams.conf`, or no proxy container: a
+  rollback to a pre-#316 release removes it as an orphan) recreates in place as before
+  and starts the proxy. Its rollback removes the proxy first when the previous release
+  publishes the ports itself (no `proxy` service), and otherwise re-points the proxy at
+  the previous release's recreated containers.
+- **Orphans go at the switch** (`up --no-deps --remove-orphans proxy`), so staging's store
+  still leaves with a release that drops its file.
+- **The overlap**: two iris processes share Postgres and the `/data` volumes (SQLite locks)
+  and have separate RPC buckets for one drain window (#714). The portal's BetterAuth
+  counters are in the database (migration 0023).
+- **Staging records it**: deploy-staging runs `scripts/rollout-watch.js` (iris image, host
+  network) across deploy.sh and fails a rolling deploy whose held session or fresh
+  requests saw a failure. A cold deploy only prints the record.
+
 ### Container egress firewall (issue #376)
 
 Compose service `egress` (docker-compose.production.yml) runs `docker/egress-firewall.sh`

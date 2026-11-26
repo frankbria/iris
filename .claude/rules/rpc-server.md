@@ -408,7 +408,9 @@ They apply only to connections with a principal; local mode is untouched.
   Both buckets must have a token before either is spent. A refused request gets
   `-32029` with `data.retryAfterMs` and never runs. Buckets outlive connections, so
   reconnecting gains nothing; full buckets are pruned on the heartbeat. In memory, one
-  process (#316 for several).
+  process: during a rolling deploy (#316) the old process keeps its buckets for the
+  sessions it still holds, so a tenant can reach twice its rate for one drain window.
+  Shared buckets are #714.
 - **The per-org connection cap is checked in the async `verify` callback**, against
   `tenants`. That is safe only because ws emits `'connection'` synchronously inside
   `done(true)` and the handler registers the tenant before returning.

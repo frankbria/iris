@@ -216,7 +216,7 @@ production.
 | `P2.2` | [#362](https://github.com/frankbria/iris/issues/362) | MCP tool: follow-up items | P0.7 (#334) | DONE (#643) |
 | `P2.3` | [#314](https://github.com/frankbria/iris/issues/314) | Hosted MCP over HTTP with tenant auth and metering | P0.24 (#341), P0.35 (#263), P2.2 (#362) | DONE (#647) |
 | `P2.4` | [#315](https://github.com/frankbria/iris/issues/315) | Per-plan artifact storage quota | P0.29 (#257), P0.37 (#346) | DONE (#551) |
-| `P2.5` | [#316](https://github.com/frankbria/iris/issues/316) | Zero-downtime deploys | P0.45 (#273), P1.30 (#309), P0.59 (#440) | TODO |
+| `P2.5` | [#316](https://github.com/frankbria/iris/issues/316) | Zero-downtime deploys | P0.45 (#273), P1.30 (#309), P0.59 (#440) | DONE ([#716](https://github.com/frankbria/iris/pull/716): rolling deploy behind the stack's TCP proxy, drain before stop; staging evidence on the issue; RPC buckets per process: #714) |
 | `P2.6` | [#317](https://github.com/frankbria/iris/issues/317) | Public status page | P0.47 (#275), P0.59 (#440) | CODE DONE (option C, owner 2026-11-26): `status.yml` + `scripts/status-probe.js`, `/contact` link via `IRIS_STATUS_URL`; probes proven against staging. Live once the owner enables Pages and sets `STATUS_PROBE_URL` (runbook "Status page") |
 | `P2.7` | [#318](https://github.com/frankbria/iris/issues/318) | Store money as integer micro-units | P0.35 (#263) | DONE (#552) |
 | `P2.8` | [#319](https://github.com/frankbria/iris/issues/319) | Watcher: `--execute` targets and nested ignore globs | — | DONE (#553) |
@@ -241,6 +241,7 @@ production.
 | `P2.31` | [#541](https://github.com/frankbria/iris/issues/541) | Audit log: a read surface for org admins, and a retention period (90 days) | P1 (#361) | DONE (#577, #653) |
 | `P2.32` | [#639](https://github.com/frankbria/iris/issues/639) | Deploy job: pass IRIS_BILLING_GRACE_DAYS to settings.env so the payment grace period is configurable in production | P0.38 (#266) | DONE: the deploy job writes `vars.IRIS_BILLING_GRACE_DAYS` to settings.env (owner yes, 2026-11-26); no variable set, so production keeps 7 days |
 | `P2.33` | [#651](https://github.com/frankbria/iris/issues/651) | Live-check the gpt-6 request shape with a real OpenAI key, and confirm the model decisions of #650 | P2.29 (#523) | BLOCKED (needs-owner) |
+| `P2.36` | [#714](https://github.com/frankbria/iris/issues/714) | Share the RPC rate buckets across iris processes | P2.5 (#316) | TODO |
 | `P2.34` | [#654](https://github.com/frankbria/iris/issues/654) | Privacy policy: say how long audit log entries are kept (90 days, #541) | P2.31 (#541) | DONE: owner's wording (2026-11-26) in sections 2 and 7, policy version 2026-11-26 |
 | `P2.35` | [#710](https://github.com/frankbria/iris/issues/710) | Privacy policy: state the audit log's live API key exception (kept while the key exists) | P2.34 (#654) | BLOCKED (needs-owner: wording) |
 | `P2.26` | [#513](https://github.com/frankbria/iris/issues/513) | Credential references hardening: origin binding and transformed values | P1.16 (#352) | DONE (#571) |

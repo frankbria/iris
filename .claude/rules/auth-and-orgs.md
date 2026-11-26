@@ -51,8 +51,11 @@ Sign-up, verification, login and password reset run through BetterAuth in
 
 - **The account policy is in `createAuth()` and is merged key by key into the caller's
   `emailAndPassword` / `emailVerification` / `rateLimit`, policy last.** Neither the
-  portal nor the API can relax a pinned key, and a caller's other keys survive (e.g.
-  `rateLimit.storage` for #316). A whole-object spread would silently drop them. The
+  portal nor the API can relax a pinned key, and a caller's other keys survive: the
+  portal passes `rateLimit.storage: 'database'` (#316: two portals overlap during a
+  rolling deploy; table `rateLimit`, migration 0023, idle rows purged by the daily
+  retention pass after a day; `postgres.test.ts` asks BetterAuth's `getMigrations` that
+  nothing is left to create). A whole-object spread would silently drop them. The
   policy does not lock `advanced` or `trustedOrigins`.
   - Verification is required, and verification mail goes out on sign-up **and on each
     correct-password sign-in of an unverified account**. BetterAuth only logs a failed

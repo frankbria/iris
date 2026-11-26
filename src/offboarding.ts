@@ -43,6 +43,8 @@ export interface RetentionReport {
   auditEntriesDeleted: number;
   sessionsDeleted: number;
   verificationsDeleted: number;
+  /** The portal's auth rate-limit counters idle for a day (#316): each holds a client IP. */
+  rateLimitsDeleted: number;
   termsDropped: number;
   /** Object-storage prefixes deleted this pass (#472). */
   artifactPrefixesPurged: number;
@@ -456,6 +458,14 @@ export function offboarding(db: Kysely<unknown>) {
       const verificationsDeleted = await step('verifications', 0, async () =>
         affected(await sql`delete from verification where "expiresAt" < ${now}`.execute(db)),
       );
+      // BetterAuth's longest window is a minute; a day past it, a counter only holds an IP.
+      const rateLimitsDeleted = await step('rate limits', 0, async () =>
+        affected(
+          await sql`delete from "rateLimit" where "lastRequest" < ${now.getTime() - 86_400_000}`.execute(
+            db,
+          ),
+        ),
+      );
       const termsDropped = await step('terms', 0, async () =>
         affected(
           await sql`delete from terms_acceptances
@@ -533,6 +543,7 @@ export function offboarding(db: Kysely<unknown>) {
         auditEntriesDeleted,
         sessionsDeleted,
         verificationsDeleted,
+        rateLimitsDeleted,
         termsDropped,
         artifactPrefixesPurged,
         baselinesCollected,

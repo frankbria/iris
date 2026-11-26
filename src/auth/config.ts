@@ -59,8 +59,9 @@ export interface AuthEmail {
  *   path with every other such request (`no-trusted-ip`), and any process that can
  *   reach the port can name any `X-Real-IP`.
  *
- * ponytail: counters are in memory, which holds for one portal process; use
- * `storage: 'database'` (a new migration) for several (#316).
+ * Counters are in memory unless the caller passes `rateLimit: { storage: 'database' }`,
+ * which the portal does (#316: two portal processes overlap during a rolling deploy;
+ * the table is migration 0023).
  */
 function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
   return {
