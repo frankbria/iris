@@ -187,7 +187,10 @@ compares them), `-s3.config` identities (never anonymous), `127.0.0.1:18333`, vo
   not recreate a service when only a secret file's *path* changes (the deploy-script test
   saw it keep the first release's mount), so a per-release file would be pruned from under
   it and a restart would fail on the missing bind source. Hence
-  `shared/secrets/seaweedfs_s3.json`, rewritten only when it differs (as `database_url`).
+  `shared/secrets/seaweedfs_s3.json`, rewritten only when it differs (as `database_url`),
+  owned by **uid 1000**: the image's entrypoint runs the server as `seaweed` (su-exec), so a
+  root-owned 0600 file is unreadable. A local test passes either way when your own uid is
+  1000, which hid this until review.
 - **The key never leaves the box**: `shared/secrets/s3_secret_access_key` is generated once;
   the identity file and the release's `secrets/s3_secret_access_key` are built from it on
   the box (`printf` is a builtin: no command line holds it). No GitHub secret.

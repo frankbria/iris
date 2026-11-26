@@ -636,6 +636,8 @@ describe('staging object store (issue #514)', () => {
   it('generates the key on the box once and points the services at it only with an endpoint', () => {
     expect(staging).toContain('if [ ! -s s3_secret_access_key ]; then head -c 32 /dev/urandom');
     expect(staging).toContain('mv seaweedfs_s3.json.new seaweedfs_s3.json');
+    // The image's entrypoint drops to `seaweed` (uid 1000) before reading it (codex review).
+    expect(staging).toContain('chown 1000:1000 seaweedfs_s3.json; chmod 400 seaweedfs_s3.json');
     // A new file renamed over put_secret's read-only one (codex review): no truncation.
     expect(staging).toContain(
       `printf '%s' \\"\\$key\\" > $release/secrets/s3_secret_access_key.new`,

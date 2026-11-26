@@ -617,13 +617,15 @@ jobs:
           # Staging's object store (#514): its secret key is generated on the box once, like
           # the Postgres password, and never leaves it (printf is a shell builtin, so the key
           # is on no process's command line). The store's identity file (shared, like the
-          # database URL: the running store mounts it) and this release's
+          # database URL: the running store mounts it; uid 1000, the image's entrypoint runs
+          # the server as `seaweed`) and this release's
           # s3_secret_access_key are built from it: an identity, so never anonymous.
           box "set -eu; umask 077; cd $DEPLOY_DIR/shared/secrets
             if [ ! -s s3_secret_access_key ]; then head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > s3_secret_access_key; chmod 400 s3_secret_access_key; fi
             key=\$(cat s3_secret_access_key)
             printf '{\"identities\":[{\"name\":\"iris\",\"credentials\":[{\"accessKey\":\"iris-staging\",\"secretKey\":\"%s\"}],\"actions\":[\"Admin\",\"Read\",\"Write\",\"List\",\"Tagging\"]}]}' \"\$key\" > seaweedfs_s3.json.new
             if cmp -s seaweedfs_s3.json.new seaweedfs_s3.json; then rm seaweedfs_s3.json.new; else mv seaweedfs_s3.json.new seaweedfs_s3.json; fi
+            chown 1000:1000 seaweedfs_s3.json; chmod 400 seaweedfs_s3.json
             printf '%s' \"\$key\" > $release/secrets/s3_secret_access_key.new
             chown 1001:1001 $release/secrets/s3_secret_access_key.new; chmod 400 $release/secrets/s3_secret_access_key.new
             mv $release/secrets/s3_secret_access_key.new $release/secrets/s3_secret_access_key"
