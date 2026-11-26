@@ -200,7 +200,7 @@ production.
 | `P1.31` | [#361](https://github.com/frankbria/iris/issues/361) | Audit log of tenant actions | P0.26 (#254) | DONE (#539) |
 | `P1.32` | [#311](https://github.com/frankbria/iris/issues/311) | Docs truth pass for the hosted product | P0.3 (#231), P0.45 (#273) | DONE (#547) |
 | `P1.33` | [#375](https://github.com/frankbria/iris/issues/375) | Hosted egress: prove WebTransport and QUIC cannot bypass the proxy | P0.9 (#336) | DONE (#540) |
-| `P1.34` | [#376](https://github.com/frankbria/iris/issues/376) | Container egress firewall for the hosted deployment | P0.9 (#336), P1.33 (#375), P0.59 (#440) | TODO |
+| `P1.34` | [#376](https://github.com/frankbria/iris/issues/376) | Container egress firewall for the hosted deployment | P0.9 (#336), P1.33 (#375), P0.59 (#440) | DONE ([#712](https://github.com/frankbria/iris/pull/712): host rules from the `egress` service, metadata probe in `deploy.sh`; staging evidence on the issue) |
 | `P1.35` | [#379](https://github.com/frankbria/iris/issues/379) | Egress proxy timeouts, configurable popup cap, per-session page cap | P0.11 (#338) | DONE (#542) |
 | `P1.36` | [#408](https://github.com/frankbria/iris/issues/408) | Portal: remove members, change roles, leave an org | P0.22 (#250) | DONE (#543) |
 | `P1.39` | [#442](https://github.com/frankbria/iris/issues/442) | Job-level deadline: a hung browser holds the worker forever | P0.52 (#435) | DONE (#545) |
