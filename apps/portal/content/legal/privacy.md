@@ -1,6 +1,6 @@
 ---
 title: Privacy Policy
-version: 2026-11-23
+version: 2026-11-26
 ---
 
 ## 1. Who we are
@@ -17,6 +17,7 @@ IRIS is provided by Noatak Enterprises, LLC, an Arizona limited liability compan
 - **Results**: run history and test results, such as the pages tested, pass or fail, accessibility violation counts and a description of each browser action. We never store what a "fill" action typed.
 - **Usage and billing data**: what your organization used (browser minutes, AI calls, jobs) and its cost. For paid plans, the billing email and the plan and payment status our payment processor, Stripe, reports to us. Stripe collects and holds your card details; we never see or store them.
 - **Logs and security data**: service logs with organization, API key and request identifiers and error messages; our web server's access logs, which include IP addresses; and the IP address recorded when you accept the Terms.
+- **Audit log**: a record of who did what in your organization: the user id or API key id, the action, its target and the time.
 - **Terms acceptances**: which version of the Terms of Service and Acceptable Use Policy you accepted, when, and from which IP address.
 
 ## 3. Why we use it
@@ -50,6 +51,7 @@ IRIS and its subprocessors store and process data in the United States. Where da
 - Service logs are rotated by size and overwritten as new logs are written.
 - Backups are encrypted. Daily backups older than 14 days are deleted, but the 7 most recent are always kept. Data deleted from the service remains in backups until they are deleted.
 - Run history and results, including a visual test's screenshots, are kept for 90 days after the run finishes. A project's approved baseline screenshots are kept until they are replaced or the organization is deleted. Expired sessions and sign-in links are deleted daily.
+- The audit log of changes in your organization is kept for 90 days.
 - Accounts and organizations are kept until you ask us to delete them at [support@briastrategy.net](mailto:support@briastrategy.net). A deleted organization is disabled at once and can be restored for 30 days; then its members, keys, runs and results are deleted. Its usage and billing records are kept for 7 years, no longer linked to its name or members, and then deleted.
 - When an account is deleted, the record of which terms it accepted, when and from which IP address is kept for 7 years under a one-way hash instead of the account, then deleted.
 

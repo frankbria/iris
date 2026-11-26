@@ -552,6 +552,13 @@ and `acceptable-use.md`. To publish a change:
 A changed file with an unchanged version is not re-accepted: bump it for any change that
 needs consent. Removing the draft banner is deleting `draft: true` from the front matter.
 
+The privacy policy, subprocessor list and DPA (`privacy.md`, `subprocessors.md`, `dpa.md`)
+are published, not accepted: set the new `version:` in the file and the same value in
+`PUBLISHED_VERSIONS` (`src/legal/versions.ts`; a portal test fails if they differ), then
+deploy. Nobody is sent to re-accept. Section 12 of the privacy policy promises customers 30
+days' notice of a material change, by email and in the portal: decide whether the change is
+material and send that notice yourself before it takes effect; nothing in IRIS sends it.
+
 ## Abuse handling (issue #348)
 
 ### Suspend or unsuspend an org

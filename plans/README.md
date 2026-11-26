@@ -240,7 +240,7 @@ production.
 | `P2.31` | [#541](https://github.com/frankbria/iris/issues/541) | Audit log: a read surface for org admins, and a retention period (90 days) | P1 (#361) | DONE (#577, #653) |
 | `P2.32` | [#639](https://github.com/frankbria/iris/issues/639) | Deploy job: pass IRIS_BILLING_GRACE_DAYS to settings.env so the payment grace period is configurable in production | P0.38 (#266) | DONE: the deploy job writes `vars.IRIS_BILLING_GRACE_DAYS` to settings.env (owner yes, 2026-11-26); no variable set, so production keeps 7 days |
 | `P2.33` | [#651](https://github.com/frankbria/iris/issues/651) | Live-check the gpt-6 request shape with a real OpenAI key, and confirm the model decisions of #650 | P2.29 (#523) | BLOCKED (needs-owner) |
-| `P2.34` | [#654](https://github.com/frankbria/iris/issues/654) | Privacy policy: say how long audit log entries are kept (90 days, #541) | P2.31 (#541) | BLOCKED (needs-owner) |
+| `P2.34` | [#654](https://github.com/frankbria/iris/issues/654) | Privacy policy: say how long audit log entries are kept (90 days, #541) | P2.31 (#541) | DONE: owner's wording (2026-11-26) in sections 2 and 7, policy version 2026-11-26 |
 | `P2.26` | [#513](https://github.com/frankbria/iris/issues/513) | Credential references hardening: origin binding and transformed values | P1.16 (#352) | DONE (#571) |
 
 ### P3 — Polish / test trust / hygiene
