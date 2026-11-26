@@ -9,7 +9,8 @@
 #
 # <deploy dir>/current points at the release that is serving, and only ever at one
 # that became healthy. Steps, each gating the next:
-#   1. pull the new images; start postgres, recreating it only if its pinned image changed
+#   1. pull the new images; start the data services (postgres; staging's object store),
+#      recreating one only if its pinned image or definition changed
 #   2. SMTP readiness check from the new portal image      } on failure: exit 1; the
 #   3. migrations from the new iris image                  } serving release is untouched
 #   4. recreate iris, worker, portal; wait for their healthchecks; healthy: point
@@ -64,9 +65,19 @@ log "serving: ${previous:-nothing}"
 log "deploying: $release"
 
 docker compose pull --quiet
-# Recreated only when its definition changed, i.e. a deliberately bumped digest (a
-# security release): compose leaves an unchanged postgres alone. Not rolled back.
-docker compose up -d --wait --wait-timeout "$wait_timeout" postgres
+# The data services: every service but the app ones, i.e. postgres, plus staging's object
+# store when settings.env names its compose file in COMPOSE_FILE (#514). Recreated only
+# when a definition changed, i.e. a deliberately bumped digest (a security release):
+# compose leaves an unchanged one alone. Not rolled back.
+# A plain assignment, so a failing `config` stops the script (set -e); an empty list
+# would make `up` start every service, the app ones included, before the gates.
+services=$(docker compose config --services)
+mapfile -t data_services < <(printf '%s\n' "$services" | grep -vxF -e iris -e worker -e portal || :)
+if [ "${#data_services[@]}" = 0 ]; then
+  log 'no data services in the compose file'
+  exit 2
+fi
+docker compose up -d --wait --wait-timeout "$wait_timeout" "${data_services[@]}"
 
 if ! docker compose run --rm --no-deps portal node verify/apps/portal/scripts/verify-smtp.js; then
   log 'SMTP check failed: nothing changed, the serving release keeps serving'

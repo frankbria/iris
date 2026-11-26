@@ -168,6 +168,40 @@ files and `_FILE` pointers equal production's.
 - `docker-compose.staging.yml` stays as the token-mode reference and what
   `iris-image.test.ts` runs; nothing deploys it.
 
+### Staging's object store (issue #514)
+
+`docker-compose.staging-s3.yml`: SeaweedFS (image pinned exactly as CI's step; a test
+compares them), `-s3.config` identities (never anonymous), `127.0.0.1:18333`, volume
+`seaweedfs-data`. Runbook "Artifact storage" → "Staging's store".
+
+- **Staging only, through `COMPOSE_FILE`.** deploy-staging copies the file into the
+  release and writes `COMPOSE_FILE='docker-compose.yml:docker-compose.staging-s3.yml'` into
+  settings.env; deploy.sh copies that into `.env`, so every compose command of the release
+  (the gates, the rollback, an operator's) runs both files. deploy-production never copies
+  it (a test fails on `staging-s3`, `seaweedfs` or `COMPOSE_FILE` in its job).
+- **deploy.sh starts every non-app service before the gates** (`config --services` minus
+  iris/worker/portal), not just postgres. The list is a plain assignment so a failing
+  `config` stops the script; an empty list would make `up` start the app services too.
+  A release without the file drops the store as an orphan (its volume stays).
+- **A data service's mounted files live in `shared/`, never in the release.** Compose does
+  not recreate a service when only a secret file's *path* changes (the deploy-script test
+  saw it keep the first release's mount), so a per-release file would be pruned from under
+  it and a restart would fail on the missing bind source. Hence
+  `shared/secrets/seaweedfs_s3.json`, rewritten only when it differs (as `database_url`).
+- **The key never leaves the box**: `shared/secrets/s3_secret_access_key` is generated once;
+  the identity file and the release's `secrets/s3_secret_access_key` are built from it on
+  the box (`printf` is a builtin: no command line holds it). No GitHub secret.
+- **The endpoint is the one setting** (`vars.IRIS_S3_ENDPOINT`): with it the job writes the
+  bucket (`iris-staging`), key id (`iris-staging`) and `_FILE` pointer; without it the store
+  runs and the services are not pointed at it (a partial config exits 3). It must be an
+  https origin the browser reaches and SeaweedFS sees unchanged (`artifact-store.ts`
+  refuses http except loopback; SigV4 signs host and path), i.e. a host nginx site for a
+  name of its own.
+- **Smoke step**: creates the bucket once (`weed shell` `s3.bucket.create`, guarded by
+  `s3.bucket.list`, which also confirms it) and requires an unsigned GET to be 403.
+- **Managed AI stays iris-only** (#549's decision, kept in #514): the worker runs tenant
+  pages and makes no AI call yet.
+
 ### Backups (issue #274)
 
 `deploy/backup.sh` (daily, `deploy/systemd/iris-backup.timer`, as root) and

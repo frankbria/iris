@@ -585,6 +585,144 @@ describe('deploy-staging runs the hosted stack (issue #440)', () => {
   });
 });
 
+/**
+ * Staging's own object store (issue #514): SeaweedFS from a staging-only compose file
+ * that deploy-staging copies into the release and names in COMPOSE_FILE. Production
+ * never gets it, and its key is generated on the box, never a workflow secret.
+ */
+describe('staging object store (issue #514)', () => {
+  const uncomment = (text: string) =>
+    text
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+  const store = uncomment(read('docker-compose.staging-s3.yml'));
+  const ci = read('.github/workflows/ci.yml');
+  const staging = uncomment(
+    ci.slice(ci.indexOf('\n  deploy-staging:\n'), ci.indexOf('\n  deploy-production:\n')),
+  );
+  const production = uncomment(ci.slice(ci.indexOf('\n  deploy-production:\n')));
+
+  it('runs SeaweedFS pinned exactly as in CI, with identities, on loopback, in a named volume', () => {
+    const image = /^\s+image: (chrislusf\/seaweedfs:[\d.]+@sha256:[0-9a-f]{64})$/m.exec(store)?.[1];
+    expect(image).toBeDefined();
+    expect(ci).toContain(`            ${image} \\\n            server -s3 -s3.config=`);
+    expect(store).toContain(
+      "command: ['server', '-dir=/data', '-s3', '-s3.config=/run/secrets/seaweedfs_s3']",
+    );
+    expect(store).toMatch(/^ {6}- '127\.0\.0\.1:\$\{IRIS_S3_PORT:-18333\}:8333'$/m);
+    expect(store).toMatch(/^ {6}- seaweedfs-data:\/data$/m);
+    expect(store).toMatch(/^volumes:\n {2}seaweedfs-data:$/m);
+    // Shared, not per release: compose does not recreate the store when only a secret
+    // file's path changes, so a pruned release would take its bind source away.
+    expect(store).toMatch(
+      /^ {2}seaweedfs_s3:\n {4}file: \.\.\/\.\.\/shared\/secrets\/seaweedfs_s3\.json$/m,
+    );
+    expect(store).toMatch(/^\s+- no-new-privileges:true$/m);
+    expect(store).toMatch(/^\s+mem_limit: \d+[mg]$/m);
+  });
+
+  it('reaches staging alone: deploy-staging copies it and names it in COMPOSE_FILE', () => {
+    expect(staging).toContain(
+      'scp "${ssh_opts[@]}" docker-compose.staging-s3.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.staging-s3.yml"',
+    );
+    expect(staging).toContain(
+      `printf "COMPOSE_FILE='docker-compose.yml:docker-compose.staging-s3.yml'\\n"`,
+    );
+    expect(production).not.toMatch(/staging-s3|seaweedfs|COMPOSE_FILE/);
+    expect(read('docker-compose.production.yml')).not.toMatch(/seaweedfs/);
+  });
+
+  it('generates the key on the box once and points the services at it only with an endpoint', () => {
+    expect(staging).toContain('if [ ! -s s3_secret_access_key ]; then head -c 32 /dev/urandom');
+    expect(staging).toContain('mv seaweedfs_s3.json.new seaweedfs_s3.json');
+    expect(staging).toContain(`printf '%s' \\"\\$key\\" > $release/secrets/s3_secret_access_key"`);
+    // Never a workflow secret; bucket and key id only with the endpoint (a partial
+    // configuration exits 3).
+    expect(staging).not.toMatch(/secrets\.IRIS_S3_/);
+    expect(staging).toContain(
+      "IRIS_S3_BUCKET: ${{ vars.IRIS_S3_ENDPOINT && 'iris-staging' || '' }}",
+    );
+    expect(staging).toContain(
+      "IRIS_S3_ACCESS_KEY_ID: ${{ vars.IRIS_S3_ENDPOINT && 'iris-staging' || '' }}",
+    );
+    expect(staging).toMatch(
+      /if \[ -n "\$IRIS_S3_ENDPOINT" \]; then\n\s+printf "IRIS_S3_SECRET_ACCESS_KEY_FILE='\/run\/secrets\/s3_secret_access_key'\\n"\n\s+fi/,
+    );
+    // Production keeps its own store's settings from its environment (#549).
+    expect(production).toContain(
+      'IRIS_S3_SECRET_ACCESS_KEY: ${{ secrets.IRIS_S3_SECRET_ACCESS_KEY }}',
+    );
+  });
+
+  it('proves the bucket exists and refuses an unsigned request after the deploy', () => {
+    const smoke = staging.slice(staging.indexOf('./deploy.sh;'));
+    expect(smoke).toContain('s3.bucket.create -name iris-staging');
+    expect(smoke).toContain('http://127.0.0.1:18333/iris-staging/');
+    expect(smoke).toContain('[ \\"\\$code\\" = 403 ]');
+  });
+
+  const composeCli = (() => {
+    try {
+      execFileSync('docker', ['compose', 'version'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      if (process.env.CI) throw new Error('docker compose is required in CI');
+      return false;
+    }
+  })();
+  (composeCli ? it : it.skip)('merges with the production file under COMPOSE_FILE', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-staging-s3-'));
+    try {
+      fs.copyFileSync(
+        path.join(ROOT, 'docker-compose.production.yml'),
+        path.join(dir, 'docker-compose.yml'),
+      );
+      fs.copyFileSync(
+        path.join(ROOT, 'docker-compose.staging-s3.yml'),
+        path.join(dir, 'docker-compose.staging-s3.yml'),
+      );
+      const digest = `sha256:${'a'.repeat(64)}`;
+      fs.writeFileSync(
+        path.join(dir, '.env'),
+        "COMPOSE_PROJECT_NAME='iris-staging'\nPORTAL_URL='https://staging.example'\n" +
+          `SMTP_FROM='IRIS <no-reply@example.com>'\nIRIS_IMAGE=ghcr.io/o/iris@${digest}\n` +
+          `PORTAL_IMAGE=ghcr.io/o/iris-portal@${digest}\n` +
+          "COMPOSE_FILE='docker-compose.yml:docker-compose.staging-s3.yml'\n",
+      );
+      const config = JSON.parse(
+        execFileSync('docker', ['compose', 'config', '--format', 'json', '--no-path-resolution'], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            DOCKER_CONFIG: process.env.DOCKER_CONFIG ?? '',
+          },
+        }),
+      ) as {
+        name: string;
+        services: Record<string, { ports?: { host_ip: string; published: string }[] }>;
+        volumes: Record<string, { name: string }>;
+      };
+      expect(config.name).toBe('iris-staging');
+      expect(Object.keys(config.services).sort()).toEqual([
+        'iris',
+        'portal',
+        'postgres',
+        'seaweedfs',
+        'worker',
+      ]);
+      expect(config.services.seaweedfs.ports).toEqual([
+        expect.objectContaining({ host_ip: '127.0.0.1', published: '18333' }),
+      ]);
+      expect(config.volumes['seaweedfs-data'].name).toBe('iris-staging_seaweedfs-data');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('Dockerfile.portal (issue #273)', () => {
   const dockerfile = read('Dockerfile.portal');
 

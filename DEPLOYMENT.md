@@ -73,7 +73,9 @@ secret `IRIS_S3_SECRET_ACCESS_KEY` (passed to iris, worker and portal); managed 
 as the variable `IRIS_MANAGED_AI_PROVIDER` and the secret `IRIS_MANAGED_AI_KEY` (passed to
 iris). Unset, production's visual-diff jobs answer 503 (the worker runs a11y only), run
 detail shows no screenshots, and an org on IRIS credits uses its own key. A partial S3
-setting stops the services (exit 3), so the deploy rolls back.
+setting stops the services (exit 3), so the deploy rolls back. Staging runs its own store
+instead (SeaweedFS, `docker-compose.staging-s3.yml`, key generated on the box, #514) and
+takes only `IRIS_S3_ENDPOINT` from its environment; see the runbook's "Artifact storage".
 
 ## Who may deploy
 

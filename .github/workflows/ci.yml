@@ -415,12 +415,17 @@ jobs:
           IRIS_ABUSE_CONTACT: ${{ vars.IRIS_ABUSE_CONTACT }}
           IRIS_SUPPORT_CONTACT: ${{ vars.IRIS_SUPPORT_CONTACT }}
           IRIS_SECURITY_TXT_EXPIRES_DAYS: ${{ vars.IRIS_SECURITY_TXT_EXPIRES_DAYS }}
-          # Optional (#549): object storage and managed AI credits.
+          # Staging's own object store (#514, docker-compose.staging-s3.yml). Its bucket and
+          # key are the box's (the secret key is generated there once, below, and never
+          # leaves it), so only the endpoint is an environment setting: the https name the
+          # host's nginx serves for the store (runbook, "Artifact storage"). Unset, the
+          # store runs and the services are not pointed at it (no artifacts, as before).
           IRIS_S3_ENDPOINT: ${{ vars.IRIS_S3_ENDPOINT }}
-          IRIS_S3_BUCKET: ${{ vars.IRIS_S3_BUCKET }}
-          IRIS_S3_REGION: ${{ vars.IRIS_S3_REGION }}
-          IRIS_S3_ACCESS_KEY_ID: ${{ vars.IRIS_S3_ACCESS_KEY_ID }}
-          IRIS_S3_SECRET_ACCESS_KEY: ${{ secrets.IRIS_S3_SECRET_ACCESS_KEY }}
+          IRIS_S3_BUCKET: ${{ vars.IRIS_S3_ENDPOINT && 'iris-staging' || '' }}
+          IRIS_S3_REGION: ''
+          IRIS_S3_ACCESS_KEY_ID: ${{ vars.IRIS_S3_ENDPOINT && 'iris-staging' || '' }}
+          IRIS_S3_SECRET_ACCESS_KEY: ''
+          # Optional (#549): managed AI credits.
           IRIS_MANAGED_AI_PROVIDER: ${{ vars.IRIS_MANAGED_AI_PROVIDER }}
           IRIS_MANAGED_AI_KEY: ${{ secrets.IRIS_MANAGED_AI_KEY }}
           # Optional (#261, #345): Stripe billing in test mode, all four or none.
@@ -543,6 +548,8 @@ jobs:
           scp "${ssh_opts[@]}" docker-compose.production.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.yml"
           scp "${ssh_opts[@]}" docker/seccomp-chromium.json "$DEPLOY_USER@$DEPLOY_HOST:$release/docker/seccomp-chromium.json"
           scp "${ssh_opts[@]}" deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/deploy.sh"
+          # Staging only (#514); deploy-production never copies it.
+          scp "${ssh_opts[@]}" docker-compose.staging-s3.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.staging-s3.yml"
           # Backups (#274), watchdog (#275), retention (#349): shipped as in production,
           # for the operator to install as root-owned copies if staging should run them.
           # Their *_COMPOSE_PROJECT and DEPLOY_DIR settings must then name staging's.
@@ -573,6 +580,13 @@ jobs:
             [ -z "$IRIS_MANAGED_AI_KEY" ] || printf "IRIS_MANAGED_AI_KEY_FILE='/run/secrets/managed_ai_key'\n"
             [ -z "$IRIS_STRIPE_SECRET_KEY" ] || printf "IRIS_STRIPE_SECRET_KEY_FILE='/run/secrets/stripe_secret_key'\n"
             [ -z "$IRIS_STRIPE_WEBHOOK_SECRET" ] || printf "IRIS_STRIPE_WEBHOOK_SECRET_FILE='/run/secrets/stripe_webhook_secret'\n"
+            # Staging's object store (#514): every compose command of this release (deploy.sh,
+            # its rollback, an operator's) runs both files. Its secret file is written on the
+            # box below, from the key generated there.
+            printf "COMPOSE_FILE='docker-compose.yml:docker-compose.staging-s3.yml'\n"
+            if [ -n "$IRIS_S3_ENDPOINT" ]; then
+              printf "IRIS_S3_SECRET_ACCESS_KEY_FILE='/run/secrets/s3_secret_access_key'\n"
+            fi
           } | box "cat > $release/settings.env"
 
           # This release's secrets, over ssh's STDIN, never a remote command line (the
@@ -599,6 +613,18 @@ jobs:
             printf 'postgres://iris:%s@postgres:5432/iris' \"\$(cat pg_password)\" > database_url.new
             if cmp -s database_url.new database_url; then rm database_url.new; else
               chown 1001:1001 database_url.new; chmod 400 database_url.new; mv database_url.new database_url; fi"
+
+          # Staging's object store (#514): its secret key is generated on the box once, like
+          # the Postgres password, and never leaves it (printf is a shell builtin, so the key
+          # is on no process's command line). The store's identity file (shared, like the
+          # database URL: the running store mounts it) and this release's
+          # s3_secret_access_key are built from it: an identity, so never anonymous.
+          box "set -eu; umask 077; cd $DEPLOY_DIR/shared/secrets
+            if [ ! -s s3_secret_access_key ]; then head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > s3_secret_access_key; chmod 400 s3_secret_access_key; fi
+            key=\$(cat s3_secret_access_key)
+            printf '{\"identities\":[{\"name\":\"iris\",\"credentials\":[{\"accessKey\":\"iris-staging\",\"secretKey\":\"%s\"}],\"actions\":[\"Admin\",\"Read\",\"Write\",\"List\",\"Tagging\"]}]}' \"\$key\" > seaweedfs_s3.json.new
+            if cmp -s seaweedfs_s3.json.new seaweedfs_s3.json; then rm seaweedfs_s3.json.new; else mv seaweedfs_s3.json.new seaweedfs_s3.json; fi
+            printf '%s' \"\$key\" > $release/secrets/s3_secret_access_key"
 
           # The box authenticates to GHCR with the run-scoped token (a new package is
           # private by default), over STDIN, and logs out after the deploy.
@@ -627,7 +653,13 @@ jobs:
             [ \"\$code\" = 200 ] || { echo \"iris-api /health/ready on 127.0.0.1:$IRIS_API_PORT answered \$code\"; exit 1; }
             code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORTAL_PORT/api/health || :)
             [ \"\$code\" = 200 ] || { echo \"portal /api/health on 127.0.0.1:$PORTAL_PORT answered \$code\"; exit 1; }
-            echo \"iris-api and portal answer on 127.0.0.1:$IRIS_API_PORT and :$PORTAL_PORT\""
+            echo \"iris-api and portal answer on 127.0.0.1:$IRIS_API_PORT and :$PORTAL_PORT\"
+            # Staging's object store (#514): the bucket exists (created once), and an
+            # unsigned request is refused.
+            docker compose exec -T seaweedfs sh -c 'echo s3.bucket.list | weed shell | grep -qw iris-staging || echo \"s3.bucket.create -name iris-staging\" | weed shell >/dev/null; echo s3.bucket.list | weed shell | grep -qw iris-staging'
+            code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18333/iris-staging/ || :)
+            [ \"\$code\" = 403 ] || { echo \"an unsigned request to the object store answered \$code, not 403\"; exit 1; }
+            echo 'object store: bucket iris-staging, unsigned requests refused'"
 
       # The record production promotes from (#273): `staged-<sha>` on both images,
       # pointing at the digests this job just deployed and smoke-tested. A new tag on

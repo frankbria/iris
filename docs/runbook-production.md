@@ -153,7 +153,8 @@ own configuration: its secrets, relay, ports and nginx site.
 
 ### What `deploy.sh` does
 
-1. It pulls the new images and starts `postgres`. Compose recreates postgres only
+1. It pulls the new images and starts the data services: `postgres`, and on staging
+   its object store (`seaweedfs`, "Artifact storage" below). Compose recreates one only
    when its definition changed, which in practice means you bumped its pinned digest
    (a security release). That restart happens before the gates and is not rolled back.
 2. It runs the SMTP check from the new portal image.
@@ -652,12 +653,44 @@ A partial configuration stops `iris connect` (exit 3) rather than serving withou
 artifacts, so the health gate rolls the deploy back. The vendor is the operator's choice
 (#273); the repository names none.
 
+### Staging's store (issue #514)
+
+Staging runs its own S3-compatible store, so the paths above run on a box before
+production: SeaweedFS from `docker-compose.staging-s3.yml` (pinned like CI's, identities
+from `-s3.config`, so an unsigned request is a 403; data in the `iris-staging_seaweedfs-data`
+volume; S3 API on `127.0.0.1:18333`). Only `deploy-staging` copies that file into the
+release and names it in `COMPOSE_FILE` (settings.env), so every compose command of a
+staging release runs both files and `deploy.sh` starts the store with postgres.
+`deploy-production` never copies it.
+
+- **Credentials**: the first deploy generates the secret key in
+  `shared/secrets/s3_secret_access_key`, never overwritten and never leaving the box. The
+  store's identity file (`shared/secrets/seaweedfs_s3.json`, access key `iris-staging`) and
+  each release's `secrets/s3_secret_access_key` are built from it. No GitHub secret.
+- **Bucket**: `iris-staging`, created by the first deploy's smoke step, which also checks
+  that an unsigned request is refused.
+- **Endpoint**: signed URLs are loaded by the user's browser, so `IRIS_S3_ENDPOINT` must be
+  an https origin the browser reaches and SeaweedFS sees unchanged (SigV4 signs the host
+  and the path, so no path prefix). On staging that is a name of its own, e.g.
+  `https://s3.<staging portal host>`: an A record to the box, a host nginx site for it
+  proxying `/` to `http://127.0.0.1:18333` with `proxy_set_header Host $host;`, no body
+  size limit below the largest screenshot (`client_max_body_size 64m;`), and a Let's
+  Encrypt certificate issued the way the box's other sites have theirs. Then set the
+  **variable** `IRIS_S3_ENDPOINT` in the `staging` environment; the next deploy sets
+  `IRIS_S3_BUCKET`, `IRIS_S3_ACCESS_KEY_ID` and `IRIS_S3_SECRET_ACCESS_KEY_FILE` with it.
+  Until then the store runs and the services are not pointed at it (no artifacts, visual
+  jobs 503). Do not set the other `IRIS_S3_*` in the `staging` environment: the job uses
+  the box's.
+
 ## Managed AI credits (issue #479)
 
 Orgs that choose **IRIS credits** on `/provider-keys` make AI calls on IRIS's own vendor
 key, up to their plan's monthly credit; then their own key, if they stored one. Set them in
-the `production` GitHub environment; the deploy passes them to the `iris` service (the
-worker gets them once hosted jobs make AI calls) (#549):
+the `production` GitHub environment; the deploy passes them to the `iris` service only
+(#549, #514). The worker runs tenant pages and makes no AI call yet, so it does not hold
+IRIS's vendor key; give it the key when a hosted job first makes one. The `staging`
+environment passes them the same way; staging leaves them unset (the wiring is pinned by
+`container-config.test.ts`):
 
 | Name | Kind | Value |
 | --- | --- | --- |
