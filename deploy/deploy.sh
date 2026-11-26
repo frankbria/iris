@@ -14,10 +14,16 @@
 #      firewall (#376) on the stack's bridge, so the gates already run behind it
 #   2. SMTP readiness check from the new portal image      } on failure: exit 1; the
 #   3. migrations from the new iris image                  } serving release is untouched
-#   4. recreate iris, worker, portal; wait for their healthchecks; probe from iris and
-#      the worker that the metadata address is refused; healthy and refused: point
-#      `current` here (only now, so an interrupted deploy keeps its rollback target)
-#   5. unhealthy or not refused: recreate them from the previous release's directory (its compose
+#   4. rolling (#316; the proxy runs): start new iris, worker and portal containers next
+#      to the serving ones; wait for their healthchecks; probe from the new iris and worker
+#      that the metadata address is refused (#376); switch the proxy (shared/proxy) to them
+#      and point `current` here; then drain the old ones (the worker finishes its job,
+#      iris and the portal keep their open connections, up to DEPLOY_DRAIN_TIMEOUT) and
+#      remove them. Unhealthy or not refused: remove the new containers, exit 1; the
+#      serving ones were never touched.
+#   5. cold (the first deploy behind the proxy, or of the stack): recreate the apps in
+#      place (an outage, as before #316), probe, start the proxy on them, point `current`
+#      here; on failure recreate them from the previous release's directory (its compose
 #      file, settings, secrets and images), `current` unchanged, exit 1
 #
 # Compose always runs from a release's real path, so each container's bind mounts name
@@ -29,6 +35,7 @@
 # working (expand now, contract in a later release).
 #
 # Env: DEPLOY_WAIT_TIMEOUT (seconds per wait, default 300),
+#      DEPLOY_DRAIN_TIMEOUT (seconds the old containers get to finish, default 300),
 #      DEPLOY_KEEP_RELEASES (release directories kept after a success, default 5).
 set -euo pipefail
 
@@ -203,7 +210,9 @@ prune_releases() {
     done
 }
 
-if [ -s "$proxy_dir/upstreams.conf" ]; then
+# A rollback to a release from before #316 removes the proxy (an orphan there) and puts the
+# ports back on the apps: then the next deploy is a cold one again.
+if [ -s "$proxy_dir/upstreams.conf" ] && [ -n "$(docker compose ps -aq proxy)" ]; then
   # Rolling (#316): the new containers start next to the serving ones, the proxy moves to
   # them once they are healthy, and the old ones drain before they stop. Nothing the
   # serving release runs is touched until the switch.

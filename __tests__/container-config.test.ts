@@ -580,7 +580,7 @@ describe('zero-downtime deploys (issue #316)', () => {
   });
 
   it('switches only after the new containers are healthy and probed, then drains the old ones', () => {
-    const rolling = deploy.slice(deploy.indexOf('if [ -s "$proxy_dir/upstreams.conf" ]; then'));
+    const rolling = deploy.slice(deploy.indexOf('# Rolling (#316)'));
     const order = [
       '--no-recreate "${scale[@]}"',
       'wait_healthy "${new[@]}"',

@@ -41,8 +41,12 @@ through the host's nginx (`deploy/nginx/iris.conf`, #347). Postgres publishes no
 | Encryption | TLS in transit. Passwords hashed. No application-level encryption at rest; disk encryption depends on the hosting provider. |
 | Retention | Session: BetterAuth's defaults, as `createAuth()` sets no `session` options: expires 7 days after it was last extended (use extends it at most once a day); all sessions are revoked on password reset. Reset token: 1 hour (BetterAuth default). Expired session and verification rows are purged by the daily retention pass. User and account rows: until the user is deleted (`iris admin delete-user`, on request; refused while the user is a live org's only owner). |
 
-Sign-in rate limits are counted per client IP in the portal process's memory (BetterAuth
-`rateLimit`, `src/auth/config.ts`); lost on restart, never written to disk.
+Sign-in rate limits are counted per client IP in Postgres (BetterAuth `rateLimit` table,
+migration `0023_auth_rate_limit`, `storage: 'database'` in `apps/portal/lib/auth.ts`), so
+the two portal processes of a rolling deploy share them (#316). A row is the key
+(client IP and auth path), a count and the last request's time; the daily retention pass
+deletes rows idle for a day (`rateLimitsDeleted`). Only the portal and operators with
+database access read them.
 
 ### Organizations, members and invitations
 
