@@ -176,8 +176,11 @@ paths:
   only models it has deprecated". A vision model outside
   the table fails with "is not one IRIS uses for images", not "is not available". Anthropic requests send no `temperature`: API version
   2026-10-21 (SDK 1.0) removed sampling parameters. The #523 request shape was written from
-  OpenAI's model pages and migration guide and is pinned by request-shape tests; no live call
-  was made (no key on the build host or in CI)
+  OpenAI's model pages and migration guide and is pinned by request-shape tests. It was sent to
+  the real API once, on 2026-11-27 (#651): `gpt-6-luna` (text, `iris run --agent`),
+  `gpt-6.1-terra` and `gpt-6.1-sol` (vision) all answered 200. `gpt-6.1-sol` at `low` used 0
+  reasoning tokens and 149 completion tokens. CI still has no key, so a new model or option needs
+  another live check
 - **`--ai-model <id>`** on `visual-diff` and `watch` is the vision model (`diff.aiModel`,
   `ai.model` -> `AIVisualClassifier`). `<PROVIDER>_MODEL` stays the text model
 - **Vision prompts frame page content (#355).** `visionContextBlock()` (src/ai-client/vision.ts)
