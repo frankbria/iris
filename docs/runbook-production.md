@@ -646,8 +646,9 @@ prune (exit 3) and goes on.
 commands run with `docker compose exec iris` in the current release, as above. (The
 #445 drill ran before that, in a one-off container of the deployed image sharing the
 store's network namespace, with `IRIS_S3_ENDPOINT=http://127.0.0.1:8333`; `artifact-store.ts`
-accepts http only on loopback.) Staging runs no daily retention pass, so an org purge there
-leaves its noncurrent versions and delete markers until a pass runs 14 days later.
+accepts http only on loopback.) Staging has no retention timer, so after an org purge there its
+noncurrent versions and delete markers stay until an operator runs `admin retention` by
+hand more than 14 days later.
 
 ## Monitoring and alerts (issue #275)
 
