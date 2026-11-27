@@ -243,7 +243,7 @@ production.
 | `P2.33` | [#651](https://github.com/frankbria/iris/issues/651) | Live-check the gpt-6 request shape with a real OpenAI key, and confirm the model decisions of #650 | P2.29 (#523) | DONE: live calls passed 2026-11-27 (`gpt-6-luna` text, `gpt-6.1-terra` vision, `gpt-6.1-sol` vision; no 4xx, request shape unchanged); the five #650 decisions confirmed by the owner 2026-11-26 |
 | `P2.36` | [#714](https://github.com/frankbria/iris/issues/714) | Share the RPC rate buckets across iris processes | P2.5 (#316) | TODO |
 | `P2.34` | [#654](https://github.com/frankbria/iris/issues/654) | Privacy policy: say how long audit log entries are kept (90 days, #541) | P2.31 (#541) | DONE: owner's wording (2026-11-26) in sections 2 and 7, policy version 2026-11-26 |
-| `P2.35` | [#710](https://github.com/frankbria/iris/issues/710) | Privacy policy: state the audit log's live API key exception (kept while the key exists) | P2.34 (#654) | BLOCKED (needs-owner: wording) |
+| `P2.35` | [#710](https://github.com/frankbria/iris/issues/710) | Privacy policy: state the audit log's live API key exception (kept while the key exists) | P2.34 (#654) | DONE: section 7 states the exception in the owner's wording (2026-11-27); privacy version 2026-11-27 |
 | `P2.26` | [#513](https://github.com/frankbria/iris/issues/513) | Credential references hardening: origin binding and transformed values | P1.16 (#352) | DONE (#571) |
 
 ### P3 — Polish / test trust / hygiene
