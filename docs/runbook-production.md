@@ -642,12 +642,12 @@ its original. Each run took about 1 s. On the first run, rclone logs "directory 
 for `replaced/` before anything has been replaced; the script treats that as nothing to
 prune (exit 3) and goes on.
 
-**Until staging's services are pointed at the store** (#711: they need its https name),
-`docker compose exec iris … admin artifact-*` has no store on staging. The drill ran those
-commands in a one-off container of the deployed image instead: the release's environment
-and secret mounts, `IRIS_S3_ENDPOINT=http://127.0.0.1:8333`, and
-`--network container:<the seaweedfs container>`, which makes the store loopback.
-`artifact-store.ts` accepts http only on loopback.
+**On staging** the deployed services have the store since #711, so the `admin artifact-*`
+commands run with `docker compose exec iris` in the current release, as above. (The
+#445 drill ran before that, in a one-off container of the deployed image sharing the
+store's network namespace, with `IRIS_S3_ENDPOINT=http://127.0.0.1:8333`; `artifact-store.ts`
+accepts http only on loopback.) Staging runs no daily retention pass, so an org purge there
+leaves its noncurrent versions and delete markers until a pass runs 14 days later.
 
 ## Monitoring and alerts (issue #275)
 
@@ -964,9 +964,13 @@ staging release runs both files and `deploy.sh` starts the store with postgres.
   Encrypt certificate issued the way the box's other sites have theirs. Then set the
   **variable** `IRIS_S3_ENDPOINT` in the `staging` environment; the next deploy sets
   `IRIS_S3_BUCKET`, `IRIS_S3_ACCESS_KEY_ID` and `IRIS_S3_SECRET_ACCESS_KEY_FILE` with it.
-  Until then the store runs and the services are not pointed at it (no artifacts, visual
+  Without it the store runs and the services are not pointed at it (no artifacts, visual
   jobs 503). Do not set the other `IRIS_S3_*` in the `staging` environment: the job uses
-  the box's.
+  the box's. **Done on 2026-11-27 (#711)**: the site also streams uploads
+  (`proxy_request_buffering off;`, `proxy_http_version 1.1;`) and adds no `X-Forwarded-*`
+  header. The worker and the API use the same public name, so their uploads leave the
+  stack's bridge for the box's own public address; the egress firewall (#376) allows it,
+  because that address is global.
 
 ## Managed AI credits (issue #479)
 

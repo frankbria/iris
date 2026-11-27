@@ -200,7 +200,9 @@ compares them), `-s3.config` identities (never anonymous), `127.0.0.1:18333`, vo
   runs and the services are not pointed at it (a partial config exits 3). It must be an
   https origin the browser reaches and SeaweedFS sees unchanged (`artifact-store.ts`
   refuses http except loopback; SigV4 signs host and path), i.e. a host nginx site for a
-  name of its own.
+  name of its own. Set since #711. The worker and the API upload through that same public
+  name (a hairpin to the box's global address, which the egress firewall allows), so a
+  broken site breaks the jobs as well as the portal's images.
 - **Smoke step**: creates the bucket once (`weed shell` `s3.bucket.create`, guarded by
   `s3.bucket.list`, which also confirms it) and requires an unsigned GET to be 403.
 - **Managed AI stays iris-only** (#549's decision, kept in #514): the worker runs tenant
