@@ -12,7 +12,9 @@
  * - negative control: the same flags with Docker's default seccomp cannot start the
  *   sandbox, which proves the profile is load-bearing;
  * - the app user can write the /data volume (its ownership regressed silently before);
- * - the image carries no portal packages (`.dockerignore` excludes `apps/`, #394).
+ * - the image carries no portal packages (`.dockerignore` excludes `apps/`, #394);
+ * - its egress firewall (#376) refuses private and metadata addresses from a bridge and
+ *   leaves public egress open (host rules on the runner, removed afterwards).
  *
  * The compose file names its container `iris-staging` and publishes 127.0.0.1:4000, so
  * both must be free. Required under CI; skipped locally unless IRIS_TEST_IMAGE is set
@@ -178,4 +180,92 @@ function docker(...args: string[]) {
     expect(found.code).toBe(0);
     expect(found.out).not.toMatch(/FOUND/);
   });
+
+  // #376: the compose `egress` service's script, run as compose runs it, against a bridge
+  // of its own. Its host rules are removed afterwards (the service itself never does).
+  it('refuses private and metadata addresses from the bridge once the egress firewall runs', () => {
+    const net = `iris-egress-${process.pid}`;
+    expect(docker('network', 'create', net).code).toBe(0);
+    const bridge = `br-${docker('network', 'inspect', '-f', '{{.Id}}', net).out.trim().slice(0, 12)}`;
+    const chain = `IRIS-EGRESS-${bridge}`;
+    const firewall = (...args: string[]) => [
+      '--network',
+      'host',
+      '--user',
+      '0',
+      '--cap-drop',
+      'ALL',
+      '--cap-add',
+      'NET_ADMIN',
+      '--cap-add',
+      'NET_RAW',
+      '--entrypoint',
+      'bash',
+      ...args,
+    ];
+    const probe = (...target: string[]) =>
+      docker(
+        'run',
+        '--rm',
+        '--network',
+        net,
+        '--cap-drop',
+        'ALL',
+        '--entrypoint',
+        'node',
+        '-w',
+        '/app',
+        IMAGE!,
+        'docker/egress-probe.js',
+        ...target,
+      );
+    try {
+      // Without the rules nothing refuses: on a cloud runner the metadata service answers.
+      expect(probe().out).not.toContain('refused');
+      const run = docker(
+        'run',
+        '-d',
+        '--name',
+        net,
+        '--read-only',
+        '--tmpfs',
+        '/run',
+        '--tmpfs',
+        '/tmp',
+        '--security-opt',
+        'no-new-privileges:true',
+        '-e',
+        `IRIS_EGRESS_BRIDGE=${bridge}`,
+        ...firewall(IMAGE!, '/app/docker/egress-firewall.sh'),
+      );
+      expect(run.code).toBe(0);
+      let applied = false;
+      for (let i = 0; i < 30 && !applied; i++) {
+        applied = docker('exec', net, 'bash', '/app/docker/egress-firewall.sh', 'check').code === 0;
+        if (!applied) spawnSync('sleep', ['1']);
+      }
+      expect(applied).toBe(true);
+
+      for (const target of [[], ['10.255.255.1', '443'], ['192.168.255.1', '80']]) {
+        const refused = probe(...target);
+        expect(refused.out).toContain('refused, as the egress firewall does');
+        expect(refused.code).toBe(0);
+      }
+      // Public egress stays open.
+      expect(probe('1.1.1.1', '443').out).toContain('accepted a connection');
+    } finally {
+      docker('rm', '-f', net);
+      docker(
+        'run',
+        '--rm',
+        ...firewall(
+          IMAGE!,
+          '-c',
+          `iptables -D DOCKER-USER -i ${bridge} ! -o ${bridge} -j ${chain}; ` +
+            `iptables -D INPUT -i ${bridge} -j ${chain}; iptables -F ${chain}; iptables -X ${chain}`,
+        ),
+      );
+      docker('network', 'rm', net);
+    }
+  }, 180_000);
 });

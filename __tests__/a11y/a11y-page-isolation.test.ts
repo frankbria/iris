@@ -11,6 +11,7 @@ import os from 'os';
 import path from 'path';
 import type { AddressInfo } from 'net';
 import { AccessibilityRunner, AccessibilityRunnerConfig } from '../../src/a11y/a11y-runner';
+import { ERROR_TEXT_MAX } from '../../src/report-encoding';
 
 const PAGE = (title: string) =>
   'data:text/html;charset=utf-8,' +
@@ -145,6 +146,43 @@ describe('a11y runner page isolation (#287)', () => {
     const result = await new AccessibilityRunner(config([withCreds])).run();
     expect(result.results[0].error).toMatch(/net::ERR_/);
     expect(result.results[0].error).not.toContain('hunter2');
+  }, 120_000);
+
+  // #645: a parser reads the last @ as the separator and accepts a space in a password.
+  // A policy refusal, because the guard's message repeats the URL as it was written
+  // (Chromium's own errors quote it percent-encoded, which the pattern already follows).
+  it.each([
+    ['an @', 'ops:half@hunter2'],
+    ['a space', 'ops:hunter2 again'],
+  ])(
+    'strips a password that holds %s from a refused page, base URL included',
+    async (_what, userinfo) => {
+      const withCreds = broken.replace('http://', `http://${userinfo}@`);
+      const refusing = { urlPolicy: { blockPrivateHosts: true } };
+      const whole = await new AccessibilityRunner(config([withCreds], refusing)).run();
+      const based = await new AccessibilityRunner(
+        config(['/broken'], { ...refusing, baseURL: withCreds.replace(/\/broken$/, '') }),
+      ).run();
+      for (const result of [whole, based]) {
+        expect(result.results[0].error).toMatch(/\/broken blocked by navigation policy/);
+        expect(result.results[0].error).not.toMatch(/hunter2|half|again/);
+      }
+    },
+    120_000,
+  );
+
+  // #658: the error repeats a URL of any length, and the patterns get a bounded start of it.
+  // The cut lands inside the URL, so the whole copy goes, password included.
+  it('bounds the error of a refused page before stripping it', async () => {
+    const withCreds =
+      broken.replace('http://', 'http://ops:hunter2 again@') + `?q=${'q'.repeat(40_000)}`;
+    const result = await new AccessibilityRunner(
+      config([withCreds], { urlPolicy: { blockPrivateHosts: true } }),
+    ).run();
+    const error = result.results[0].error ?? '';
+    expect(error).not.toBe('');
+    expect(error.length).toBeLessThanOrEqual(ERROR_TEXT_MAX);
+    expect(error).not.toMatch(/hunter2|again|qqqq/);
   }, 120_000);
 
   it('errors a page that hangs during the keyboard checks instead of waiting forever (#293)', async () => {

@@ -379,6 +379,55 @@ describe('assertion vocabulary (issue #116)', () => {
     });
   });
 
+  // #658: what names an element is repeated into history and every error about it.
+  describe('selector length', () => {
+    const { MAX_SELECTOR_LENGTH } = require('../src/actions');
+    const longest = '#' + 'a'.repeat(MAX_SELECTOR_LENGTH - 1);
+    const actions = (selector: string) => [
+      { type: 'click', selector },
+      { type: 'fill', selector, text: 'x' },
+      { type: 'assert', kind: 'element_visible', target: selector },
+    ];
+
+    it('accepts a selector and a target of MAX_SELECTOR_LENGTH characters', () => {
+      expect(MAX_SELECTOR_LENGTH).toBe(4096);
+      for (const action of actions(longest)) {
+        expect(ActionSchema.safeParse(action).success).toBe(true);
+      }
+    });
+
+    it('refuses one character more, in each action that takes one', () => {
+      for (const action of actions(longest + 'a')) {
+        expect(ActionSchema.safeParse(action).success).toBe(false);
+      }
+      expect(parseActions(actions(longest + 'a'))).toMatchObject({
+        ok: false,
+        reason: expect.stringMatching(/^action\[0\] is invalid: .*4096/),
+      });
+    });
+
+    it('is not produced by the pattern translator either', () => {
+      const { translateSync } = require('../src/translator');
+      const over = longest + 'a';
+      expect(translateSync(`click ${longest}`)).toEqual([{ type: 'click', selector: longest }]);
+      for (const instruction of [
+        `click ${over}`,
+        `fill ${over} with x`,
+        `enter x into ${over}`,
+        `verify ${over} is visible`,
+        `verify ${over} is not visible`,
+        `verify the url contains ${over}`,
+      ]) {
+        expect(translateSync(instruction)).toEqual([]);
+      }
+    });
+
+    it('does not bound what a fill types', () => {
+      const fill = { type: 'fill', selector: '#a', text: 'x'.repeat(MAX_SELECTOR_LENGTH * 4) };
+      expect(ActionSchema.safeParse(fill).success).toBe(true);
+    });
+  });
+
   describe('parseActions', () => {
     it('accepts a valid list', () => {
       const result = parseActions([{ type: 'click', selector: '#a' }]);

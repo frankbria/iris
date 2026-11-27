@@ -142,11 +142,81 @@ model, and the page under test chooses much of what an error or a redirect conta
 - **`scannedPage(requested, scanned)`**: same URL reports the request without userinfo; a
   redirect reports `redirected: true` and origin plus path, at most 200 characters, path
   segments of 32+ characters cut to `…` (tokens; shorter ones show). "Same" is compared as
-  parsed `href`s without fragment and userinfo: the runner's URL is the response's, which
-  has neither, so `/#/route` read as a redirect (internal review).
+  parsed `href`s without fragment, userinfo and (since #662) query string, so `/#/route`
+  does not read as a redirect (internal review). Since #662 the runner's URL is the
+  document's at the time axe runs, so a page that moved on by script, meta refresh or
+  `history.replaceState` is a redirect too; a move that changes only the fragment or the
+  query string (a hash router, a dropped tracking parameter) is not, by HTTP either.
 - `stripUserinfo` (src/report-encoding.ts) and `redactString` (src/log.ts) are patterns over
-  free text and stop at the first `@` and at whitespace; do not use them on a URL you hold
-  whole.
+  free text. Since #645 both cut to the **last** `@` of the authority (`[^\s/?#]*@`: `/`, `?`
+  and `#` end it, so an `@` in a path or query stays), as a URL parser does. **Whitespace
+  still ends the match**: in prose a space ends a URL, so a password holding a raw space
+  (`http://u:correct horse@host/`) is not followed, and that is decided, not an oversight
+  (reading on to a later `@` would eat `see http://host and mail a@b`). So: a URL you hold
+  whole goes through `urlWithoutUserinfo()` (parsed; text that does not parse gets the
+  pattern), and text known to quote one goes through `stripUserinfo(text, quotedUrl)`,
+  which replaces each occurrence by its parsed form before the pattern runs (a11y page
+  errors with the URL navigated, base URL included; stored RPC errors with the navigation
+  target; `loggedDetail` does
+  the same for the MCP log). A space written `%20` has no such problem, and that is how
+  Chromium and Playwright quote a URL in their own errors: only the guard's messages
+  repeat it raw, so a browser test of the raw path must be a policy refusal. Tests:
+  `url-credentials.test.ts` (no browser).
+- **A pattern that redacts must be linear in its input (#658).** Both userinfo patterns
+  began at the scheme (`[a-z][a-z0-9+.-]*:\/\/`), so a long run of scheme characters was
+  scanned again from each of its positions: 40,000 letters took 3 s, synchronously, and a
+  megabyte would have held the event loop for about half an hour. `QUERY_PARAM` had the
+  same shape (a parameter name may hold `?`); see the next entry for its form now. The fix
+  keeps the match set:
+  `replaceUserinfo()` (src/report-encoding.ts, used by both helpers) matches the **whole
+  run** of scheme characters and makes `://userinfo@` an optional tail, so a run is consumed
+  by one match and no position inside it is retried; the callback cuts only when the tail
+  matched and the run holds a letter, and keeps what stands before it (`1http://u:p@h` →
+  `1http://h`). A lookbehind would have been shorter and would have leaked `...http://u:p@h`.
+  When adding a pattern to `redactString`, ask what happens on a megabyte of the character
+  its first class repeats; `url-credentials.test.ts` times every pattern at 1 kB, 10 kB,
+  100 kB and 1 MB and fails on a step over forty-fold (fastest of five, monotonic clock, a
+  1 ms floor), and compares both helpers with the old patterns on 60,000 generated strings.
+- **Linear is not enough for a pattern every log line passes: count the callbacks (#660).**
+  #658 first made `QUERY_PARAM` linear by making `=value` an optional tail, which turned
+  every `?`, `&`, `;` and `#` into a match and a callback: a megabyte of `&` took about
+  300 ms, where the pattern before #658 took 7. It now needs the `=value` again, and a `?`
+  begins a match only where it is the first since the last character a name cannot hold
+  (`\?(?<=(?:^|[=&;#\s])[^?=&;#\s]*\?)`). That is the same match set, because a later `?`
+  of the same name reaches the same end; and it is linear, because the lookbehind stands
+  **after** the `\?` (so it runs only at a `?`) and reads back no further than the `?`
+  before it. Written before the `\?` it measured the same on V8, but only
+  because the engine skips positions where no `?` follows; after it, nothing depends on that.
+  A megabyte of any separator is now about 9 ms. Tests in
+  `url-credentials.test.ts`: the megabyte cases compare against the pre-#658 pattern timed
+  in the same test (a ratio, never an absolute time: #142, #190), and the 60,000-string
+  comparison has `;`, `%` and an encoded `k` in its alphabet, with the name decoded in its
+  reference.
+- **Page- or client-controlled error text goes through `strippedError(text, quotedUrl)`**
+  (#658): colour codes and userinfo cut from the first `ERROR_TEXT_MAX` (16,384) UTF-16
+  units, cut before any pattern runs. A cut can land inside a URL whose `@` is past it, so
+  a cut text also loses a trailing partial copy of `quotedUrl`, a trailing authority that
+  nothing terminates, and a lone high surrogate. Four things codex found in that edge
+  handling: colour codes must leave the cut text **before** the edge is judged (one inside a
+  userinfo holds a `?`, which read as the authority's end, and removing it afterwards
+  exposed the password), a code the cut ended included; and the partial copy is found with
+  Knuth-Morris-Pratt, because comparing each suffix with the URL took a second on 16,384
+  repeated letters; and whole copies of `quotedUrl` are replaced before a partial one is
+  looked for, because a URL may end with its own beginning (`…@host/http`) and cutting that
+  off left a copy the exact replacement no longer matched; and the text is cut again after
+  that replacement, which happens once, because a parsed URL percent-encodes its path and
+  can be six times as long as it was written. The property test holds all of it to one
+  rule: `strippedError(text, q)` is a prefix of `stripUserinfo(stripAnsi(text), q)`, at most
+  16,384 units, on generated texts (`IRIS_FUZZ_CASES`, `IRIS_FUZZ_SEED` for a longer run).
+  Edge handling for a bound is code an attacker also reaches: time it. Used by `boundedError` (history store) and
+  the a11y runner's `erroredPage`, so an a11y page error is at most 16,384 units now.
+- **`MAX_SELECTOR_LENGTH` = 4,096** (src/actions.ts, #658) bounds `selector` (click, fill)
+  and an assertion's `target` in the shared `ActionSchema`: `-32602` at the RPC boundary,
+  a translation failure on the AI parse path, and the pattern translator treats a longer
+  target as prose (it is not built through the schema; an instruction is at most 10,000
+  characters). What names an element is repeated into the
+  stored action, Playwright's call log and every error about it. What a `fill` types and a
+  navigate URL are not bounded here (the frame limit is).
 - **`ScanLimiter(2, 8)`** (src/mcp/scan-limiter.ts), one per process: 2 scans run, 8 wait in
   arrival order, the next is a tool error at once. A finishing scan hands its slot to the
   head of the queue. Stdio only: hosted MCP (#314) does not use it, its cap is the org's
@@ -185,8 +255,29 @@ model, and the page under test chooses much of what an error or a redirect conta
   stored page result: `violationRules` (rule id, impact, node count, at most 50, written
   by `resultsOf` since #314; rows from before have counts only, so `violations` is empty
   beside a non-zero `violationCount`), `needsReviewRules`, `keyboardPassed`.
-- **`passed` is the stored page verdict** with every impact in `failOn`: no violation and
-  the keyboard checks passed. #646 (what `passed` means for the stdio tool) is still open.
+- **A redirect is reported as the stdio tool reports it** (#648): `resultsOf` stores
+  `landedUrl` (`scannedPage()`'s cut) beside the requested `url` when they differ, and the
+  tool answers `url` = the landing page, `redirected: true`, `redirectedFrom` = the request
+  (a caller reading by job id may no longer hold it). Only for absolute page URLs: a
+  relative pattern (`iris a11y` with `baseURL`) records nothing, since history does not
+  know the base. Rows from before #648 read as not redirected. The portal's run detail
+  shows it beside the request (`describeResult`: `<url> (landed on <landedUrl>)`, #662).
+- **A rule's `helpUrl` is derived, never stored** (`axeRuleHelpUrl`, src/mcp/axe-help-url.ts):
+  axe runs inside the page under test, so the `helpUrl` in its result is page-chosen text.
+  The link is built from the rule id (one encoded path segment) and the installed axe-core's
+  `major.minor`, read from its `package.json` so the API process never loads axe.
+  `axe-help-url.test.ts` holds it equal to `axe.getRules()`'s links, so an axe upgrade that
+  changes the form goes red there.
+- **`passed` is the stored page verdict** (#646, owner decision 2026-11-26): the job is
+  queued with the call's `failOn` (default `DEFAULT_FAIL_ON` in src/a11y/wcag.ts, the CLI's
+  `--fail-on` default, also the REST default), and `describeJob` answers `run_results.passed`,
+  so a REST job read by id answers at its own `failOn`. The hosted worker always runs the
+  keyboard checks, so they are part of it.
+- **The stdio tool (#646)** takes `failOn` (same default) and `keyboard` (opt-in) and answers
+  the runner's page verdict (`withVerdict`, #288), so it and `iris a11y` agree on one page.
+  Keyboard results are under `keyboard`: `{ passed, checks, failures }`, at most
+  `MAX_KEYBOARD_FAILURES` (20), each field cut to 200 characters (page-labelled targets).
+  The screen-reader checks are not offered.
 - **The URL pre-flight** refuses non-http(s), credentials (params are stored and org-readable)
   and what `assertNavigationAllowed` refuses, before `enqueue`, so it costs no run. A name
   that resolves to a private address still fails in the worker, at the egress proxy.
@@ -317,7 +408,9 @@ They apply only to connections with a principal; local mode is untouched.
   Both buckets must have a token before either is spent. A refused request gets
   `-32029` with `data.retryAfterMs` and never runs. Buckets outlive connections, so
   reconnecting gains nothing; full buckets are pruned on the heartbeat. In memory, one
-  process (#316 for several).
+  process: during a rolling deploy (#316) the old process keeps its buckets for the
+  sessions it still holds, so a tenant can reach twice its rate for one drain window.
+  Shared buckets are #714.
 - **The per-org connection cap is checked in the async `verify` callback**, against
   `tenants`. That is safe only because ws emits `'connection'` synchronously inside
   `done(true)` and the handler registers the tenant before returning.

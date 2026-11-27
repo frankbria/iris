@@ -44,6 +44,9 @@ export function getAuth() {
       })),
       type: "postgres",
     },
+    // Counters in the database (migration 0023), not per process: the old and the new
+    // portal of a rolling deploy (#316) must share one budget per client and path.
+    rateLimit: { storage: "database" },
     sendEmail: async ({ to, subject, text }) => {
       await mail.sendMail({ from, to, subject, text })
     },

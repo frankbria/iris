@@ -177,11 +177,18 @@ const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
     fs.mkdirSync(bin);
     // rclone stub: logs its arguments; fails once if dir/rclone-fail exists; otherwise
     // copies the included backups into remote/ (cp -n: skip what is already there).
+    // For the artifact copy (#445) it accepts sync and purge, and lists dir/replaced-dirs
+    // (exit 3, rclone's "directory not found", when there is none).
     fs.writeFileSync(
       path.join(bin, 'rclone'),
       `#!/bin/sh
 echo "$@" >> ${dir}/rclone.log
 if [ -e ${dir}/rclone-fail ]; then rm ${dir}/rclone-fail; exit 1; fi
+case "$1" in
+  sync) exit 0 ;;
+  lsf) [ -e ${dir}/replaced-dirs ] || exit 3; cat ${dir}/replaced-dirs; exit 0 ;;
+  purge) exit 0 ;;
+esac
 [ "$1 $3 $4 $5 $6 $7" = "copy offsite:iris --include iris-*.dump.age --include master_key-*.age" ] || exit 9
 mkdir -p ${remote} && cp -n "$2"/iris-*.dump.age "$2"/master_key-*.age ${remote}/
 `,
@@ -424,6 +431,78 @@ services:
     // The retry copied the first run's files too.
     expect(fs.readdirSync(remote).sort()).toEqual([...day1, ...day2, ...recent].sort());
   }, 120_000);
+
+  // #445: the artifact bucket's off-site copy. rclone is the stub, so these pin what the
+  // script asks of it, not what rclone then does.
+  describe('artifact bucket copy', () => {
+    const artifacts = {
+      BACKUP_ARTIFACTS_SOURCE: 'artifacts:iris',
+      BACKUP_ARTIFACTS_REMOTE: 'offsite:iris-artifacts',
+    };
+    const stampOf = (date: Date) => date.toISOString().replace(/[-:]|\.\d{3}/g, '');
+    const rcloneCalls = () => {
+      const log = path.join(dir, 'rclone.log');
+      const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [];
+      fs.rmSync(log, { force: true });
+      return calls;
+    };
+
+    it('refuses one setting without the other before writing anything', () => {
+      for (const name of Object.keys(artifacts)) {
+        const r = backup(`half-${name}`, { [name]: 'offsite:x' });
+        expect(r.status).toBe(1);
+        expect(r.out).toMatch(/BACKUP_ARTIFACTS_SOURCE and BACKUP_ARTIFACTS_REMOTE must be set/);
+        expect(r.files).toEqual([]);
+      }
+    });
+
+    it("syncs into current/, keeping what it replaces under this run's stamp", () => {
+      rcloneCalls();
+      const r = backup('artifacts-first', artifacts);
+      expect(r.status).toBe(0);
+      const stamp = r.files[0].match(/^iris-(\d{8}T\d{6}Z)\.dump\.age$/)![1];
+      // Nothing replaced yet: the listing answers "directory not found" and that is fine.
+      expect(rcloneCalls()).toEqual([
+        `sync artifacts:iris offsite:iris-artifacts/current --backup-dir offsite:iris-artifacts/replaced/${stamp}`,
+        'lsf --dirs-only offsite:iris-artifacts/replaced',
+      ]);
+      expect(r.out).toMatch(/synced artifacts:iris to offsite:iris-artifacts\/current/);
+    }, 120_000);
+
+    it('removes replaced/ directories older than BACKUP_KEEP_DAYS, and nothing else', () => {
+      const old = stampOf(daysAgo(9));
+      const recent = stampOf(daysAgo(7));
+      fs.writeFileSync(
+        path.join(dir, 'replaced-dirs'),
+        [`${old}/`, `${recent}/`, 'not-a-stamp/', '20200101T000000Z-x/', ''].join('\n'),
+      );
+      try {
+        rcloneCalls();
+        const r = backup('artifacts-prune', { ...artifacts, BACKUP_KEEP_DAYS: '8' });
+        expect(r.status).toBe(0);
+        expect(rcloneCalls().filter((c) => c.startsWith('purge'))).toEqual([
+          `purge offsite:iris-artifacts/replaced/${old}`,
+        ]);
+      } finally {
+        fs.rmSync(path.join(dir, 'replaced-dirs'));
+      }
+    }, 120_000);
+
+    it('a failed sync exits non-zero after the local backup, and prunes nothing', () => {
+      fs.writeFileSync(path.join(dir, 'replaced-dirs'), `${stampOf(daysAgo(30))}/\n`);
+      fs.writeFileSync(path.join(dir, 'rclone-fail'), '');
+      try {
+        rcloneCalls();
+        const r = backup('artifacts-fail', artifacts);
+        expect(r.status).toBe(1);
+        expect(r.out).toMatch(/off-site copy of artifacts:iris to offsite:iris-artifacts failed/);
+        expect(r.files).toHaveLength(2);
+        expect(rcloneCalls()).toHaveLength(1);
+      } finally {
+        fs.rmSync(path.join(dir, 'replaced-dirs'));
+      }
+    }, 120_000);
+  });
 
   it('keeps the newest BACKUP_KEEP_MIN even when all are older than BACKUP_KEEP_DAYS', () => {
     const seeded = seedBackups('keep-min', [30, 31, 32]);

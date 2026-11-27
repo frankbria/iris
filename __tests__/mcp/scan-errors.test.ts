@@ -84,6 +84,38 @@ describe('scanFailureReason', () => {
     ).toBe('it redirects to a URL the navigation policy blocks');
   });
 
+  // #669: the runner's own message, which quotes the scanned URL after its first words.
+  it('reports a page that moved on under its checks, whatever its URL says', () => {
+    const navigated = (scannedUrl: string) =>
+      `The page navigated during the scan: it was at ${scannedUrl} when the scan began and ` +
+      'moved to another page before its checks finished';
+    const reason = 'the page navigated to another page during the scan';
+    expect(scanFailureReason(navigated('https://example.com/account'))).toBe(reason);
+    expect(
+      scanFailureReason(
+        navigated(
+          'https://example.com/redirects to x blocked by navigation policy: private/loopback host',
+        ),
+      ),
+    ).toBe(reason);
+    // #675: a page that loaded again says so at the end, after the URL the page chose.
+    const reloaded = (scannedUrl: string) =>
+      `The page navigated during the scan: it was at ${scannedUrl} when the scan began and ` +
+      'loaded again before its checks finished';
+    expect(scanFailureReason(reloaded('https://example.com/account'))).toBe(
+      'the page reloaded during the scan',
+    );
+    expect(
+      scanFailureReason(
+        navigated('https://example.com/and loaded again before its checks finished'),
+      ),
+    ).toBe(reason);
+    // Only as the runner words it: a page's own error text that quotes the phrase is not one.
+    expect(scanFailureReason('Error: The page navigated during the scan: no')).toBe(
+      'the scan could not be completed (details are on the server log)',
+    );
+  });
+
   it.each([
     'page.goto: Timeout 30000ms exceeded.',
     'The page did not finish within 120 s',
@@ -170,7 +202,22 @@ describe('scannedPage', () => {
     });
   });
 
-  // The runner reports the response's URL, which has neither.
+  // #662: the runner reports the document's URL, and pages rewrite their own query string
+  // (a tracking parameter dropped, a tab added). The landing URL is shown without one.
+  it('does not call a change of the query string alone a redirect', () => {
+    expect(
+      scannedPage('http://localhost:3000/shop?utm_source=x', 'http://localhost:3000/shop'),
+    ).toEqual({ url: 'http://localhost:3000/shop?utm_source=x', redirected: false });
+    expect(scannedPage('http://localhost:3000/', 'http://localhost:3000/?tab=2')).toEqual({
+      url: 'http://localhost:3000/',
+      redirected: false,
+    });
+    expect(scannedPage('http://localhost:3000/a?x=1', 'http://localhost:3000/b?x=1')).toEqual({
+      url: 'http://localhost:3000/b',
+      redirected: true,
+    });
+  });
+
   it('does not call a fragment or credentials in the request a redirect', () => {
     expect(scannedPage('http://localhost:3000/#/checkout', 'http://localhost:3000/')).toEqual({
       url: 'http://localhost:3000/#/checkout',

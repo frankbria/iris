@@ -5,12 +5,16 @@
  * path from a failed browser launch, a token in a landing page's query string.
  */
 
+import { saysReloaded } from '../a11y/scan-navigation';
+
 const REDIRECT_BLOCKED = /redirects to .* blocked by navigation policy/;
 const BLOCKED = 'blocked by navigation policy';
 /** Only where Playwright puts the code, and bounded: the rest of the line names a URL. */
 const NETWORK_ERROR = /^(?:[\w.]+: )?(net::ERR_[A-Z0-9_]{1,60})(?![A-Z0-9_])/;
 /** Playwright's navigation, the runner's page deadline (#293), axe's own timer. */
 const TIMED_OUT = /Timeout \d+ ?ms exceeded|did not finish within|timed out after \d+ ?ms/;
+/** The runner's own words for a page that moved on under its checks (src/a11y/scan-navigation.ts, #669). */
+const NAVIGATED = /^The page navigated during the scan: /;
 /** Playwright's launch call, or IRIS's own message about it (src/browser.ts). */
 const LAUNCH_FAILED = /browserType\.launch|Chromium could not start/;
 
@@ -31,6 +35,14 @@ function blockedAddressKind(detail: string): string | null {
  * `detail` is the raw error; nothing of it is returned except a `net::ERR_*` code.
  */
 export function scanFailureReason(detail: string): string {
+  // First, and anchored: the message goes on to quote the scanned URL, whose path the page
+  // chose and could word like one of the reasons below.
+  if (NAVIGATED.test(detail)) {
+    // By the message's end, which is the runner's: the URL before it is the page's.
+    return saysReloaded(detail)
+      ? 'the page reloaded during the scan'
+      : 'the page navigated to another page during the scan';
+  }
   const kind = blockedAddressKind(detail);
   if (REDIRECT_BLOCKED.test(detail)) {
     return kind
@@ -104,13 +116,16 @@ export function loggedDetail(detail: string, requested: string): string {
 }
 
 /**
- * A URL as the network sees it. The runner reports the response's URL, which never has
- * the request's fragment or credentials: without this, `/#/checkout` read as a redirect.
+ * A URL as far as a redirect is judged by it: origin and path. The runner reports the
+ * document's URL (#662), which never has the request's credentials or fragment, and pages
+ * rewrite their own query string (a tracking parameter dropped, a tab added). A landing URL
+ * is shown without either, so such a move would read as a redirect to the same page.
  */
 function asRequested(url: string): string | undefined {
   const target = parsed(url);
   if (!target) return undefined;
   target.hash = '';
+  target.search = '';
   target.username = '';
   target.password = '';
   return target.href;

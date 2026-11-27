@@ -11,7 +11,7 @@ import { Kysely, sql } from 'kysely';
 import { Client } from 'pg';
 import { createPostgresDb } from '../../src/db/postgres';
 import { migrateToLatest } from '../../src/db/migrate';
-import { usageLedger } from '../../src/billing/usage';
+import { runsUsedThisMonth, usageLedger } from '../../src/billing/usage';
 import { postgresHistory } from '../../src/history-store';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
@@ -222,5 +222,32 @@ const JUNE = { from: new Date('2026-06-01T00:00:00Z'), to: new Date('2026-07-01T
     ).rejects.toThrow();
     const after = await sql<{ n: string }>`select count(*) as n from runs`.execute(db);
     expect(after.rows[0].n).toBe(before.rows[0].n);
+  });
+
+  it('runsUsedThisMonth: billed jobs of this UTC month plus queued and running ones', async () => {
+    const org = 'org-runs';
+    await sql`insert into organization (id, name, slug, "createdAt")
+      values (${org}, ${org}, ${org}, now())`.execute(db);
+    expect(await runsUsedThisMonth(db, org)).toBe(0);
+
+    await usageLedger(db).record(org, [
+      { kind: 'a11y_job', quantity: 1, idempotencyKey: 'a' },
+      { kind: 'visual_job', quantity: 4, idempotencyKey: 'v' },
+      // Not runs: other kinds, another month, another org.
+      { kind: 'browser_minutes', quantity: 30, idempotencyKey: 'm' },
+      { kind: 'a11y_job', quantity: 7, idempotencyKey: 'old', at: at('2020-01-15T00:00:00Z') },
+    ]);
+    await usageLedger(db).record('org-b', [
+      { kind: 'a11y_job', quantity: 9, idempotencyKey: 'theirs' },
+    ]);
+    expect(await runsUsedThisMonth(db, org)).toBe(5);
+
+    // Outstanding jobs count before they are billed: a visual job per url x device.
+    await sql`insert into runs (org_id, kind, status, params) values
+      (${org}, 'a11y', 'queued', '{"urls":["https://a.example/"]}'::jsonb),
+      (${org}, 'visual', 'running',
+        '{"urls":["https://a.example/","https://b.example/"],"devices":["desktop","mobile","tablet"]}'::jsonb),
+      (${org}, 'a11y', 'failed', '{"urls":["https://a.example/"]}'::jsonb)`.execute(db);
+    expect(await runsUsedThisMonth(db, org)).toBe(5 + 1 + 6);
   });
 });

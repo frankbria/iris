@@ -5,7 +5,9 @@
 # Images are pinned by digest through IRIS_IMAGE / PORTAL_IMAGE, which
 # deploy/deploy.sh writes into the release's .env: the deploy promotes the exact digests staging
 # ran, never a tag that could have moved. Hardening matches
-# docker-compose.staging.yml (#332); its comments explain each setting.
+# docker-compose.staging.yml (#332); its comments explain each setting. Staging
+# runs this same file (#440), under the project name iris-staging (COMPOSE_PROJECT_NAME
+# in its settings.env) and its own deploy directory.
 #
 # Each release is its own directory, <deploy dir>/releases/<id>/, holding this file,
 # the seccomp profile, settings.env and the release's own secrets (./secrets). The
@@ -26,10 +28,8 @@ services:
     # Metrics (#275) on the container's loopback only; never published. The watchdog
     # (deploy/watchdog.sh) scrapes them with `docker exec`.
     command: ['connect', '4000', '--metrics-port', '9464']
-    # Loopback only (#347): nginx forwards to it and sets X-Real-IP / clears
-    # X-Iris-Probe. Must match the upstream port in deploy/nginx/iris.conf.
-    ports:
-      - '127.0.0.1:${IRIS_API_PORT:-4000}:4000'
+    # No `ports:`: the proxy below publishes it (#316), so two of these can run at once
+    # during a deploy.
     environment:
       # API keys authenticate (#341); no shared token in hosted mode.
       IRIS_HOSTED: '1'
@@ -49,12 +49,21 @@ services:
       # Managed AI credits (#479, #549): both or neither; empty is neither.
       IRIS_MANAGED_AI_PROVIDER: ${IRIS_MANAGED_AI_PROVIDER:-}
       IRIS_MANAGED_AI_KEY_FILE: ${IRIS_MANAGED_AI_KEY_FILE:-}
+      # Stripe billing (#261, #345): all four or none; empty is none (billing off).
+      IRIS_STRIPE_SECRET_KEY_FILE: ${IRIS_STRIPE_SECRET_KEY_FILE:-}
+      IRIS_STRIPE_WEBHOOK_SECRET_FILE: ${IRIS_STRIPE_WEBHOOK_SECRET_FILE:-}
+      IRIS_STRIPE_PRICE_PRO: ${IRIS_STRIPE_PRICE_PRO:-}
+      IRIS_STRIPE_PRICE_TEAM: ${IRIS_STRIPE_PRICE_TEAM:-}
+      # Days from a failed payment to suspension (#266); empty is the default, 7.
+      IRIS_BILLING_GRACE_DAYS: ${IRIS_BILLING_GRACE_DAYS:-}
     secrets:
       - database_url
       - better_auth_secret
       - master_key
       - s3_secret_access_key
       - managed_ai_key
+      - stripe_secret_key
+      - stripe_webhook_secret
     volumes:
       - iris-data:/data
     restart: unless-stopped
@@ -114,9 +123,13 @@ services:
       IRIS_S3_REGION: ${IRIS_S3_REGION:-}
       IRIS_S3_ACCESS_KEY_ID: ${IRIS_S3_ACCESS_KEY_ID:-}
       IRIS_S3_SECRET_ACCESS_KEY_FILE: ${IRIS_S3_SECRET_ACCESS_KEY_FILE:-}
+      # The Stripe key only (#264): the worker reports managed usage to the Stripe meter.
+      # Empty is unset (no report). It gets no webhook secret and no prices.
+      IRIS_STRIPE_SECRET_KEY_FILE: ${IRIS_STRIPE_SECRET_KEY_FILE:-}
     secrets:
       - database_url
       - s3_secret_access_key
+      - stripe_secret_key
     volumes:
       - worker-data:/data
     restart: unless-stopped
@@ -160,8 +173,7 @@ services:
   portal:
     image: ${PORTAL_IMAGE:?set PORTAL_IMAGE to the portal image by digest}
     restart: unless-stopped
-    ports:
-      - '127.0.0.1:${PORTAL_PORT:-3000}:3000'
+    # No `ports:`: published by the proxy (#316), as iris is.
     environment:
       BETTER_AUTH_URL: ${PORTAL_URL:?set PORTAL_URL to the portal's public https origin}
       BETTER_AUTH_SECRET_FILE: /run/secrets/better_auth_secret
@@ -175,6 +187,8 @@ services:
       IRIS_ABUSE_CONTACT: ${IRIS_ABUSE_CONTACT:-}
       IRIS_SUPPORT_CONTACT: ${IRIS_SUPPORT_CONTACT:-}
       IRIS_SECURITY_TXT_EXPIRES_DAYS: ${IRIS_SECURITY_TXT_EXPIRES_DAYS:-}
+      # The public status page (#317): optional; linked from /contact only when set.
+      IRIS_STATUS_URL: ${IRIS_STATUS_URL:-}
       # Object storage (#257, #549): empty is unset (no artifacts; visual jobs answer 503).
       # The deploy sets the _FILE path only when it wrote the secret.
       IRIS_S3_ENDPOINT: ${IRIS_S3_ENDPOINT:-}
@@ -182,12 +196,19 @@ services:
       IRIS_S3_REGION: ${IRIS_S3_REGION:-}
       IRIS_S3_ACCESS_KEY_ID: ${IRIS_S3_ACCESS_KEY_ID:-}
       IRIS_S3_SECRET_ACCESS_KEY_FILE: ${IRIS_S3_SECRET_ACCESS_KEY_FILE:-}
+      # Stripe billing (#261, #345): all four or none; empty is none (billing off).
+      IRIS_STRIPE_SECRET_KEY_FILE: ${IRIS_STRIPE_SECRET_KEY_FILE:-}
+      IRIS_STRIPE_WEBHOOK_SECRET_FILE: ${IRIS_STRIPE_WEBHOOK_SECRET_FILE:-}
+      IRIS_STRIPE_PRICE_PRO: ${IRIS_STRIPE_PRICE_PRO:-}
+      IRIS_STRIPE_PRICE_TEAM: ${IRIS_STRIPE_PRICE_TEAM:-}
     secrets:
       - database_url
       - better_auth_secret
       - master_key
       - smtp_url
       - s3_secret_access_key
+      - stripe_secret_key
+      - stripe_webhook_secret
     depends_on:
       postgres:
         condition: service_healthy
@@ -206,6 +227,81 @@ services:
     pids_limit: 256
     stop_grace_period: 20s
     # The image's HEALTHCHECK applies: GET /api/health (auth, master key, database).
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  # Zero-downtime deploys (#316): the one holder of the host ports, a TCP proxy to whichever
+  # iris and portal containers deploy.sh last switched it to (shared/proxy/upstreams.conf,
+  # which deploy.sh writes with nginx.conf and reloads in place). TCP, so WebSockets and
+  # every header (X-Real-IP from the host's nginx) pass through unchanged.
+  # Loopback only (#347): the host's nginx forwards here and sets X-Real-IP / clears
+  # X-Iris-Probe. Must match the upstream ports in deploy/nginx/iris.conf.
+  proxy:
+    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    command: ['nginx', '-c', '/etc/iris-proxy/nginx.conf', '-g', 'daemon off;']
+    user: '101:101'
+    ports:
+      - '127.0.0.1:${IRIS_API_PORT:-4000}:4000'
+      - '127.0.0.1:${PORTAL_PORT:-3000}:3000'
+    volumes:
+      - ../../shared/proxy:/etc/iris-proxy:ro
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,uid=101,gid=101
+      - /var/cache/nginx:size=8m,uid=101,gid=101
+    mem_limit: 128m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  # Container egress firewall (#376): host rules that refuse new connections from this
+  # stack's bridge to private, CGNAT, link-local (cloud metadata) and reserved IPv4 ranges.
+  # docker/egress-firewall.sh says what is allowed. deploy.sh starts it before the gates
+  # with the bridge it found (IRIS_EGRESS_BRIDGE in .env) and probes the metadata address
+  # from the running containers. The rules outlive this container (fail closed); it
+  # re-applies them every 30s and after a reboot.
+  egress:
+    image: ${IRIS_IMAGE:?set IRIS_IMAGE to the iris image by digest}
+    entrypoint: ['bash', '/app/docker/egress-firewall.sh']
+    environment:
+      IRIS_EGRESS_BRIDGE: ${IRIS_EGRESS_BRIDGE:-}
+    # The host's network and NET_ADMIN are what writing its firewall takes; NET_RAW only
+    # for a host on the legacy iptables backend.
+    network_mode: host
+    user: '0'
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run:size=1m
+      - /tmp:size=1m
+    init: true
+    restart: unless-stopped
+    mem_limit: 64m
+    pids_limit: 32
+    healthcheck:
+      test: ['CMD', 'bash', '/app/docker/egress-firewall.sh', 'check']
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      start_interval: 1s
+      retries: 2
     logging:
       driver: json-file
       options:
@@ -258,6 +354,10 @@ secrets:
     file: ./secrets/s3_secret_access_key
   managed_ai_key:
     file: ./secrets/managed_ai_key
+  stripe_secret_key:
+    file: ./secrets/stripe_secret_key
+  stripe_webhook_secret:
+    file: ./secrets/stripe_webhook_secret
   # Shared: generated once on the box (password, master key); the URL is rebuilt.
   pg_password:
     file: ../../shared/secrets/pg_password

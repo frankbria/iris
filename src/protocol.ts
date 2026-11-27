@@ -2,7 +2,7 @@ import type { AuditEntry } from './audit-log';
 import WebSocket, { WebSocketServer } from 'ws';
 import { MAX_POPUPS_PER_CONTEXT } from './url-policy-guard';
 import { createServer, IncomingMessage, ServerResponse, STATUS_CODES } from 'http';
-import { handleJobsRequest, type ApiJobs, type RunReader } from './jobs-api';
+import { handleJobsRequest, type ApiJobs, type RunReader, type StripeWebhook } from './jobs-api';
 import { handleMcpRequest, MCP_PATH } from './mcp/hosted';
 import type { ArtifactStore } from './artifact-store';
 import { randomUUID, timingSafeEqual } from 'crypto';
@@ -561,16 +561,23 @@ function restOutcome(status: number | undefined, rateLimited: boolean): Outcome 
   return status >= 400 ? 'client_error' : 'ok';
 }
 
+/** Metric labels must stay bounded, so ids are folded into the route's shape. */
+const REST_ROUTES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^\/v1\/a11y\/jobs$/, '/v1/a11y/jobs'],
+  [/^\/v1\/visual\/jobs$/, '/v1/visual/jobs'],
+  [/^\/v1\/runs$/, '/v1/runs'],
+  [/^\/v1\/stripe\/webhook$/, '/v1/stripe/webhook'],
+  [/^\/v1\/jobs\/[^/]+$/, '/v1/jobs/:id'],
+  [/^\/v1\/runs\/[^/]+$/, '/v1/runs/:id'],
+  [/^\/v1\/runs\/[^/]+\/results\/[^/]+\/approve$/, '/v1/runs/:id/results/:position/approve'],
+];
+
 function restRoute(req: IncomingMessage): string {
   const path = (req.url ?? '').split('?')[0];
   const route =
-    path === '/v1/a11y/jobs' || path === '/v1/runs' || path === MCP_PATH
+    path === MCP_PATH
       ? path
-      : /^\/v1\/jobs\/[^/]+$/.test(path)
-        ? '/v1/jobs/:id'
-        : /^\/v1\/runs\/[^/]+$/.test(path)
-          ? '/v1/runs/:id'
-          : 'other';
+      : (REST_ROUTES.find(([pattern]) => pattern.test(path))?.[1] ?? 'other');
   const method = ['GET', 'POST', 'HEAD', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(
     req.method ?? '',
   )
@@ -700,6 +707,8 @@ export interface StartServerOptions {
   ) => Promise<{ runsPerMonth: number; artifactStorageBytes?: number }>;
   /** Signed URL lifetime in seconds (default 300, at most 900). */
   artifactUrlTtlSeconds?: number;
+  /** The Stripe webhook (#345), `POST /v1/stripe/webhook`, served beside the job API. */
+  stripeWebhook?: StripeWebhook;
   /** Overrides for any subset of `DEFAULT_SERVER_LIMITS`. */
   limits?: Partial<ServerLimits>;
 }
@@ -772,6 +781,7 @@ export function startServer(port: number, options?: StartServerOptions): WebSock
       artifactUrlTtlSeconds: options?.artifactUrlTtlSeconds,
       entitlements: options?.entitlements,
       maxQueuedJobsPerOrg: limits.maxQueuedJobsPerOrg,
+      stripeWebhook: options?.stripeWebhook,
       // REST verifications share the upgrades' `verifying` count, so a bad-key flood
       // cannot pile onto the auth pool. Only pending ones count here: idle sockets
       // should not make the API unavailable.

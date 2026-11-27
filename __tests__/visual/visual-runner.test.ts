@@ -12,6 +12,7 @@ import { BaselineManager } from '../../src/visual/baseline';
 import { StorageManager } from '../../src/visual/storage';
 import { AIVisualClassifier } from '../../src/visual/ai-classifier';
 import { ModelUnavailableError } from '../../src/ai-client/models';
+import { MODEL_UNAVAILABLE, aiUnavailableNote } from '../../src/visual/reporter';
 
 // Mock Playwright
 jest.mock('playwright');
@@ -88,7 +89,11 @@ describe('VisualTestRunner', () => {
     // Mock Playwright BrowserContext
     mockContext = {
       newPage: jest.fn().mockResolvedValue(mockPage),
-      newCDPSession: jest.fn().mockResolvedValue({ send: jest.fn(), on: jest.fn() }),
+      newCDPSession: jest.fn().mockResolvedValue({
+        // The guard asks each page for its target id (#668).
+        send: jest.fn().mockResolvedValue({ targetInfo: { targetId: 'page-target' } }),
+        on: jest.fn(),
+      }),
       route: jest.fn().mockResolvedValue(undefined),
       on: jest.fn(),
       browser: jest.fn().mockReturnValue(null),
@@ -720,6 +725,46 @@ describe('VisualTestRunner', () => {
       expect(result.summary.aiUnavailableReason).toMatch(
         /Model "gpt-nope" is not available from openai/,
       );
+    });
+
+    // #652: a model IRIS does not use for images comes back as the classifier's fallback,
+    // not a throw, so the comparison is graded by its pixels and the cause is named.
+    it('names a model that is not used for images, and grades by pixels', async () => {
+      const reason =
+        'openai model "gpt-4o" is not one IRIS uses for images ' +
+        '(text-only, deprecated or unknown); choose another with --ai-model';
+      mockAIClassifier.analyzeChange.mockResolvedValue({
+        classification: MODEL_UNAVAILABLE,
+        confidence: 0.5,
+        description: reason,
+        severity: 'medium',
+        suggestions: [],
+        isIntentional: false,
+        changeType: 'unknown',
+        reasoning: `Analysis failed: ${reason}`,
+        analysisFailed: true,
+      });
+      visualRunner = new VisualTestRunner({
+        ...defaultConfig,
+        diff: { ...defaultConfig.diff, semanticAnalysis: true, apiKey: 'sk-test' },
+      });
+      mockDiffEngine.compare.mockResolvedValue({
+        success: true,
+        passed: false,
+        similarity: 0.99,
+        pixelDifference: 20736, // count: 1% of 1920x1080
+        threshold: 0.995,
+        diffBuffer: Buffer.from('test-diff'),
+      });
+
+      const result = await visualRunner.run();
+
+      // 1% of the pixels: minor by the estimate, where a model nobody serves is breaking.
+      expect(result.results[0].severity).toBe('minor');
+      expect(result.results[0].error).toBeUndefined();
+      expect(result.summary.aiUnavailable).toBe(2);
+      expect(result.summary.aiUnavailableReason).toBe(reason);
+      expect(aiUnavailableNote(result.summary)).toBe(`unavailable for 2 comparison(s): ${reason}`);
     });
 
     it('defaults suggestions to an empty list when the classifier omits them', async () => {

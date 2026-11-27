@@ -61,13 +61,17 @@ describe("legal documents", () => {
     " JaVaScRiPt:void0",
     "https:/\\x",
     "http://plain.example/",
+    "mailto:a@b.co?subject=x",
+    "mailto:a@b.co?bcc=c@d.co",
+    "mailto:a@b",
+    "MAILTO:a@b.co",
   ]
-  const KEPT = ["/terms", "https://ok.example/"]
+  const KEPT = ["/terms", "https://ok.example/", "mailto:support@example.com"]
 
   it.each([
     ["a paragraph", (md: string) => md],
     ["a table cell", (md: string) => `| H |\n|---|\n| ${md} |`],
-  ])("keeps only site paths and https links in %s", (_, wrap) => {
+  ])("keeps only site paths, https links and bare mailto: in %s", (_, wrap) => {
     for (const href of [...REFUSED, ...KEPT]) {
       const { unmount } = render(
         <LegalDocument doc={doc("", wrap(`[go](${href})`))} />
@@ -129,13 +133,58 @@ describe("legal documents", () => {
     ).toEqual(LEGAL_LINKS.map(([href]) => href))
   })
 
-  it("the published documents parse, are drafts, and carry their pinned versions", async () => {
+  it("the published documents parse, are in effect, and carry their pinned versions", async () => {
     const { PUBLISHED_VERSIONS } = await import("../../../src/legal/versions")
     for (const name of ["privacy", "subprocessors", "dpa"] as const) {
       const d = readLegal(name)
       expect(d.version).toBe(PUBLISHED_VERSIONS[name])
-      expect(d.draft).toBe(true)
+      expect(d.draft).toBe(false)
       expect(d.body.length).toBeGreaterThan(500)
+    }
+  })
+
+  it("no shipped document is a draft or keeps a [placeholder] (#450)", () => {
+    for (const name of [
+      "terms",
+      "acceptable-use",
+      "privacy",
+      "subprocessors",
+      "dpa",
+    ] as const) {
+      const d = readLegal(name)
+      expect(d.draft).toBe(false)
+      // A bracket not opening a link is placeholder text. The DPA keeps one on purpose:
+      // the customer's own details, filled in when it is signed.
+      const left = (d.body.match(/\[[^\]]*\](?!\()/g) ?? []).filter(
+        (m) => !(name === "dpa" && m === "[customer legal name, address]")
+      )
+      expect({ name, left }).toEqual({ name, left: [] })
+    }
+  })
+
+  it("every link written in a shipped document renders as a link (#450)", () => {
+    for (const name of [
+      "terms",
+      "acceptable-use",
+      "privacy",
+      "subprocessors",
+      "dpa",
+    ] as const) {
+      const d = readLegal(name)
+      const written = [...d.body.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map(
+        (m) => m[1]
+      )
+      const { container, unmount } = render(<LegalDocument doc={d} />)
+      const rendered = [...container.querySelectorAll("main a")].map((a) =>
+        a.getAttribute("href")
+      )
+      for (const href of written)
+        expect({ name, href, ok: rendered.includes(href) }).toEqual({
+          name,
+          href,
+          ok: true,
+        })
+      unmount()
     }
   })
 
@@ -144,13 +193,7 @@ describe("legal documents", () => {
     const rows = within(screen.getByRole("table"))
       .getAllByRole("row")
       .map((r) => r.textContent ?? "")
-    for (const name of [
-      "[hosting provider]",
-      "[email delivery provider]",
-      "OpenAI",
-      "Anthropic",
-      "Stripe",
-    ])
+    for (const name of ["Linode", "Resend", "OpenAI", "Anthropic", "Stripe"])
       expect(rows.some((r) => r.includes(name))).toBe(true)
   })
 

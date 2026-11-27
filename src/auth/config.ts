@@ -59,8 +59,9 @@ export interface AuthEmail {
  *   path with every other such request (`no-trusted-ip`), and any process that can
  *   reach the port can name any `X-Real-IP`.
  *
- * ponytail: counters are in memory, which holds for one portal process; use
- * `storage: 'database'` (a new migration) for several (#316).
+ * Counters are in memory unless the caller passes `rateLimit: { storage: 'database' }`,
+ * which the portal does (#316: two portal processes overlap during a rolling deploy;
+ * the table is migration 0023).
  */
 function accountPolicy(sendEmail: (email: AuthEmail) => Promise<void>) {
   return {
@@ -141,11 +142,14 @@ const ac = createAccessControl({
   providerKey: ['create', 'read', 'delete'],
   // Making a visual result a project's new baseline (#463): owners and admins only.
   visualBaseline: ['approve'],
+  // Checkout and the Stripe Customer Portal (#261): owners and admins only.
+  billing: ['manage'],
 } as const);
 const keyManager = {
   apiKey: ['create', 'read', 'update', 'delete'] as const,
   providerKey: ['create', 'read', 'delete'] as const,
   visualBaseline: ['approve'] as const,
+  billing: ['manage'] as const,
 };
 const roles = {
   owner: ac.newRole({ ...ownerAc.statements, ...keyManager }),

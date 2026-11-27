@@ -94,7 +94,10 @@ describe('ActionExecutor', () => {
     // The URL-policy guard vets requests through a CDP Fetch session rather than
     // page.route (see src/url-policy-guard.ts), so a mock page has to be able to
     // hand one out or createPage cannot install the guard at all.
-    mockCdpSession = { send: jest.fn().mockResolvedValue(undefined), on: jest.fn() };
+    mockCdpSession = {
+      send: jest.fn().mockResolvedValue({ targetInfo: { targetId: 'page-target' } }),
+      on: jest.fn(),
+    };
     // The guard also attaches a context-level net for popups (issue #155), so
     // the fake context needs route/on as well as a CDP session. No browser, so
     // the browser-level popup net (#337) is skipped, as for a persistent context.

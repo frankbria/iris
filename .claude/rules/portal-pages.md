@@ -7,6 +7,34 @@ paths:
   - "docs/legal/**"
 ---
 
+### Usage and Billing Page (issue #271)
+
+`/usage`, linked from the dashboard and from `/org`'s Billing section. Every member reads
+it; the billing controls are for owners and admins.
+
+- **The period is the current UTC calendar month** (`utcMonth()` in `lib/usage.ts`): the
+  window the limits are enforced on (#346) and the managed credit is counted on (#479),
+  whatever day Stripe bills. Do not switch it to the Stripe billing period without moving
+  enforcement too.
+- **"Runs" is `runsUsedThisMonth()`** (src/billing/usage.ts), the query the job submit
+  check runs: billed jobs plus queued and running ones. The other lines come from
+  `usageLedger().summary()`. Storage is `storageUsage()`, a level, not a monthly total.
+  "(limit reached)" shows on runs and storage only: the agent-turn and vision-call limits
+  are not enforced yet (hosted-data.md, #346), so `planUsage` never marks them reached.
+  Drop `notEnforced` there when enforcement lands.
+- **Credit left is `managedCreditLeft()`** (src/billing/managed-ai.ts, #641), on `/usage` and
+  `/provider-keys`: plan credit minus this month's managed spend and `held` reservations
+  (#482), the figure the resolver admits against. Live reservations (calls in flight) are
+  not shown.
+- **`lib/usage.ts` is pure** (type-only imports from `src/`), so the portal's jsdom Jest
+  can test it; importing `src/billing/plans.ts` there loads Kysely (ESM) and fails.
+- **`components/billing-section.tsx`** (`PlanLine`, `BillingControls`) is what `/org` and
+  `/usage` both render. `/org` hides its Billing section without Stripe; `/usage` always
+  shows the plan and adds the controls only when `getBilling()` is set. Stripe returns the
+  user to `/org` from either page (`billingReturnUrl`).
+- BYOK cost is IRIS's own computation from its price list (`unit_cost_usd`), not the
+  vendor's invoice; the page says so.
+
 ### Audit Log Page (issue #541)
 
 `/audit` in the portal shows the org's `audit_log` (#361) to owners and admins (`isManager(role)`
@@ -21,9 +49,12 @@ with the retention pass's `audit` step (src/offboarding.ts; "Tenant Audit Log" i
 
 ### Privacy, subprocessors and DPA (issue #277)
 
-Drafts at `/privacy`, `/subprocessors` and `/dpa` (`apps/portal/content/legal/{privacy,
-subprocessors,dpa}.md`), same renderer and draft banner as #276; owner/counsel approval is
-#450. `docs/legal/dpa-template.md` is a copy of `dpa.md` (a portal test keeps them equal).
+Published at `/privacy`, `/subprocessors` and `/dpa` (`apps/portal/content/legal/{privacy,
+subprocessors,dpa}.md`), same renderer as #276. The owner approved the wording and filled
+the placeholders in #450, so none is a draft: a test fails on `draft: true` or on any
+`[bracketed]` text that is not a link (the DPA's `[customer legal name, address]` excepted,
+filled in at signing). A wording change bumps the version as the runbook says.
+`docs/legal/dpa-template.md` is a copy of `dpa.md` (a portal test keeps them equal).
 
 - **`docs/data-flows.md` is the source of truth** for what is stored, where, for how long
   and what goes to which third party, each entry citing its code. A change that adds or
@@ -36,6 +67,10 @@ subprocessors,dpa}.md`), same renderer and draft banner as #276; owner/counsel a
 - The renderer also takes simple pipe tables (header, `|---|` row, cells through the same
   escaping `inline()`). `LegalFooter` (on legal pages and the `(auth)` layout) links all five
   documents; it is a `nav`, not a list, so the renderer's list tests are unaffected.
+- **Links:** `safeHref()` keeps site paths, `https://` URLs and a bare `mailto:` address
+  (no `?`, so no injected headers or body); anything else renders as its label only. A
+  test renders each shipped document and fails if a link written in it is not a link, so
+  a new link scheme fails CI instead of silently becoming text.
 
 ### Portal Runs Pages (issue #270)
 

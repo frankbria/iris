@@ -96,7 +96,8 @@ paths:
   exit 3 unless a scanned page has violations: those exit 4, `summary.scannedPassed`).
   The score covers scanned pages only (`null` when none was: an unscanned page has no
   violations and raised it). Errors are userinfo-stripped where they are made
-  (`stripUserinfo`, src/report-encoding.ts). The report directory is created before
+  (`strippedError(text, navigatedUrl)`, src/report-encoding.ts, at most 16,384 units of it, #658: the URL navigated, base URL
+  included, is cut by parsing, so a password with a space goes too, #645). The report directory is created before
   writing. The hosted worker sets `failFast` (no browser time on pages whose results
   would be thrown away) and throws the page error itself, keeping fail-the-job semantics
 - **A WCAG level is WCAG 2.2 (#290).** `wcagTags(level)` (src/a11y/wcag.ts) is the one
@@ -135,7 +136,12 @@ paths:
   HTML, JUnit (`iris.aiUnavailable` testsuite property) and Markdown reports carry the same
   run-level note (`aiUnavailableNote()`, src/visual/reporter.ts, #484). A `ModelUnavailableError`
   (a model the provider does not serve) still fails the comparison closed as `breaking`, and now
-  counts in `aiUnavailable` with `summary.aiUnavailableReason` naming it
+  counts in `aiUnavailable` with `summary.aiUnavailableReason` naming it. A model outside the
+  vision table is a `ModelNotForImagesError` (models.ts, #652): the smart client still tries
+  the fallback vendors, and throws it itself (not "All providers failed") when none of them
+  failed for a reason of its own; the classifier answers it with the fallback classified
+  `MODEL_UNAVAILABLE` and described by the reason alone, so the comparison is graded by its
+  pixels and the same `AI: unavailable for N comparison(s): <reason>` line names it
 - **Vision capability is a table, Ollama's is its own answer (#298).** `isVisionModel(provider,
   model)` (src/ai-client/models.ts) is the one capability check: id prefixes per family. It
   replaced name guesses (`includes('gpt-4')`, `llava|bakllava`) that skipped every newer vision
@@ -162,7 +168,12 @@ paths:
   which refuse `none`) and no `temperature`, which they refuse unless effort is `none` (#523);
   reasoning is billed as output inside the 1000-token cap, hence `none`. The o-series
   and the first `gpt-5` (`gpt-5`, `-mini`, `-nano`: no `none` effort) get neither
-  (`isReasoningModel()`, #520); anything else keeps `temperature: 0.1`. A vision model outside
+  (`isReasoningModel()`, #520); anything else keeps `temperature: 0.1`. A fine-tuned id
+  (`ft:<base model>:<org>:<suffix>:<id>`, `fineTunedBase()`) gets its base model's options
+  (#652). It is never a vision model (#664): OpenAI fine-tunes only `gpt-4o` and `gpt-4.1`
+  snapshots, which IRIS stopped offering for images in #523, and every family in the vision
+  table lists fine-tuning as not supported; the refusal says "fine-tuned: OpenAI fine-tunes
+  only models it has deprecated". A vision model outside
   the table fails with "is not one IRIS uses for images", not "is not available". Anthropic requests send no `temperature`: API version
   2026-10-21 (SDK 1.0) removed sampling parameters. The #523 request shape was written from
   OpenAI's model pages and migration guide and is pinned by request-shape tests; no live call
@@ -185,6 +196,7 @@ paths:
 - Rows are the **standard** rate: not batch, flex or fast, cached input charged as plain input, and never a promotion (GPT-5.6 Sol is $5/$30, not its $4/$20 to 2026-11-30). The table gates a budget circuit breaker: over-reporting trips it early, under-reporting lets real spend outrun the tracked total. Claude Sonnet 5 is $2/$10: that began as an introductory price, which is why the row said $3/$15 until Anthropic made it the standard one
 - **Long-context tier (#523)**: a row may carry `longContext { aboveInputTokens, costPerInputToken, costPerOutputToken }`; a call with more input tokens than the threshold pays those rates for *all* its tokens (OpenAI: 272K, 2x input and 1.5x output; Claude Haiku 5.5: 100,000 prompt tokens, 5x). Recording, reservations (a text call reserves one token per request character) and `managedCallEstimateUsd` all go through `tokenCost()`, so they agree. `setPricing()` takes the tier as an optional last argument. An unpriced model's estimate has no tier
 - **Deprecated is not the same as shut down (#523)**: a model the vendor has deprecated but still serves keeps its row, marked with the shutdown date, because spend on it is still billed and an unpriced model is charged the dearest rate in the table (over 60 times too much for `gpt-4o-mini`). Delete the row after the date. IRIS no longer *offers* such a model: not a default, not in the vision table, not in the docs
+- **Fine-tuned OpenAI ids have their own rows (#664)**: `ft:<base>:<org>:<suffix>:<id>` (a checkpoint id too) is priced by the row `ft:<base>`, from the "Fine-tuning" table of OpenAI's pricing page (standard inference rate, checked 2026-11-11): `gpt-4o-2024-08-06` $3.75/$15, `gpt-4o-mini-2024-07-18` $0.30/$1.20, `gpt-4.1-2025-04-14` $3/$12, `gpt-4.1-mini-2025-04-14` $0.80/$3.20, each dearer than its base. A fine-tune of any other base (`gpt-3.5-turbo`, an alias without its snapshot date, a base that cannot be fine-tuned) has no rate on the page and stays an estimate at the dearest rate, flagged and warned: the base's own rate would under-report. A `setPricing` row for the whole id wins. Fine-tuning is closed to new users and a fine-tune is served until its base is shut down, so the four rows go with their bases on 2027-01-14
 - The `-pro` OpenAI models have no row on purpose: Responses API only, so IRIS cannot call them, and a row that dear would become every unpriced model's estimate (#388). Claude Mythos has none either (limited availability; priced at or below Fable, the dearest rate, so the estimate never under-reports)
 - `managedCallEstimateUsd` is the dearest registered row *for that call's size*. Adding a dear row raises what every managed call reserves (Fable and GPT-6 Astra took it from $0.065 to $0.13)
 - Ollama (local): $0.00

@@ -55,6 +55,7 @@ function isNonIdentifyingIPv4(ip: string): boolean {
   if (a === 192 && b === 168) return true;
   if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // IETF protocol assignments, TEST-NET-1
   if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
+  if (a === 192 && b === 88 && c === 99) return true; // 6to4 relay anycast (RFC 7526, deprecated)
   if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
   if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
   return ['8.8.8.8', '8.8.4.4', '1.1.1.1', '1.0.0.1'].includes(ip);

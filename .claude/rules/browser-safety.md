@@ -46,6 +46,169 @@ mode is unchanged, and `run` / `watch` have an opt-in `--block-private-hosts`.
   browser with `cov_* is not defined`. Pass a string expression, as
   `src/visual/capture.ts` does (also for `waitForFunction`), or exclude the module from coverage as the a11y
   modules are.
+- **The a11y runner reports the document's URL, read just before axe runs** (#662):
+  `guardedDocumentUrl(page, requested)`, not `guardedGoto`'s return value, which is the last
+  HTTP response of the navigation asked for and stays the first page when a script, a meta
+  refresh or a router moves on. It throws when the page holds Chromium's error page
+  (`chrome-error:`, what a refused or failed move leaves behind) or a URL the page's policy
+  refuses, in the words of a refused HTTP redirect ("redirects to …, which is blocked by
+  navigation policy"), so the MCP tools' fixed reasons apply. Under `IRIS_HOSTED` a move to
+  a name the egress proxy refuses is the proxy's 403 document over http, which
+  `failOnHttpError` fails first, and a refused CONNECT (the error page) over https. The
+  runner drops the fragment and any credentials before reporting (`reportedUrl`), as the
+  response's URL had none. Read once, and the checks that only read the page are held to it
+  (next item).
+  `guardedGoto` itself is unchanged for the executor, watcher and visual runner.
+- **Every a11y check is held to the scanned document** (#669):
+  `onScannedDocument(page, scanned, check, moveIsTheChecksOwn?)`
+  (src/a11y/scan-navigation.ts) turns a check's result *or* error into
+  `NavigatedDuringScanError` ("The page navigated during the scan: it was at <scanned URL>
+  …", never the destination; the destroyed check's error is its `cause`) when the page's
+  scheme, host or path differs once the check has settled. A page that moves on by timer
+  after `networkidle` used to die on a raw protocol error or report the second document
+  under the first URL. Query-only and fragment-only changes within the document are not
+  moves (as in #662); a router that pushes another path is a move. Before reading
+  `page.url()` it makes a page call until one answers (five at most): the failed check can reach its `catch` before Playwright has
+  processed the navigation's commit, and without that the URL read is the old one (the
+  tests fail without it). The runner then asks `guardedDocumentUrl` first, so a move the
+  policy refused or that could not be loaded keeps #662's words.
+  - **Order is axe, screen reader, keyboard.** The keyboard checks press keys, and a key
+    may leave the page on purpose (an Escape handler that navigates passes, #286), so they
+    run last and their move is their own when `KeyboardTester.navigatedByKey` is set or
+    custom sequences are configured. The tester sets the flag when the check after an
+    Escape press died on a navigation **or the URL differs once it answered**: the check
+    often runs on the page Escape went to and just answers "gone". With default settings
+    the keyboard walk is where a 1 to 2 s timer lands (axe is done in half a second on an
+    ordinary page), so holding only axe would have fixed slow pages alone.
+  - **A reload is a move too, told by the document and not the URL** (#675): the runner
+    holds the scanned document (`holdDocument(page, url)`: a JS handle to `document`) and
+    `onScannedDocument` takes that `HeldDocument`. A cross-document navigation destroys the
+    handle's execution context whatever the URL (`location.reload()`, the same path under
+    another query string); `pushState`, `replaceState` and a fragment change leave it
+    alive (measured in Chromium). `replaced()` is "the handle no longer answers and the
+    page does", so a closed page is not a reload and a hung one is not either. No CDP
+    session and no event: nothing lags behind `page.url()` (the #673 lesson). The message
+    ends "… and loaded again before its checks finished" and the MCP reason is "the page
+    reloaded during the scan", chosen by the message's end (`saysReloaded`), which the
+    runner writes after the URL. A fake page in a mocked suite needs `evaluateHandle`
+    resolving to `{ evaluate, dispose }`.
+  - **Arrow keys are the tester's own keys as well** (#675): `navigatedByKey` is set when
+    the check after an Escape *or ArrowDown* press died on a navigation, or
+    `documentSince(page, held)` is not `same` once it answered: `replaced` (another
+    document: the key navigated or reloaded the page) or `moved` (the same document under
+    another origin or path, a router's `pushState`). A query string or fragment the key
+    rewrote is `same`, the rule the scan itself uses (tabs that sync to `#tab` were failed
+    by a whole-URL comparison; the internal review showed it). An ArrowDown that
+    *replaced* the document is a failed interaction, "The page navigated"; the other
+    widgets were on the page it left, and the Escape check goes back to the start page
+    when any key left it. After `moved`, focus is judged as usual. Playwright's next page
+    call waits for a navigation the key started synchronously, even when the response
+    takes 1.5 s (measured), so "the check right after the key" is reliable for those.
+  - **The tester's own reload is not the page's** (#675): the Escape check reloads the page
+    (or goes back to the start URL) after the trap check, inside the held keyboard check,
+    which replaces the scanned document on every page with a dialog. It holds the document
+    it loaded (`KeyboardTester.reloadedInto`) and `onScannedDocument`'s fifth argument
+    hands that to the hold, which asks it instead of the scanned one; the URL comparison
+    is unchanged. The first version of #675 failed every such page as "loaded again"
+    (default `iris a11y` and every hosted a11y job): a fixture with a dialog that stays
+    and both checks on is the test that was missing.
+  - **The return to the start page does not cover a move the page made itself** (#679): the
+    Escape check goes back only when a dialog was examined or a key left the page, and it
+    used to go back whatever had happened to the page. A page that moved by itself during
+    the Tab walk to a page with a dialog (or one with a dialog that loaded again, or whose
+    router pushed a path) was put back under the start URL, the runner saw no move, and
+    the second page's focus order and trap result were reported under the first (shown in
+    Chromium on main). `KeyboardTester.run(page, name, scanned?)` takes the document the
+    runner holds (without one it holds the document it began on) and, when no key of its
+    own left the page, asks before going back whether the page still has that document
+    under that origin and path (`documentNow`, which does not release the caller's handle):
+    anything but `same` sets `movedByItself` and throws without going back, so the runner's
+    hold names the move. The runner's document and not one taken when the keyboard checks
+    begin: a reload between two checks would otherwise be the start. The runner does not
+    take that move for a custom sequence's either (`keysMayNavigate && !movedByItself`;
+    the sequences run after the Escape check). A query string or fragment the page rewrote
+    is still `same`, and the tester goes back.
+    **The tester names that move itself** (#683): it throws `NavigatedDuringScanError`
+    (under the URL of the document it was given; "loaded again" when the page is at the
+    same origin and path) and `run` lets that one error through without its "Keyboard
+    testing failed:" prefix. It used to throw a plain error and leave the naming to the
+    runner's hold, which reads the page a moment later: a router that pushed another path
+    and then the first one back in between left the plain error, and the MCP tools' fixed
+    reason did not apply. When the hold still sees the move it names it as before, with the
+    tester's error as `cause`.
+    **`reloadedInto` is released** (#683): by the runner once the held keyboard check has
+    settled (the hold has asked it by then), and by the tester when its next `run` begins,
+    for a caller that keeps one page across runs and never asks.
+    The real-Chromium tests move the page from a zero-delay timer once the Tab walk has
+    reached a link (150 links). They show the outcome, not the branch: a navigation often
+    kills the walk's own page call first, which fails the page by name on main as well
+    (measured: the reload case nearly always, the move to another page about half the
+    time; only the router case is red on main every run). The branch itself is pinned in
+    `keyboard-tester.test.ts` on a fake page, where every mutation of it fails a test.
+  - `holdDocument` tries once more when a navigation commits as it takes the handle; a
+    move away from the URL read is then seen by the URL.
+  - **A handler that navigates after a delay is the page's move, by decision** (#675):
+    nothing outside the page ties a later navigation to an earlier key, and a time window
+    after each key would hand the page's own timers back to the keys. A test pins it.
+  - Not seen: a move after the last check finished (the results are the first page's), and
+    a timer move that lands right after one of the tester's Escape or arrow presses (taken
+    for the key's).
+  - The MCP tools' fixed reason is "the page navigated to another page during the scan",
+    matched first and anchored, since the message quotes a URL the page chose.
+  - `__tests__/a11y/scan-navigation.test.ts` launches Chromium through Playwright itself,
+    so it runs where sandboxed Chromium cannot start. Its fixtures move 2 s after their
+    response (idle comes at 0.5 s) and `scanned()` asserts the URL read was the first
+    page's; the runner cases in `runner-url-policy.test.ts` use a page large enough that
+    axe outlasts the timer.
+- **The refusal a failed navigation is explained by is the main frame's** (#668): the page
+  session records a refused `Document` only when the request's `frameId` is the page's
+  target id (a top-level frame's id is its target id, read with `Target.getTargetInfo`
+  before `Fetch.enable`). A refused `<iframe>` is still refused, but it is no longer quoted
+  by `guardedGoto` or `guardedDocumentUrl` when the main document then fails for another
+  reason. A fake CDP session in a test must answer `Target.getTargetInfo` with a
+  `targetInfo.targetId`, on a context without a browser too.
+  `__tests__/url-policy-guard-refusal.test.ts` drives the handler on a stand-in session;
+  `url-policy-guard.test.ts` launches Chromium through Playwright itself, not through
+  `launchBrowser()`, which is why it runs where sandboxed Chromium cannot start.
+- **The refusal an error page is explained by is that of the navigation that left it**
+  (#673), **and which navigation that is, is asked of the browser** (#677): a refused
+  main-frame document is recorded by its navigation's id (the paused request's `networkId`,
+  the same on every redirect hop, on the page session and on the browser net) in
+  `GuardState.refusals`, the newest `MAX_REMEMBERED_REFUSALS` (16). `guardedDocumentUrl` is
+  **async**: when `page.url()` is an error page it sends `Page.getFrameTree` on the guard's
+  own session and looks the main frame's `loaderId` up. So a refused move followed by a
+  move that failed for another reason (a refused port, a name that does not resolve) gets
+  "moved on to a page that could not be loaded", the reverse order the refusal, and a
+  refused move a second refused move overtook its own reason. Things to know:
+  - Do not go back to state set from `Page.frameNavigated`: the guard's session hears of a
+    commit a moment after Playwright's `page.url()` shows it, and read in that moment a
+    second error page was explained by the first one's reason (#673 shipped that way; the
+    three real-Chromium #673 cases read straight after `framenavigated`, with no page call
+    in between, and fail on it). `Page.getFrameTree` needs no `Page.enable`; the session
+    enables only `Fetch`.
+  - Not a URL comparison: the error page's `unreachableUrl` has the fragment, the paused
+    request's URL does not.
+  - If the frame tree no longer shows an error page (no `unreachableUrl`: the page moved on
+    between the two reads), its `url` plus `urlFragment` is the document's URL and goes
+    through the policy check like any other.
+  - `guardedGoto` still reads the latest refusal, which it resets itself.
+  - A guard session that cannot answer (the page closed meanwhile) gives the generic
+    reason, not the protocol error, so the a11y runner's `NavigatedDuringScanError` path
+    never trades its error for one.
+  - A fake CDP session behind a test that reaches an error page must answer
+    `Page.getFrameTree` with `frameTree.frame` (`loaderId`, `url`, and `unreachableUrl`
+    for an error page), as `a11y-runner.test.ts` does.
+  - Limit: a refusal older than the newest 16 on its page explains nothing; its error page
+    gets the generic reason.
+  - Limit, kept on purpose (#681): a popup's opening navigation refused while the popup
+    still runs on its opener's guard is not recorded (it would overwrite the opener's), so
+    `guardedDocumentUrl(popup, …)` on that error page gives the generic reason. Nothing
+    reads a popup today (the a11y runner scans the page it opened); the read still fails,
+    pinned in `url-policy-guard.test.ts`. If a caller starts reading popups, let the browser
+    net keep an inherited target's refusals by navigation id and hand them to the popup's
+    guard in `joinBrowserNet`. An opening request refused outright (no redirect) may be
+    answered by the context route instead, which records nothing either; measure which
+    layer answers first before building on one.
 - Hostnames that *resolve* to private addresses are the egress proxy's job, below.
 
 ### URL Guard: Popups, Pins, Opaque Starts (issue #337)

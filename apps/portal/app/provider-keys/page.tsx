@@ -2,7 +2,7 @@ import Link from "next/link"
 
 import { orgEntitlements } from "../../../../src/billing/plans"
 import {
-  managedSpendThisMonth,
+  managedCreditLeft,
   orgAiSettings,
 } from "../../../../src/billing/managed-ai"
 import {
@@ -11,7 +11,7 @@ import {
   RemoveProviderKeyButton,
 } from "@/components/provider-key-forms"
 import { getDb } from "@/lib/auth"
-import { SuspendedBanner } from "@/components/contact-link"
+import { OrgBanner } from "@/components/contact-link"
 import { isManager, requireOrg } from "@/lib/org"
 import { getProviderKeys } from "@/lib/provider-keys"
 
@@ -30,22 +30,21 @@ const when = (date: Date) =>
  * this org's AI calls. With keys for both vendors, the one saved last is used.
  */
 export default async function ProviderKeysPage() {
-  const { org, role, suspended } = await requireOrg()
+  const { org, role, suspended, payment } = await requireOrg()
   const stored = await getProviderKeys().list(org.id)
   // A member may hold several roles, stored comma-separated.
   const manager = isManager(role)
   // How the org pays for AI (#479) and what is left of this month's credit.
   const db = getDb()
-  const [mode, plan, spent] = await Promise.all([
+  const [mode, plan] = await Promise.all([
     orgAiSettings(db).get(org.id),
     orgEntitlements(db).get(org.id),
-    managedSpendThisMonth(db, org.id),
   ])
   const credit = plan.managedAiCreditUsdPerMonth
-  const left = Math.max(credit - spent, 0)
+  const left = await managedCreditLeft(db, org.id, credit)
   return (
     <main className="flex min-h-svh flex-col gap-6 p-6">
-      {suspended && <SuspendedBanner />}
+      <OrgBanner suspended={suspended} payment={payment} />
       <div className="flex flex-col gap-1">
         <h1 className="font-heading text-lg font-medium">
           AI provider keys for {org.name}

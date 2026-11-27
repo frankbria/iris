@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { once } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -24,7 +24,7 @@ const compose = read('docker-compose.staging.yml')
   .filter((line) => !/^\s*#/.test(line))
   .join('\n');
 
-describe('docker-compose.staging.yml hardening (issue #332)', () => {
+describe('docker-compose.staging.yml (token mode) hardening (issue #332)', () => {
   it('reaps Chromium children with an init process as PID 1', () => {
     expect(compose).toMatch(/^\s+init: true$/m);
   });
@@ -133,17 +133,13 @@ describe('Dockerfile and deploy wiring (issue #332)', () => {
     expect(read('docker-compose.staging.yml')).toMatch(/^\s+IRIS_DATA_DIR: \/data$/m);
   });
 
-  it('ships the seccomp profile and the token file to the host, and not the token in .env', () => {
+  it('ships the seccomp profile with both deploys: the compose files reference it', () => {
     const ci = read('.github/workflows/ci.yml');
-    expect(ci).toMatch(/docker\/seccomp-chromium\.json/);
-    expect(ci).toMatch(/\/opt\/iris\/secrets\/connect_token/);
-    expect(ci).not.toMatch(/IRIS_CONNECT_TOKEN=%s/);
-    // The token is read once at startup; a rotated file needs a new container.
-    expect(ci).toMatch(/docker compose up -d --force-recreate/);
+    expect(ci.match(/^\s+scp .* docker\/seccomp-chromium\.json /gm)).toHaveLength(2);
   });
 });
 
-describe('staging Postgres and migrations (issue #248)', () => {
+describe('token-mode compose Postgres (issue #248)', () => {
   const postgres = compose.slice(compose.indexOf('\n  postgres:'), compose.indexOf('\nvolumes:'));
 
   it('keeps Postgres off the host: no published port', () => {
@@ -157,16 +153,6 @@ describe('staging Postgres and migrations (issue #248)', () => {
     expect(compose).not.toMatch(/^\s+(DATABASE_URL|POSTGRES_PASSWORD):/m);
     expect(compose).toMatch(/^\s+- connect_token\n\s+- database_url$/m);
     expect(compose).toMatch(/depends_on:\n\s+postgres:\n\s+condition: service_healthy$/m);
-  });
-
-  it('migrates from the new image after pull and before up, and stops the deploy if it fails', () => {
-    const ci = read('.github/workflows/ci.yml');
-    expect(ci).toMatch(
-      /docker compose pull --quiet \\\s+&& docker compose up -d --wait postgres \\\s+&& docker compose run --rm --no-deps --entrypoint node iris dist\/db\/migrate\.js \\\s+&& docker compose up -d --force-recreate --no-deps --remove-orphans iris;/,
-    );
-    // Generated once on the box: a new password per deploy would not match the
-    // one the existing volume was initialised with.
-    expect(ci).toMatch(/if \[ ! -s pg_password \]; then/);
   });
 });
 
@@ -250,7 +236,7 @@ describe('docker-compose.production.yml (issue #273)', () => {
 
   it('pins every image by digest: a literal @sha256 or a required digest env var', () => {
     const images = [...file.matchAll(/^\s+image: (.*)$/gm)].map((m) => m[1]);
-    expect(images).toHaveLength(4);
+    expect(images).toHaveLength(6);
     for (const image of images) {
       expect(image).toMatch(
         /^(?:[^\s$]+@sha256:[0-9a-f]{64}|\$\{(?:IRIS|PORTAL)_IMAGE:\?[^}]*\})$/,
@@ -324,6 +310,73 @@ describe('docker-compose.production.yml (issue #273)', () => {
     expect(file).toMatch(/^  managed_ai_key:\n    file: \.\/secrets\/managed_ai_key$/m);
   });
 
+  // Stripe billing (#261, #345): the webhook runs in iris, Checkout and the Portal in the portal.
+  const STRIPE = [
+    'IRIS_STRIPE_SECRET_KEY_FILE',
+    'IRIS_STRIPE_WEBHOOK_SECRET_FILE',
+    'IRIS_STRIPE_PRICE_PRO',
+    'IRIS_STRIPE_PRICE_TEAM',
+  ];
+  it.each(['iris', 'portal'])('passes Stripe billing to %s, empty when unset', (name) => {
+    const s = service(name);
+    for (const v of STRIPE) expect(s).toMatch(new RegExp(`^\\s+${v}: \\$\\{${v}:-\\}$`, 'm'));
+    expect(s).toMatch(/^\s+- stripe_secret_key$/m);
+    expect(s).toMatch(/^\s+- stripe_webhook_secret$/m);
+    expect(file).toMatch(/^  stripe_secret_key:\n    file: \.\/secrets\/stripe_secret_key$/m);
+    expect(file).toMatch(
+      /^  stripe_webhook_secret:\n    file: \.\/secrets\/stripe_webhook_secret$/m,
+    );
+  });
+
+  // The meter report runs in the worker (#264, ADR 0001 §1). It runs tenant pages, so it
+  // gets the API key alone: no webhook secret to forge events with, and no prices.
+  it('passes the worker the Stripe key and nothing else of Stripe', () => {
+    const s = service('worker');
+    expect(s).toMatch(/^\s+IRIS_STRIPE_SECRET_KEY_FILE: \$\{IRIS_STRIPE_SECRET_KEY_FILE:-\}$/m);
+    expect(s).toMatch(/^\s+- stripe_secret_key$/m);
+    expect(s.match(/STRIPE_\w+/g)).toEqual(['STRIPE_SECRET_KEY_FILE', 'STRIPE_SECRET_KEY_FILE']);
+    expect(s).not.toMatch(/stripe_webhook_secret/);
+  });
+
+  // The webhook and the sweep run in iris only (#266); the portal reads the stored deadline.
+  // #317: the portal links the public status page from /contact when this is set.
+  it('passes the status page URL to the portal alone, empty when unset', () => {
+    expect(service('portal')).toMatch(/^\s+IRIS_STATUS_URL: \$\{IRIS_STATUS_URL:-\}$/m);
+    expect(service('iris')).not.toMatch(/IRIS_STATUS_URL/);
+    expect(service('worker')).not.toMatch(/IRIS_STATUS_URL/);
+  });
+
+  it('passes the payment grace period to iris alone, empty when unset', () => {
+    const setting = /^\s+IRIS_BILLING_GRACE_DAYS: \$\{IRIS_BILLING_GRACE_DAYS:-\}$/m;
+    expect(service('iris')).toMatch(setting);
+    expect(service('portal')).not.toMatch(/GRACE/);
+    expect(service('worker')).not.toMatch(/GRACE/);
+  });
+
+  it('has the deploy job write the Stripe secrets, and point at them only when set', () => {
+    const ci = read('.github/workflows/ci.yml');
+    const job = ci.slice(ci.indexOf('\n  deploy-production:'));
+    for (const [secret, name] of [
+      ['stripe_secret_key', 'IRIS_STRIPE_SECRET_KEY'],
+      ['stripe_webhook_secret', 'IRIS_STRIPE_WEBHOOK_SECRET'],
+    ]) {
+      expect(job).toContain(`put_secret ${secret} "$${name}"`);
+      expect(job).toContain(
+        `[ -z "$${name}" ] || printf "${name}_FILE='/run/secrets/${secret}'\\n"`,
+      );
+      expect(job).toContain(`${name}: \${{ secrets.${name} }}`);
+    }
+    expect(job).toMatch(/IRIS_STRIPE_PRICE_PRO IRIS_STRIPE_PRICE_TEAM IRIS_BILLING_GRACE_DAYS; do/);
+  });
+
+  // #639: written to settings.env only when the variable is set, so unset keeps the default.
+  it('has the deploy job pass the payment grace period from its variable', () => {
+    const ci = read('.github/workflows/ci.yml');
+    const job = ci.slice(ci.indexOf('\n  deploy-production:'));
+    expect(job).toContain('IRIS_BILLING_GRACE_DAYS: ${{ vars.IRIS_BILLING_GRACE_DAYS }}');
+    expect(ci.slice(0, ci.indexOf('\n  deploy-production:'))).not.toMatch(/GRACE/);
+  });
+
   it('reads the empty defaults as unset, not as a partial configuration (#549)', () => {
     const { resolveArtifactStore } = require('../src/artifact-store');
     const { resolveManagedKey } = require('../src/billing/managed-ai');
@@ -332,6 +385,8 @@ describe('docker-compose.production.yml (issue #273)', () => {
     );
     expect(resolveArtifactStore(empty)).toBeNull();
     expect(resolveManagedKey(empty)).toBeNull();
+    const { resolveStripeConfig } = require('../src/billing/stripe');
+    expect(resolveStripeConfig(Object.fromEntries(STRIPE.map((v) => [v, ''])))).toBeNull();
   });
 
   it('has the deploy job write both secret files, and point at them only when set (#549)', () => {
@@ -347,14 +402,16 @@ describe('docker-compose.production.yml (issue #273)', () => {
     );
   });
 
-  it('publishes iris-api and the portal on loopback only, at the ingress ports (#347)', () => {
+  it('publishes iris-api and the portal on loopback only, at the ingress ports, through the proxy (#347, #316)', () => {
     const ports = [...file.matchAll(/^\s+- '([^']*:\d+)'$/gm)].map((m) => m[1]);
     expect(ports).toEqual([
       '127.0.0.1:${IRIS_API_PORT:-4000}:4000',
       '127.0.0.1:${PORTAL_PORT:-3000}:3000',
     ]);
-    expect(service('postgres')).not.toMatch(/ports:/);
-    expect(service('worker')).not.toMatch(/ports:/);
+    expect(service('proxy')).toMatch(/^\s+ports:\n\s+- '127\.0\.0\.1:\$\{IRIS_API_PORT/m);
+    for (const name of ['postgres', 'worker', 'iris', 'portal']) {
+      expect(service(name)).not.toMatch(/^\s+ports:/m);
+    }
     const nginx = read('deploy/nginx/iris.conf');
     expect(nginx).toMatch(/127\.0\.0\.1:4000/);
     expect(nginx).toMatch(/127\.0\.0\.1:3000/);
@@ -391,6 +448,466 @@ describe('docker-compose.production.yml (issue #273)', () => {
       expect(file).toMatch(
         new RegExp(`^  ${secret}:\\n\\s+file: \\.\\./\\.\\./shared/secrets/${secret}$`, 'm'),
       );
+    }
+  });
+});
+
+/**
+ * Staging runs the hosted stack (#440): the production compose file through deploy.sh,
+ * in its own directory and compose project, so `staged-<sha>` proves what production
+ * then promotes. Only a merge to main runs the job, so these pin its shape.
+ */
+describe('container egress firewall (issue #376)', () => {
+  const nonComment = (name: string) =>
+    read(name)
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+  const egress = nonComment('docker-compose.production.yml').match(
+    /^  egress:\n((?:(?:    .*)?\n)*)/m,
+  )![1];
+  const script = nonComment('docker/egress-firewall.sh');
+  const deploy = nonComment('deploy/deploy.sh');
+
+  it('runs the firewall script from the iris image, on the host network, with NET_ADMIN alone', () => {
+    expect(egress).toMatch(/^\s+image: \$\{IRIS_IMAGE:\?[^}]*\}$/m);
+    expect(egress).toMatch(/^\s+entrypoint: \['bash', '\/app\/docker\/egress-firewall\.sh'\]$/m);
+    expect(egress).toMatch(/^\s+network_mode: host$/m);
+    expect(egress).toMatch(
+      /^\s+cap_drop:\n\s+- ALL\n\s+cap_add:\n\s+- NET_ADMIN\n\s+- NET_RAW\n\s+security_opt:/m,
+    );
+    expect(egress).toMatch(/^\s+- no-new-privileges:true$/m);
+    expect(egress).toMatch(/^\s+read_only: true$/m);
+    expect(egress).toMatch(/^\s+restart: unless-stopped$/m);
+    expect(egress).toMatch(/^\s+IRIS_EGRESS_BRIDGE: \$\{IRIS_EGRESS_BRIDGE:-\}$/m);
+    expect(egress).toMatch(
+      /test: \['CMD', 'bash', '\/app\/docker\/egress-firewall\.sh', 'check'\]/,
+    );
+    expect(egress).not.toMatch(/privileged|ports:|volumes:|secrets:/);
+  });
+
+  it('refuses private, CGNAT, link-local (metadata) and reserved ranges, TCP with a reset', () => {
+    const denied = script
+      .match(/^denied=\(\n([\s\S]*?)\n\)$/m)![1]
+      .trim()
+      .split(/\s+/);
+    for (const range of [
+      '0.0.0.0/8',
+      '10.0.0.0/8',
+      '100.64.0.0/10',
+      '127.0.0.0/8',
+      '169.254.0.0/16',
+      '172.16.0.0/12',
+      '192.0.0.0/24',
+      '192.0.2.0/24',
+      '192.168.0.0/16',
+      '198.18.0.0/15',
+      '198.51.100.0/24',
+      '203.0.113.0/24',
+      '224.0.0.0/4',
+      '240.0.0.0/4',
+    ]) {
+      expect(denied).toContain(range);
+    }
+    expect(script).toContain('-d $range -p tcp -j REJECT --reject-with tcp-reset');
+    expect(script).toContain('-d $range -j REJECT --reject-with icmp-admin-prohibited');
+    // Routed traffic leaving the bridge, and traffic to the host itself.
+    expect(script).toContain('DOCKER-USER -i $bridge ! -o $bridge -j $chain');
+    expect(script).toContain('INPUT -i $bridge -j $chain');
+  });
+
+  it('exempts DNS to the host resolvers only, and keeps both jumps first (codex review)', () => {
+    // No blanket port-53 exemption: a private address must not be reachable on 53.
+    expect(script).not.toMatch(/^\s+echo "-p (udp|tcp) --dport 53 -j RETURN"$/m);
+    expect(script).toContain('echo "-d $resolver/32 -p udp --dport 53 -j RETURN"');
+    expect(script).toMatch(/\$2 !~ \/\^127\\\.\//);
+    // A rule above a jump (ufw's ACCEPTs) fails the check; the repair re-inserts at 1.
+    expect(script).toContain('sed -n 2p)" = "-A $rule" ] || return 1');
+    expect(script).toContain('"$ipt" -w -I ${rule/ / 1 }');
+  });
+
+  it('ships the script and the probe in the iris image, with iptables', () => {
+    const runtime = nonComment('Dockerfile').split(/^FROM .* AS runtime$/m)[1];
+    expect(runtime).toMatch(/apt-get install -y --no-install-recommends iptables/);
+    expect(runtime).toMatch(/^COPY docker\/egress-firewall\.sh \.\/docker\/egress-firewall\.sh$/m);
+    expect(runtime).toMatch(/^COPY docker\/egress-probe\.js \.\/docker\/egress-probe\.js$/m);
+  });
+
+  it('has deploy.sh start it on the bridge before the gates and probe before switching', () => {
+    expect(deploy).toMatch(/grep -vxF -e iris -e worker -e portal -e egress/);
+    expect(deploy).toMatch(/\{\{\.EnableIPv6\}\}/);
+    expect(deploy).toMatch(/^printf 'IRIS_EGRESS_BRIDGE=%s\\n' "\$bridge" >> \.env$/m);
+    const start = deploy.indexOf('up -d --wait --wait-timeout "$wait_timeout" egress');
+    expect(start).toBeGreaterThan(0);
+    expect(start).toBeLessThan(deploy.indexOf('verify-smtp.js'));
+    expect(deploy).toMatch(/docker exec "\$id" node docker\/egress-probe\.js/);
+    // Both ways to the switch probe the new containers first (#316 moved them).
+    expect(deploy).toMatch(/wait_healthy "\$\{new\[@\]\}" && egress_probe "\$\{new\[@\]\}"/);
+    expect(deploy).toMatch(/&& egress_probe "\$\{serving\[@\]\}" \\\n\s+&& switch_proxy/);
+  });
+});
+
+describe('zero-downtime deploys (issue #316)', () => {
+  const nonComment = (name: string) =>
+    read(name)
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+  const proxy = nonComment('docker-compose.production.yml').match(
+    /^  proxy:\n((?:(?:    .*)?\n)*)/m,
+  )![1];
+  const deploy = read('deploy/deploy.sh');
+
+  it('runs a digest-pinned nginx as the one holder of the host ports, hardened', () => {
+    expect(proxy).toMatch(/^\s+image: nginx:[\w.-]+@sha256:[0-9a-f]{64}$/m);
+    expect(proxy).toMatch(/^\s+- \.\.\/\.\.\/shared\/proxy:\/etc\/iris-proxy:ro$/m);
+    expect(proxy).toMatch(/^\s+user: '101:101'$/m);
+    expect(proxy).toMatch(/^\s+cap_drop:\n\s+- ALL$/m);
+    expect(proxy).toMatch(/^\s+- no-new-privileges:true$/m);
+    expect(proxy).toMatch(/^\s+read_only: true$/m);
+    expect(proxy).toMatch(/^\s+restart: unless-stopped$/m);
+  });
+
+  it('proxies TCP (sessions and headers pass through) and lets old workers finish on reload', () => {
+    const conf = deploy.match(/<<'NGINX'\n([\s\S]*?)\nNGINX\n/)![1];
+    expect(conf).toMatch(/^stream \{$/m);
+    expect(conf).not.toMatch(/^http \{|proxy_set_header/m);
+    expect(conf).toMatch(/^worker_shutdown_timeout 1h;$/m);
+    expect(conf).toMatch(/resolver 127\.0\.0\.11/);
+    expect(conf).toMatch(/listen 4000; proxy_pass iris_api;/);
+    expect(conf).toMatch(/listen 3000; proxy_pass portal;/);
+    // By name (follows a restart) and, until the name resolves, by address (codex review).
+    expect(deploy).toMatch(/server %s:%s resolve; server %s:%s backup;/);
+  });
+
+  it('switches only after the new containers are healthy and probed, then drains the old ones', () => {
+    const rolling = deploy.slice(deploy.indexOf('# Rolling (#316)'));
+    const order = [
+      '--no-recreate "${scale[@]}"',
+      'wait_healthy "${new[@]}"',
+      'switch_proxy "$(new_of iris)"',
+      'point_current "$release"',
+      'open_connections "$id"',
+      'docker rm -f "${old[@]}"',
+    ].map((step) => rolling.indexOf(step));
+    expect(order.every((i) => i > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(deploy).toMatch(/^drain_timeout=\$\{DEPLOY_DRAIN_TIMEOUT:-300\}$/m);
+    // The old worker gets SIGTERM (stop after the current job) with the whole drain window.
+    expect(deploy).toMatch(/docker stop -t "\$drain_timeout" "\$id"/);
+  });
+
+  it('has deploy-staging hold a session across deploy.sh and fail a rolling deploy that drops one', () => {
+    const ci = read('.github/workflows/ci.yml');
+    const staging = ci.slice(ci.indexOf('  deploy-staging:'), ci.indexOf('  deploy-production:'));
+    const production = ci.slice(ci.indexOf('  deploy-production:'));
+    expect(staging).toMatch(/scp .* scripts\/rollout-watch\.js /);
+    const start = staging.indexOf('/watch/rollout-watch.js $IRIS_API_PORT $PORTAL_PORT');
+    expect(start).toBeGreaterThan(0);
+    expect(start).toBeLessThan(staging.indexOf('./deploy.sh; \\'));
+    expect(staging).toMatch(
+      /jq -e '\.held\.failed == 0 and \.held\.sockets == 1 and \.held\.spannedSwitch and \.fresh\.failed == 0'/,
+    );
+    expect(production).not.toMatch(/rollout-watch/);
+  });
+
+  it("keeps the portal's auth rate limits in the database, shared by both portals", () => {
+    expect(read('apps/portal/lib/auth.ts')).toMatch(/rateLimit: \{ storage: "database" \}/);
+    expect(read('src/db/migrate.ts')).toMatch(/'0023_auth_rate_limit': authRateLimit/);
+  });
+});
+
+describe('deploy-staging runs the hosted stack (issue #440)', () => {
+  const ci = read('.github/workflows/ci.yml');
+  const uncomment = (text: string) =>
+    text
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+  const staging = uncomment(
+    ci.slice(ci.indexOf('\n  deploy-staging:\n'), ci.indexOf('\n  deploy-production:\n')),
+  );
+  const production = uncomment(ci.slice(ci.indexOf('\n  deploy-production:\n')));
+  const steps = staging.split(/\n {6}- /);
+  const stepIndex = (name: string) => steps.findIndex((s) => s.includes(`name: ${name}\n`));
+
+  it('deploys docker-compose.production.yml with deploy.sh, not the token-mode file', () => {
+    expect(staging).toContain(
+      'scp "${ssh_opts[@]}" docker-compose.production.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.yml"',
+    );
+    expect(staging).toContain(
+      'scp "${ssh_opts[@]}" deploy/deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:$release/deploy.sh"',
+    );
+    expect(staging).toContain("IRIS_IMAGE='$IRIS_IMAGE' PORTAL_IMAGE='$PORTAL_IMAGE' ./deploy.sh;");
+    expect(staging).not.toMatch(/docker-compose\.staging\.yml/);
+    expect(staging).not.toMatch(/IRIS_CONNECT_TOKEN/);
+  });
+
+  it('keeps apart from production: its own deploy directory and compose project', () => {
+    expect(staging).toMatch(/^\s+DEPLOY_DIR: \/opt\/iris-staging$/m);
+    expect(production).toMatch(/^\s+DEPLOY_DIR: \/opt\/iris-production$/m);
+    expect(staging).toContain(`printf "COMPOSE_PROJECT_NAME='iris-staging'\\n"`);
+    expect(staging).toContain(
+      'release="$DEPLOY_DIR/releases/staging-${GITHUB_SHA::12}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
+    );
+  });
+
+  it('fails by name when the box is configured and a hosted setting is missing', () => {
+    expect(staging).toContain('for name in BETTER_AUTH_SECRET SMTP_URL PORTAL_URL SMTP_FROM; do');
+    expect(staging).toContain('::error::The staging environment is missing:');
+    for (const name of ['BETTER_AUTH_SECRET', 'SMTP_URL']) {
+      expect(staging).toContain(`${name}: \${{ secrets.${name} }}`);
+    }
+    for (const name of ['PORTAL_URL', 'SMTP_FROM']) {
+      expect(staging).toContain(`${name}: \${{ vars.${name} }}`);
+    }
+    expect(staging).toContain('::error::PORTAL_URL must be https');
+    // Still skips when there is no box at all (a fork).
+    expect(staging).toContain('::notice::Staging secrets not configured - skipping deploy.');
+  });
+
+  // The same secret files and the same _FILE pointers as production, so the deploy
+  // that gates production's promotion configures the services the same way.
+  it("writes the release's secrets and optional settings as production does", () => {
+    const lines = (text: string) =>
+      [
+        ...text.matchAll(
+          /^\s+(put_secret \w+ "\$\w+"|\[ -z "\$\w+" \] \|\| printf "\w+_FILE=.*)$/gm,
+        ),
+      ].map((m) => m[1]);
+    expect(lines(staging)).toHaveLength(10);
+    expect(lines(staging)).toEqual(lines(production));
+    const optional =
+      /for name in IRIS_SECURITY_CONTACT IRIS_ABUSE_CONTACT IRIS_SUPPORT_CONTACT IRIS_SECURITY_TXT_EXPIRES_DAYS \\\n\s+IRIS_S3_ENDPOINT IRIS_S3_BUCKET IRIS_S3_REGION IRIS_S3_ACCESS_KEY_ID IRIS_MANAGED_AI_PROVIDER \\\n\s+IRIS_STRIPE_PRICE_PRO IRIS_STRIPE_PRICE_TEAM/;
+    // Staging also takes the status page URL (#317); production's job is the owner's to extend.
+    expect(staging).toMatch(new RegExp(`${optional.source} IRIS_STATUS_URL; do`));
+    // Production also takes the payment grace period (#639); staging runs no Stripe sweep.
+    expect(production).toMatch(new RegExp(`${optional.source} IRIS_BILLING_GRACE_DAYS; do`));
+    expect(staging).toContain("if [ ! -s master_key ]; then printf 'k1:%s'");
+    expect(staging).toContain('if [ ! -s pg_password ]; then');
+  });
+
+  it("publishes on loopback ports that default apart from production's", () => {
+    expect(staging).toContain("IRIS_API_PORT: ${{ vars.IRIS_API_PORT || '14000' }}");
+    expect(staging).toContain("PORTAL_PORT: ${{ vars.PORTAL_PORT || '13000' }}");
+    expect(staging).toContain(`printf 'IRIS_API_PORT=%d\\nPORTAL_PORT=%d\\n'`);
+  });
+
+  it('deploys the digests it built, and records staged-<sha> only after the deploy', () => {
+    expect(staging).toContain(
+      'IRIS_IMAGE: ghcr.io/${{ github.repository }}@${{ steps.iris_image.outputs.digest }}',
+    );
+    expect(staging).toContain(
+      'PORTAL_IMAGE: ghcr.io/${{ github.repository }}-portal@${{ steps.portal_image.outputs.digest }}',
+    );
+    const deploy = stepIndex('Deploy');
+    expect(deploy).toBeGreaterThan(0);
+    expect(stepIndex('Record the staged digests')).toBe(steps.length - 1);
+    expect(stepIndex('Record the staged digests')).toBe(deploy + 1);
+    // The runner-side portal boot (#273) is gone: staging serves the portal itself.
+    expect(staging).not.toMatch(/portal-smoke/);
+  });
+
+  it('proves Chromium in iris and the worker, and both host ports, after deploy.sh', () => {
+    const deploy = steps[stepIndex('Deploy')];
+    const smoke = deploy.slice(deploy.indexOf('./deploy.sh;'));
+    expect(smoke).toContain('for service in iris worker; do');
+    expect(smoke).toContain('require(\\"./dist/browser\\").launchBrowser()');
+    expect(smoke).toContain('docker compose exec -T iris node dist/cli.js --version');
+    expect(smoke).toContain('http://127.0.0.1:$IRIS_API_PORT/health/ready');
+    expect(smoke).toContain('http://127.0.0.1:$PORTAL_PORT/api/health');
+  });
+
+  // Compose takes COMPOSE_PROJECT_NAME from the project's .env over the file's top-level
+  // `name: iris-production`; deploy.sh writes .env from settings.env. Needs only the
+  // docker CLI (no daemon): required under CI, skipped locally without it.
+  const composeCli = (() => {
+    try {
+      execFileSync('docker', ['compose', 'version'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      if (process.env.CI) throw new Error('docker compose is required in CI');
+      return false;
+    }
+  })();
+  (composeCli ? it : it.skip)('names the compose project iris-staging through settings.env', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-staging-name-'));
+    try {
+      fs.copyFileSync(
+        path.join(ROOT, 'docker-compose.production.yml'),
+        path.join(dir, 'docker-compose.yml'),
+      );
+      const digest = `sha256:${'a'.repeat(64)}`;
+      fs.writeFileSync(
+        path.join(dir, '.env'),
+        "COMPOSE_PROJECT_NAME='iris-staging'\nPORTAL_URL='https://staging.example'\n" +
+          `SMTP_FROM='IRIS <no-reply@example.com>'\nIRIS_IMAGE=ghcr.io/o/iris@${digest}\n` +
+          `PORTAL_IMAGE=ghcr.io/o/iris-portal@${digest}\nIRIS_API_PORT=14000\nPORTAL_PORT=13000\n`,
+      );
+      const config = JSON.parse(
+        execFileSync('docker', ['compose', 'config', '--format', 'json', '--no-path-resolution'], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            DOCKER_CONFIG: process.env.DOCKER_CONFIG ?? '',
+          },
+        }),
+      ) as { name: string; services: Record<string, { ports?: { published: string }[] }> };
+      expect(config.name).toBe('iris-staging');
+      // Published by the proxy since #316.
+      expect(config.services.proxy.ports?.map((p) => p.published)).toEqual(['14000', '13000']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Staging's own object store (issue #514): SeaweedFS from a staging-only compose file
+ * that deploy-staging copies into the release and names in COMPOSE_FILE. Production
+ * never gets it, and its key is generated on the box, never a workflow secret.
+ */
+describe('staging object store (issue #514)', () => {
+  const uncomment = (text: string) =>
+    text
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n');
+  const store = uncomment(read('docker-compose.staging-s3.yml'));
+  const ci = read('.github/workflows/ci.yml');
+  const staging = uncomment(
+    ci.slice(ci.indexOf('\n  deploy-staging:\n'), ci.indexOf('\n  deploy-production:\n')),
+  );
+  const production = uncomment(ci.slice(ci.indexOf('\n  deploy-production:\n')));
+
+  it('runs SeaweedFS pinned exactly as in CI, with identities, on loopback, in a named volume', () => {
+    const image = /^\s+image: (chrislusf\/seaweedfs:[\d.]+@sha256:[0-9a-f]{64})$/m.exec(store)?.[1];
+    expect(image).toBeDefined();
+    expect(ci).toContain(`            ${image} \\\n            server -s3 -s3.config=`);
+    expect(store).toContain(
+      "command: ['server', '-dir=/data', '-s3', '-s3.config=/run/secrets/seaweedfs_s3']",
+    );
+    expect(store).toMatch(/^ {6}- '127\.0\.0\.1:\$\{IRIS_S3_PORT:-18333\}:8333'$/m);
+    expect(store).toMatch(/^ {6}- seaweedfs-data:\/data$/m);
+    expect(store).toMatch(/^volumes:\n {2}seaweedfs-data:$/m);
+    // Shared, not per release: compose does not recreate the store when only a secret
+    // file's path changes, so a pruned release would take its bind source away.
+    expect(store).toMatch(
+      /^ {2}seaweedfs_s3:\n {4}file: \.\.\/\.\.\/shared\/secrets\/seaweedfs_s3\.json$/m,
+    );
+    expect(store).toMatch(/^\s+- no-new-privileges:true$/m);
+    expect(store).toMatch(/^\s+mem_limit: \d+[mg]$/m);
+  });
+
+  it('reaches staging alone: deploy-staging copies it and names it in COMPOSE_FILE', () => {
+    expect(staging).toContain(
+      'scp "${ssh_opts[@]}" docker-compose.staging-s3.yml "$DEPLOY_USER@$DEPLOY_HOST:$release/docker-compose.staging-s3.yml"',
+    );
+    expect(staging).toContain(
+      `printf "COMPOSE_FILE='docker-compose.yml:docker-compose.staging-s3.yml'\\n"`,
+    );
+    expect(production).not.toMatch(/staging-s3|seaweedfs|COMPOSE_FILE/);
+    expect(read('docker-compose.production.yml')).not.toMatch(/seaweedfs/);
+  });
+
+  it('generates the key on the box once and points the services at it only with an endpoint', () => {
+    expect(staging).toContain('if [ ! -s s3_secret_access_key ]; then head -c 32 /dev/urandom');
+    expect(staging).toContain('mv seaweedfs_s3.json.new seaweedfs_s3.json');
+    // The image's entrypoint drops to `seaweed` (uid 1000) before reading it (codex review).
+    expect(staging).toContain('chown 1000:1000 seaweedfs_s3.json; chmod 400 seaweedfs_s3.json');
+    // A new file renamed over put_secret's read-only one (codex review): no truncation.
+    expect(staging).toContain(
+      `printf '%s' \\"\\$key\\" > $release/secrets/s3_secret_access_key.new`,
+    );
+    expect(staging).toContain(
+      'mv $release/secrets/s3_secret_access_key.new $release/secrets/s3_secret_access_key"',
+    );
+    // Never a workflow secret; bucket and key id only with the endpoint (a partial
+    // configuration exits 3).
+    expect(staging).not.toMatch(/secrets\.IRIS_S3_/);
+    expect(staging).toContain(
+      "IRIS_S3_BUCKET: ${{ vars.IRIS_S3_ENDPOINT && 'iris-staging' || '' }}",
+    );
+    expect(staging).toContain(
+      "IRIS_S3_ACCESS_KEY_ID: ${{ vars.IRIS_S3_ENDPOINT && 'iris-staging' || '' }}",
+    );
+    expect(staging).toMatch(
+      /if \[ -n "\$IRIS_S3_ENDPOINT" \]; then\n\s+printf "IRIS_S3_SECRET_ACCESS_KEY_FILE='\/run\/secrets\/s3_secret_access_key'\\n"\n\s+fi/,
+    );
+    // Production keeps its own store's settings from its environment (#549).
+    expect(production).toContain(
+      'IRIS_S3_SECRET_ACCESS_KEY: ${{ secrets.IRIS_S3_SECRET_ACCESS_KEY }}',
+    );
+  });
+
+  it('proves the bucket exists and refuses an unsigned request after the deploy', () => {
+    const smoke = staging.slice(staging.indexOf('./deploy.sh;'));
+    expect(smoke).toContain('s3.bucket.create -name iris-staging');
+    expect(smoke).toContain('http://127.0.0.1:18333/iris-staging/');
+    expect(smoke).toContain('[ \\"\\$code\\" = 403 ]');
+  });
+
+  const composeCli = (() => {
+    try {
+      execFileSync('docker', ['compose', 'version'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      if (process.env.CI) throw new Error('docker compose is required in CI');
+      return false;
+    }
+  })();
+  (composeCli ? it : it.skip)('merges with the production file under COMPOSE_FILE', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-staging-s3-'));
+    try {
+      fs.copyFileSync(
+        path.join(ROOT, 'docker-compose.production.yml'),
+        path.join(dir, 'docker-compose.yml'),
+      );
+      fs.copyFileSync(
+        path.join(ROOT, 'docker-compose.staging-s3.yml'),
+        path.join(dir, 'docker-compose.staging-s3.yml'),
+      );
+      const digest = `sha256:${'a'.repeat(64)}`;
+      fs.writeFileSync(
+        path.join(dir, '.env'),
+        "COMPOSE_PROJECT_NAME='iris-staging'\nPORTAL_URL='https://staging.example'\n" +
+          `SMTP_FROM='IRIS <no-reply@example.com>'\nIRIS_IMAGE=ghcr.io/o/iris@${digest}\n` +
+          `PORTAL_IMAGE=ghcr.io/o/iris-portal@${digest}\n` +
+          "COMPOSE_FILE='docker-compose.yml:docker-compose.staging-s3.yml'\n",
+      );
+      const config = JSON.parse(
+        execFileSync('docker', ['compose', 'config', '--format', 'json', '--no-path-resolution'], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            PATH: process.env.PATH,
+            HOME: process.env.HOME,
+            DOCKER_CONFIG: process.env.DOCKER_CONFIG ?? '',
+          },
+        }),
+      ) as {
+        name: string;
+        services: Record<string, { ports?: { host_ip: string; published: string }[] }>;
+        volumes: Record<string, { name: string }>;
+      };
+      expect(config.name).toBe('iris-staging');
+      expect(Object.keys(config.services).sort()).toEqual([
+        'egress',
+        'iris',
+        'portal',
+        'postgres',
+        'proxy',
+        'seaweedfs',
+        'worker',
+      ]);
+      expect(config.services.seaweedfs.ports).toEqual([
+        expect.objectContaining({ host_ip: '127.0.0.1', published: '18333' }),
+      ]);
+      expect(config.volumes['seaweedfs-data'].name).toBe('iris-staging_seaweedfs-data');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

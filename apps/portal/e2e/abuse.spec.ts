@@ -66,6 +66,9 @@ test("the contact page is public, lists the configured contacts and a placeholde
     page.getByRole("link", { name: "support@iris.test" })
   ).toBeVisible()
   await expect(page.getByText("[abuse contact]")).toBeVisible()
+  await expect(
+    page.getByRole("link", { name: "https://status.iris.test/" })
+  ).toHaveAttribute("href", "https://status.iris.test/")
   // Linked from the legal footer of the sign-in pages.
   await page.goto("/login")
   await page

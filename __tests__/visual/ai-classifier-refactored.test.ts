@@ -34,7 +34,8 @@ import { AIVisualClassifier, AIAnalysisRequest } from '../../src/visual/ai-class
 import { SmartAIVisionClient } from '../../src/ai-client/smart-client';
 import { ImagePreprocessor } from '../../src/ai-client/preprocessor';
 import { AIVisionResponse } from '../../src/ai-client/base';
-import { ModelUnavailableError } from '../../src/ai-client/models';
+import { MODEL_UNAVAILABLE } from '../../src/visual/reporter';
+import { ModelNotForImagesError, ModelUnavailableError } from '../../src/ai-client/models';
 
 const MockSmartAIVisionClient = SmartAIVisionClient as jest.MockedClass<typeof SmartAIVisionClient>;
 const MockImagePreprocessor = ImagePreprocessor as jest.MockedClass<typeof ImagePreprocessor>;
@@ -324,6 +325,45 @@ describe('AIVisualClassifier (real, backed by Phase 2A infrastructure)', () => {
 
       await expect(promise).rejects.toBeInstanceOf(ModelUnavailableError);
       await expect(promise).rejects.toThrow(/claude-3-opus-20240229/);
+    });
+  });
+
+  // #652: a model IRIS does not use for images is the user's to change. It keeps the
+  // fallback (the comparison is graded by its pixels) but is classified so the runner
+  // can say why, and the description is the reason itself, not "Failed to analyze".
+  describe('a model that is not one IRIS uses for images (#652)', () => {
+    let classifier: AIVisualClassifier;
+    beforeEach(() => {
+      classifier = makeClassifier();
+    });
+
+    it('answers with the fallback, classified and described by the reason', async () => {
+      const reason = new ModelNotForImagesError('openai', 'gpt-4o');
+      mockSmartClient.analyzeVisualDiff.mockRejectedValue(reason);
+
+      const result = await classifier.analyzeChange({
+        baselineImage: mockBaselineBuffer,
+        currentImage: mockCurrentBuffer,
+      });
+
+      expect(result.analysisFailed).toBe(true);
+      expect(result.classification).toBe(MODEL_UNAVAILABLE);
+      expect(result.description).toBe(reason.message);
+      expect(result.description).toMatch(
+        /^openai model "gpt-4o" is not one IRIS uses for images .*--ai-model$/,
+      );
+    });
+
+    it('leaves any other failure classified unknown', async () => {
+      mockSmartClient.analyzeVisualDiff.mockRejectedValue(new Error('openai is not available'));
+
+      const result = await classifier.analyzeChange({
+        baselineImage: mockBaselineBuffer,
+        currentImage: mockCurrentBuffer,
+      });
+
+      expect(result.classification).toBe('unknown');
+      expect(result.description).toBe('Failed to analyze visual changes: openai is not available');
     });
   });
 

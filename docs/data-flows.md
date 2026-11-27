@@ -41,8 +41,12 @@ through the host's nginx (`deploy/nginx/iris.conf`, #347). Postgres publishes no
 | Encryption | TLS in transit. Passwords hashed. No application-level encryption at rest; disk encryption depends on the hosting provider. |
 | Retention | Session: BetterAuth's defaults, as `createAuth()` sets no `session` options: expires 7 days after it was last extended (use extends it at most once a day); all sessions are revoked on password reset. Reset token: 1 hour (BetterAuth default). Expired session and verification rows are purged by the daily retention pass. User and account rows: until the user is deleted (`iris admin delete-user`, on request; refused while the user is a live org's only owner). |
 
-Sign-in rate limits are counted per client IP in the portal process's memory (BetterAuth
-`rateLimit`, `src/auth/config.ts`); lost on restart, never written to disk.
+Sign-in rate limits are counted per client IP in Postgres (BetterAuth `rateLimit` table,
+migration `0023_auth_rate_limit`, `storage: 'database'` in `apps/portal/lib/auth.ts`), so
+the two portal processes of a rolling deploy share them (#316). A row is the key
+(client IP and auth path), a count and the last request's time; the daily retention pass
+deletes rows idle for a day (`rateLimitsDeleted`). Only the portal and operators with
+database access read them.
 
 ### Organizations, members and invitations
 
@@ -81,7 +85,7 @@ Sign-in rate limits are counted per client IP in the portal process's memory (Be
 
 | | |
 |---|---|
-| Data | `runs`: kind (`a11y`, `visual`, `rpc`), status, timestamps, the API key that started it, a summary, `params` (a11y jobs: target **URLs**, WCAG level, fail-on levels), a bounded error message. `run_results`: per page or action, the URL, pass/fail and a result object. a11y stores violation **counts** per impact, keyboard/screen-reader pass flags, a score, a needs-review count with up to 20 axe rule ids (#498), and which rules were violated (`violationRules`: axe rule id, impact and element count, at most 50 per page, #314), not axe's HTML snippets, selectors or page text. A hosted MCP tool call (`POST /v1/mcp`, #314) is stored as the a11y job it queues: the same rows, nothing more. An RPC action is stored as `describeAction()` (never what a `fill` typed); a navigate URL loses its `user:password@`; errors are cut to 500 characters. |
+| Data | `runs`: kind (`a11y`, `visual`, `rpc`), status, timestamps, the API key that started it, a summary, `params` (a11y jobs: target **URLs**, WCAG level, fail-on levels), a bounded error message. `run_results`: per page or action, the URL, pass/fail and a result object. a11y stores violation **counts** per impact, keyboard/screen-reader pass flags, a score, a needs-review count with up to 20 axe rule ids (#498), and which rules were violated (`violationRules`: axe rule id, impact and element count, at most 50 per page, #314), and for a page that redirected, by HTTP or by itself before the scan (#662), where the scan landed (`landedUrl`: origin and path only, a path segment of 32 or more characters replaced by `…`, at most 200 characters, never the query string or fragment, #648; only for pages given as absolute URLs), not axe's HTML snippets, selectors or page text. A hosted MCP tool call (`POST /v1/mcp`, #314) is stored as the a11y job it queues: the same rows, nothing more. An RPC action is stored as `describeAction()` (never what a `fill` typed); a navigate URL loses its `user:password@`; errors are cut to 500 characters. |
 | Purpose | The queue for `iris worker` (#267, #435) and the org's run history (#254). |
 | Where | Postgres, migrations `0001`, `0002`, `0004`, `0005`; `src/history-store.ts`, `src/jobs-api.ts`, `src/worker.ts`. |
 | Access | Everyone in the org (that is why credentials in URLs are refused with a 400 and typed values are never stored). Operators. |
@@ -95,10 +99,10 @@ is processed in Chromium's memory for the duration of the job.
 
 | | |
 |---|---|
-| Data | `usage_events`: org, run, kind (`browser_minutes`, `text_call`, `vision_call`, `agent_turn`, `a11y_job`, `visual_job`, `observation`), quantity, unit cost, billing mode, estimated flag, idempotency key. No content. |
+| Data | `usage_events`: org, run, kind (`browser_minutes`, `text_call`, `vision_call`, `agent_turn`, `a11y_job`, `visual_job`, `observation`), quantity, unit cost, billing mode, estimated flag, idempotency key, and when a managed row was sent to the Stripe meter (`stripe_reported_at`, #264). No content. |
 | Purpose | Metering and billing (#263). |
-| Where | Postgres, `0001`, `0003`; `src/billing/usage.ts`. |
-| Access | Operators; the org's own usage view (#271, pending). |
+| Where | Postgres, `0001`, `0003`, `0021`; `src/billing/usage.ts`, `src/billing/stripe-meter.ts`. |
+| Access | Operators; the org's members on the portal's `/usage` page (#271): this month's totals per kind and billing mode, never single events. |
 | Retention | While the org exists, and **7 years** after it is purged, on a tombstone org with no name, members or keys (pseudonymised); then deleted. The 7 years is the owner's decision pending counsel's confirmation for the jurisdiction (#450). |
 
 ### Org plans
@@ -108,8 +112,18 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `org_plans`: org, plan id (`free`/`pro`/`team`), per-org overrides of plan limits, last update. No personal data. An org with no row is on free. |
 | Purpose | Entitlements (#260): which limits apply to the org, enforced at the API (#346). |
 | Where | Postgres, `0009`; `src/billing/plans.ts`. |
-| Access | Operators; Stripe webhooks will set it (#261). |
+| Access | Operators; the verified Stripe webhook sets the plan from the current subscription's price as read from Stripe (#345), only when it changes, so a support grant survives other events. Shown on `/org` (#261) and `/usage` (#271). |
 | Retention | Deleted when the org is purged. |
+
+### Org billing (Stripe)
+
+| | |
+|---|---|
+| Data | `org_billing`: org, Stripe customer id, the current subscription's id and status as last read from Stripe, last update, and for a failed payment when its grace period ends and when the org was suspended for it (#266). `stripe_events`: Stripe event id, org, event type, time processed. No card data (it stays at Stripe) and no personal data. |
+| Purpose | One Stripe customer per org, and the subscription state taken only from signature-verified webhooks (#261, #345); `stripe_events` makes each event apply once. |
+| Where | Postgres, `0020_org_billing.ts`; `src/billing/stripe.ts`, `src/billing/stripe-webhook.ts`; `0022_billing_grace.ts`, `src/billing/payment-grace.ts`. |
+| Access | Operators; the org's members see the plan and status on `/org` and `/usage`, where owners and admins open Checkout and the Customer Portal. |
+| Retention | Kept on the purged org's tombstone as a billing record, and deleted with it after **7 years** (cascade). |
 
 ### Terms acceptances
 
@@ -138,9 +152,9 @@ is processed in Chromium's memory for the duration of the job.
 | Data | `audit_log`: org, `actor_user_id`, `actor_api_key_id` (plain ids, no foreign keys, so an entry outlives its actor), action, target, `metadata jsonb`, time. |
 | Purpose | An org's audit trail (#361). |
 | Where | Postgres, `0001_initial.ts`. |
-| Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`), and the withdrawal of a still-queued job whose MCP caller disconnected (`job.cancel`, #314: the `runs` row is deleted, the two audit entries remain); member removed, left or given a role (`member.remove|leave|role`, the member's user id, and the keys revoked with them); keys revoked by a user ban (`api_key.delete`, reason `user banned`, no actor); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463). No URL, page content or typed value is recorded. |
+| Status | Recorded (`src/audit-log.ts`, each in the transaction that makes the change): API key create, update (field names only) and delete with the acting user (`api_key.*`, BetterAuth hooks in `src/auth/config.ts`); provider key save (`replaced` true/false), remove and operator rewrap (`provider_key.*`: the provider and master key id, **never the key**); AI mode (`ai_mode.set`); plan and overrides (`plan.set`); job submit with the API key (`job.submit`, `run:<id>`), and the withdrawal of a still-queued job whose MCP caller disconnected (`job.cancel`, #314: the `runs` row is deleted, the two audit entries remain); member removed, left or given a role (`member.remove|leave|role`, the member's user id, and the keys revoked with them); keys revoked by a user ban (`api_key.delete`, reason `user banned`, no actor); RPC session start and end with the API key (`session.*`); visual baseline approval (`visual_baseline.approve`, #463); Stripe customer created for the org, with the acting user (`billing_customer.create`, `customer:<id>`, #261); each applied Stripe event (`subscription.update`, `event:<id>`, its type and the subscription id, status and plan read from Stripe, no actor, #345); a failed payment's grace period starting, the suspension when it ends and the restore when it is settled (`billing.grace_start|suspend|restore`, the deadline or whether a suspension was lifted, no actor, #266). No URL, page content or typed value is recorded. |
 | Access | The org's owners and admins on the portal's `/audit` page (#541), newest first, with the acting user's name and email while they exist; members are refused. Operators by query. |
-| Retention | **90 days** (owner decision 2026-11-08, #541): the daily retention pass deletes older entries. One exception: the `api_key.create` entry of a key that still exists is kept until the key is revoked, because it is the only record of who made the key and a member's removal, leave or ban revokes their keys by it (#408, #457); it goes on the first pass after the key does, or after its creator's account is deleted (the entry then names nobody). Also deleted when the org is purged; a deleted user's id is removed from their entries (#349). The portal's `/audit` page states the period. |
+| Retention | **90 days** (owner decision 2026-11-08, #541): the daily retention pass deletes older entries. One exception: the `api_key.create` entry of a key that still exists is kept until the key is revoked, because it is the only record of who made the key and a member's removal, leave or ban revokes their keys by it (#408, #457); it goes on the first pass after the key does, or after its creator's account is deleted (the entry then names nobody). Also deleted when the org is purged; a deleted user's id is removed from their entries (#349). The portal's `/audit` page and the privacy policy (sections 2 and 7, #654) state it. |
 
 ### Artifact storage usage
 
@@ -192,8 +206,8 @@ private S3-compatible bucket (`src/artifact-store.ts`, #257):
 | Purpose | Visual regression testing: comparing a page with its approved look. |
 | Where | Bucket keys `org/<org>/project/<project>/run/<run uuid>/{current,diff}/<name>.png` and `org/<org>/project/<project>/baselines/<name>.png`. |
 | Access | The org's API keys, through run detail's signed URLs (5 minutes, at most 15; only that org's keys for that run, #460). The bucket is never public. |
-| Retention | Run images: with the run, **90 days** after it finishes; current baselines: until the org is purged; a replaced baseline image, once no remaining run links it and it is older than 90 days (#475; images stored before #315's accounting stay until the org is purged). The daily retention pass queues each prefix (`artifact_purges`, migration 0012) in the transaction that deletes its rows and deletes the objects when the container has `IRIS_S3_*`; a store failure is retried by the next pass (#472). A purged org's prefix is swept once more a day after the purge, for images a job already running at the purge wrote afterwards (#476). |
-| Third parties | The hosting / object-storage provider (#273). Not sent to an AI vendor: hosted visual jobs run no AI analysis yet. |
+| Retention | Run images: with the run, **90 days** after it finishes; current baselines: until the org is purged; a replaced baseline image, once no remaining run links it and it is older than 90 days (#475; images stored before #315's accounting stay until the org is purged). The daily retention pass queues each prefix (`artifact_purges`, migration 0012) in the transaction that deletes its rows and deletes the objects when the container has `IRIS_S3_*`; a store failure is retried by the next pass (#472). A purged org's prefix is swept once more a day after the purge, for images a job already running at the purge wrote afterwards (#476). On a bucket with versioning on (#445), a deleted or replaced image stays as a version for **14 days** after it stopped being current, then the same pass removes it for good; the off-site copy of the bucket, when configured, keeps it `BACKUP_KEEP_DAYS` (default 14). |
+| Third parties | The hosting / object-storage provider (#273). Not sent to an AI vendor: hosted visual jobs run no AI analysis yet. Staging keeps its bucket in SeaweedFS on the staging box itself (volume `iris-staging_seaweedfs-data`, #514): no third party. |
 
 ### Browser sessions
 
@@ -228,7 +242,7 @@ container.
 | Data | A `pg_dump` of the whole database (everything above that lives in Postgres) and the BYOK master key file. Not the SQLite ledger or cache. |
 | Where | `/var/backups/iris` on the host; optionally copied off the box with rclone to `BACKUP_RCLONE_REMOTE` (`deploy/backup.sh`, #274). |
 | Encryption | Encrypted with `age` to public keys before being written; the decryption identity stays off the box. The script refuses to write plaintext. |
-| Retention | On the host: the newest `BACKUP_KEEP_MIN` (default **7**) of each kind are always kept; the rest are deleted once older than `BACKUP_KEEP_DAYS` (default **14**). The off-box copy is `rclone copy`, which deletes nothing: its retention is the remote's own policy, **undecided (#349, #445)**. A deleted record therefore survives in backups until they age out. |
+| Retention | On the host: the newest `BACKUP_KEEP_MIN` (default **7**) of each kind are always kept; the rest are deleted once older than `BACKUP_KEEP_DAYS` (default **14**). The off-box copy is `rclone copy`, which deletes nothing: its retention is the remote's own policy, **undecided (#349)**. A deleted record therefore survives in backups until they age out. |
 
 ## Transmissions to third parties
 
@@ -273,16 +287,54 @@ org name. The provider is a subprocessor; its retention applies.
 
 ### Payments (Stripe)
 
-Not live: there is no Stripe code yet (#261). When billing launches, Stripe receives billing
-contact and payment details and metered usage (#264); update this section then.
+Live when the operator sets `IRIS_STRIPE_*` (#261, #345); off otherwise. IRIS sends Stripe
+the org id (customer metadata `org_id`, and `client_reference_id` on Checkout) and the
+price of the plan chosen (`src/billing/stripe.ts`). Before each Checkout the portal also
+asks Stripe for that customer's subscriptions and open Checkout Sessions, and expires the
+open ones (customer id and session ids only, #688), so an org cannot pay for two
+subscriptions. The customer enters billing contact
+and card details on Stripe's own Checkout and Customer Portal pages: IRIS never receives or
+stores them. Stripe sends IRIS signed webhook events (`POST /v1/stripe/webhook`). For each new one about a
+known customer, `iris connect` calls the Stripe API once (list that customer's
+subscriptions, sending the customer id) and keeps the current subscription's id and status,
+and the event id (Org billing, above); the event's own payload is not stored or applied.
+The worker also reports managed AI usage to a Stripe meter (#264,
+`src/billing/stripe-meter.ts`): per `managed` usage row, the org's Stripe customer id, the
+row's provider cost in micro-USD, its time, and an identifier made from the row's id
+(`usage-<uuid>`). No kind, model, run or content is sent, and BYOK and platform usage never
+are. `iris admin billing-reconcile` reads the meter's totals per customer back.
+Stripe is a subprocessor; its retention applies.
 
 ### Off-box backup storage
 
 Only when `BACKUP_RCLONE_REMOTE` is set: the age-encrypted backups above. The storage
 provider cannot read them.
+The published subprocessor list (#450) has no off-box backup row, because none is in use:
+add the provider to `/subprocessors` (30 days' notice, as the DPA says) before setting
+`BACKUP_RCLONE_REMOTE` in production.
+
+Only when `BACKUP_ARTIFACTS_SOURCE` and `BACKUP_ARTIFACTS_REMOTE` are set (#445): a copy
+of the artifact bucket (tenants' screenshots, diffs and baselines), synced daily by
+`deploy/backup.sh`. Deleted and replaced images are kept there `BACKUP_KEEP_DAYS` (default
+14), then removed. The images are not encrypted by IRIS: that provider can read them
+unless the operator's rclone remote is a `crypt` remote (the runbook recommends one), and
+it is a subprocessor like the bucket's own provider.
+
+### Status page (GitHub Actions and Pages)
+
+Only once the owner sets the `STATUS_PROBE_URL` secret and enables Pages (#317):
+`.github/workflows/status.yml` runs `scripts/status-probe.js` on a GitHub-hosted runner
+every five minutes. It sends two requests to the portal without credentials (`GET /` and
+`GET /v1/jobs/x`) and publishes, on GitHub Pages, whether each answered as expected, the
+time of each check and an uptime share, for the last 288 checks (`status.json` and the
+page). No customer data, address or hostname is sent or published; the Actions log has
+status codes only. The history lives only in the published `status.json`.
 
 ### Sites under test
 
 IRIS's browser requests the URLs the customer names, from the hosting provider's network,
-through the egress proxy that refuses private addresses (`src/egress-proxy.ts`). Those sites
-are chosen by the customer and are not IRIS's subprocessors.
+through the egress proxy that refuses private addresses (`src/egress-proxy.ts`). Beneath it,
+the host refuses every new connection from the hosted containers to private, CGNAT,
+link-local (cloud metadata) and reserved addresses (`docker/egress-firewall.sh`, #376), so
+nothing in the containers, browser or not, reaches the hosting provider's internal network.
+Those sites are chosen by the customer and are not IRIS's subprocessors.

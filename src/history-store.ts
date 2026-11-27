@@ -1,6 +1,7 @@
 import { recordAudit } from './audit-log';
 import { StorageQuotaExceededError, storageUsage } from './storage-quota';
-import { stripAnsi, stripUserinfo } from './report-encoding';
+import { strippedError, stripUserinfo, urlWithoutUserinfo } from './report-encoding';
+import { scannedPage } from './mcp/scan-errors';
 import type Database from 'better-sqlite3';
 import { sql, type Kysely } from 'kysely';
 import { describeAction } from './actions';
@@ -18,7 +19,7 @@ import {
   type TestRun,
 } from './db';
 import type { ExecutionResult } from './executor';
-import { insertUsage, type UsageEvent } from './billing/usage';
+import { insertUsage, runsUsedThisMonth, type UsageEvent } from './billing/usage';
 import type { VisualTestResult as VisualRunResult } from './visual/visual-runner';
 import type { ArtifactStore } from './artifact-store';
 import {
@@ -128,12 +129,13 @@ function violationCounts(page: AccessibilityTestResult['results'][number]) {
 }
 
 /**
- * An error as stored: terminal colour codes (#420) and URL userinfo stripped, at most `max`
- * characters, cut by code point (a cut inside a surrogate pair leaves a lone half, which
- * Postgres's json input rejects, losing the whole run).
+ * An error as stored: terminal colour codes (#420) and URL userinfo stripped (from a bounded
+ * start of the text, #658), at most `max` characters, cut by code point (a cut inside a surrogate pair leaves a lone half, which
+ * Postgres's json input rejects, losing the whole run). `quotedUrl` is the URL the error is
+ * known to repeat (a navigation's target), whose credentials are cut by parsing it (#645).
  */
-const boundedError = (error: string, max = 500): string =>
-  [...stripUserinfo(stripAnsi(error))].slice(0, max).join('');
+const boundedError = (error: string, max = 500, quotedUrl?: string): string =>
+  [...strippedError(error, quotedUrl)].slice(0, max).join('');
 
 /**
  * One result per page, comparison or action. An RPC action is stored as
@@ -165,6 +167,19 @@ function violationRulesOf(page: AccessibilityTestResult['results'][number]) {
     nodes: violation.nodes?.length ?? 0,
   }));
   return rules.length > 0 ? { violationRules: rules } : {};
+}
+
+/**
+ * Where a scan landed when it was redirected (#648), cut as the MCP tool cuts it: origin
+ * and path, long segments dropped, so no token a redirect carried is stored.
+ * shortcut: a relative page pattern (`iris a11y` with a `baseURL`) records nothing, because
+ * the base it was resolved against is not known here; upgrade by having the runner report
+ * the URL it navigated if local history should show redirects too.
+ */
+function landedUrlOf(page: AccessibilityTestResult['results'][number]) {
+  if (!URL.canParse(page.page)) return {};
+  const scanned = scannedPage(page.page, page.axeResult.url);
+  return scanned.redirected ? { landedUrl: scanned.url } : {};
 }
 
 function resultsOf(run: RunInput): StoredRunResult[] {
@@ -202,6 +217,7 @@ function resultsOf(run: RunInput): StoredRunResult[] {
             ...(page.error !== undefined && { error: boundedError(page.error) }),
             violations: counts,
             ...(page.error === undefined && violationRulesOf(page)),
+            ...(page.error === undefined && landedUrlOf(page)),
             // Absent sub-tests mean "not run", which is not a failure to record.
             keyboardPassed: page.keyboardResult?.passed ?? true,
             screenReaderPassed: page.screenReaderResult?.passed ?? true,
@@ -215,9 +231,11 @@ function resultsOf(run: RunInput): StoredRunResult[] {
       });
     case 'rpc':
       return run.results.map((r) => {
+        // History is readable by everyone in the org, so a navigation loses its credentials.
+        // ponytail: query-string tokens are kept; they are often what the page under test is.
         const action =
           r.action.type === 'navigate'
-            ? { ...r.action, url: withoutCredentials(r.action.url) }
+            ? { ...r.action, url: urlWithoutUserinfo(r.action.url) }
             : r.action;
         return {
           url: action.type === 'navigate' ? action.url : null,
@@ -228,7 +246,13 @@ function resultsOf(run: RunInput): StoredRunResult[] {
             // also quotes URLs (guardedGoto, Playwright's goto), credentials and all.
             // Cut by code point: a cut inside a surrogate pair leaves a lone half,
             // which Postgres's json input rejects, losing the whole run.
-            ...(r.error && { error: boundedError(r.error) }),
+            ...(r.error && {
+              error: boundedError(
+                r.error,
+                undefined,
+                r.action.type === 'navigate' ? r.action.url : undefined,
+              ),
+            }),
           },
         };
       });
@@ -250,22 +274,6 @@ const toJsonb = (value: unknown) =>
  */
 const wellFormed = (text: string) => text.replace(UNSTORABLE, '\uFFFD');
 const UNSTORABLE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]|\u0000/g;
-
-/**
- * A URL without its `user:password@`: history is readable by everyone in the org.
- * ponytail: query-string tokens are kept; they are often what the page under test is.
- */
-function withoutCredentials(url: string): string {
-  try {
-    const parsed = new URL(url);
-    if (!parsed.username && !parsed.password) return url;
-    parsed.username = '';
-    parsed.password = '';
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
 
 /**
  * The hosted history (#254). The only way to a store is `forOrg(scope)`, and every
@@ -508,18 +516,7 @@ export function postgresJobs(db: Kysely<unknown>): PostgresJobs {
             // submits cannot all pass: what was billed, plus what is queued or running.
             if (monthlyRunLimit !== undefined) {
               const requested = jobQuantity({ kind, params } as JobSpec);
-              const { rows } = await sql<{ used: string }>`
-                select
-                  (select coalesce(sum(quantity), 0) from usage_events
-                     where org_id = ${orgId} and kind in ('a11y_job', 'visual_job')
-                       and created_at >= date_trunc('month', now() at time zone 'UTC') at time zone 'UTC')
-                  + (select coalesce(sum(case when kind = 'visual'
-                       then greatest(jsonb_array_length(params->'urls') * jsonb_array_length(params->'devices'), 1)
-                       else 1 end), 0)
-                     from runs where org_id = ${orgId} and status in ('queued', 'running')) as used`.execute(
-                tx,
-              );
-              const used = Number(rows[0].used);
+              const used = await runsUsedThisMonth(tx, orgId);
               if (used + requested > monthlyRunLimit)
                 throw new RunQuotaExceededError(monthlyRunLimit, used);
             }

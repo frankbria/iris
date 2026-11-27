@@ -15,7 +15,8 @@ import { IrisConfig, ProviderCredentials } from '../config';
 import { SmartAIVisionClient, SmartClientConfig } from '../ai-client/smart-client';
 import { ImagePreprocessor } from '../ai-client/preprocessor';
 import { AIVisionRequest, AIVisionResponse } from '../ai-client/base';
-import { DEFAULT_MODELS, ModelUnavailableError } from '../ai-client/models';
+import { DEFAULT_MODELS, ModelNotForImagesError, ModelUnavailableError } from '../ai-client/models';
+import { MODEL_UNAVAILABLE } from './reporter';
 import { AIVisualAnalysis } from './types';
 
 /**
@@ -457,11 +458,14 @@ export class AIVisualClassifier {
    */
   private createFallbackResponse(error: unknown): AIAnalysisResponse {
     const message = error instanceof Error ? error.message : 'Unknown error';
+    // The user's to change, so it is named as the reason (#652); still the fallback,
+    // because the comparison itself can be graded by its pixels.
+    const modelFault = error instanceof ModelNotForImagesError;
 
     return {
-      classification: 'unknown',
+      classification: modelFault ? MODEL_UNAVAILABLE : 'unknown',
       confidence: 0.5,
-      description: `Failed to analyze visual changes: ${message}`,
+      description: modelFault ? message : `Failed to analyze visual changes: ${message}`,
       severity: 'medium',
       suggestions: [
         'Review the visual changes manually',

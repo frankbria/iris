@@ -10,6 +10,7 @@ paths:
   - "scripts/check-pack.js"
   - "scripts/third-party-notices.js"
   - "__tests__/{container-config,iris-image,check-pack}.test.ts"
+  - "docker/**"
 ---
 
 ### TLS Ingress (issue #347)
@@ -72,8 +73,8 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
   a `v*` ref, for a dispatch too (no tag input: an input would let a branch run deploy).
 - **`staged-<sha>` is a record, not a boundary**: deploy-staging tags both images
   (`imagetools create`, no rebuild) as its *last* step; anything with `packages: write`
-  could move it. Staging runs token mode without worker/portal, so it proves the iris
-  image boots (plus the portal digest serving `/terms` on the runner), not the hosted stack.
+  could move it. Since #440 it is written only after deploy.sh brought the hosted stack up
+  healthy on staging (see "Staging runs the hosted stack" below).
 - **One directory per release** (`releases/<tag>-<run>-<attempt>/`: compose, settings.env,
   per-release secrets); `shared/secrets/` holds pg_password, master_key, database_url
   (rewritten only if it differs: serving containers mount it). `current` is switched only
@@ -146,12 +147,181 @@ portal, postgres; every image pinned by digest, app images only from `${IRIS_IMA
 - **Tag pushes already ran `build`** (`on: push` has no filter); adding
   `workflow_dispatch` leaves push/PR behaviour unchanged.
 
+### Staging runs the hosted stack (issue #440)
+
+`deploy-staging` builds both images, then deploys **those digests** the way
+`deploy-production` does: `docker-compose.production.yml` + `deploy/deploy.sh` from a
+release directory (`/opt/iris-staging/releases/staging-<sha12>-<run>-<attempt>/`), the
+release's secrets from the `staging` environment, `pg_password` / `master_key` generated
+once in `shared/secrets/`. Then it proves what the healthchecks stop short of (sandboxed
+Chromium in iris *and* the worker, the CLI, both host ports answering), and only then
+writes `staged-<sha>`. Container-config tests pin the job's shape and that its secret
+files and `_FILE` pointers equal production's.
+
+- **Project name `iris-staging`, not the file's `name: iris-production`.** settings.env
+  sets `COMPOSE_PROJECT_NAME='iris-staging'`; deploy.sh copies it into `.env`, and compose
+  takes a `.env` `COMPOSE_PROJECT_NAME` over the top-level `name:` (a test runs `docker
+  compose config` on it). Containers, network and volumes are `iris-staging-*`, so the
+  two stacks cannot collide on one box. Backup/watchdog/retention on staging need their
+  `*_COMPOSE_PROJECT=iris-staging` and `DEPLOY_DIR=/opt/iris-staging`.
+- **Ports default to 14000 / 13000** (`vars.IRIS_API_PORT || '14000'`): the staging box
+  is shared and the token-mode server held 4000. The host's nginx site points there.
+- **Preflight**: no box secrets → skip (a fork stays green); box configured but
+  `BETTER_AUTH_SECRET`, `SMTP_URL`, `PORTAL_URL` or `SMTP_FROM` missing → fail by name
+  before anything is built. A silent skip would leave production nothing to promote.
+- **The deploy user must be able to create `/opt/iris-staging`** (or the operator
+  creates it once, owned by that user); the job says so when it cannot.
+- **The smoke step needs `curl` on the box** (host-loopback checks of both ports).
+- `docker-compose.staging.yml` stays as the token-mode reference and what
+  `iris-image.test.ts` runs; nothing deploys it.
+
+### Staging's object store (issue #514)
+
+`docker-compose.staging-s3.yml`: SeaweedFS (image pinned exactly as CI's step; a test
+compares them), `-s3.config` identities (never anonymous), `127.0.0.1:18333`, volume
+`seaweedfs-data`. Runbook "Artifact storage" → "Staging's store".
+
+- **Staging only, through `COMPOSE_FILE`.** deploy-staging copies the file into the
+  release and writes `COMPOSE_FILE='docker-compose.yml:docker-compose.staging-s3.yml'` into
+  settings.env; deploy.sh copies that into `.env`, so every compose command of the release
+  (the gates, the rollback, an operator's) runs both files. deploy-production never copies
+  it (a test fails on `staging-s3`, `seaweedfs` or `COMPOSE_FILE` in its job).
+- **deploy.sh starts every non-app service before the gates** (`config --services` minus
+  iris/worker/portal), not just postgres. The list is a plain assignment so a failing
+  `config` stops the script; an empty list would make `up` start the app services too.
+  A release without the file drops the store as an orphan (its volume stays).
+- **A data service's mounted files live in `shared/`, never in the release.** Compose does
+  not recreate a service when only a secret file's *path* changes (the deploy-script test
+  saw it keep the first release's mount), so a per-release file would be pruned from under
+  it and a restart would fail on the missing bind source. Hence
+  `shared/secrets/seaweedfs_s3.json`, rewritten only when it differs (as `database_url`),
+  owned by **uid 1000**: the image's entrypoint runs the server as `seaweed` (su-exec), so a
+  root-owned 0600 file is unreadable. A local test passes either way when your own uid is
+  1000, which hid this until review.
+- **The key never leaves the box**: `shared/secrets/s3_secret_access_key` is generated once;
+  the identity file and the release's `secrets/s3_secret_access_key` are built from it on
+  the box (`printf` is a builtin: no command line holds it). No GitHub secret.
+- **The endpoint is the one setting** (`vars.IRIS_S3_ENDPOINT`): with it the job writes the
+  bucket (`iris-staging`), key id (`iris-staging`) and `_FILE` pointer; without it the store
+  runs and the services are not pointed at it (a partial config exits 3). It must be an
+  https origin the browser reaches and SeaweedFS sees unchanged (`artifact-store.ts`
+  refuses http except loopback; SigV4 signs host and path), i.e. a host nginx site for a
+  name of its own.
+- **Smoke step**: creates the bucket once (`weed shell` `s3.bucket.create`, guarded by
+  `s3.bucket.list`, which also confirms it) and requires an unsigned GET to be 403.
+- **Managed AI stays iris-only** (#549's decision, kept in #514): the worker runs tenant
+  pages and makes no AI call yet.
+
+### Zero-downtime deploys (issue #316)
+
+`deploy.sh` rolls the app services behind the stack's own `proxy` (nginx, digest-pinned, a
+**TCP** `stream` proxy: WebSockets and the host nginx's headers pass through). Runbook
+"Zero-downtime deploys". `deploy-script.test.ts` holds a request open through the real
+proxy across a deploy; `container-config.test.ts` pins the order.
+
+- **Why a proxy in the stack, not the host's nginx**: the host site is the operator's (root,
+  `nginx -t` + reload), and deploy-production may not change. The proxy owns the host
+  ports; iris and the portal publish nothing, so two of each can run at once.
+- **Rolling = compose scale**: `up -d --no-deps --no-recreate --scale <svc>=<n+1>` starts one
+  new container per service from the new release and leaves the old (diverged) ones alone.
+  New = `ps -aq` after minus before. `wait_healthy` polls the new ids (not `up --wait`,
+  which would also wait on the old ones). `docker compose exec <svc>` picks any running
+  container, so the smoke step and the runbook's commands still work after a deploy.
+- **The switch is a file and a reload**: `shared/proxy/upstreams.conf` names the new
+  containers (`server <name>:<port> resolve`, nginx >= 1.27.3 OSS, resolver 127.0.0.11, so
+  a restart's new address is followed), plus `server <address>:<port> backup`: nginx
+  resolves a new name only after the new worker starts, so the address carries the first
+  connections (codex review on #716), written atomically (tmp + mv in the bind-mounted
+  directory), `nginx -t`, then `nginx -s reload`. Old workers keep their connections
+  (`worker_shutdown_timeout 1h`). `nginx.conf` is a heredoc in deploy.sh, rewritten each
+  deploy: production copies a fixed file list, so the config ships inside deploy.sh.
+  Files 0644 in a 0755 directory: the proxy runs as uid 101.
+- **Drain = no outside connections left**: `open_connections` reads the container's
+  `/proc/net/tcp{,6}` for ESTABLISHED on its service port from anything but loopback (its
+  own healthcheck). Up to `DEPLOY_DRAIN_TIMEOUT`, then `docker stop` (iris's #309 drain).
+  The old worker gets `docker stop -t <drain>` at once, in the background: SIGTERM is
+  "stop after the current job".
+- **Failure before the switch removes the new containers** (whatever `up --scale` created,
+  even when it failed partway) and restores `upstreams.conf.prev` only if this run's
+  switch wrote it: the rolling path deletes any older `.prev` first, since it names
+  containers long gone (codex review). The serving ones were never touched (no
+  previous-directory rollback on this path). Between the reload and `point_current` there
+  is no recovery: two local commands, accepted. The cold path (no `upstreams.conf`, or no proxy container: a
+  rollback to a pre-#316 release removes it as an orphan) recreates in place as before
+  and starts the proxy. Its rollback removes the proxy first when the previous release
+  publishes the ports itself (no `proxy` service), and otherwise re-points the proxy at
+  the previous release's recreated containers.
+- **Orphans go at the switch** (`up --no-deps --remove-orphans proxy`), so staging's store
+  still leaves with a release that drops its file.
+- **The overlap**: two iris processes share Postgres and the `/data` volumes (SQLite locks)
+  and have separate RPC buckets for one drain window (#714). The portal's BetterAuth
+  counters are in the database (migration 0023).
+- **Staging records it**: deploy-staging runs `scripts/rollout-watch.js` (iris image, host
+  network) across deploy.sh and fails a rolling deploy whose held session or fresh
+  requests saw a failure. A cold deploy only prints the record.
+
+### Container egress firewall (issue #376)
+
+Compose service `egress` (docker-compose.production.yml) runs `docker/egress-firewall.sh`
+from the iris image: `network_mode: host`, `user: '0'`, `cap_drop: ALL` + `NET_ADMIN` and
+`NET_RAW` only. Host chain `IRIS-EGRESS-<bridge>`, jumped to from `DOCKER-USER`
+(`-i <bridge> ! -o <bridge>`) and `INPUT` (`-i <bridge>`): ESTABLISHED/RELATED and DNS
+(53) return, then every non-global IPv4 range is REJECTed (TCP `tcp-reset`). Runbook
+"Container egress firewall". `container-config.test.ts` pins it; `iris-image.test.ts` runs
+the real script on the CI runner; `deploy-script.test.ts` checks the bridge name and the
+probe's rollback.
+
+- **Why host rules, from a container.** The apps hold no capabilities, and per-container
+  rules die with the network namespace on every restart. Host rules keyed on the stack's
+  bridge cover every app container, a restart and a rollback included, and touch no other
+  stack. The service is the deploy applying them: no host step, no script outside the
+  release (deploy-production copies a fixed file list, which must not change), and
+  `restart: unless-stopped` re-applies after a reboot flushed them.
+- **Only `deploy.sh` and the iris image carry it to production.** The script and
+  `docker/egress-probe.js` ship in the image (with `iptables`, apt in the runtime stage);
+  the service is in the production compose file. Nothing in deploy-production changed.
+- **The bridge comes from deploy.sh**, after the data services created the network:
+  `docker compose config`'s `name:` + `_default`, the `com.docker.network.bridge.name`
+  option or `br-<12 of the id>`, appended to `.env` as `IRIS_EGRESS_BRIDGE`. A network
+  with IPv6 is refused (the rules are IPv4 only). Not set on the default network in
+  compose: changing an existing network's options means recreating it under the
+  serving release, and a rollback's compose file would differ again.
+- **`egress` is not a data service**: deploy.sh's list excludes it and starts it on its own
+  once the bridge is known, before the gates, so the SMTP check and migrations run behind it.
+- **The backend is Docker's own**: the script writes into every one of `iptables-nft` /
+  `iptables-legacy` that shows `DOCKER-USER` (both after a migration), and fails by name
+  when neither does (Docker's nftables firewall backend has no such chain).
+- **Fail closed**: nothing removes the rules (stop, removal, rollback). The loop re-checks
+  every 30s with `-C` and re-applies with one `iptables-restore --noflush` (declaring the
+  chain empties it). The healthcheck is the same check.
+- **Each jump must be first in its chain** (`-S <chain> | sed -n 2p`, codex review): ufw
+  puts its jumps atop `INPUT` on reload, and its ACCEPTs (22, 443) would then let the
+  containers reach the host. The repair deletes every copy and inserts at 1.
+- **Reboot window and pre-#376 rollback are accepted gaps** (runbook): Docker starts the
+  apps and `egress` together after a reboot; a rollback to a release without the service
+  removes it as an orphan (rules stay until reboot).
+- **The probe needs a reset, not just a failure**: `egress-probe.js` passes only on
+  `ECONNREFUSED`. A timeout is what a metadata-less host shows with no firewall, and the
+  GitHub runner's metadata service answers, which the image test uses as its negative
+  control. It runs in iris and the worker (the portal shares the bridge, so the rules).
+- **DNS only to the host's non-loopback nameservers** (its `/etc/resolv.conf`, which a
+  host-network container sees): Docker's embedded resolver forwards to those from inside
+  the container's namespace, and they are often private (a VPS resolver, tailnet DNS); to
+  a loopback upstream (systemd-resolved) it forwards from the host's (`ExtServers:
+  [host(127.0.0.53)]` in a container's resolv.conf), which needs nothing. A blanket port-53
+  exemption let containers reach any private address on 53 (codex review). A daemon.json
+  `dns` setting is not read: lookups then fail, loudly, at the SMTP gate.
+- **`192.0.0.9` and `192.0.0.10` return before `192.0.0.0/24` is refused**: IANA marks
+  them globally reachable (PCP and TURN anycast).
+- **Private dependencies are refused by design**: an SMTP relay or object store on a
+  private/tailnet address needs a public address or a place on the stack's network.
+
 ### Backups (issue #274)
 
 `deploy/backup.sh` (daily, `deploy/systemd/iris-backup.timer`, as root) and
 `deploy/restore.sh`; setup, restore and the drill log are in `docs/runbook-production.md`.
 The deploy job ships both scripts and the units into each release directory; it never
-runs or installs them. Object storage is #445.
+runs or installs them. The artifact bucket is the next section.
 
 - **Root runs only root-owned files outside the deploy tree.** The unit runs
   `/usr/local/sbin/iris-backup`, a reviewed copy the operator installs; settings,
@@ -188,6 +358,40 @@ runs or installs them. Object storage is #445.
   apt package) or the pinned, checksummed release tarball cached in the temp dir. Each
   restore is one container start (~30 s on a loaded WSL daemon).
 
+### Artifact bucket backups (issue #445)
+
+Versions in the bucket plus an off-site copy; runbook "Artifact bucket backups".
+
+- **Everything runs from what the deploy already ships**: `iris admin artifact-versioning
+  [--enable]`, `artifact-versions <key>`, `artifact-restore <key> --version-id <id>`,
+  `artifact-undelete <key|prefix/>` in the image (they need `IRIS_S3_*` only, no
+  database), and the copy in `backup.sh`. A new script would need a deploy-job change.
+- **`--version` is taken**: commander gives the program's version for it on any
+  subcommand, with exit 0. Hence `--version-id`.
+- **Old versions are pruned in code, not by a lifecycle rule**: `pruneVersions()` in the
+  daily retention pass (`ARTIFACT_VERSION_DAYS` = 14, the backups' default window). A
+  rule's enforcement differs by vendor and cannot be tested; this is the same everywhere.
+  A version's age counts from when it **stopped being current** (the write time of the
+  version in front of it), not from its own write time: a 60-day-old baseline replaced
+  yesterday is one day into its 14.
+- **A key's versions can straddle `ListObjectVersions` pages**, and versions and delete
+  markers come as two lists. `keyVersions()` carries the page's last key
+  (`NextKeyMarker`) into the next page. SeaweedFS timestamps have one-second resolution.
+- **Undelete removes all of a key's delete markers** (no copy, history kept; all, because
+  entries written within one second cannot be ordered), and the prune deletes spent markers
+  only after the versions behind them went (a marker gone first would re-expose a purged
+  image if the version's delete failed); restoring an overwrite is a
+  `CopyObject` from the version. A purge on a versioned bucket only adds delete markers,
+  so "purged" means unreadable at once and gone after the prune.
+- **`removeBucket()` (tests) deletes versions first**: a versioned bucket is not empty
+  while versions or markers remain.
+- **The off-site copy is `rclone sync --backup-dir <remote>/replaced/<stamp>`**: a plain
+  sync would empty the copy when the bucket is emptied, a plain copy would keep purged
+  images for ever. `replaced/` directories are pruned by their name (a UTC stamp), not by
+  `--min-age`: moved files keep their original modification time. `rclone lsf` exits 3
+  when `replaced/` does not exist yet. The test's rclone is a stub; the sync has not run
+  against a real rclone or bucket. The destination must be unversioned (the runbook says so).
+
 ### npm Package (issue #320)
 
 - **Not published yet; install from source.** The npm name `iris-suite` is reserved by the
@@ -209,9 +413,11 @@ break and expensive to rediscover:
 
 - **Base image is `mcr.microsoft.com/playwright:v<version>-noble`**, tracking the
   `playwright` version in package.json. It carries Chromium *and* its system
-  libraries, so no `playwright install --with-deps` at build time. Verified to
-  ship Node v24.18.1, satisfying the `engines` floor. Keep the tag in step with
-  the library — they are matched pairs.
+  libraries, so no `playwright install --with-deps` at build time. Keep the tag in
+  step with the library — they are matched pairs. Since 1.65.1 the image ships
+  Node 26 while `.nvmrc` and CI stay on 24: the container runs a major ahead of
+  the jest suite, and `iris-image.test.ts` is the only check on Node 26. Read the
+  Node major from the image config's `NODE_VERSION` build arg before a bump.
 - **Three stages, deliberately.** `better-sqlite3` has no prebuilt binary here
   and needs node-gyp, which the Playwright image has no `make` for; the compiler
   goes in a `deps` stage and never reaches the shipped image. That stage runs
@@ -290,3 +496,29 @@ break and expensive to rediscover:
 The healthcheck completes an authenticated JSON-RPC round trip rather than a TCP
 open — the socket listens long before the browser layer is usable. It lives in a
 file because compose interprets `${...}` in an inline script as its own syntax.
+
+### Public Status Page (issue #317)
+
+Owner decision 2026-11-26: option C. `.github/workflows/status.yml` (schedule `*/5` +
+dispatch) runs `scripts/status-probe.js` (plain CommonJS, no dependencies, unit-tested in
+`__tests__/status-probe.test.ts` against a real local server) and publishes to GitHub Pages.
+Runbook "Status page" has the owner's settings.
+
+- **Off until configured, and safe before.** The `config` job only reads the
+  `STATUS_PROBE_URL` **secret**; `publish` (the only job naming `github-pages`, Pages
+  actions or Pages permissions) runs only when it is set. Referencing the environment would
+  create it, and `configure-pages` fails while Pages is off. A test pins both.
+- **A secret, not a variable**: Actions logs are public and secrets are masked; the script
+  prints status codes only and the page never shows the URL (#329).
+- **History is the published `status.json`**, read back through `configure-pages`'s
+  `base_url` with a `?t=` cache-buster (Pages' CDN caches it 10 min, longer than the
+  schedule, glm review), filtered (ISO time, two booleans) and capped at 288 checks. Nothing is
+  committed. First run or unreadable: a fresh history.
+- **Probes** are the runbook's "Uptime from outside": `/` 200 or a same-origin redirect to
+  `/login`; `/v1/jobs/x` 401 (anything else, 502 included, is down). One retry after 5 s.
+- **A down probe publishes, then fails the run** (last step), so GitHub's failed-workflow
+  mail is the alert.
+- **Portal link**: `IRIS_STATUS_URL` (https only, `readContacts().status`, malformed throws
+  so `/api/health` fails) shows a "Service status" section on `/contact`. Compose passes it
+  to the portal; `deploy-staging` writes it from `vars.IRIS_STATUS_URL`; `deploy-production`
+  does not yet (the owner's edit, runbook step 5).

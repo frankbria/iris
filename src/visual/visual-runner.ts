@@ -110,7 +110,7 @@ export interface VisualTestResult {
      * severity is the pixel estimate, not a verdict (#281). Absent when AI was not asked.
      */
     aiUnavailable?: number;
-    /** Why, when the configured model is not served by the provider (#484). */
+    /** Why, when the configured model is not served (#484) or not used for images (#652). */
     aiUnavailableReason?: string;
   };
   results: Array<{

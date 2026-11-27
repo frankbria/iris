@@ -38,6 +38,15 @@ export type Action =
     };
 
 /**
+ * The longest `selector` or assertion `target`, in characters (#658). What names an element
+ * is repeated into the stored history, Playwright's call log and every error about it, so it
+ * gets a bound of its own, far above any selector a person or a model writes.
+ */
+export const MAX_SELECTOR_LENGTH = 4096;
+
+const selector = z.string().min(1).max(MAX_SELECTOR_LENGTH);
+
+/**
  * Runtime schema for the Action union.
  *
  * One definition shared by the AI parse path and the JSON-RPC boundary. They
@@ -46,13 +55,13 @@ export type Action =
  * shape flowed straight to the executor.
  */
 export const ActionSchema: z.ZodType<Action> = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('click'), selector: z.string().min(1) }),
-  z.object({ type: z.literal('fill'), selector: z.string().min(1), text: z.string() }),
+  z.object({ type: z.literal('click'), selector }),
+  z.object({ type: z.literal('fill'), selector, text: z.string() }),
   z.object({ type: z.literal('navigate'), url: z.string().url() }),
   z.object({
     type: z.literal('assert'),
     kind: z.enum(['text_visible', 'element_visible', 'url_matches', 'element_absent']),
-    target: z.string().min(1),
+    target: selector,
     description: z.string().optional(),
   }),
 ]);

@@ -22,8 +22,10 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { RunQuotaExceededError, type StoredJob, type TenantScope } from '../history-store';
 import { authorize, readBody, send, type ApiJobs, type JobsApiDeps } from '../jobs-api';
 import { errMessage, log } from '../log';
+import { DEFAULT_FAIL_ON, IMPACTS, type Impact } from '../a11y/wcag';
 import { assertNavigationAllowed } from '../url-policy';
 import { JOB_TIMED_OUT, ORG_SUSPENDED } from '../worker';
+import { axeRuleHelpUrl } from './axe-help-url';
 import { scanFailureReason } from './scan-errors';
 import { packageVersion } from './version';
 
@@ -34,19 +36,36 @@ export const GET_ACCESSIBILITY_TEST_RESULT = 'get_accessibility_test_result';
 /** Same bound as the job API's `urls` entries. */
 const MAX_URL_LENGTH = 2048;
 
-/** Every impact fails the run, so `passed` means what the stdio tool's does: no violation. */
-const FAIL_ON_ANY = ['critical', 'serious', 'moderate', 'minor'] as const;
-
 const outputSchema = {
   jobId: z.string().describe(`The scan's id: pass it to ${GET_ACCESSIBILITY_TEST_RESULT}.`),
   status: z
     .enum(['queued', 'running', 'finished'])
     .describe('Only a finished scan carries the fields below.'),
-  url: z.string().optional().describe('The page that was requested.'),
+  url: z
+    .string()
+    .optional()
+    .describe(
+      'The page that was scanned: the requested URL, or when the scan was redirected the ' +
+        "landing page's origin and path only (its query string and fragment are left out).",
+    ),
+  redirected: z
+    .boolean()
+    .optional()
+    .describe(
+      'True when the scan landed on another URL than the request. A scan stored before ' +
+        'redirects were recorded reads false.',
+    ),
+  redirectedFrom: z
+    .string()
+    .optional()
+    .describe('The URL that was requested. Only present when the scan was redirected.'),
   passed: z
     .boolean()
     .optional()
-    .describe('True when axe-core reported no violations and the keyboard checks passed.'),
+    .describe(
+      'The stored page verdict: no violation with an impact in the failOn the scan was ' +
+        'queued with, and the keyboard checks passed.',
+    ),
   violationCount: z.number().optional().describe('Total number of distinct axe rules violated.'),
   violations: z
     .array(
@@ -54,6 +73,7 @@ const outputSchema = {
         id: z.string().describe('axe rule id, e.g. "image-alt".'),
         impact: z.enum(['minor', 'moderate', 'serious', 'critical']).nullable(),
         nodes: z.number().describe('How many elements on the page violate this rule.'),
+        helpUrl: z.string().describe('Deque documentation for the rule.'),
       }),
     )
     .optional()
@@ -73,10 +93,21 @@ type ToolOutput = z.infer<z.ZodObject<typeof outputSchema>>;
 /** One page of a stored a11y run, as `history-store` writes it; older rows lack the rules. */
 const StoredPage = z.object({
   url: z.string().nullable(),
+  passed: z.boolean(),
   result: z.object({
     error: z.string().optional(),
     violations: z.record(z.string(), z.number()).default({}),
-    violationRules: outputSchema.violations.unwrap().default([]),
+    violationRules: z
+      .array(
+        z.object({
+          id: z.string(),
+          impact: z.enum(['minor', 'moderate', 'serious', 'critical']).nullable(),
+          nodes: z.number(),
+        }),
+      )
+      .default([]),
+    /** Where a redirect landed, already cut by `resultsOf` (#648); absent without one. */
+    landedUrl: z.string().optional(),
     needsReviewRules: z.array(z.string()).default([]),
     keyboardPassed: z.boolean().default(true),
   }),
@@ -142,13 +173,23 @@ function describeJob(job: StoredJob) {
     );
   }
   const violationCount = Object.values(page.result.violations).reduce((sum, n) => sum + n, 0);
-  const violations = page.result.violationRules;
-  const url = page.url ?? 'the requested URL';
+  const violations = page.result.violationRules.map((rule) => ({
+    ...rule,
+    helpUrl: axeRuleHelpUrl(rule.id),
+  }));
+  const requested = page.url ?? 'the requested URL';
+  // The page that was measured: reporting the request would misattribute every finding
+  // on the page a redirect landed on.
+  const landed = page.result.landedUrl;
+  const url = landed ?? requested;
+  const where = landed === undefined ? url : `${url} (redirected from ${requested})`;
   const lines = [
     violationCount === 0
-      ? `No WCAG violations found on ${url}.`
-      : `${violationCount} WCAG violation(s) on ${url}:`,
-    ...violations.map((v) => `- [${v.impact ?? 'unrated'}] ${v.id} (${v.nodes} element(s))`),
+      ? `No WCAG violations found on ${where}.`
+      : `${violationCount} WCAG violation(s) on ${where}:`,
+    ...violations.map(
+      (v) => `- [${v.impact ?? 'unrated'}] ${v.id} (${v.nodes} element(s)): ${v.helpUrl}`,
+    ),
     ...(page.result.keyboardPassed ? [] : ['The keyboard checks failed.']),
     ...(page.result.needsReviewRules.length === 0
       ? []
@@ -158,8 +199,10 @@ function describeJob(job: StoredJob) {
     jobId: job.id,
     status: 'finished',
     url,
-    // Not the stored verdict: a job submitted over REST may have had a narrower `failOn`.
-    passed: violationCount === 0 && page.result.keyboardPassed,
+    redirected: landed !== undefined,
+    ...(landed !== undefined && { redirectedFrom: requested }),
+    // The stored verdict (#646): at the failOn the job was queued with, as `iris a11y` decides.
+    passed: page.passed,
     violationCount,
     violations,
     needsReviewRules: page.result.needsReviewRules,
@@ -212,13 +255,18 @@ async function awaitJob(id: string, deps: HostedToolsDeps): Promise<StoredJob | 
   }
 }
 
-async function runScan(url: string, wcagLevel: 'AA' | 'AAA', deps: HostedToolsDeps) {
+async function runScan(
+  url: string,
+  wcagLevel: 'AA' | 'AAA',
+  failOn: readonly Impact[],
+  deps: HostedToolsDeps,
+) {
   const refusal = urlRefusal(url);
   if (refusal) return toolError(refusal);
   let id: string | null;
   try {
     id = await deps.jobs.enqueue(
-      { kind: 'a11y', params: { urls: [url], wcagLevel, failOn: [...FAIL_ON_ANY] } },
+      { kind: 'a11y', params: { urls: [url], wcagLevel, failOn: [...failOn] } },
       { maxOutstanding: deps.maxOutstanding, monthlyRunLimit: deps.monthlyRunLimit },
     );
   } catch (error) {
@@ -293,6 +341,14 @@ export function registerHostedTools(server: McpServer, deps: HostedToolsDeps): v
           .enum(['AA', 'AAA'])
           .optional()
           .describe('WCAG 2.2 conformance level to check against. Defaults to AA.'),
+        failOn: z
+          .array(z.enum(IMPACTS))
+          .min(1)
+          .optional()
+          .describe(
+            `Violation impacts that fail the page. Defaults to ${JSON.stringify(DEFAULT_FAIL_ON)}, ` +
+              'as `iris a11y --fail-on` does; violations below it are still listed.',
+          ),
       },
       outputSchema,
       // As the stdio tool (#362): a real browser visits a URL the model chose.
@@ -303,8 +359,10 @@ export function registerHostedTools(server: McpServer, deps: HostedToolsDeps): v
         openWorldHint: true,
       },
     },
-    ({ url, wcagLevel }) =>
-      answered(RUN_ACCESSIBILITY_TEST, () => runScan(url, wcagLevel ?? 'AA', deps)),
+    ({ url, wcagLevel, failOn }) =>
+      answered(RUN_ACCESSIBILITY_TEST, () =>
+        runScan(url, wcagLevel ?? 'AA', failOn ?? DEFAULT_FAIL_ON, deps),
+      ),
   );
   server.registerTool(
     GET_ACCESSIBILITY_TEST_RESULT,

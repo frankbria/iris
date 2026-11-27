@@ -5,13 +5,17 @@ import type { LegalContent } from "@/lib/legal"
 
 const SITE = "https://portal.invalid"
 
+/** A bare `mailto:` address: no query, so no added headers, subject or body. */
+const MAILTO = /^mailto:[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/
+
 /**
- * `href` if it is a link on this site or an https URL, else null. Browsers read `\` as
- * `/` and drop tab/newline, so `/\evil.com` would leave the site: any backslash, space
- * or control character is refused before the URL is resolved.
+ * `href` if it is a link on this site, an https URL or a bare `mailto:` address, else
+ * null. Browsers read `\` as `/` and drop tab/newline, so `/\evil.com` would leave the
+ * site: any backslash, space or control character is refused before the URL is resolved.
  */
 function safeHref(href: string): string | null {
   if (/[\\\s\x00-\x1f\x7f]/.test(href)) return null
+  if (MAILTO.test(href)) return href
   let url: URL
   try {
     url = new URL(href, SITE)

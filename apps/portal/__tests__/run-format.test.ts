@@ -31,6 +31,28 @@ describe("describeResult", () => {
     ).toBe("score 100 · no violations")
   })
 
+  it("an a11y page that was redirected: where the scan landed (#662)", () => {
+    expect(
+      describeResult("a11y", {
+        url: "https://a.example/account",
+        passed: true,
+        result: {
+          score: 100,
+          violations: {},
+          landedUrl: "https://a.example/login",
+        },
+      }).subject
+    ).toBe("https://a.example/account (landed on https://a.example/login)")
+    // Only text: a stored value of another type is not shown.
+    expect(
+      describeResult("a11y", {
+        url: "https://a.example/",
+        passed: true,
+        result: { landedUrl: { href: "x" } },
+      }).subject
+    ).toBe("https://a.example/")
+  })
+
   it("an a11y page with rules axe could not decide: needs review (#498)", () => {
     expect(
       describeResult("a11y", {

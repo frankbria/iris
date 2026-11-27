@@ -3,6 +3,7 @@ import * as path from 'path';
 import Database from 'better-sqlite3';
 import { sql, type Kysely, type RawBuilder } from 'kysely';
 import { log } from './log';
+import { BILLING_ACTOR } from './org-suspension';
 import { orgArtifacts, type ArtifactStore } from './artifact-store';
 import { forgetArtifacts } from './storage-quota';
 import { AUDIT_RETENTION_DAYS } from './audit-log';
@@ -17,6 +18,11 @@ import { AUDIT_RETENTION_DAYS } from './audit-log';
 export const GRACE_DAYS = 30;
 export const RUN_RETENTION_DAYS = 90;
 export const RECORD_RETENTION_YEARS = 7;
+/**
+ * How long a versioned bucket keeps a deleted or overwritten image (#445): the window the
+ * Postgres backups keep by default (`BACKUP_KEEP_DAYS`), so a restored dump finds its images.
+ */
+export const ARTIFACT_VERSION_DAYS = 14;
 
 /** Refusals an operator should see as such (unknown org, already purged, …): exit 1. */
 export class OffboardingError extends Error {
@@ -37,11 +43,15 @@ export interface RetentionReport {
   auditEntriesDeleted: number;
   sessionsDeleted: number;
   verificationsDeleted: number;
+  /** The portal's auth rate-limit counters idle for a day (#316): each holds a client IP. */
+  rateLimitsDeleted: number;
   termsDropped: number;
   /** Object-storage prefixes deleted this pass (#472). */
   artifactPrefixesPurged: number;
   /** Superseded baseline images deleted this pass (#475). */
   baselinesCollected: number;
+  /** Old versions and spent delete markers removed from a versioned bucket (#445). */
+  artifactVersionsPruned: number;
   /** Steps that failed this pass (logged); non-empty makes the CLI exit 3. */
   failures: string[];
 }
@@ -153,8 +163,8 @@ export function offboarding(db: Kysely<unknown>) {
 
   const latestSuspension = async (q: Kysely<unknown>, orgId: string) =>
     (
-      await sql<{ action: string; reason: string }>`
-        select action, reason from org_suspensions where org_id = ${orgId}
+      await sql<{ action: string; reason: string; actor: string }>`
+        select action, reason, actor from org_suspensions where org_id = ${orgId}
         order by created_at desc, id desc limit 1`.execute(q)
     ).rows[0];
 
@@ -259,8 +269,17 @@ export function offboarding(db: Kysely<unknown>) {
           on conflict (org_id) do nothing returning purge_after`.execute(tx);
         if (!inserted.rows.length)
           throw new OffboardingError(`Deletion of ${orgId} was already requested`);
+        // A failed payment's suspension is replaced by this one (#266), so its
+        // once-per-failure mark goes: if the deletion is cancelled while the payment is
+        // still failing, the sweep suspends again. Before the lock: billing takes the
+        // org_billing row first, then the suspension lock.
+        await sql`update org_billing set payment_suspended_at = null
+          where org_id = ${orgId}`.execute(tx);
         await lockSuspensions(tx, orgId);
-        if ((await latestSuspension(tx, orgId))?.action !== 'suspend')
+        // Over a billing suspension too: a late payment lifts only billing's own
+        // row, and must not reopen an org that is waiting to be purged.
+        const last = await latestSuspension(tx, orgId);
+        if (last?.action !== 'suspend' || last.actor === BILLING_ACTOR)
           await stampSuspension(tx, orgId, 'suspend', DELETION_REASON, actor);
         log('info', 'org deletion requested', { orgId, actor });
         return (inserted.rows[0] as { purge_after: Date }).purge_after;
@@ -439,6 +458,14 @@ export function offboarding(db: Kysely<unknown>) {
       const verificationsDeleted = await step('verifications', 0, async () =>
         affected(await sql`delete from verification where "expiresAt" < ${now}`.execute(db)),
       );
+      // BetterAuth's longest window is a minute; a day past it, a counter only holds an IP.
+      const rateLimitsDeleted = await step('rate limits', 0, async () =>
+        affected(
+          await sql`delete from "rateLimit" where "lastRequest" < ${now.getTime() - 86_400_000}`.execute(
+            db,
+          ),
+        ),
+      );
       const termsDropped = await step('terms', 0, async () =>
         affected(
           await sql`delete from terms_acceptances
@@ -501,6 +528,14 @@ export function offboarding(db: Kysely<unknown>) {
       if (baselines.failed) failures.push('baselines');
       const baselinesCollected = baselines.collected;
 
+      // After the deletions above, so what they just deleted starts its 14 days today.
+      const versionCutoff = new Date(now.getTime() - ARTIFACT_VERSION_DAYS * 86_400_000);
+      const artifactVersionsPruned = await step(
+        'versions',
+        0,
+        async () => (await artifacts?.pruneVersions?.(versionCutoff)) ?? 0,
+      );
+
       const report = {
         orgsPurged,
         tombstonesDropped,
@@ -508,9 +543,11 @@ export function offboarding(db: Kysely<unknown>) {
         auditEntriesDeleted,
         sessionsDeleted,
         verificationsDeleted,
+        rateLimitsDeleted,
         termsDropped,
         artifactPrefixesPurged,
         baselinesCollected,
+        artifactVersionsPruned,
         failures,
       };
       log(failures.length ? 'error' : 'info', 'retention pass', {

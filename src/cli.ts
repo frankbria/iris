@@ -12,7 +12,7 @@ import { DEFAULT_KEEP_RUNS } from './visual/artifacts';
 import type { TranslationResult } from './translator';
 import { describeAction } from './actions';
 import type { ExecutionResult } from './executor';
-import { unknownAxeTags, wcagTags } from './a11y/wcag';
+import { DEFAULT_FAIL_ON, IMPACTS, unknownAxeTags, wcagTags } from './a11y/wcag';
 
 /**
  * `--pages` collector (#289): repeatable. Within one value, a URL with a scheme (`data:`,
@@ -38,8 +38,6 @@ function collectPages(value: string, previous: string[] | undefined): string[] {
   if (pages.length === 0) throw new InvalidArgumentError('--pages needs a page (got none).');
   return [...(previous ?? []), ...pages];
 }
-
-const IMPACTS = ['critical', 'serious', 'moderate', 'minor'] as const;
 
 /** `--fail-on` as a threshold map, or the error message when it is not a valid list (#289). */
 function parseFailOn(value: string): Record<string, boolean> | string {
@@ -1143,7 +1141,18 @@ program
     const { runWorker } = await import('./worker');
     let db: ReturnType<typeof createPostgresDb> | undefined;
     let artifacts: import('./artifact-store').ArtifactStore | null = null;
+    let meters: import('./billing/stripe-meter').UsageMeters | null = null;
     try {
+      // The Stripe meter report (#264) runs here when the worker has the Stripe key. It is
+      // given that one setting only: it runs tenant pages, and needs no webhook secret.
+      const secretKey = (await import('./secret-env')).readSecretEnv('IRIS_STRIPE_SECRET_KEY');
+      if (secretKey) {
+        const [{ stripeClient }, { stripeMeters }] = await Promise.all([
+          import('./billing/stripe'),
+          import('./billing/stripe-meter'),
+        ]);
+        meters = stripeMeters(stripeClient({ secretKey }, { timeout: 10_000 }));
+      }
       // Visual jobs (#268) need somewhere to put images; without IRIS_S3_* the worker
       // runs a11y jobs only (and the API refuses visual ones). Partial config: exit 3.
       artifacts = (await import('./artifact-store')).resolveArtifactStore();
@@ -1171,6 +1180,8 @@ program
     process.on('SIGTERM', onSignal);
     console.log(`iris worker: waiting for jobs (${artifacts ? 'a11y, visual' : 'a11y only'})`);
     try {
+      const { runMeterReports } = await import('./billing/stripe-meter');
+      const reports = meters ? runMeterReports({ db, meters, signal: stop.signal }) : undefined;
       await runWorker({
         jobs: postgresJobs(db),
         signal: stop.signal,
@@ -1188,7 +1199,11 @@ program
           return quotaArtifacts(store, db, orgId, artifactStorageBytes);
         },
       });
+      // Stopped by the same signal, between two rows, before the database closes.
+      await reports;
     } finally {
+      // Had the worker loop thrown, the report loop would keep the process alive.
+      stop.abort();
       await db.destroy();
     }
   });
@@ -1410,6 +1425,124 @@ admin
       // A failed step is logged and the rest still ran; exit 3 so the timer alerts.
       if (report.failures.length)
         throw new Error(`retention steps failed: ${report.failures.join(', ')}`);
+    });
+  });
+
+/**
+ * The artifact bucket's own backup (#445): versioning keeps what a delete or an overwrite
+ * replaced, these commands bring it back. They need `IRIS_S3_*` only, no database. Exit 2
+ * outside hosted mode, 3 without a store or when the store refuses, 1 for nothing found.
+ */
+async function withArtifactBucket(
+  fn: (store: import('./artifact-store').S3ArtifactStore) => Promise<string | null>,
+): Promise<void> {
+  const { isHostedMode } = await import('./hosted');
+  if (!isHostedMode()) {
+    console.error('iris admin runs in hosted mode only: set IRIS_HOSTED=1');
+    process.exit(2); // Invalid usage
+    return;
+  }
+  let code = 0;
+  let store: import('./artifact-store').S3ArtifactStore | null = null;
+  try {
+    store = (await import('./artifact-store')).resolveArtifactStore();
+    if (!store) throw new Error('No artifact store: IRIS_S3_ENDPOINT is not set');
+    const notFound = await fn(store);
+    if (notFound) {
+      console.error(notFound);
+      code = 1;
+    }
+  } catch (err) {
+    console.error((err as Error).message);
+    code = 3; // Environment/runtime error
+  } finally {
+    store?.close();
+  }
+  if (code) process.exit(code);
+}
+
+const formatVersion = (v: import('./artifact-store').ArtifactVersion) =>
+  [
+    v.lastModified.toISOString(),
+    v.versionId,
+    v.deleteMarker ? 'deleted' : `${v.size} bytes`,
+    ...(v.latest ? ['current'] : []),
+  ].join('  ');
+
+admin
+  .command('artifact-versioning')
+  .description('Print whether the artifact bucket keeps old versions; --enable turns it on')
+  .option('--enable', 'Keep deleted and overwritten objects as versions from now on')
+  .action((options: { enable?: boolean }) =>
+    withArtifactBucket(async (store) => {
+      if (options.enable) await store.enableVersioning();
+      const state = (await store.versioningEnabled()) ? 'enabled' : 'off';
+      console.log(`bucket ${store.bucket}: versioning ${state}`);
+      return null;
+    }),
+  );
+
+admin
+  .command('artifact-versions <key>')
+  .description('List the stored versions of one object, current first')
+  .action((key: string) =>
+    withArtifactBucket(async (store) => {
+      const versions = await store.versions(key);
+      for (const version of versions) console.log(formatVersion(version));
+      return versions.length ? null : `no versions of ${key}`;
+    }),
+  );
+
+admin
+  .command('artifact-restore <key>')
+  .description('Make an older version of an overwritten object current again')
+  .requiredOption('--version-id <id>', 'The version id, from artifact-versions')
+  .action((key: string, options: { versionId: string }) =>
+    withArtifactBucket(async (store) => {
+      await store.restoreVersion(key, options.versionId);
+      console.log(`restored ${key} from version ${options.versionId}`);
+      return null;
+    }),
+  );
+
+admin
+  .command('artifact-undelete <keyOrPrefix>')
+  .description('Bring back deleted objects: one key, or everything under a prefix ending in /')
+  .action((target: string) =>
+    withArtifactBucket(async (store) => {
+      const count = await store.undelete(target);
+      if (!count) return `nothing deleted under ${target}`;
+      console.log(`undeleted ${count} object(s) under ${target}`);
+      return null;
+    }),
+  );
+
+const parseTime = (value: string) => new Date(value);
+
+admin
+  .command('billing-reconcile')
+  .description(
+    'Managed AI usage per org for a period: the ledger total against the Stripe meter total ' +
+      '(micro-USD). Exits 3 when they differ',
+  )
+  .requiredOption(
+    '--from <time>',
+    'Period start (inclusive), ISO 8601 on a whole minute',
+    parseTime,
+  )
+  .requiredOption('--to <time>', 'Period end (exclusive), ISO 8601 on a whole minute', parseTime)
+  .action(async (options: { from: Date; to: Date }) => {
+    await withAdminDb(async (_s, db) => {
+      const { resolveStripeConfig, stripeClient } = await import('./billing/stripe');
+      const { meterReconciliation, stripeMeters } = await import('./billing/stripe-meter');
+      const config = resolveStripeConfig();
+      if (!config) throw new Error('Stripe billing is not configured (IRIS_STRIPE_*)');
+      const report = await meterReconciliation(db, stripeMeters(stripeClient(config)), options);
+      console.log(JSON.stringify(report));
+      const differing = report.filter(
+        (row) => row.differenceMicroUsd !== 0 || row.stripeError,
+      ).length;
+      if (differing) throw new Error(`the ledger and Stripe differ for ${differing} org(s)`);
     });
   });
 
@@ -1836,7 +1969,7 @@ program
   .option(
     '--fail-on <impacts>',
     'Fail on impact levels (critical,serious,moderate,minor)',
-    'critical,serious',
+    DEFAULT_FAIL_ON.join(','),
   )
   .option('--format <type>', 'Output format (html|json|junit)', 'html')
   .option('--output <path>', 'Output file path')

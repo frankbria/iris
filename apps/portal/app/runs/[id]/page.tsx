@@ -5,7 +5,7 @@ import { notFound } from "next/navigation"
 import { redactStrings } from "../../../../../src/log"
 import type { StoredRun, StoredRunResult } from "../../../../../src/run-reads"
 import { ApproveBaselineForm } from "@/components/approve-baseline-form"
-import { SuspendedBanner } from "@/components/contact-link"
+import { OrgBanner } from "@/components/contact-link"
 import { getAuth } from "@/lib/auth"
 import { requireOrg } from "@/lib/org"
 import { runsFor, visualImages } from "@/lib/runs"
@@ -26,7 +26,7 @@ export default async function RunPage({
 }: {
   params: Promise<{ id: string }>
 }) {
-  const { org, suspended } = await requireOrg()
+  const { org, suspended, payment } = await requireOrg()
   const { id } = await params
   const found = await runsFor(org.id).get(id)
   if (!found) notFound()
@@ -67,7 +67,7 @@ export default async function RunPage({
 
   return (
     <main className="flex min-h-svh flex-col gap-4 p-6">
-      {suspended && <SuspendedBanner />}
+      <OrgBanner suspended={suspended} payment={payment} />
       <Link href="/runs" className="text-sm underline">
         All runs
       </Link>

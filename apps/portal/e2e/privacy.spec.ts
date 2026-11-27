@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test"
 
 /**
  * Privacy policy, subprocessor list and DPA (#277) through the real portal: each page is
- * public (no session), says it is a draft, and every link in the legal footer resolves,
+ * public (no session), is in effect (no draft banner), and every link in the legal footer resolves,
  * from the legal pages and from the sign-in page.
  */
 const PAGES = [
@@ -11,7 +11,9 @@ const PAGES = [
   ["/dpa", "Data Processing Agreement"],
 ] as const
 
-test("the documents are public and say they are drafts", async ({ page }) => {
+test("the documents are public and in effect (no draft banner)", async ({
+  page,
+}) => {
   for (const [path, title] of PAGES) {
     const res = await page.goto(path)
     expect(res?.status()).toBe(200)
@@ -19,14 +21,14 @@ test("the documents are public and say they are drafts", async ({ page }) => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(title)
     await expect(
       page.getByText("Draft — pending review; not yet in effect")
-    ).toBeVisible()
+    ).toHaveCount(0)
   }
 })
 
 test("the subprocessor list is a table with the vendors", async ({ page }) => {
   await page.goto("/subprocessors")
   const table = page.getByRole("table")
-  for (const name of ["OpenAI", "Anthropic", "Stripe", "[hosting provider]"])
+  for (const name of ["OpenAI", "Anthropic", "Stripe", "Linode", "Resend"])
     await expect(table.getByText(name, { exact: false }).first()).toBeVisible()
 })
 

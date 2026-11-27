@@ -1,10 +1,9 @@
 ---
 title: Acceptable Use Policy
-version: 2026-10-02
-draft: true
+version: 2026-11-23
 ---
 
-This policy is a working draft and is part of the [Terms of Service](/terms). IRIS drives real browsers against real websites, so what you point it at matters. Text in [square brackets] is a placeholder.
+This policy is part of the [Terms of Service](/terms). IRIS drives real browsers against real websites, so what you point it at matters.
 
 ## 1. Only test what you may test
 
@@ -30,8 +29,8 @@ This policy is a working draft and is part of the [Terms of Service](/terms). IR
 
 ## 4. Enforcement
 
-We may refuse or stop a run, limit or suspend an account, or remove content that breaks this policy, and may report illegal activity to the authorities. We try to give notice where we reasonably can, but may act at once to stop harm. To report abuse or a suspected vulnerability in IRIS: [security and abuse contact].
+We may refuse or stop a run, limit or suspend an account, or remove content that breaks this policy, and may report illegal activity to the authorities. We try to give notice where we reasonably can, but may act at once to stop harm. To report abuse or a suspected vulnerability in IRIS: [support@briastrategy.net](mailto:support@briastrategy.net).
 
 ## 5. Changes
 
-This policy is versioned like the terms. A new version is published here and you are asked to accept it at your next sign-in.
+This policy is versioned like the terms. A new version is published here and you are asked to accept it at your next sign-in. For a material change we give the same notice as for the terms.

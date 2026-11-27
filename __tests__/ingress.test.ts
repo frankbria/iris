@@ -12,6 +12,7 @@
  */
 
 import { execFileSync } from 'child_process';
+import { once } from 'events';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
@@ -20,6 +21,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as tls from 'tls';
 import WebSocket, { WebSocketServer } from 'ws';
+import { closedPort, containerExit, onFreePorts, PortTaken } from './utils/ports';
 
 const IMAGE = 'nginx:1.29-alpine';
 const HOST = 'iris.example.com';
@@ -56,14 +58,8 @@ async function upstream(name: string) {
   return { server, seen, port: (server.address() as net.AddressInfo).port };
 }
 
-/** A port nothing listens on right now, on both families (nginx binds 0.0.0.0 and [::]). */
-async function freePort(): Promise<number> {
-  const s = net.createServer();
-  await new Promise<void>((resolve) => s.listen(0, '::', resolve));
-  const { port } = s.address() as net.AddressInfo;
-  await new Promise((resolve) => s.close(resolve));
-  return port;
-}
+/** What nginx says before it exits when a `listen` port is held by something else. */
+const NGINX_PORT_TAKEN = /bind\(\) to \S+ failed \(98: Address (already )?in use\)/;
 
 interface Reply {
   status: number;
@@ -86,12 +82,14 @@ interface Reply {
     urlPath: string,
     headers: http.OutgoingHttpHeaders = {},
     local = '127.0.0.1',
+    to: { port?: number; signal?: AbortSignal } = {},
   ): Promise<Reply> {
     return new Promise((resolve, reject) => {
       const req = https.request(
         {
           host: local,
-          port: httpsPort,
+          port: to.port ?? httpsPort,
+          signal: to.signal,
           path: urlPath,
           headers: { host: HOST, ...headers },
           ca: cert,
@@ -107,6 +105,66 @@ interface Reply {
       req.on('error', reject);
       req.end();
     });
+  }
+
+  /**
+   * Runs the template in a container on the two ports and resolves with them once
+   * `/healthz` answers. nginx cannot say which port it chose, so they are probed (on `::`:
+   * it binds 0.0.0.0 and [::]) and can be taken before it binds them (#666); it then exits
+   * and this throws `PortTaken`. Whoever took the port may accept a connection and never
+   * answer, so the poll is cut by the container's exit, not left waiting on a reply.
+   */
+  async function startNginx(container: string, ports: number[]): Promise<number[]> {
+    // Only ports and upstreams change; the certificate paths are the template's own.
+    const conf = fs
+      .readFileSync(TEMPLATE, 'utf8')
+      .replace(/listen (\[::\]:)?80;/g, `listen $1${ports[0]};`)
+      .replace(/listen (\[::\]:)?443 ssl;/g, `listen $1${ports[1]} ssl;`)
+      .replace(/127\.0\.0\.1:4000/g, `127.0.0.1:${api.port}`)
+      .replace(/127\.0\.0\.1:3000/g, `127.0.0.1:${portal.port}`)
+      // Test-only: a request from ::1 may name its client address in X-Test-Client
+      // (nginx's realip module), so the shipped zones can be fed IPv6 addresses this
+      // host does not have. Requests without the header keep their real peer.
+      .replace(
+        /^(\s*)ssl_session_cache .*$/m,
+        '$&\n$1set_real_ip_from ::1;\n$1real_ip_header X-Test-Client;',
+      );
+    expect(conf).toContain('real_ip_header X-Test-Client;');
+    const confFile = path.join(dir, `${container}.conf`);
+    fs.writeFileSync(confFile, conf);
+    fs.chmodSync(confFile, 0o644);
+
+    execFileSync('docker', ['rm', '-f', container], { stdio: 'ignore' });
+    execFileSync('docker', [
+      'run', '-d', '--name', container, '--network', 'host',
+      '-v', `${confFile}:/etc/nginx/conf.d/default.conf:ro`,
+      '-v', `${dir}:/etc/ssl/iris:ro`,
+      IMAGE,
+    ]); // prettier-ignore
+
+    const exit = containerExit(container);
+    try {
+      // Poll over [::1]: on WSL a connect to a closed 127.0.0.1 port hangs instead of
+      // being refused (#382).
+      for (let i = 0; ; i++) {
+        try {
+          await get('/healthz', {}, '::1', { port: ports[1], signal: exit.signal });
+          return ports;
+        } catch (err) {
+          if (exit.signal.aborted) {
+            const said = exit.output();
+            if (NGINX_PORT_TAKEN.test(said)) throw new PortTaken(said);
+            throw new Error(`nginx exited:\n${said}`);
+          }
+          if (i === 100) {
+            throw new Error(`nginx did not come up: ${(err as Error).message}\n${exit.output()}`);
+          }
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+    } finally {
+      exit.stop();
+    }
   }
 
   beforeAll(async () => {
@@ -132,59 +190,33 @@ interface Reply {
       ws.on('message', (m) => ws.send(`echo:${m}`));
     });
     portal = await upstream('portal');
-    httpPort = await freePort();
-    httpsPort = await freePort();
-
-    // Only ports and upstreams change; the certificate paths are the template's own.
-    const conf = fs
-      .readFileSync(TEMPLATE, 'utf8')
-      .replace(/listen (\[::\]:)?80;/g, `listen $1${httpPort};`)
-      .replace(/listen (\[::\]:)?443 ssl;/g, `listen $1${httpsPort} ssl;`)
-      .replace(/127\.0\.0\.1:4000/g, `127.0.0.1:${api.port}`)
-      .replace(/127\.0\.0\.1:3000/g, `127.0.0.1:${portal.port}`)
-      // Test-only: a request from ::1 may name its client address in X-Test-Client
-      // (nginx's realip module), so the shipped zones can be fed IPv6 addresses this
-      // host does not have. Requests without the header keep their real peer.
-      .replace(
-        /^(\s*)ssl_session_cache .*$/m,
-        '$&\n$1set_real_ip_from ::1;\n$1real_ip_header X-Test-Client;',
-      );
-    expect(conf).toContain('real_ip_header X-Test-Client;');
-    fs.writeFileSync(path.join(dir, 'iris.conf'), conf);
-    fs.chmodSync(path.join(dir, 'iris.conf'), 0o644);
-
-    execFileSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
-    execFileSync('docker', [
-      'run', '-d', '--name', name, '--network', 'host',
-      '-v', `${path.join(dir, 'iris.conf')}:/etc/nginx/conf.d/default.conf:ro`,
-      '-v', `${dir}:/etc/ssl/iris:ro`,
-      IMAGE,
-    ]); // prettier-ignore
-
-    // Poll over [::1]: on WSL a connect to a closed 127.0.0.1 port hangs instead of
-    // being refused (#382).
-    for (let i = 0; ; i++) {
-      try {
-        await get('/healthz', {}, '::1');
-        break;
-      } catch (err) {
-        if (i === 100) {
-          const logs = execFileSync('docker', ['logs', name], { encoding: 'utf8', stdio: 'pipe' });
-          throw new Error(`nginx did not come up: ${(err as Error).message}\n${logs}`);
-        }
-        await new Promise((r) => setTimeout(r, 100));
-      }
-    }
+    [httpPort, httpsPort] = await onFreePorts(2, '::', (ports) => startNginx(name, ports));
     api.seen.length = 0;
     portal.seen.length = 0;
   }, 60_000);
 
   afterAll(async () => {
-    if (DOCKER) execFileSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
+    if (DOCKER) execFileSync('docker', ['rm', '-f', name, `${name}-taken`], { stdio: 'ignore' });
     wss?.close();
     await Promise.all([api, portal].map((u) => u && new Promise((r) => u.server.close(r))));
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it('recognises a listen port something else took, even one that accepts and stays silent (#666)', async () => {
+    const accepted: net.Socket[] = [];
+    const holder = net.createServer((socket) => accepted.push(socket)).listen(0, '::');
+    await once(holder, 'listening');
+    const { port: held } = holder.address() as net.AddressInfo;
+    const free = await closedPort('::');
+    try {
+      await expect(startNginx(`${name}-taken`, [free, held])).rejects.toThrow(PortTaken);
+      // The poll reached the holder, not nginx: without the exit watch it would still wait.
+      expect(accepted.length).toBeGreaterThan(0);
+    } finally {
+      for (const socket of accepted) socket.destroy();
+      await new Promise((resolve) => holder.close(resolve));
+    }
+  }, 30_000);
 
   const spoofed = {
     'x-forwarded-for': '198.51.100.9',

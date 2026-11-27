@@ -135,7 +135,8 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
 - **`runsPerMonth` on job submits**: `enqueue({ monthlyRunLimit })` counts, under the same
   per-org advisory lock as the outstanding cap, this UTC month's `a11y_job` + `visual_job`
   usage (`sum(quantity)`) plus queued and running jobs (a11y 1, visual urls x devices), so
-  parallel submits cannot overshoot. Over it, `RunQuotaExceededError` and the API answers
+  parallel submits cannot overshoot (the count is `runsUsedThisMonth()` in
+  src/billing/usage.ts, which the portal's `/usage` shows too, #271). Over it, `RunQuotaExceededError` and the API answers
   **402** `{ error: 'Monthly run limit reached', limit, used }`. `startServer({
   entitlements })` supplies the limit; hosted `iris connect` passes `orgEntitlements(db)`.
 - **Sessions**: the hosted authenticator puts the plan's `maxConcurrentSessions` on the
@@ -206,6 +207,164 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   is `over-quota` (API 402, portal message). The portal dashboard shows usage of quota.
 - **Objects stored before migration 0015 have no row** and are not counted.
 
+### Stripe Billing (issues #261, #345)
+
+`src/billing/stripe.ts` (config, customers, Checkout, Portal), `src/billing/stripe-webhook.ts`,
+migration 0020 (`org_billing`, `stripe_events`), `POST /v1/stripe/webhook` in
+`src/jobs-api.ts`, the Billing section of the portal's `/org`. Ops: runbook "Stripe billing".
+
+- **Config is all four `IRIS_STRIPE_*` (each with `_FILE`) or none** (`resolveStripeConfig`):
+  none is billing off (no section on `/org`, the route 404s); some throws (`iris connect`
+  exits 3). On the `jest.setup.ts` scrub list. `stripe` is pinned exactly (23.2.0) and the
+  client pins `STRIPE_API_VERSION`; keep the webhook endpoint on the same version.
+- **State only from the webhook**, never the Checkout redirect (ADR 0001 §6). The route
+  takes no API key and passes the **raw body text** to `constructEvent`: re-serialised JSON
+  would not match the signature. 400 on a bad or missing signature, 200 for anything
+  verified (applied, duplicate, ignored), so Stripe stops retrying; a database or Stripe API
+  error is a 500 and Stripe redelivers. The body cap is the shared `MAX_BODY_BYTES` (413).
+- **An event's payload is never applied** (owner decision 2026-11-08, after three review
+  rounds of #636 kept finding out-of-order bugs in a payload-plus-timestamp design). A
+  verified event of the six handled types only names the customer (`object.customer`); the
+  handler then lists that customer's subscriptions from Stripe (`status: 'all'`) and stores
+  the current one: the newest entitled (`active`, `trialing`, `past_due`) if any, else the
+  newest, else none (free, status and subscription id null). So delivery order does not
+  matter: after the last event the row is Stripe's state as read then. Stripe's own
+  recommended pattern.
+- **One transaction per event, Stripe read inside it**: the `org_billing` row is locked by
+  customer id, the event id is inserted `on conflict do nothing` (a redelivery, concurrent or
+  not, stops there and reads nothing), then Stripe is read and the state written. The lock
+  serialises one org's events, so the later commit always carries the later read. Because the
+  read holds the row lock, the reader's client has a 10 s timeout and **no automatic
+  retries** (`stripeClient(config, { timeout, maxNetworkRetries: 0 })`); a failed read throws,
+  the transaction rolls back (no event row), the route answers 500 and Stripe redelivers.
+  An unknown customer or an unhandled type is a 200 that records nothing and reads nothing.
+  The reader is injectable (`stripeWebhookHandler(db, config, { readSubscriptions })`); tests
+  pass one over in-test fixtures. It follows every page (`has_more`).
+- **At most `MAX_CONCURRENT_DELIVERIES` (2) deliveries hold a transaction at once**
+  (#636 review). The webhook shares the one hosted pool (pg default `max` 10) with key
+  verification, jobs and usage, and each delivery holds a connection across the Stripe read
+  (up to 10 s), so a Stripe outage's redelivery waves could take every connection and 503
+  tenants. Past the cap the handler returns `busy` before touching the database (nothing
+  recorded) and the route answers **503 + `Retry-After: 1`**; Stripe retries any non-2xx.
+  An in-process counter, not a second pool: one process serves the route, and a dedicated
+  pool would be more connections and config for the same bound. Checked after the
+  signature and the type, so ignored events never wait. `db/stripe-webhook.test.ts` holds
+  two reads open on a default-sized pool and shows eight tenant queries still run.
+- **Plan from the price**: `active`, `trialing` and `past_due` keep the price's plan (a
+  failed payment suspends, it does not downgrade: #266 below); any other status, or a price
+  IRIS does not sell, is free.
+  `setPlan` is called only when the plan changes, because it replaces the overrides (a
+  support grant). `setPlan` joins a caller's transaction (`db.isTransaction`): Kysely
+  cannot nest one.
+- **One customer per org**: created on first Checkout with idempotency key
+  `customer-<orgId>` and `metadata.org_id`, stored `on conflict do nothing` (audited
+  `billing_customer.create`). Plan changes and cancelling go through the Customer Portal,
+  which must allow switching prices.
+- **One subscription per org, enforced by IRIS (#688)**, not by Stripe's dashboard setting
+  (the owner's account does not offer it; the runbook calls it optional). `checkout()`
+  answers `{ outcome: 'checkout', url } | 'subscribed' | 'busy'`, and the portal action
+  sends `subscribed` to the Customer Portal. In order: the stored state
+  (`hasLiveSubscription`, any status but none/`canceled`/`incomplete_expired`) answers
+  `subscribed` without calling Stripe; the customer is ensured; then, in one transaction
+  under `pg_try_advisory_xact_lock(hashtext('stripe-checkout:' || org))`, the customer's
+  open Checkout Sessions are **expired first** and **then** Stripe's subscription list
+  (`status: 'all'`) is read: any `active`, `trialing`, `past_due`, `unpaid` or `paused` is
+  `subscribed`; else a new session is created. Expiring first matters: a session paid while
+  the guard runs cannot be expired (Stripe answers invalid-request, ignored), and the list
+  read after it then shows its subscription. The webhook's column alone was not enough:
+  it is empty between a paid Checkout and its event, and two tabs each held a payable session.
+- **Why a try-lock, a cap and bounded calls** (the #636 lesson): the lock's transaction
+  holds a connection of the portal's one pool (pg default `max` 10, which also serves
+  every sign-in and page) across up to four Stripe calls. So the lock is **try**, never a
+  wait: a second concurrent call for the org answers `busy` at once ("Billing is busy …
+  try again") instead of queuing on a connection, and the earlier session it would have
+  replaced stays the only open one. **At most `MAX_CONCURRENT_CHECKOUTS` (2) checkouts
+  hold a connection at once** across all orgs (an in-process counter, as the webhook's:
+  one portal process; past it `busy` before any connection is taken), and every Stripe
+  call under the lock has a 10 s timeout and no retries (`BOUNDED`), so at most 2 of 10
+  connections are held, each for a bounded time. An `incomplete` subscription in Stripe's
+  list does not refuse (Stripe expires it unpaid after 23 hours); a stored `incomplete`
+  still does, through `hasLiveSubscription`.
+- **Tests**: `db/stripe-billing.test.ts` runs the guard with the real SDK against a local
+  HTTP Stripe (each refusal status, the expire step, a session paid before its expiry, two
+  concurrent calls for one org giving one session and one `busy`, the cap with 8 tenant
+  queries still served); its test-mode part repeats the sequence, a trialing subscription
+  and the concurrent pair against Stripe. Test-mode org ids are new each run: the customer's
+  idempotency key lasts 24 hours and would hand back a customer a cleanup deleted. The
+  portal's `billing-actions.test.ts` pins the redirects; portal E2E's positive control is
+  an operator suspension (a live subscription's Checkout now reaches Stripe for the Portal).
+- **Portal**: `createAuth()` roles carry `billing: ['manage']` (owners, admins). Server
+  actions `startCheckout` / `openBillingPortal` (`app/org/actions.ts`) check that
+  permission for the form's org, then suspension (the Portal passes a billing one, #266),
+  then redirect to Stripe. `lib/billing.ts`
+  is `server-only`. Portal E2E sets placeholder `IRIS_STRIPE_*` and never reaches Stripe;
+  its positive control is a forged Checkout refused for an operator suspension (after the
+  permission check).
+- **Tests**: the webhook and route run real verification with payloads signed by
+  `generateTestHeaderString` against real Postgres, with the in-test reader playing Stripe's
+  current state (each former out-of-order case is now "any delivery order ends in that
+  state"). Calls to Stripe itself
+  (`db/stripe-billing.test.ts`) need `IRIS_TEST_STRIPE_SECRET_KEY` (a test-mode key) and
+  are skipped without it, **CI included** (CI has no Stripe key); the
+  Portal case also needs the account's Customer Portal configuration saved. With
+  `IRIS_TEST_STRIPE_PRICE_PRO` / `_TEAM` set they use those prices; without, each run
+  creates two test products. The default
+  reader is covered there too (an unpaid test-mode subscription stored as `incomplete`).
+
+### Payment Failure (issue #266)
+
+`src/billing/payment-grace.ts`, migration 0022 (`org_billing.payment_grace_ends_at`,
+`payment_suspended_at`). Ops: runbook "Failed payments".
+
+- **Stripe's state decides, not the event type** (the #636 rule). After every handled event
+  the webhook calls `trackPayment(tx, orgId, { failing })`, `failing` being a current
+  subscription that is `past_due` or `unpaid`. Failing with no deadline starts the grace
+  period; not failing with one ends it. Anything else writes nothing, so retries and a late
+  `invoice.payment_failed` after `invoice.paid` change nothing.
+- **The deadline is stored when the failure is first seen** (`now() + IRIS_BILLING_GRACE_DAYS`,
+  whole days 0-90, default 7, read by `hostedServices()`; malformed exits 3, so a deploy
+  rolls back; production sets it from the `production` environment's variable of that name,
+  written to `settings.env` only when set, #639). The sweep and
+  the portal need no setting, and changing it never moves a running deadline. It has
+  microseconds: a JS `Date` read back from it is up to 1 ms earlier, so a test sweeps at
+  the deadline plus a second.
+- **Suspension is an `org_suspensions` row with actor `billing`** (`BILLING_ACTOR`), so
+  every #348 enforcement point applies unchanged. `suspendOverdueOrgs(db, now)` writes it;
+  `startGraceSweep(db)` runs it every minute in the API server, only when Stripe is
+  configured (unref'd timer, a failed pass is logged). Each org is re-read `for update`
+  on its `org_billing` row, the lock the webhook holds, so a payment settling at that
+  moment is either seen or lifts the suspension afterwards.
+- **Once per failure** (`payment_suspended_at`): an operator's `unsuspend-org` after it is an
+  extension that lasts until the payment settles (a failure after that is a new one). An org an operator
+  already suspended is skipped while suspended, and suspended for billing if that is lifted.
+- **Restore lifts only billing's own suspension** (the latest row is `suspend` by
+  `billing`, checked under the suspension lock: `unsuspend(…, { onlyIfBy })`, codex review). An operator's survives a paid invoice, and `suspend` by anyone else is
+  recorded **over** a billing suspension (`act()` in org-suspension.ts, the one case where
+  an already-suspended org gets a row). `requestOrgDeletion` stamps over it too (a card
+  retry during the 30 days must not reopen an org waiting to be purged) and clears
+  `payment_suspended_at`, so a `restoreOrg` while still unpaid is suspended again.
+  `BILLING_ACTOR` lives in org-suspension.ts (payment-grace imports that module).
+- **One org's failure does not stop a pass**: logged (`payment suspension failed`), retried
+  next minute.
+- **A cancelled subscription ends the failure** like a paid one: the plan is free (#345) and
+  the suspension lifts.
+- **`orgSuspensions(tx)` joins a caller's transaction** (`db.isTransaction`, as `setPlan`);
+  its log line is then written before that transaction commits.
+- **Audit**: `billing.grace_start` (`graceEndsAt`), `billing.suspend` (`graceEndedAt`),
+  `billing.restore` (`suspensionLifted`), no actor, in the transaction of the change.
+- **Portal**: `requireOrg()` returns `payment` (`paymentState`: the deadline, and whether the
+  org's suspension is billing's). `OrgBanner` replaces the bare `SuspendedBanner` on every
+  org page: grace warning, payment suspension (both link to `/org#billing`), or the
+  operator banner. Tenants are told a suspension is for payment; an operator's reason is
+  still never shown. `openBillingPortal` passes a billing suspension (`authorise(…, { toPay
+  })`): paying is the way out. Checkout and key writes stay refused.
+- **Tests**: `db/stripe-webhook.test.ts` drives it with signed fixtures and an injected
+  `now` for the sweep; the database is shared by the file, so its `sweep()` helper drops
+  orgs earlier tests left overdue. Portal E2E writes the rows as the webhook and sweep do,
+  and matches a server action's refusal in the form state (`{"error":…}`), because the
+  operator banner contains the same sentence. No E2E opens the Customer Portal for a
+  billing-suspended org: that call reaches Stripe.
+
 ### Managed AI Credits (issue #479)
 
 `src/billing/managed-ai.ts`, migration 0013 (`org_ai_settings`), ADR 0001 §6.
@@ -241,10 +400,55 @@ Plan limits checked before work starts. Managed AI credits are #479 (ADR 0001 §
   counting and is deleted at the org's next admission (a crashed call). A billed call whose
   usage row failed to write is released as `{ unrecorded: true }`: its row becomes `held`
   and counts as spent until the month ends (codex review), since nothing else records it.
+  `managedCreditLeft()` (credit minus spend minus this month's held rows) is the one
+  figure: the resolver admits a call when live reservations + its worst case fit it, and
+  the portal pages show it (#641).
   A live row ends only with its TTL, so a call started before midnight UTC still counts
   after it. The estimate is a
   resolver parameter, computed in `hostedServices()`: the portal imports `managed-ai.ts`,
-  and the cost tracker would bring SQLite into its bundle. Stripe reporting is #264.
+  and the cost tracker would bring SQLite into its bundle. Stripe reporting: next section.
+
+### Stripe Meter Reporting (issue #264)
+
+`src/billing/stripe-meter.ts`, migration 0021 (`usage_events.stripe_reported_at`, a partial
+index of unreported managed rows, one of managed rows by time for the reconciliation; it
+sets `lock_timeout` like 0005), `iris worker`, `iris admin billing-reconcile`.
+Ops: runbook "Usage reporting and reconciliation".
+
+- **One meter event per `managed` usage row**, never BYOK or platform rows: value =
+  `round(quantity * unit_cost_usd * 1e6)` micro-USD (integers, so totals compare exactly),
+  timestamp = the row's `created_at` (usage lands in the billing period it happened in),
+  identifier **and** idempotency key `usage-<row id>`. The meter's event name is the
+  constant `METER_EVENT_NAME`; there is no setting for it.
+- **`reportManagedUsage(db, meters, { signal })`** is one pass under
+  `pg_try_advisory_xact_lock(hashtext('stripe-meter-report'))`: a transaction that holds
+  only the lock, so the lock ends with the pass however it ends (a session lock left on a
+  pooled connection would silently stop every later pass). Reads and marks go through `db`
+  on other connections, so each mark commits on its own. `null` (and a warn log) when
+  another pass holds the lock. It pages by `id` (keyset), sends, and marks each row as
+  Stripe accepts it; `signal` stops it between two rows. `MeterEventRejected` (Stripe's
+  invalid-request and idempotency errors; a 401 is `StripeAuthenticationError`, not this)
+  leaves the row unreported and goes on; any other error ends the pass and
+  `runMeterReports` (every 5 min in the worker) logs it and retries. A crash between send
+  and mark resends the same identifier: Stripe counts it once, for 24 hours.
+- **Not sent**: rows of an org with no `org_billing` row (sent once it has one, if still
+  inside the window; their timestamps precede any subscription), rows older than 34 days
+  (Stripe's window is 35), a row that cost 0 (marked without a call). **Estimated rows
+  (#243) are sent as they are**: the credit gate charged the org's credit that amount.
+- **The worker gets `IRIS_STRIPE_SECRET_KEY(_FILE)` only** (compose): it runs tenant
+  pages, so no webhook secret and no prices; unset means no report. `stripeClient()` takes
+  just the key. No price is attached to the meter by this code.
+- **`meterReconciliation(db, meters, { from, to })`**: per org with managed usage in the
+  period, ledger, estimated and unreported totals, the meter's total (`listEventSummaries`,
+  which needs whole minutes; `null` without a customer) and ledger minus Stripe. A Stripe
+  failure for one org is that row's `stripeError`; the others are still reported. The CLI
+  prints it as JSON and exits 3 on any difference or error.
+- **Tests**: `db/stripe-meter.test.ts` (real Postgres; an in-test meter that keeps events
+  by identifier, as Stripe does) and `billing/stripe-meter-gateway.test.ts` (the real SDK
+  against a local HTTP server: `new Stripe(key, { host, port, protocol: 'http' })`). The
+  one call to a real test-mode meter needs `IRIS_TEST_STRIPE_SECRET_KEY`, skipped without
+  it, CI included. Under Claude Code the Stripe SDK prints a `<claude-code-hint>` line to
+  stderr: do not assert an empty stderr on a CLI path that loads it.
 
 ### Hosted Job API (issue #267)
 
@@ -500,8 +704,9 @@ tables.
 - **Hosted RPC records each `executeBrowserAction`** (`startServer({ history })`,
   wired by `hostedServices()` over the auth pool). An action is stored as
   `describeAction()`, which never includes what a `fill` typed, and a navigate URL
-  loses its `user:password@`. Errors are cut to 500 characters and lose terminal colour
-  codes (`stripAnsi`, src/report-encoding.ts, #420: Playwright colours its call log). The write is awaited
+  loses its `user:password@` (`urlWithoutUserinfo`, parsed; the same URL quoted in the
+  action's error is cut the same way, #645). Errors are cut to 500 characters and lose terminal colour
+  codes (`strippedError`, src/report-encoding.ts, #420: Playwright colours its call log; only the first 16,384 units reach the patterns, #658). The write is awaited
   before the reply, so a reply means the run is recorded (#269 reads it). A failed write is logged, and the request still succeeds. Local
   (token) connections record nothing.
 - **Local: `sqliteHistoryStore(path)`** over the #77 tables. `test_results` has no kind

@@ -18,7 +18,14 @@ import { liveKeysByCreator } from '../../src/audit-log';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { baselineKey, FilesystemArtifactStore, runArtifactKey } from '../../src/artifact-store';
+import {
+  baselineKey,
+  FilesystemArtifactStore,
+  runArtifactKey,
+  S3ArtifactStore,
+} from '../../src/artifact-store';
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { removeBucket } from '../utils/s3-bucket';
 
 const ADMIN_URL = process.env.IRIS_TEST_DATABASE_URL;
 if (!ADMIN_URL) {
@@ -286,6 +293,18 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
     expect(report.sessionsDeleted).toBeGreaterThanOrEqual(1);
     expect(await count('session', "id in ('s-old', 's-live')")).toBe(1);
     expect(await count('verification', "id in ('v-old', 'v-live')")).toBe(1);
+  });
+
+  // #316: the portal's rate-limit counters are keyed by client IP; idle ones go after a day.
+  it('drops auth rate-limit counters idle for a day, and nothing recent', async () => {
+    const now = new Date();
+    await sql`insert into "rateLimit" (id, key, count, "lastRequest")
+      values ('rl-old', '203.0.113.8|/sign-in/email', 2, ${now.getTime() - 86_400_001}),
+             ('rl-live', '203.0.113.9|/sign-in/email', 1, ${now.getTime() - 60_000})`.execute(db);
+    const report = await offboarding(db).runRetention({ now });
+    expect(report.rateLimitsDeleted).toBe(1);
+    expect(await count('"rateLimit"', "id in ('rl-old', 'rl-live')")).toBe(1);
+    expect(await count('"rateLimit"', "id = 'rl-live'")).toBe(1);
   });
 
   it('pseudonymises terms evidence when a user is deleted, and drops it after 7 years', async () => {
@@ -672,4 +691,56 @@ const at = (base: Date, days: number) => new Date(base.getTime() + days * DAY);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+  // #445: on a versioned bucket a purge leaves versions, which are the bucket's backup.
+  (process.env.IRIS_TEST_S3_ENDPOINT ? it : it.skip)(
+    'a versioned bucket keeps purged images 14 days, then the pass removes them',
+    async () => {
+      const bucket = `iris-test-${randomBytes(4).toString('hex')}`;
+      const config = {
+        endpoint: process.env.IRIS_TEST_S3_ENDPOINT!,
+        region: 'us-east-1',
+        credentials: {
+          accessKeyId: process.env.IRIS_TEST_S3_ACCESS_KEY_ID!,
+          secretAccessKey: process.env.IRIS_TEST_S3_SECRET_ACCESS_KEY!,
+        },
+      };
+      const s3 = new S3Client({ ...config, forcePathStyle: true });
+      const store = new S3ArtifactStore({ ...config, bucket });
+      const key = runArtifactKey({
+        orgId: 'org-ver',
+        projectId: 'p',
+        runId: 'r1',
+        kind: 'current',
+        name: 'home',
+      });
+      try {
+        await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+        await store.enableVersioning();
+        await store.put(key, Buffer.from('screenshot'), 'image/png');
+        await sql`insert into organization (id, name, slug, "createdAt")
+          values ('org-ver', 'V', 'ver', now())`.execute(db);
+        await sql`insert into artifact_purges (org_id, prefix)
+          values ('org-ver', 'org/org-ver/')`.execute(db);
+        const now = new Date();
+
+        const purge = await offboarding(db).runRetention({ now, artifacts: store });
+        expect(purge).toMatchObject({ artifactVersionsPruned: 0, failures: [] });
+        expect(purge.artifactPrefixesPurged).toBeGreaterThanOrEqual(1);
+        expect(await store.get(key)).toBeNull();
+
+        const early = await offboarding(db).runRetention({ now: at(now, 13), artifacts: store });
+        expect(early).toMatchObject({ artifactVersionsPruned: 0, failures: [] });
+        expect(await store.versions(key)).toHaveLength(2);
+
+        const late = await offboarding(db).runRetention({ now: at(now, 15), artifacts: store });
+        // The image and the delete marker in front of it.
+        expect(late).toMatchObject({ artifactVersionsPruned: 2, failures: [] });
+        expect(await store.versions(key)).toEqual([]);
+      } finally {
+        await removeBucket(s3, bucket).finally(() => s3.destroy());
+        store.close();
+      }
+    },
+    60_000,
+  );
 });

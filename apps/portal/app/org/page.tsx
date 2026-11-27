@@ -3,14 +3,17 @@ import { headers } from "next/headers"
 import Link from "next/link"
 
 import { liveKeysByCreator } from "../../../../src/audit-log"
+import { orgEntitlements } from "../../../../src/billing/plans"
+import { BillingControls, PlanLine } from "@/components/billing-section"
 import {
   InviteForm,
   LeaveOrgButton,
   MemberControls,
 } from "@/components/org-forms"
-import { SuspendedBanner } from "@/components/contact-link"
+import { OrgBanner } from "@/components/contact-link"
 import { getAuth, getDb } from "@/lib/auth"
-import { requireOrg } from "@/lib/org"
+import { getBilling } from "@/lib/billing"
+import { logInIfSignedOut, requireOrg } from "@/lib/org"
 
 /** BetterAuth keeps several roles as one comma string (`admin,owner`). */
 const hasRole = (roles: string, role: string) =>
@@ -33,23 +36,60 @@ async function ownerCount(orgId: string): Promise<number> {
   return rows[0].n
 }
 
+/**
+ * The org's plan and subscription (#261); hidden when Stripe is not configured. Usage
+ * against the plan is on `/usage` (#271), which shows the same controls.
+ */
+async function BillingSection({
+  organizationId,
+  manages,
+}: {
+  organizationId: string
+  manages: boolean
+}) {
+  const billing = getBilling()
+  if (!billing) return null
+  const [account, { plan }] = await Promise.all([
+    billing.account(organizationId),
+    orgEntitlements(getDb()).get(organizationId),
+  ])
+  return (
+    <section aria-labelledby="billing" className="flex flex-col gap-2">
+      <h2 id="billing" className="font-medium">
+        Billing
+      </h2>
+      <PlanLine plan={plan} account={account} />
+      <BillingControls
+        organizationId={organizationId}
+        manages={manages}
+        account={account}
+      />
+      <Link href="/usage" className="text-sm underline">
+        Usage this month
+      </Link>
+    </section>
+  )
+}
+
 export default async function OrgPage({
   searchParams,
 }: {
   searchParams: Promise<{ page?: string | string[] }>
 }) {
-  const { session, org, role, suspended } = await requireOrg()
+  const { session, org, role, suspended, payment } = await requireOrg()
   const page = pageNumber((await searchParams).page)
-  const { members, total } = await getAuth().api.listMembers({
-    headers: await headers(),
-    query: {
-      organizationId: org.id,
-      limit: PAGE,
-      offset: (page - 1) * PAGE,
-      sortBy: "createdAt",
-      sortDirection: "asc",
-    },
-  })
+  const { members, total } = await getAuth()
+    .api.listMembers({
+      headers: await headers(),
+      query: {
+        organizationId: org.id,
+        limit: PAGE,
+        offset: (page - 1) * PAGE,
+        sortBy: "createdAt",
+        sortDirection: "asc",
+      },
+    })
+    .catch(logInIfSignedOut)
   const now = new Date()
   const pending = org.invitations.filter(
     (i) => i.status === "pending" && new Date(i.expiresAt) > now
@@ -63,7 +103,7 @@ export default async function OrgPage({
   const keys = await liveKeysByCreator(getDb(), org.id)
   return (
     <main className="flex min-h-svh flex-col gap-6 p-6">
-      {suspended && <SuspendedBanner />}
+      <OrgBanner suspended={suspended} payment={payment} />
       <div className="flex flex-col gap-1">
         <h1 className="font-heading text-lg font-medium">{org.name}</h1>
         <Link href="/dashboard" className="text-sm underline">
@@ -154,6 +194,7 @@ export default async function OrgPage({
           Only owners and admins can invite people.
         </p>
       )}
+      <BillingSection organizationId={org.id} manages={manages} />
       <section className="flex flex-col gap-2">
         <h2 className="font-medium">Leave</h2>
         {soleOwner(role) ? (

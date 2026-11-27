@@ -387,6 +387,7 @@ without limit:
 | open connections | `--max-connections <n>` | 16 | handshake refused, HTTP `503` |
 | browser sessions, server-wide | `--max-sessions <n>` | 4 | `launchBrowser` error `-32000` |
 | actions per `executeBrowserAction` | `--max-actions <n>` | 100 | `-32602` for an `actions` array; `success: false` when an `instruction` translates to more |
+| characters in a `selector` or an assertion `target` | (fixed) | 4,096 | `-32602` for an `actions` array; an `instruction` never translates to a longer one (it is left to the AI, whose plan is checked the same way) |
 | requests per minute, per API key (hosted) | `--rate-per-key <n>` | 120 | error `-32029` "Rate limit exceeded", `data.retryAfterMs`; the request is not run |
 | requests per minute, per org (hosted) | `--rate-per-org <n>` | 300 | same; all of an org's keys share it |
 | browser sessions per org (hosted) | `--max-sessions-per-org <n>` | 2 | `launchBrowser` error `-32000` |
@@ -485,18 +486,12 @@ docker run -d --name iris \
   iris
 ```
 
-`docker-compose.staging.yml` is the deployed form of the same thing. CI deploys
-it on merge to `main` using the **`staging` GitHub Environment**, which supplies
-`HOST`, `USER`, `SSH_KEY`, `SSH_KNOWN_HOSTS` and `IRIS_CONNECT_TOKEN`. The job
-skips itself when those are absent, so a fork does not get a red CI it cannot fix.
-The deploy writes the token to the compose secret file (`secrets/connect_token`
-beside the compose file) and hands it to uid 1001, so `USER` must be able to
-`chown`.
-
-`IRIS_CONNECT_TOKEN` belongs to the environment, not the repository: it is the
-credential to one running service, so a single repo-wide value would let a
-staging leak drive the production browser. A `production` environment holds a
-different value under the same name.
+`docker-compose.staging.yml` is the compose form of the same thing: one token-mode
+server with its token in a secret file (`secrets/connect_token` beside the compose
+file, readable by uid 1001). The deployed environments no longer run it: since #440
+staging runs the hosted stack (`docker-compose.production.yml` through
+`deploy/deploy.sh`), like production. See [DEPLOYMENT.md](DEPLOYMENT.md) for the
+secrets each GitHub environment needs.
 
 Container specifics worth knowing:
 
@@ -792,6 +787,40 @@ iris a11y --pages / --base-url https://example.com \
 The report contains axe-core violations with impact level, WCAG tags, and the
 offending selectors. Outcome is signalled by the exit code (`4` = violations found).
 
+**A page that navigates while it is scanned (#669).** IRIS loads the page, waits until its
+network has been idle for half a second, and scans the document it holds then. A page
+that moves to another origin or path after that, while its checks are still running (a
+`setTimeout` that calls `location.replace`, a meta refresh of a few seconds, a sign-in
+check that redirects after a slow call), is not scanned: it is listed as a page that
+could not be scanned, with the error `The page navigated during the scan: it was at <URL>
+when the scan began and moved to another page before its checks finished`, and the command
+exits `3` (or `4` when another page has violations). Scan the page it ends on instead.
+
+- A page that loads itself again while it is scanned (`location.reload()` on a timer, or
+  the same path under another query string) fails the same way, with `… and loaded again
+  before its checks finished` (#675): the checks that were running lost their document,
+  and the ones after them would have measured the second load.
+- A change of the query string or the fragment within the document (a router's
+  `history.replaceState`, an anchor) is not a move.
+- A router that pushes another path counts as a move, although the document is the same.
+- A key the keyboard checks press may leave the page on purpose (a dialog that navigates
+  on Escape passes its check), and so may a custom key sequence; that is not an error.
+  The keyboard checks run last for that reason, after axe and the screen-reader checks.
+  An arrow key that leaves the page is the key's doing too (#675), and is reported as a
+  failed keyboard check, `The page navigated`: an arrow key in a menu, listbox, tree, grid
+  or tab list is for moving focus. Tabs that keep the selected one in the fragment, the
+  query string or, through their router, the path stay on their document and are judged
+  by where focus went, as before.
+- The keyboard checks load the page again themselves before they press Escape on its
+  dialogs; that reload is theirs, and the page is held to the document it produced.
+- A handler that leaves the page some time after the key (a dialog that closes on Escape
+  and navigates when its animation ends) cannot be told from the page's own timer, and
+  fails the page as navigated during the scan.
+- A move that comes after the last check has finished is not seen: the results are the
+  first page's, which is the page that was scanned.
+- A move to an address the navigation policy refuses, or to a page that cannot be loaded,
+  is reported as that.
+
 ### Exit codes
 
 Every command signals its outcome through the exit code:
@@ -815,9 +844,10 @@ instead of shelling out. It is a **spike**: exactly one tool today.
 
 | | |
 |---|---|
-| **Tool** | `run_accessibility_test` — scans a page with axe-core |
-| **Input** | `url` (required, http/https), `wcagLevel` (`AA` default, or `AAA`; WCAG 2.2, 2.0 and 2.1 criteria included) |
-| **Output** | `{ url, redirected, passed, violationCount, violations[], needsReview[] }`, each violation `{ id, impact, description, helpUrl, nodes }`; `needsReview` lists rules axe could not decide (`{ id, description, nodes }`), which never fail the scan |
+| **Tool** | `run_accessibility_test` — scans a page with axe-core, and on request presses real keys |
+| **Input** | `url` (required, http/https), `wcagLevel` (`AA` default, or `AAA`; WCAG 2.2, 2.0 and 2.1 criteria included), `failOn` (impacts that fail the page, default `["critical","serious"]` like `iris a11y --fail-on`), `keyboard` (`true` also runs the keyboard checks; default `false`) |
+| **Output** | `{ url, redirected, passed, violationCount, violations[], needsReview[], keyboard? }`, each violation `{ id, impact, description, helpUrl, nodes }`; `needsReview` lists rules axe could not decide (`{ id, description, nodes }`), which never fail the scan; `keyboard` (only with `keyboard: true`) is `{ passed, checks, failures[] }`, at most 20 failures `{ key, target, expected, actual }` |
+| **Verdict** | `passed` is the verdict `iris a11y` gives the page at the same `--fail-on`: no violation at a `failOn` impact and, with `keyboard`, the keyboard checks passed. Violations below `failOn` are still listed |
 | **Keys** | none — axe-core runs locally |
 | **Redirects** | followed, with every hop checked against the navigation policy; `url` is then the landing page's origin and path |
 | **Hints** | not read-only (`readOnlyHint: false`, `destructiveHint: true`, `openWorldHint: true`): the scan loads the page in a real browser, so expect your client to ask before each call |
@@ -862,9 +892,9 @@ API key as the REST API:
 
 | | |
 |---|---|
-| **Tools** | `run_accessibility_test { url, wcagLevel? }` and `get_accessibility_test_result { jobId }` |
+| **Tools** | `run_accessibility_test { url, wcagLevel?, failOn? }` and `get_accessibility_test_result { jobId }` |
 | **What a call does** | queues the same job as `POST /v1/a11y/jobs` with one URL: a worker scans the page, and the run appears in the org's history (`GET /v1/runs`, the portal) and counts as one run on the plan |
-| **Output** | `{ jobId, status }`, and once `status` is `finished`: `url, passed, violationCount, violations[] ({ id, impact, nodes }), needsReviewRules[], keyboardPassed`. `passed` is true when axe reported no violation and the keyboard checks passed |
+| **Output** | `{ jobId, status }`, and once `status` is `finished`: `url, redirected, passed, violationCount, violations[] ({ id, impact, nodes, helpUrl }), needsReviewRules[], keyboardPassed`. `url` is the page that was scanned: when the request was redirected it is the landing page's origin and path (no query string or fragment), `redirected` is true and `redirectedFrom` holds the URL you asked for. `helpUrl` is Deque's page for the rule. `passed` is the job's verdict: no violation at an impact in `failOn` (default `["critical","serious"]`, as `iris a11y`) and the keyboard checks passed; the hosted scan always runs them |
 | **Slow scans** | a call waits up to 45 s, then answers `status: "queued"` or `"running"` with the `jobId`; `get_accessibility_test_result` reads the result later and costs nothing |
 | **Limits** | the key's and org's request rate (HTTP 429), the org's 10 queued or running jobs and the plan's monthly runs (both a tool error; no scan starts) |
 | **URLs** | public `http(s)` pages only, without credentials: private, loopback and metadata addresses are refused before a run is spent |
@@ -891,10 +921,14 @@ and the page under test chooses much of what an error or a redirect contains. So
 - A failure is `Accessibility scan failed for <your URL>: <reason>`, with the reason
   from a fixed list: the kind of address the navigation policy blocked (never the
   redirect target itself), a `net::ERR_*` code, a timeout, "the browser could not
-  be started on the server", or "the scan could not be completed". The error's own text (local paths, addresses) goes to the
+  be started on the server", "the page navigated to another page during the scan" (#669:
+  it moved on by timer after it had loaded, so scan the page it ends on), "the page
+  reloaded during the scan" (#675), or "the scan could not be completed". The error's own text (local paths, addresses) goes to the
   server's stderr.
 - A redirected scan reports `redirected: true` and the landing page's origin and
-  path, at most 200 characters. Its query string and fragment, where sign-in
+  path, at most 200 characters. A page that moves on by itself (a script, a meta
+  refresh, its router) before the scan counts as redirected; a move that only
+  changes the query string or the fragment does not. Its query string and fragment, where sign-in
   codes and tokens travel, are left out, and a path segment of 32 characters or
   more (a reset link's token) is shown as `…`. A shorter token in the path is
   not recognised as one.
@@ -909,8 +943,8 @@ calls in parallel. Up to 8 more calls wait in arrival order (a client with a sho
 request timeout may give up on a long wait); beyond that a call is refused at once
 with a tool error saying to call again.
 
-**Deliberate limits.** The tool reports axe-core results *only*: the keyboard and
-screen-reader checks `iris a11y` runs are not offered through it yet. Visual-diff
+**Deliberate limits.** The keyboard checks run only with `keyboard: true` (they press
+keys on the page and take longer); the screen-reader checks are not offered. Visual-diff
 and action tools come after the
 spike verdict — the CLI JSON contract above remains the supported integration
 surface in the meantime.

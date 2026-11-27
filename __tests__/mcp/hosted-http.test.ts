@@ -18,6 +18,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { drainServer, startServer, type Authenticator, type Principal } from '../../src/protocol';
 import { RunQuotaExceededError, type StoredJob, type TenantScope } from '../../src/history-store';
 import type { ApiJobs } from '../../src/jobs-api';
+import { axeRuleHelpUrl } from '../../src/mcp/axe-help-url';
 
 const keys = new Map<string, Principal>([
   ['key-a', { orgId: 'org-a', keyId: 'id-a' }],
@@ -82,6 +83,8 @@ const jobs = {
     };
   },
 };
+
+const IMAGE_ALT_HELP = axeRuleHelpUrl('image-alt');
 
 /** What the worker stores for a page with one critical violation. */
 const PAGE_RESULT = {
@@ -267,7 +270,8 @@ describe('run_accessibility_test over HTTP', () => {
       params: {
         urls: ['https://example.com/checkout'],
         wcagLevel: 'AAA',
-        failOn: ['critical', 'serious', 'moderate', 'minor'],
+        // #646: the CLI's --fail-on default, unless the caller names others.
+        failOn: ['critical', 'serious'],
       },
     });
     expect(result.isError).toBeFalsy();
@@ -275,14 +279,66 @@ describe('run_accessibility_test over HTTP', () => {
       jobId: job.id,
       status: 'finished',
       url: 'https://example.com/checkout',
+      redirected: false,
       passed: false,
       violationCount: 1,
-      violations: [{ id: 'image-alt', impact: 'critical', nodes: 2 }],
+      violations: [{ id: 'image-alt', impact: 'critical', nodes: 2, helpUrl: IMAGE_ALT_HELP }],
       needsReviewRules: ['color-contrast'],
       keyboardPassed: true,
     });
-    expect(textOf(result)).toContain('- [critical] image-alt (2 element(s))');
+    expect(textOf(result)).toContain(`- [critical] image-alt (2 element(s)): ${IMAGE_ALT_HELP}`);
     expect(textOf(result)).toContain('color-contrast');
+    expect(textOf(result)).not.toContain('redirected');
+  });
+
+  it('reports the page a redirect landed on, and which URL was asked for (#648)', async () => {
+    const client = await connect();
+    const landed = {
+      ...PAGE_RESULT,
+      result: { ...PAGE_RESULT.result, landedUrl: 'https://login.example.com/signin' },
+    };
+    const [result, job] = await Promise.all([scan(client), workerFinishes({ results: [landed] })]);
+    expect(result.structuredContent).toMatchObject({
+      url: 'https://login.example.com/signin',
+      redirected: true,
+      redirectedFrom: 'https://example.com/checkout',
+      violationCount: 1,
+    });
+    expect(textOf(result)).toContain(
+      '1 WCAG violation(s) on https://login.example.com/signin ' +
+        '(redirected from https://example.com/checkout):',
+    );
+
+    // Read later by id, when the caller may no longer hold the URL it asked for.
+    const read = await client.callTool({
+      name: 'get_accessibility_test_result',
+      arguments: { jobId: job.id },
+    });
+    expect(read.structuredContent).toMatchObject({
+      url: 'https://login.example.com/signin',
+      redirected: true,
+      redirectedFrom: 'https://example.com/checkout',
+    });
+  });
+
+  it("links each rule to axe's documentation, whatever the stored rule id holds (#648)", async () => {
+    const client = await connect();
+    // A rule id is axe's output from inside the page under test: it is only ever a path
+    // segment of the link, never the link.
+    const odd = {
+      ...PAGE_RESULT,
+      result: {
+        ...PAGE_RESULT.result,
+        violationRules: [{ id: '../../evil?x=1#y', impact: null, nodes: 1 }],
+      },
+    };
+    const [result] = await Promise.all([scan(client), workerFinishes({ results: [odd] })]);
+    const { violations } = result.structuredContent as { violations: Array<{ helpUrl: string }> };
+    const link = new URL(violations[0].helpUrl);
+    expect(link.origin).toBe('https://dequeuniversity.com');
+    expect(link.pathname).toMatch(/^\/rules\/axe\/\d+\.\d+\/[^/]+$/);
+    expect(link.search).toBe('?application=axeAPI');
+    expect(link.hash).toBe('');
   });
 
   it('reports a clean page as passed, and a failed keyboard check in words', async () => {
@@ -312,6 +368,24 @@ describe('run_accessibility_test over HTTP', () => {
     const [failed] = await Promise.all([scan(client), workerFinishes({ results: [keyboard] })]);
     expect(failed.structuredContent).toMatchObject({ passed: false, keyboardPassed: false });
     expect(textOf(failed)).toContain('keyboard checks failed');
+  });
+
+  // #646: the caller's failOn is the job's, so the worker's verdict is the one asked for.
+  it('queues the failOn the caller names, and refuses an unknown impact', async () => {
+    const client = await connect();
+    const [, job] = await Promise.all([
+      scan(client, { failOn: ['minor'] }),
+      workerFinishes({ status: 'succeeded', results: [{ ...PAGE_RESULT, passed: true }] }),
+    ]);
+    expect(job.params).toMatchObject({ failOn: ['minor'] });
+
+    const before = stored.size;
+    for (const failOn of [[], ['severe']]) {
+      const refused = await scan(client, { failOn });
+      expect(refused.isError).toBe(true);
+      expect(textOf(refused)).toMatch(/validation/i);
+    }
+    expect(stored.size).toBe(before);
   });
 
   it('words a failed job from the fixed vocabulary, never from its stored error', async () => {
@@ -358,8 +432,8 @@ describe('run_accessibility_test over HTTP', () => {
       violationCount: 1,
     });
 
-    // A REST job with a narrower failOn stored `passed: true` beside a minor violation:
-    // the tool's `passed` is its own definition, not that verdict.
+    // A job whose failOn left out minor stored `passed: true` beside a minor violation: the
+    // tool answers that verdict, as `iris a11y` would at the same failOn (#646).
     Object.assign(stored.get(id)!, {
       status: 'succeeded',
       results: [
@@ -373,7 +447,7 @@ describe('run_accessibility_test over HTTP', () => {
         },
       ],
     });
-    expect((await read(id)).structuredContent).toMatchObject({ passed: false, violationCount: 1 });
+    expect((await read(id)).structuredContent).toMatchObject({ passed: true, violationCount: 1 });
 
     // Another org's id, an unknown one and a visual job all read as "no such scan".
     const other = await read(id, await connect('key-b'));

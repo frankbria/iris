@@ -5,9 +5,14 @@
  * `@sha256:` digest refs and really pulls them. The images are busybox builds that
  * model only what the script depends on: a migration that exits 0 or 1
  * (`dist/db/migrate.js`), an SMTP check that passes only when the release's mounted
- * `smtp_url` secret says `ok`, healthchecks that pass or fail, and a worker that
- * writes a heartbeat checked by the production compose file's own command. Their
- * `node` is a shell wrapper, so those "scripts" are shell.
+ * `smtp_url` secret says `ok`, healthchecks that pass or fail, a worker that
+ * writes a heartbeat checked by the production compose file's own command, and an egress
+ * probe (`docker/egress-probe.js`) that passes or fails (#376). Their `node` is a shell
+ * wrapper, so those "scripts" are shell. The egress service stands in for the firewall:
+ * on the host's network, it is healthy only when the bridge deploy.sh named exists.
+ * The proxy is production's (#316): the real nginx image, with ephemeral host ports; iris
+ * and the portal answer HTTP through it with busybox httpd (`/host` is the container's
+ * hostname, so a reply names the container that served it).
  *
  * Each case stages a release directory the way the deploy job does
  * (<root>/releases/<id>/ with its compose file, settings.env and secrets/, shared
@@ -19,7 +24,9 @@
  */
 
 import { execFileSync, spawn, spawnSync } from 'child_process';
+import { once } from 'events';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -62,6 +69,19 @@ const WORKER_CHECK = (() => {
   return `${m[1]}3`;
 })();
 
+/** The production proxy's image line, so the test runs the pinned nginx. */
+const PROXY_IMAGE = (() => {
+  const m = fs
+    .readFileSync(path.join(ROOT, 'docker-compose.production.yml'), 'utf8')
+    .match(/^ {4}image: (nginx:\S+)$/m);
+  if (!m) throw new Error('proxy image not found in docker-compose.production.yml');
+  return m[1];
+})();
+
+/** Serves /app/www plus /host (this container's hostname) on the given port. */
+const serve = (port: number) =>
+  `['sh', '-c', 'cp -r /app/www /tmp/www && hostname > /tmp/www/host && httpd -p ${port} -h /tmp/www && exec sleep infinity']`;
+
 const COMPOSE = `
 name: iris-deploy-test
 x-app: &app
@@ -87,8 +107,11 @@ services:
   iris:
     <<: *app
     image: \${IRIS_IMAGE:?}
+    command: ${serve(4000)}
     environment:
       MARK: \${MARK:?}
+      # An optional setting as the production file passes one (#549): empty is unset.
+      OPTIONAL: \${OPTIONAL:-}
     secrets: [shared]
   worker:
     <<: *app
@@ -102,10 +125,47 @@ services:
   portal:
     <<: *app
     image: \${PORTAL_IMAGE:?}
+    command: ${serve(3000)}
     secrets: [smtp_url]
+  proxy:
+    image: ${PROXY_IMAGE}
+    command: ['nginx', '-c', '/etc/iris-proxy/nginx.conf', '-g', 'daemon off;']
+    user: '101:101'
+    ports: ['127.0.0.1::4000', '127.0.0.1::3000']
+    volumes:
+      - ../../shared/proxy:/etc/iris-proxy:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,uid=101,gid=101
+      - /var/cache/nginx:size=8m,uid=101,gid=101
+  egress:
+    image: \${IRIS_IMAGE:?}
+    init: true
+    network_mode: host
+    command: ['sleep', 'infinity']
+    environment:
+      IRIS_EGRESS_BRIDGE: \${IRIS_EGRESS_BRIDGE:-}
+    healthcheck:
+      test: ['CMD-SHELL', 'test -n "$$IRIS_EGRESS_BRIDGE" && test -e "/sys/class/net/$$IRIS_EGRESS_BRIDGE"']
+      interval: 1s
+      timeout: 2s
+      retries: 1
 secrets:
   smtp_url:
     file: ./secrets/smtp_url
+  shared:
+    file: ../../shared/secrets/shared
+`;
+
+/** A second compose file adding a data service, as staging's object store does (#514). */
+const STORE = `
+services:
+  store:
+    image: \${DB_IMAGE:?}
+    init: true
+    command: ['sleep', 'infinity']
+    secrets: [shared]
+secrets:
   shared:
     file: ../../shared/secrets/shared
 `;
@@ -121,7 +181,7 @@ secrets:
    * Builds and pushes one image; returns its digest ref. COPY only, no RUN: each RUN
    * is a container, which costs tens of seconds on a loaded WSL daemon.
    */
-  function image(name: string, { migrate = 0, health = 0 } = {}): string {
+  function image(name: string, { migrate = 0, health = 0, egress = 0 } = {}): string {
     const ctx = path.join(dir, `ctx-${name}`);
     const put = (file: string, body: string, mode = 0o644) => {
       fs.mkdirSync(path.dirname(path.join(ctx, file)), { recursive: true });
@@ -134,11 +194,13 @@ secrets:
       '[ "$(cat /run/secrets/smtp_url)" = ok ]\n',
     );
     put('app/health', `${health}\n`);
+    put('app/docker/egress-probe.js', `exit ${egress}\n`);
     put(
       'app/worker.sh',
       'while :; do [ "$(cat /app/health)" = 0 ] && touch /tmp/iris-worker-heartbeat; sleep 1; done\n',
     );
     put('app/version', `${name}\n`);
+    put('app/www/version', `${name}\n`);
     put('Dockerfile', `FROM ${BASE}\nCOPY node /bin/node\nCOPY app /app\nWORKDIR /app\n`);
     const tag = `${repo}:${name}`;
     docker('build', '-q', '-t', tag, ctx);
@@ -149,11 +211,20 @@ secrets:
   }
 
   /** A release directory as the deploy job stages it. */
-  function stage(id: string, { smtp = 'ok', mark = 'a', db = refs.db } = {}): string {
+  function stage(
+    id: string,
+    { smtp = 'ok', mark = 'a', db = refs.db, store = false } = {},
+  ): string {
     const release = path.join(root, 'releases', id);
     fs.mkdirSync(path.join(release, 'secrets'), { recursive: true });
     fs.writeFileSync(path.join(release, 'docker-compose.yml'), COMPOSE);
-    fs.writeFileSync(path.join(release, 'settings.env'), `DB_IMAGE=${db}\nMARK=${mark}\n`);
+    let settings = `DB_IMAGE=${db}\nMARK=${mark}\n`;
+    if (store) {
+      // What deploy-staging adds (#514): the store's compose file and the optional settings.
+      fs.writeFileSync(path.join(release, 'docker-compose.store.yml'), STORE);
+      settings += "COMPOSE_FILE='docker-compose.yml:docker-compose.store.yml'\nOPTIONAL='set'\n";
+    }
+    fs.writeFileSync(path.join(release, 'settings.env'), settings);
     fs.writeFileSync(path.join(release, 'secrets', 'smtp_url'), smtp);
     return release;
   }
@@ -180,6 +251,27 @@ secrets:
       return null;
     }
   };
+
+  /** The running container of one service (one id; the deploy leaves one of each). */
+  const serviceId = (name: string) =>
+    docker(
+      'ps',
+      '-q',
+      '--filter',
+      'label=com.docker.compose.project=iris-deploy-test',
+      '--filter',
+      `label=com.docker.compose.service=${name}`,
+    );
+
+  /** One HTTP/1.0 GET through the proxy's published iris port; the body. */
+  async function get(port: number, file: string): Promise<string> {
+    const socket = net.connect(port, '127.0.0.1');
+    let reply = '';
+    socket.on('data', (d) => (reply += d));
+    socket.write(`GET /${file} HTTP/1.0\r\n\r\n`);
+    await once(socket, 'close');
+    return reply.split('\r\n\r\n')[1]?.trim() ?? '';
+  }
 
   /** service -> what its container runs: image ref, id, MARK, and bind mount sources. */
   function running() {
@@ -245,6 +337,7 @@ secrets:
     refs.v2 = image('v2');
     refs.badMigration = image('bad-migration', { migrate: 1 });
     refs.unhealthy = image('unhealthy', { health: 1 });
+    refs.leaky = image('leaky', { egress: 1 });
   }, 180_000);
 
   afterAll(() => {
@@ -280,8 +373,76 @@ secrets:
         path.join(fs.realpathSync(release), 'secrets', 'smtp_url'),
       );
     }
+    // The firewall keys on the stack's own bridge (#376): compose's default network.
+    const id = docker('network', 'inspect', '-f', '{{.Id}}', 'iris-deploy-test_default');
+    const egress = docker(
+      'ps',
+      '-q',
+      '--filter',
+      'label=com.docker.compose.project=iris-deploy-test',
+      '--filter',
+      'label=com.docker.compose.service=egress',
+    );
+    expect(docker('inspect', '-f', '{{range .Config.Env}}{{.}} {{end}}', egress)).toContain(
+      `IRIS_EGRESS_BRIDGE=br-${id.slice(0, 12)}`,
+    );
     // DEPLOY_KEEP_RELEASES=2: the failed r0 is gone.
     expect(fs.readdirSync(path.join(root, 'releases')).sort()).toEqual(['r1', 'r2']);
+  }, 150_000);
+
+  // #316: a session held through the proxy across a deploy is served to its end by the old
+  // container, new connections go to the new one, and the old one stops only once drained.
+  it('a rolling deploy keeps a held session on the old release and drains it before the stop', async () => {
+    const before = serviceId('iris');
+    const port = Number(docker('port', serviceId('proxy'), '4000/tcp').split(':').pop());
+    expect(await get(port, 'host')).toBe(before.slice(0, 12));
+
+    // A request whose headers are not finished: the old iris holds it open.
+    const held = net.connect(port, '127.0.0.1');
+    let heldReply = '';
+    held.on('data', (d) => (heldReply += d));
+    const heldClosed = once(held, 'close');
+    held.write('GET /host HTTP/1.0\r\n');
+
+    const release = stage('r2s');
+    const child = spawn('bash', [SCRIPT], {
+      cwd: release,
+      env: {
+        ...process.env,
+        IRIS_IMAGE: refs.v2,
+        PORTAL_IMAGE: refs.v1,
+        DEPLOY_WAIT_TIMEOUT: '30',
+        DEPLOY_DRAIN_TIMEOUT: '60',
+        DEPLOY_KEEP_RELEASES: '2',
+      },
+    });
+    let out = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (out += d));
+    const exited = new Promise<number | null>((resolve) => child.on('close', resolve));
+    for (let i = 0; i < 240 && !/rolling: switched/.test(out); i++) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(out).toMatch(/rolling: switched/);
+
+    // A new connection reaches the new container; the old one still runs, still draining.
+    const after = await get(port, 'host');
+    expect(after).not.toBe(before.slice(0, 12));
+    await new Promise((r) => setTimeout(r, 3000));
+    expect(out).not.toMatch(/drained/);
+    expect(docker('inspect', '-f', '{{.State.Running}}', before)).toBe('true');
+
+    // The held request finishes on the old container, after the switch.
+    held.write('\r\n');
+    await heldClosed;
+    expect(heldReply).toMatch(/^HTTP\/1\.[01] 200/);
+    expect(heldReply.split('\r\n\r\n')[1].trim()).toBe(before.slice(0, 12));
+
+    expect(await exited).toBe(0);
+    expect(out).toMatch(/drained iris-deploy-test-iris-\d+: 0 connections left/);
+    expect(current()).toBe(fs.realpathSync(release));
+    expect(serviceId('iris').slice(0, 12)).toBe(after);
+    expect(spawnSync('docker', ['inspect', before]).status).not.toBe(0); // removed
   }, 150_000);
 
   /** Runs a release that must fail before the switch, and checks nothing changed. */
@@ -361,10 +522,15 @@ secrets:
     fs.rmSync(path.join(root, 'releases', 'r5i'), { recursive: true, force: true });
   }, 150_000);
 
-  it('an unhealthy release rolls back to the previous release: its images, settings and files', () => {
+  // Behind the proxy (#316) the serving containers are never touched before the switch, so
+  // a failed release is only removed.
+  it('an unhealthy release is removed; the previous one keeps serving: its images, settings and files', async () => {
     const serving = current()!;
+    const before = running();
+    const upstreams = path.join(root, 'shared', 'proxy', 'upstreams.conf');
+    const routed = fs.readFileSync(upstreams, 'utf8');
     const r = deploy(stage('r6', { mark: 'b' }), refs.unhealthy, refs.unhealthy);
-    expect(r.out).toMatch(/rolled back/);
+    expect(r.out).toMatch(/the serving release kept serving/);
     expect(r.status).toBe(1);
     expect(current()).toBe(serving);
     const now = running();
@@ -375,7 +541,24 @@ secrets:
     ]);
     expect(now.iris.mark).toBe('a'); // the previous release's settings, not r6's
     expect(now.portal.mounts).toContain(path.join(serving, 'secrets', 'smtp_url'));
+    expect(now).toEqual(before); // the very same containers
+    // The proxy still points at them: no stale backup of an earlier switch was restored.
+    expect(fs.readFileSync(upstreams, 'utf8')).toBe(routed);
+    const port = Number(docker('port', serviceId('proxy'), '4000/tcp').split(':').pop());
+    expect(await get(port, 'host')).toBe(now.iris.id.slice(0, 12));
   }, 150_000);
+
+  // #376: a release whose containers reach the metadata address is not switched to.
+  it('a release that fails the egress probe rolls back', () => {
+    const serving = current()!;
+    const r = deploy(stage('r6e', { mark: 'b' }), refs.leaky, refs.v1);
+    expect(r.out).toMatch(/egress probe failed in iris/);
+    expect(r.out).toMatch(/the serving release kept serving/);
+    expect(r.status).toBe(1);
+    expect(current()).toBe(serving);
+    expect(running().iris.image).toBe(refs.v2);
+  }, 150_000);
+
   // A bumped Postgres digest (a security release) must reach the running database;
   // an unchanged one must leave it alone (#273 review).
   it('recreates postgres only when its image changed', () => {
@@ -394,5 +577,39 @@ secrets:
     expect(deploy(stage('r8', { db: refs.db2 }), refs.v2, refs.v1).status).toBe(0);
     expect(pg()).not.toBe(before);
     expect(docker('inspect', '-f', '{{.Config.Image}}', pg())).toBe(refs.db2);
+  }, 150_000);
+
+  // Staging's object store (#514): a release whose settings name a second compose file
+  // gets its data service started with postgres, before the gates, and the optional
+  // settings reach the app; the next release without them drops both.
+  it('starts the data services of every compose file settings.env names, and drops them after', () => {
+    const service = (name: string) =>
+      docker(
+        'ps',
+        '-q',
+        '--filter',
+        'label=com.docker.compose.project=iris-deploy-test',
+        '--filter',
+        `label=com.docker.compose.service=${name}`,
+      );
+    const optional = () =>
+      /OPTIONAL=(\S*)/.exec(
+        docker('inspect', '-f', '{{range .Config.Env}}{{.}} {{end}}', service('iris')),
+      )?.[1];
+
+    // The store is up before the gates: a failed migration leaves it running.
+    const failed = deploy(stage('r9', { store: true }), refs.badMigration, refs.badMigration);
+    expect(failed.out).toMatch(/migration failed/);
+    expect(service('store')).not.toBe('');
+    expect(optional()).toBe('');
+
+    const withStore = stage('r10', { store: true });
+    expect(deploy(withStore, refs.v2, refs.v1).status).toBe(0);
+    expect(service('store')).not.toBe('');
+    expect(optional()).toBe('set');
+
+    expect(deploy(stage('r11'), refs.v2, refs.v1).status).toBe(0);
+    expect(service('store')).toBe('');
+    expect(optional()).toBe('');
   }, 150_000);
 });

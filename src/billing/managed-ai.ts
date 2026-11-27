@@ -78,6 +78,34 @@ export async function managedSpendThisMonth(db: Kysely<unknown>, orgId: string):
 }
 
 /**
+ * The managed credit an org can still draw this UTC month, in USD, never below 0: the plan's
+ * `creditUsd` minus this month's managed spend and this month's `held` reservations (billed
+ * calls whose usage row failed to write, #482). Live reservations (calls in flight) are left
+ * out: they are transient, and `reserveCredit` subtracts them itself. The portal pages and
+ * the resolver both use it, so a page never shows credit the resolver refuses (#641).
+ */
+export async function managedCreditLeft(
+  db: Kysely<unknown>,
+  orgId: string,
+  creditUsd: number,
+): Promise<number> {
+  const { rows } = await sql<{
+    left: string;
+  }>`select ${creditLeftSql(orgId, creditUsd)} as left`.execute(db);
+  return Number(rows[0].left);
+}
+
+/** `managedCreditLeft` as a Postgres numeric, so the admission check never rounds money. */
+const creditLeftSql = (orgId: string, creditUsd: number) => sql`greatest(${creditUsd}::numeric
+  - (select coalesce(sum(quantity * coalesce(unit_cost_usd, 0)), 0) from usage_events
+     where org_id = ${orgId} and billing_mode = 'managed'
+       and created_at >= date_trunc('month', now() at time zone 'UTC') at time zone 'UTC')
+  - (select coalesce(sum(amount_usd), 0) from managed_ai_reservations
+     where org_id = ${orgId} and held
+       and created_at >= date_trunc('month', now() at time zone 'UTC') at time zone 'UTC'),
+  0)`;
+
+/**
  * A credential for one call. A managed one carries `release`: the caller runs it once the
  * call is over (settled or not), which frees the credit reserved for it (#482).
  */
@@ -94,8 +122,8 @@ export type ResolvedAI = AICredentials & {
 const RESERVATION_TTL_MINUTES = 10;
 
 /**
- * Reserves `estimateUsd` of the org's managed credit if spend plus live reservations leave
- * room for it, under a per-org lock so parallel calls cannot all pass. Returns the
+ * Reserves `estimateUsd` of the org's managed credit if the credit left
+ * (`managedCreditLeft`) minus live reservations leaves room for it, under a per-org lock so parallel calls cannot all pass. Returns the
  * reservation's id, or null when the credit is used up.
  */
 async function reserveCredit(
@@ -114,11 +142,12 @@ async function reserveCredit(
       or (held and created_at < date_trunc('month', now() at time zone 'UTC') at time zone 'UTC'))`.execute(
       tx,
     );
-    const { rows } = await sql<{ reserved: string }>`
-      select coalesce(sum(amount_usd), 0) as reserved from managed_ai_reservations
-      where org_id = ${orgId}`.execute(tx);
-    const committed = (await managedSpendThisMonth(tx, orgId)) + Number(rows[0].reserved);
-    if (committed + estimateUsd > creditUsd) return null;
+    // In numeric, not JS floats: $9.83 spent of $10 must still admit a $0.17 call (codex review).
+    const { rows } = await sql<{ fits: boolean }>`
+      select coalesce(sum(amount_usd), 0) + ${estimateUsd}::numeric
+        <= ${creditLeftSql(orgId, creditUsd)} as fits
+      from managed_ai_reservations where org_id = ${orgId} and not held`.execute(tx);
+    if (!rows[0].fits) return null;
     const inserted = await sql<{ id: string }>`
       insert into managed_ai_reservations (org_id, amount_usd) values (${orgId}, ${estimateUsd})
       returning id`.execute(tx);

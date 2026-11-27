@@ -1,7 +1,7 @@
 import Link from "next/link"
 
 import { InvalidCursorError } from "../../../../../src/run-reads"
-import { SuspendedBanner } from "@/components/contact-link"
+import { OrgBanner } from "@/components/contact-link"
 import { requireOrg } from "@/lib/org"
 import { listFilters, PAGE_SIZE, runsFor } from "@/lib/runs"
 import {
@@ -23,7 +23,7 @@ export default async function RunsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const { org, suspended } = await requireOrg()
+  const { org, suspended, payment } = await requireOrg()
   const filters = listFilters(await searchParams)
 
   let page
@@ -55,7 +55,7 @@ export default async function RunsPage({
 
   return (
     <main className="flex min-h-svh flex-col gap-4 p-6">
-      {suspended && <SuspendedBanner />}
+      <OrgBanner suspended={suspended} payment={payment} />
       <div className="flex items-baseline justify-between gap-4">
         <h1 className="font-heading text-lg font-medium">Runs</h1>
         <Link href="/dashboard" className="text-sm underline">

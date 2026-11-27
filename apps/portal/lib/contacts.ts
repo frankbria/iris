@@ -17,6 +17,8 @@ export interface Contacts {
   security: string | null
   abuse: string | null
   support: string | null
+  /** The public status page (#317), `IRIS_STATUS_URL`: an https URL, linked only when set. */
+  status: string | null
   /** security.txt `Expires`: this many days after the portal process first serves it. */
   expiresDays: number
 }
@@ -54,7 +56,16 @@ function contactUrl(name: string, raw: string | undefined): string | null {
   return value
 }
 
-/** @throws naming the variable, for a malformed contact or expiry */
+/** A status page is a web page: the contact rules, `mailto:` refused. */
+function statusUrl(raw: string | undefined): string | null {
+  const value = contactUrl("IRIS_STATUS_URL", raw)
+  // The parsed scheme: `MAILTO:` passes contactUrl too (glm review).
+  if (value && new URL(value).protocol !== "https:")
+    throw new Error("IRIS_STATUS_URL must be an https: URL")
+  return value
+}
+
+/** @throws naming the variable, for a malformed contact, status URL or expiry */
 export function readContacts(
   env: Record<string, string | undefined> = process.env
 ): Contacts {
@@ -68,6 +79,7 @@ export function readContacts(
     security: contactUrl(ENV.security, env[ENV.security]),
     abuse: contactUrl(ENV.abuse, env[ENV.abuse]),
     support: contactUrl(ENV.support, env[ENV.support]),
+    status: statusUrl(env.IRIS_STATUS_URL),
     expiresDays: Number(days),
   }
 }

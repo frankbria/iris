@@ -47,6 +47,7 @@ const BETTER_AUTH_TABLES = [
   'invitation',
   'member',
   'organization',
+  'rateLimit',
   'session',
   'user',
   'verification',
@@ -201,6 +202,10 @@ describe('migrate process against a server that never answers', () => {
       ['0017_org_resweep', 'Success'],
       ['0018_managed_ai_reservations', 'Success'],
       ['0019_user_active_orgs', 'Success'],
+      ['0020_org_billing', 'Success'],
+      ['0021_usage_stripe_reported', 'Success'],
+      ['0022_billing_grace', 'Success'],
+      ['0023_auth_rate_limit', 'Success'],
     ]);
 
     const tables = await sql<{ table_name: string }>`
@@ -220,6 +225,8 @@ describe('migrate process against a server that never answers', () => {
         'visual_baselines',
         'artifact_purges',
         'org_ai_settings',
+        'org_billing',
+        'stripe_events',
       ]),
     );
   });
@@ -229,18 +236,18 @@ describe('migrate process against a server that never answers', () => {
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('19');
+    expect(applied.rows[0].n).toBe('23');
   });
 
   // A rollback deploys an older image (#273): its catalog lacks what a newer release applied.
   it('an older release on a newer schema applies nothing and succeeds', async () => {
     const older: Record<string, unknown> = { ...MIGRATIONS };
-    delete older['0019_user_active_orgs'];
+    delete older['0022_billing_grace'];
     const log = jest.spyOn(console, 'log').mockImplementation(() => {});
     try {
       expect(await migrateToLatest(db, older as typeof MIGRATIONS)).toEqual([]);
       expect(log).toHaveBeenCalledWith(
-        expect.stringMatching(/schema is ahead.*0019_user_active_orgs/),
+        expect.stringMatching(/schema is ahead.*0022_billing_grace/),
       );
     } finally {
       log.mockRestore();
@@ -249,17 +256,17 @@ describe('migrate process against a server that never answers', () => {
 
   it('refuses a release with pending migrations on a schema with newer ones', async () => {
     const branched: Record<string, unknown> = { ...MIGRATIONS };
-    delete branched['0019_user_active_orgs'];
+    delete branched['0022_billing_grace'];
     const up = jest.fn();
     branched['0003b_branch'] = { up };
     await expect(migrateToLatest(db, branched as typeof MIGRATIONS)).rejects.toThrow(
-      /does not know \(0019_user_active_orgs\).*unapplied ones \(0003b_branch\).*branched off/,
+      /does not know \(0022_billing_grace\).*unapplied ones \(0003b_branch\).*branched off/,
     );
     expect(up).not.toHaveBeenCalled();
     const applied = await sql<{ n: string }>`select count(*) as n from kysely_migration`.execute(
       db,
     );
-    expect(applied.rows[0].n).toBe('19');
+    expect(applied.rows[0].n).toBe('23');
   });
 
   it('gives every IRIS table org_id NOT NULL and an index that leads with it', async () => {
@@ -406,5 +413,47 @@ describe('migrate process against a server that never answers', () => {
       },
     );
     expect(JSON.parse(stdout)).toEqual({ valid: true, owner: true });
+  }, 30_000);
+
+  // BetterAuth's own schema diff, for the portal's options (database rate-limit storage,
+  // #316) and every plugin createAuth() adds: the migrations must leave nothing for its
+  // generator to create or add.
+  it("leaves BetterAuth's generator nothing to create, rate-limit table included", async () => {
+    const PROBE = `
+      const { Pool } = require('pg');
+      const { createAuth } = require('./src/auth/config.ts');
+      const { getMigrations } = require('better-auth/db/migration');
+      (async () => {
+        const pool = new Pool({ connectionString: process.env.PROBE_URL });
+        const auth = createAuth({
+          secret: process.env.PROBE_SECRET,
+          baseURL: 'http://localhost:3000',
+          database: pool,
+          rateLimit: { storage: 'database' },
+          sendEmail: async () => {},
+        });
+        const { toBeCreated, toBeAdded } = await getMigrations(auth.options);
+        await pool.end();
+        process.stdout.write(JSON.stringify({
+          create: toBeCreated.map((t) => t.table),
+          add: toBeAdded.map((t) => t.table + ':' + Object.keys(t.fields).join(',')),
+        }));
+      })().catch((e) => { console.error(e); process.exit(1); });
+    `;
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      ['-r', 'ts-node/register', '-e', PROBE],
+      {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          TS_NODE_TRANSPILE_ONLY: '1',
+          BETTER_AUTH_TELEMETRY: '0',
+          PROBE_URL: url,
+          PROBE_SECRET: randomBytes(32).toString('hex'),
+        },
+      },
+    );
+    expect(JSON.parse(stdout)).toEqual({ create: [], add: [] });
   }, 30_000);
 });

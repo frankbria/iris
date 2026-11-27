@@ -22,6 +22,7 @@ import * as path from 'path';
 import {
   installUrlPolicyGuard,
   guardedGoto,
+  guardedDocumentUrl,
   observeGuardDecisions,
   MAX_POPUPS_PER_CONTEXT,
 } from '../src/url-policy-guard';
@@ -159,6 +160,29 @@ describe('URL policy guard', () => {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(page('Outer', '<iframe src="/to-final"></iframe>'));
       }
+      // Pages that move on by themselves after their own response arrived (#662).
+      const moves: Record<string, string> = {
+        '/script-moves': `<script>location.replace('/final?moved=1')</script>`,
+        '/router-moves': `<script>history.replaceState(null, '', '/routed')</script>`,
+        '/script-to-metadata': `<script>location.replace('${METADATA}')</script>`,
+        // Port 1 is one Chromium refuses to dial itself, so this fails the same everywhere.
+        '/script-to-nowhere': `<script>location.replace('http://localhost:1/')</script>`,
+        // A refused frame, then a move of the top frame that fails for another reason (#668).
+        // On `load`, which waits for the frame, so the frame's refusal comes first.
+        '/frame-refused-then-nowhere':
+          `<iframe title="refused" src="${METADATA}"></iframe>` +
+          `<script>addEventListener('load', () => location.replace('http://localhost:1/'))</script>`,
+      };
+      if (moves[url]) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(page('Moves', moves[url]));
+      }
+      if (url === '/meta-moves') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(
+          '<!DOCTYPE html><html lang="en"><head><meta http-equiv="refresh" content="0;url=/final?moved=1"><title>Moves</title></head><body></body></html>',
+        );
+      }
       if (url === '/subresource-blocked') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end(page('Sub', '<img alt="x" src="/img-to-metadata">'));
@@ -264,6 +288,17 @@ describe('URL policy guard', () => {
       );
     }, 60_000);
 
+    it('says why from the page session alone, where no browser net records it (#668)', async () => {
+      // As on a persistent context. With the browser net on, it records the same refusal,
+      // and this would pass even if the page session took the main frame for a subframe.
+      jest.spyOn(context, 'browser').mockReturnValue(null);
+      await installUrlPolicyGuard(p, {});
+
+      await expect(guardedGoto(p, `${origin}/to-metadata`)).rejects.toThrow(
+        /redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy/,
+      );
+    }, 60_000);
+
     it('blocks a directly-supplied blocked URL', async () => {
       await installUrlPolicyGuard(p, {});
 
@@ -330,6 +365,147 @@ describe('URL policy guard', () => {
 
       expect(landed).toBe(`${origin}/final`);
       expect(landed).not.toBe(`${origin}/to-final`);
+    }, 60_000);
+  });
+
+  describe('the document a page holds once it moved on by itself (#662)', () => {
+    it.each([
+      ['a script', '/script-moves'],
+      ['a meta refresh', '/meta-moves'],
+    ])(
+      '%s: the second document, where the response was the first',
+      async (_how, first) => {
+        await installUrlPolicyGuard(p, {});
+
+        const responded = await guardedGoto(p, `${origin}${first}`, { waitUntil: 'networkidle' });
+
+        // The control: what the a11y runner used to report as the page it scanned.
+        expect(responded).toBe(`${origin}${first}`);
+        await expect(guardedDocumentUrl(p, `${origin}${first}`)).resolves.toBe(
+          `${origin}/final?moved=1`,
+        );
+        await expect(p.title()).resolves.toBe('Final');
+      },
+      60_000,
+    );
+
+    it('a router rewriting the URL: the URL the document has now', async () => {
+      await installUrlPolicyGuard(p, {});
+
+      await guardedGoto(p, `${origin}/router-moves`, { waitUntil: 'networkidle' });
+
+      await expect(guardedDocumentUrl(p, `${origin}/router-moves`)).resolves.toBe(
+        `${origin}/routed`,
+      );
+    }, 60_000);
+
+    it('a page that stayed: its own URL, on an unguarded page too', async () => {
+      await guardedGoto(p, `${origin}/final`);
+      await expect(guardedDocumentUrl(p, `${origin}/final`)).resolves.toBe(`${origin}/final`);
+
+      await installUrlPolicyGuard(p, {});
+      await guardedGoto(p, `${origin}/final#part`);
+      await expect(guardedDocumentUrl(p, `${origin}/final#part`)).resolves.toBe(
+        `${origin}/final#part`,
+      );
+    }, 60_000);
+
+    it('refuses the error page a refused move leaves behind, and says why', async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/script-to-metadata`;
+
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
+        /script-to-metadata redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy: .*link-local\/metadata/,
+      );
+    }, 60_000);
+
+    it('refuses the error page of a move that failed for another reason', async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/script-to-nowhere`;
+
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
+        `${first} moved on to a page that could not be loaded`,
+      );
+    }, 60_000);
+
+    it("does not give a refused frame's reason for a move that failed for another (#668)", async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/frame-refused-then-nowhere`;
+
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
+        new Error(`${first} moved on to a page that could not be loaded`),
+      );
+    }, 60_000);
+
+    // The second move is made from the test, once the first one's error page is there:
+    // a page that makes both itself races its own timer against the first commit.
+    const thenMovesTo = async (target: string): Promise<void> => {
+      const committed = p.waitForEvent('framenavigated', (frame) => frame === p.mainFrame());
+      await p.evaluate(`location.replace(${JSON.stringify(target)})`).catch(() => undefined);
+      await committed;
+    };
+
+    it('does not give an earlier refusal for a later move that failed for another reason (#673)', async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/script-to-metadata`;
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+      // The control: the refusal is the reason while its own error page is the document.
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(/blocked by navigation policy/);
+
+      await thenMovesTo('http://localhost:1/');
+
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
+        new Error(`${first} moved on to a page that could not be loaded`),
+      );
+    }, 60_000);
+
+    it('gives the refusal of a move that followed one that failed for another reason (#673)', async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/script-to-nowhere`;
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
+        new Error(`${first} moved on to a page that could not be loaded`),
+      );
+
+      await thenMovesTo(`${METADATA}?q=1#part`);
+
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
+        /script-to-nowhere redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy: .*link-local\/metadata/,
+      );
+    }, 60_000);
+
+    it('gives the refusal of a redirect hop, which is the same navigation (#673)', async () => {
+      await installUrlPolicyGuard(p, {});
+      const first = `${origin}/script-to-nowhere`;
+      await guardedGoto(p, first, { waitUntil: 'networkidle' });
+
+      await thenMovesTo(`${origin}/to-metadata`);
+
+      await expect(guardedDocumentUrl(p, first)).rejects.toThrow(
+        /script-to-nowhere redirects to http:\/\/169\.254\.169\.254\/.*blocked by navigation policy: .*link-local\/metadata/,
+      );
+    }, 60_000);
+
+    it('refuses a document the policy no longer admits', async () => {
+      await installUrlPolicyGuard(p, {});
+      await guardedGoto(p, `${origin}/final`);
+      // Tightened after the navigation, as the agent loop's pin is.
+      await installUrlPolicyGuard(p, { blockPrivateHosts: true });
+
+      // Named as itself, as guardedGoto names a URL refused outright.
+      await expect(guardedDocumentUrl(p, `${origin}/final`)).rejects.toThrow(
+        /\/final blocked by navigation policy: .*private\/loopback/,
+      );
+      // Reached from elsewhere, it is where that page went.
+      await expect(guardedDocumentUrl(p, `${origin}/account`)).rejects.toThrow(
+        /\/account redirects to http:\/\/localhost:\d+\/final, which is blocked by navigation policy: .*private\/loopback/,
+      );
     }, 60_000);
   });
 
@@ -729,6 +905,28 @@ describe('URL policy guard', () => {
       const hop = decisions.find((d) => d.url === METADATA && d.attribution === 'opener');
       expect(hop).toMatchObject({ allowed: false, policies: [{}] });
       expect(hop?.reason).toMatch(/metadata/);
+    }, 60_000);
+
+    // #681, a limit kept on purpose: while a popup runs on its opener's guard a refusal is
+    // not recorded (it would overwrite the opener's), so the popup's error page is refused
+    // without the policy's reason. No caller reads a popup; this pins that such a read
+    // still fails rather than passing an error page off as a document.
+    it('refuses to read a popup left on the error page of a refused redirect, without the reason', async () => {
+      await installUrlPolicyGuard(p, {});
+      const source = `${origin}/popup-source`;
+      await guardedGoto(p, source);
+
+      const [popup] = await Promise.all([
+        p.context().waitForEvent('page', { timeout: 15_000 }),
+        p.click('#redir-meta'),
+      ]);
+      await popup.waitForURL(/^chrome-error:/, { timeout: 15_000 });
+
+      const opening = `${origin}/to-metadata`;
+      await expect(guardedDocumentUrl(popup, opening)).rejects.toThrow(
+        `${opening} moved on to a page that could not be loaded`,
+      );
+      await expect(guardedDocumentUrl(p, source)).resolves.toBe(source);
     }, 60_000);
 
     it('still lands a popup whose redirect stays in policy', async () => {
