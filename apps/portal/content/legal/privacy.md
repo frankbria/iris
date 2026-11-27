@@ -1,6 +1,6 @@
 ---
 title: Privacy Policy
-version: 2026-11-26
+version: 2026-11-27
 ---
 
 ## 1. Who we are
@@ -51,7 +51,7 @@ IRIS and its subprocessors store and process data in the United States. Where da
 - Service logs are rotated by size and overwritten as new logs are written.
 - Backups are encrypted. Daily backups older than 14 days are deleted, but the 7 most recent are always kept. Data deleted from the service remains in backups until they are deleted.
 - Run history and results, including a visual test's screenshots, are kept for 90 days after the run finishes. A project's approved baseline screenshots are kept until they are replaced or the organization is deleted. Expired sessions and sign-in links are deleted daily.
-- The audit log of changes in your organization is kept for 90 days.
+- The audit log of changes in your organization is kept for 90 days. The record of who created an API key is kept while the key exists and its creator still has an account.
 - Accounts and organizations are kept until you ask us to delete them at [support@briastrategy.net](mailto:support@briastrategy.net). A deleted organization is disabled at once and can be restored for 30 days; then its members, keys, runs and results are deleted. Its usage and billing records are kept for 7 years, no longer linked to its name or members, and then deleted.
 - When an account is deleted, the record of which terms it accepted, when and from which IP address is kept for 7 years under a one-way hash instead of the account, then deleted.
 
